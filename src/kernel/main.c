@@ -130,6 +130,9 @@ void load_font() {
   }
 }
 
+
+
+
 void puts(char *s)
 {
     load_font();
