@@ -38,7 +38,11 @@ typedef unsigned short int  uint16_t;
 typedef unsigned int        uint32_t;
 typedef unsigned long int   uint64_t;
 
+void print_hex16(uint16_t x);
+
 #include <bootboot.h>
+
+#include "input.h"
 
 /* imported virtual addresses, see linker script */
 extern BOOTBOOT bootboot;               // see bootboot.h
@@ -53,6 +57,10 @@ void _start()
     /*** NOTE: this code runs on all cores in parallel ***/
     int x, y, s=bootboot.fb_scanline, w=bootboot.fb_width, h=bootboot.fb_height;
 
+    if(init_keyboard()) {
+        puts("init keyboard failure\n");
+    }
+
     if(s) {
         // cross-hair to see screen dimension detected correctly
         for(y=0;y<h;y++) { *((uint32_t*)(&fb + s*y + (w*2)))=0x00FFFFFF; }
@@ -63,11 +71,15 @@ void _start()
         for(y=0;y<20;y++) { for(x=0;x<20;x++) { *((uint32_t*)(&fb + s*(y+20) + (x+50)*4))=0x0000FF00; } }
         for(y=0;y<20;y++) { for(x=0;x<20;x++) { *((uint32_t*)(&fb + s*(y+20) + (x+80)*4))=0x000000FF; } }
 
-        // say hello
-        puts("Hello from a simple BOOTBOOT kernel");
     }
-    // hang for now
-    while(1);
+    
+    while (1)
+    {
+        uint32_t scan_code = get_scan_code();
+        puts("Scan Code: ");
+        print_hex16(scan_code);
+    }
+
 }
 
 /**************************
@@ -130,9 +142,6 @@ void load_font() {
   }
 }
 
-
-
-
 void puts(char *s)
 {
     load_font();
@@ -162,4 +171,20 @@ void puts(char *s)
 
         s++;
     }
+}
+
+void print_hex16(uint16_t x) {
+  const char *hex = "0123456789ABCDEF";
+  char buf[2 * sizeof(x) + 1];
+  buf[sizeof(buf) - 1] = '\0';
+  char *p = buf + sizeof(buf) - 2;
+  while (1) {
+    *p = hex[x & 0xF];
+    x >>= 4;
+    if (p == buf) {
+      break;
+    }
+    --p;
+  }
+  puts(buf);
 }
