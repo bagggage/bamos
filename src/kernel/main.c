@@ -57,7 +57,7 @@ void _start()
     /*** NOTE: this code runs on all cores in parallel ***/
     int x, y, s=bootboot.fb_scanline, w=bootboot.fb_width, h=bootboot.fb_height;
 
-    if(init_keyboard()) {
+    if(init_keyboard() != ACK) {
         puts("init keyboard failure\n");
     }
 
@@ -73,11 +73,13 @@ void _start()
 
     }
     
-    while (1)
-    {
-        uint32_t scan_code = get_scan_code();
-        puts("Scan Code: ");
-        print_hex16(scan_code);
+     while (1) {
+        char* buff[2];
+        buff[1] = '\0';
+
+        buff[0] = scan_code_to_ascii(get_scan_code());
+        puts("fds");
+          
     }
 
 }
