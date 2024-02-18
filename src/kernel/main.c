@@ -1,46 +1,17 @@
-/*
- * mykernel/c/kernel.c
- *
- * Copyright (C) 2017 - 2021 bzt (bztsrc@gitlab)
- *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use, copy,
- * modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
- * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
- * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
- *
- * This file is part of the BOOTBOOT Protocol package.
- * @brief A sample BOOTBOOT compatible kernel
- *
- */
+#include <bootboot.h>
 
-/* function to display a string, see below */
+#include "definitions.h"
+
 void puts(char *s);
 
 /* we don't assume stdint.h exists */
-typedef short int           int16_t;
-typedef unsigned char       uint8_t;
-typedef unsigned short int  uint16_t;
-typedef unsigned int        uint32_t;
-typedef unsigned long int   uint64_t;
+typedef short int int16_t;
+typedef unsigned char uint8_t;
+typedef unsigned short int uint16_t;
+typedef unsigned int uint32_t;
+typedef unsigned long int uint64_t;
 
 void print_hex16(uint16_t x);
-
-#include <bootboot.h>
 
 #include "input.h"
 
@@ -49,39 +20,17 @@ extern BOOTBOOT bootboot;               // see bootboot.h
 extern unsigned char environment[4096]; // configuration, UTF-8 text key=value pairs
 extern uint8_t fb;                      // linear framebuffer mapped
 
-/******************************************
- * Entry point, called by BOOTBOOT Loader *
- ******************************************/
-void _start()
-{
-    /*** NOTE: this code runs on all cores in parallel ***/
-    int x, y, s=bootboot.fb_scanline, w=bootboot.fb_width, h=bootboot.fb_height;
+// Entry point, called by BOOTBOOT Loader
+void _start() {
+  Status status = init_kernel();
 
-    if(init_keyboard() != ACK) {
-        puts("init keyboard failure\n");
-    }
+  if (status == KERNEL_PANIC) {
+    // TODO: handle error
+  }
 
-    if(s) {
-        // cross-hair to see screen dimension detected correctly
-        for(y=0;y<h;y++) { *((uint32_t*)(&fb + s*y + (w*2)))=0x00FFFFFF; }
-        for(x=0;x<w;x++) { *((uint32_t*)(&fb + s*(h/2)+x*4))=0x00FFFFFF; }
+  // TODO: handle user space, do some stuff
 
-        // red, green, blue boxes in order
-        for(y=0;y<20;y++) { for(x=0;x<20;x++) { *((uint32_t*)(&fb + s*(y+20) + (x+20)*4))=0x00FF0000; } }
-        for(y=0;y<20;y++) { for(x=0;x<20;x++) { *((uint32_t*)(&fb + s*(y+20) + (x+50)*4))=0x0000FF00; } }
-        for(y=0;y<20;y++) { for(x=0;x<20;x++) { *((uint32_t*)(&fb + s*(y+20) + (x+80)*4))=0x000000FF; } }
-
-    }
-    
-     while (1) {
-        char* buff[2];
-        buff[1] = '\0';
-
-        buff[0] = scan_code_to_ascii(get_scan_code());
-        puts("fds");
-          
-    }
-
+  while (1);
 }
 
 /**************************
@@ -100,8 +49,9 @@ struct PSF1 {
   uint16_t magic; /* 0x0436 */
   uint8_t flags;  /* how many glyps and if unicode, etc. */
   uint8_t height; /* height; width is always 8 */
-                  /* glyphs start here */
+  /* glyphs start here */
 };
+
 #define PSF1_MODE512 0x01
 #define PSF1_MAGIC 0x0436
 
@@ -117,6 +67,7 @@ struct PSF2 {
   uint32_t width;
   /* glyphs start here */
 } __attribute__((packed));
+
 #define PSF2_MAGIC 0x864ab572
 
 struct Font font;
@@ -131,6 +82,7 @@ void load_font() {
     font.charsize = psf1->height;
     font.width = 8;
     font.height = psf1->height;
+
     return;
   }
 
@@ -144,49 +96,23 @@ void load_font() {
   }
 }
 
-void puts(char *s)
-{
-    load_font();
-
-    int offset = 0;
-    int bpl = (font.width + 7) / 8;
-
-    while(*s) {
-        const uint8_t *const glyph = font.glyphs + *s * font.charsize;
-        int curr_offset = offset;
-
-        for (int y = 0; y < font.height; ++y)
-        {
-            int y_bit_idx = 0;
-            int mask = (1 << (font.width - 1));
-
-            for (int x = 0; x < font.width; ++x)
-            {
-                *(uint32_t*)(&fb + curr_offset + (x << 2)) = (glyph[y] & mask ? 0xFFFFFFFF : 0x00000000);
-                mask >>= 1;
-            }
-
-            curr_offset += bootboot.fb_scanline;
-        }
-
-        offset += font.width << 2;
-
-        s++;
-    }
-}
-
 void print_hex16(uint16_t x) {
   const char *hex = "0123456789ABCDEF";
+
   char buf[2 * sizeof(x) + 1];
   buf[sizeof(buf) - 1] = '\0';
+
   char *p = buf + sizeof(buf) - 2;
+
   while (1) {
     *p = hex[x & 0xF];
+
     x >>= 4;
-    if (p == buf) {
-      break;
-    }
+
+    if (p == buf) break;
+
     --p;
   }
+
   puts(buf);
 }
