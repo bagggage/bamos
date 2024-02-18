@@ -16,7 +16,7 @@ LINKLD:=${CONFIG_DIR}/kernel.ld
 
 ${OBJS}: ${SRCS}
 	${MKDIR} ${@D}
-	${CC} -I${BOOTBOOT} -c $(patsubst ${BUILD_KER}/%.o, ${SRC_KER}/%.c, $@) -o $@
+	${CC} -I${BOOTBOOT} -I${SRC_KER} -c $(patsubst ${BUILD_KER}/%.o, ${SRC_KER}/%.c, $@) -o $@
 
 bin: ${OBJS}
 	${LD} -nostdlib -n -T ${LINKLD} -o ${KERNEL_BIN} ${BUILD_KER}/font.o ${OBJS}
