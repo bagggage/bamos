@@ -20,6 +20,8 @@ Status init_bootboot_display(DisplayDevice* dev) {
     display_fb.format = (FbFormat)bootboot.fb_type;
     display_fb.bpp = BOOTBOOT_FB_BPP;
 
+    dev->fb = &display_fb;
+
     return KERNEL_OK;
 }
 
