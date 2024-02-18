@@ -25,6 +25,7 @@ typedef uint64_t size_t;
 typedef enum Status {
     KERNEL_OK = 0,
     KERNEL_COUGHT,
+    KERNEL_INVALID_ARGS,
     KERNEL_ERROR,
     KERNEL_PANIC,
 } Status;

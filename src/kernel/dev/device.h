@@ -22,11 +22,16 @@ typedef enum DevType {
     DEV_SERIAL
 } DevType;
 
+typedef struct Device Device;
+
+typedef Status (*DevRemove_t)(Device*);
+
 // Common device structure
 typedef struct Device {
 // TODO: maybe id, name, type idk... something
     uint64_t id;
     DevType type;
+    DevRemove_t remove;
 } Device;
 
 typedef struct DevicePool {
@@ -47,9 +52,22 @@ must be accessible at indexes 0 and 1, respectively.
 | 1 | Keyboard      |
 +---+---------------+
 | n | ...           |
-+---+---------------+   
++---+---------------+
 */
 extern DevicePool dev_pool;
+
+/*
+Create and push new device structure into 'dev_pool'. Device structure initialized with valid id
+and type fields, other filelds initialized with zeroes.
+Returns 'KERNEL_OK' and set pointer to valid value, otherwise returns 'KERNEL_ERROR' or
+'KERNEL_COUGHT' and leaves the pointer unchanged.
+*/
+Status add_device(DevType dev_type, void** out_dev_struct_ptr, size_t dev_struct_size);
+/*
+Remove device from 'dev_pool', all pointers to that device becomes invalid.
+Returns 'KERNEL_OK' if successed, otherwise leaves 'dev_pool' unchanged.
+*/
+Status remove_device(size_t dev_idx);
 
 #define DEV_FUNC(device_name, ret_t, func_name, ...) \
    typedef ret_t (* device_name ## _ ## func_name ## _t)(__VA_ARGS__)

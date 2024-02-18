@@ -1,9 +1,12 @@
 #include "mem.h"
 
-void* ker_alloc(size_t size) {
+void* kmalloc(size_t size) {
     return NULL;
 }
 
-Status ker_free(void* allocated_mem) {
+Status kfree(void* allocated_mem) {
+    if (allocated_mem == NULL)
+        return KERNEL_OK;
+
     return KERNEL_OK;
 }
