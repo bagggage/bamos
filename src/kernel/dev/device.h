@@ -2,13 +2,15 @@
 
 #include "definitions.h"
 
-// Common header for all devices
-// For each unique device needs to define init_<device-name> function in <device-name>.h
-//
-// This function should return 'Status' and takes pointer to an device structure for current device type
-// like 'KeyboardDevice', status might be 'KERNEL_OK' if device initialized successfully and device structure
-// might be filled with device's data and interface
-// otherwise if something went wrong, device structure doesn't change
+/*
+Common header for all devices
+For each unique device needs to define init_<device-name> function in <device-name>.h.
+
+This function should return 'Status' and takes pointer to an device structure for current device type
+like 'KeyboardDevice', status might be 'KERNEL_OK' if device initialized successfully and device structure
+might be filled with device's data and interface,
+otherwise if something went wrong, device structure doesn't change.
+*/
 
 // Device types
 typedef enum DevType {
@@ -60,7 +62,7 @@ extern DevicePool dev_pool;
 Create and push new device structure into 'dev_pool'. Device structure initialized with valid id
 and type fields, other filelds initialized with zeroes.
 Returns 'KERNEL_OK' and set pointer to valid value, otherwise returns 'KERNEL_ERROR' or
-'KERNEL_COUGHT' and leaves the pointer unchanged.
+'KERNEL_INVALID_ARGS' and leaves the pointer unchanged.
 */
 Status add_device(DevType dev_type, void** out_dev_struct_ptr, size_t dev_struct_size);
 /*
