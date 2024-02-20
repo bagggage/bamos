@@ -1,4 +1,4 @@
-#include "input.h"
+#include "ps2_driver.h"
 
 unsigned char inb(unsigned short port) {
     unsigned char ret;
