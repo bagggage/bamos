@@ -4,10 +4,10 @@
 #include "definitions.h"
 
 typedef enum FbFormat {
-    FB_ARGB = 0,
-    FB_RGBA = 1,
-    FB_ABGR = 2,
-    FB_BGRA = 3
+    FB_FORMAT_ARGB = 0,
+    FB_FORMAT_RGBA = 1,
+    FB_FORMAT_ABGR = 2,
+    FB_FORMAT_BGRA = 3
 } FbFormat;
 
 typedef struct Framebuffer {
