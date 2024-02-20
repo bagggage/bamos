@@ -8,9 +8,9 @@ Can be used only after display device initialization.
 */
 
 typedef enum LogType {
-    MSG,
-    WARN,
-    ERROR
+    LOG_MSG,
+    LOG_WARN,
+    LOG_ERROR
 } LogType;
 
 // Prints log to display framebuffer
