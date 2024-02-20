@@ -33,7 +33,6 @@ typedef struct Device {
 // TODO: maybe id, name, type idk... something
     uint64_t id;
     DevType type;
-    DevRemove_t remove;
 } Device;
 
 typedef struct DevicePool {

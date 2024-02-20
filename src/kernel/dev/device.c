@@ -29,10 +29,6 @@ Status remove_device(size_t idx) {
     Device* dev = dev_pool.data[idx];
     uint64_t temp_dev_id = dev->id;
 
-    if (dev->remove != NULL) {
-        if (dev->remove(dev) != KERNEL_OK) return KERNEL_ERROR;
-    }
-
     vector_remove((Vector*)&dev_pool, idx, sizeof(Device*));
     kfree((void*)dev);
 
