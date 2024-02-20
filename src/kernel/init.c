@@ -18,7 +18,10 @@ Status init_kernel() {
 
 Status init_io_devices() {
     // TODO
-    Status status = init_bootboot_display();
+    DisplayDevice* display;
+
+    if (add_device(DEV_DISPLAY, &display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }

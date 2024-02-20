@@ -12,7 +12,7 @@
 // Kernel space memory allocation
 void* kmalloc(size_t size);
 // Kernel space memory free
-Status kfree(void* allocated_mem);
+void kfree(void* allocated_mem);
 
 /*
 Map physical memory pages to virtual.
