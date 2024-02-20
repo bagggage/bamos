@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "device.h"
+#include "definitions.h"
 
 typedef enum KernelScancode {
     NONE = 0x00,
