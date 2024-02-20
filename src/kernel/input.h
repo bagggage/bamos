@@ -6,8 +6,7 @@
 #define PS2_PORT 0x60
 
 // for more info see PS/2 commands
-enum Commands
-{
+enum Commands {
     SET_LED                                                 = 0xED,  // response: 0xFA (ACK) or 0xFE (Resend)
     ECHO                                                    = 0xEE,  // response: 0xEE (Echo) or 0xFE (Resend) 
     GET_OR_SET_CURRENT_SCAN_CODE                            = 0xF0,  // response: 0xFA (ACK) or 0xFE (Resend) if scan code is being set
@@ -27,8 +26,7 @@ enum Commands
     RESET_AND_START_SELFTEST                                = 0xFF   // response: 0xFA (ACK) or 0xFE (Resend) followed by 0xAA (self-test passed)4
 };
 
-enum Special_bytes
-{
+enum SpecialBytes {
     ERROR            = 0x00,
     SELF_TEST_PASSED = 0xAA,
     ECHO_RESPONSE    = 0xEE,
@@ -37,7 +35,7 @@ enum Special_bytes
     RESEND           = 0xFE,
 };
 
-enum Scan_code {
+enum ScanCode {
     SCAN_CODE_ESC = 0x01,
     SCAN_CODE_1 = 0x02,
     SCAN_CODE_2 = 0x03,
