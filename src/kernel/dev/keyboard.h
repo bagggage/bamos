@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdint.h>
-
 #include "device.h"
 #include "definitions.h"
 
@@ -220,7 +218,7 @@ typedef enum KernelScancode {
     SCAN_CODE_MULTIMEDIA_MEDIA_SELECT = 0xE0,
     SCAN_CODE_PRINT_SCREEN = 0xE0,
     SCAN_CODE_PAUSE = 0xE1,
-}KernelScancode;
+} KernelScancode;
 
 DEV_FUNC(Keyboard, uint8_t, get_scan_code);
 DEV_FUNC(Keyboard, uint8_t, get_ascii_symbol);
@@ -235,7 +233,7 @@ typedef struct KeyboardInterface {
 // TODO
 typedef struct KeyboardDevice {
    DEVICE_STRUCT_IMPL(Keyboard);
-}KeyboardDevice;
+} KeyboardDevice;
 
 uint8_t keyboard_scan_code_to_kernel_scan_code();
 

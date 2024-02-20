@@ -1,10 +1,7 @@
-#ifndef _INPUT_H
-#define _INPUT_H
-
-#include <stdint.h>
+#pragma once
 
 #include "keyboard.h"
-#include "../definitions.h"
+#include "definitions.h"
 
 #define PS2_PORT 0x60
 
@@ -27,7 +24,7 @@ typedef enum Commands {
     SET_SPECIFIC_TO_MAKE_ONLY                               = 0xFD,  // response: 0xFA (ACK) or 0xFE (Resend)
     RESEND_LAST_BYTE                                        = 0xFE,  // response: Previously sent byte or 0xFE (Resend) 
     RESET_AND_START_SELFTEST                                = 0xFF   // response: 0xFA (ACK) or 0xFE (Resend) followed by 0xAA (self-test passed)4
-}Commands;
+} Commands;
 
 typedef enum SpecialBytes {
     ERROR            = 0x00,
@@ -36,7 +33,7 @@ typedef enum SpecialBytes {
     ACK              = 0xFA,
     SELF_TEST_FAILD  = 0xFC & 0xFD,
     RESEND           = 0xFE,
-}SpecialBytes;
+} SpecialBytes;
 
 typedef enum PS2ScanCode {
     SCAN_CODE_ESC = 0x01,
@@ -252,10 +249,8 @@ typedef enum PS2ScanCode {
     SCAN_CODE_MULTIMEDIA_MEDIA_SELECT = 0xE0,
     SCAN_CODE_PRINT_SCREEN = 0xE0,
     SCAN_CODE_PAUSE = 0xE1,
-}PS2ScanCode;
+} PS2ScanCode;
 
 Status init_ps2_keyboard(KeyboardDevice* keyboard_device);
 
 uint8_t ps2_get_scan_code();
-
-#endif // _INPUT_H

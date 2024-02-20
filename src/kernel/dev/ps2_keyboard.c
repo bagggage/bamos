@@ -1,7 +1,7 @@
 #include "ps2_keyboard.h"
 
 #include "keyboard.h"
-#include "../mem.h"
+#include "mem.h"
 
 uint8_t inb(unsigned short port) {
     unsigned char ret;
@@ -16,13 +16,13 @@ void outb(unsigned char value, unsigned short port) {
 }
 
 Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
-    if(keyboard_device == NULL) {
+    if (keyboard_device == NULL) {
         return KERNEL_ERROR;
     }
     
     outb(PS2_PORT, SET_DEFAULT_PARAMETERS); 
 
-    if(inb(PS2_PORT) != ACK) {
+    if (inb(PS2_PORT) != ACK) {
         return KERNEL_ERROR;
     } 
 
