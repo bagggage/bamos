@@ -1,9 +1,16 @@
 #include "device.h"
 
+#include "io/logger.h"
 #include "utils/vector.h"
 #include "mem.h"
 
-DevicePool device_pool = { NULL, 0 };
+DevicePool dev_pool = { NULL, 0 };
+
+size_t last_id = 0;
+
+size_t get_avail_dev_id() {
+    return last_id++;
+}
 
 Status add_device(DevType dev_type, void** out_dev_struct_ptr, size_t dev_struct_size) {
     if (dev_struct_size < sizeof(Device) || out_dev_struct_ptr == NULL) return KERNEL_INVALID_ARGS;
