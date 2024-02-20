@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device.h"
+#include "definitions.h"
 
 // TODO: Scancodes enum
 typedef enum Scancode {
