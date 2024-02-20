@@ -1,31 +1,11 @@
-#include "ps2_driver.h"
+#include "keyboard.h"
 
-unsigned char inb(unsigned short port) {
-    unsigned char ret;
-
-    asm volatile("in %%dx, %%al" : "=a"(ret) : "d"(port));
-
-    return ret;
+uint8_t keyboard_scan_code_to_kernel_scan_code(uint8_t (*keyboard_scan_code) (void)) {
+    // TODO: convert keyboard scan code to kernel scan code
+    return keyboard_scan_code();
 }
 
-void outb(unsigned char value, unsigned short port) {
-    asm volatile("out %%al, %%dx" : : "a"(value), "d"(port));
-}
-
-uint8_t init_keyboard() {
-    outb(PS2_PORT, SET_DEFAULT_PARAMETERS); 
-
-    uint8_t status = 0;
-    status = inb(PS2_PORT); 
-
-    return status;
-}   
-
-uint32_t get_scan_code() {
-    return inb(PS2_PORT);    
-}
-
-char scan_code_to_ascii(uint32_t scan_code) {
+unsigned char scan_code_to_ascii(KernelScancode scan_code) {
     //TODO: upper case
     static const char asciiTable[] = {
         0, 0, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b', '\t',   // 0x00-0x0F

@@ -4,6 +4,7 @@
 
 #include "dev/bootboot_display.h"
 #include "dev/keyboard.h"
+#include "dev/ps2_keyboard.h"
 #include "io/logger.h"
 
 #ifdef MEM_RAW_PATCH
@@ -30,9 +31,13 @@ extern volatile unsigned char _binary_font_psf_start;
 Status init_io_devices() {
     // TODO
     DisplayDevice* display;
+    KeyboardDevice* keyboard;
 
     if (add_device(DEV_DISPLAY, &display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
+
+    if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
     return init_kernel_logger(display->fb, &_binary_font_psf_start);
 }
