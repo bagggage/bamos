@@ -4,6 +4,8 @@ AS:=${TOOLCHAIN}/x86_64-elf-as
 LD:=${TOOLCHAIN}/x86_64-elf-ld
 CC:=${TOOLCHAIN}/x86_64-elf-gcc ${CROSS_ENV} -O2
 
+PP_DEF:=-DMEM_RAW_PATCH
+
 OBJCOPY:=objcopy
 MKDIR:=mkdir -p
 
@@ -16,7 +18,7 @@ LINKLD:=${CONFIG_DIR}/kernel.ld
 
 ${OBJS}: ${SRCS}
 	${MKDIR} ${@D}
-	${CC} -I${BOOTBOOT} -I${SRC_KER} -c $(patsubst ${BUILD_KER}/%.o, ${SRC_KER}/%.c, $@) -o $@
+	${CC} ${PP_DEF} -I${BOOTBOOT} -I${SRC_KER} -c $(patsubst ${BUILD_KER}/%.o, ${SRC_KER}/%.c, $@) -o $@
 
 bin: ${OBJS}
 	${LD} -nostdlib -n -T ${LINKLD} -o ${KERNEL_BIN} ${BUILD_KER}/font.o ${OBJS}
