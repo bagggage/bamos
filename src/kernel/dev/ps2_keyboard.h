@@ -3,10 +3,13 @@
 
 #include <stdint.h>
 
+#include "keyboard.h"
+#include "../definitions.h"
+
 #define PS2_PORT 0x60
 
 // for more info see PS/2 commands
-enum Commands {
+typedef enum Commands {
     SET_LED                                                 = 0xED,  // response: 0xFA (ACK) or 0xFE (Resend)
     ECHO                                                    = 0xEE,  // response: 0xEE (Echo) or 0xFE (Resend) 
     GET_OR_SET_CURRENT_SCAN_CODE                            = 0xF0,  // response: 0xFA (ACK) or 0xFE (Resend) if scan code is being set
@@ -24,18 +27,18 @@ enum Commands {
     SET_SPECIFIC_TO_MAKE_ONLY                               = 0xFD,  // response: 0xFA (ACK) or 0xFE (Resend)
     RESEND_LAST_BYTE                                        = 0xFE,  // response: Previously sent byte or 0xFE (Resend) 
     RESET_AND_START_SELFTEST                                = 0xFF   // response: 0xFA (ACK) or 0xFE (Resend) followed by 0xAA (self-test passed)4
-};
+}Commands;
 
-enum SpecialBytes {
+typedef enum SpecialBytes {
     ERROR            = 0x00,
     SELF_TEST_PASSED = 0xAA,
     ECHO_RESPONSE    = 0xEE,
     ACK              = 0xFA,
     SELF_TEST_FAILD  = 0xFC & 0xFD,
     RESEND           = 0xFE,
-};
+}SpecialBytes;
 
-enum ScanCode {
+typedef enum PS2ScanCode {
     SCAN_CODE_ESC = 0x01,
     SCAN_CODE_1 = 0x02,
     SCAN_CODE_2 = 0x03,
@@ -249,11 +252,10 @@ enum ScanCode {
     SCAN_CODE_MULTIMEDIA_MEDIA_SELECT = 0xE0,
     SCAN_CODE_PRINT_SCREEN = 0xE0,
     SCAN_CODE_PAUSE = 0xE1,
-};
+}PS2ScanCode;
 
-uint8_t init_keyboard();
+Status init_ps2_keyboard(KeyboardDevice* keyboard_device);
 
-uint32_t get_scan_code();
-char scan_code_to_ascii(uint32_t scan_code);
+uint8_t ps2_get_scan_code();
 
 #endif // _INPUT_H

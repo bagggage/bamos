@@ -2,6 +2,7 @@
 
 #include "dev/bootboot_display.h"
 #include "dev/keyboard.h"
+#include "dev/ps2_keyboard.h"
 
 Status init_kernel() {
     // After this step we should be able to use memory allocations, otherwise drop kernel =)
@@ -19,9 +20,13 @@ Status init_kernel() {
 Status init_io_devices() {
     // TODO
     DisplayDevice* display;
+    KeyboardDevice* keyboard;
 
     if (add_device(DEV_DISPLAY, &display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
+
+    if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }
