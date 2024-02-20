@@ -1,6 +1,7 @@
 #pragma once
 
 #include "definitions.h"
+#include "dev/display.h"
 
 /*
 Raw kernel logger.
@@ -13,6 +14,8 @@ typedef enum LogType {
     LOG_ERROR
 } LogType;
 
+Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr);
+
 // Prints log to display framebuffer
 void kernel_log(LogType log_type, const char* fmt, ...);
 
@@ -22,3 +25,5 @@ void kernel_msg(const char* fmt, ...);
 void kernel_warn(const char* fmt, ...);
 // Prints error log
 void kernel_error(const char* fmt, ...);
+
+void debug_point();
