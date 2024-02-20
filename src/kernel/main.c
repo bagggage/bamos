@@ -13,7 +13,7 @@ typedef unsigned long int uint64_t;
 
 void print_hex16(uint16_t x);
 
-#include "input.h"
+#include "ps2_dirver.h"
 
 /* imported virtual addresses, see linker script */
 extern BOOTBOOT bootboot;               // see bootboot.h

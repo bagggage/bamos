@@ -10,7 +10,7 @@ typedef enum Scancode {
 // TODO: interface
 typedef struct KeyboardInterface {
 //read_scancode()
-//read_ascii() special func only for ascii in case of optimization for deferent keyboards
+//read_ascii() special func only for ascii in case of optimization for different keyboards
 //...
 } KeyboardInterface;
 
