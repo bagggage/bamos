@@ -1,5 +1,6 @@
 #include "logger.h"
 
+#include <bootboot.h>
 #include <stdarg.h>
 
 #include "font.h"
@@ -17,6 +18,10 @@
 #define COLOR_LYELLOW   255,    235,    75
 #define COLOR_ORANGE    255,    165,    0
 
+extern BOOTBOOT bootboot;
+
+const char* error_str = NULL;
+
 typedef struct Logger {
     Framebuffer* fb;
     RawFont font;
@@ -28,13 +33,12 @@ typedef struct Logger {
 } Logger;
 
 Logger logger = { NULL, {}, 0, 0, 0, 0, 0xFFFFFFFF };
-
-extern volatile uint32_t fb;
+Framebuffer early_fb;
 
 void debug_point() {
     static uint32_t offset = 0;
 
-    uint32_t* base = &fb + offset;
+    uint32_t* base = (uint32_t*)bootboot.fb_ptr + offset;
 
     for (size_t i = 0; i < 100; ++i) {
         base[i] = 0x00FFFFFF;
@@ -71,6 +75,23 @@ void logger_set_color(uint8_t r, uint8_t g, uint8_t b) {
     }
 }
 
+bool_t is_initialized = FALSE;
+
+bool_t is_logger_initialized() {
+    return is_initialized;
+}
+
+Status init_kernel_logger_raw(const uint8_t* font_binary_ptr) {
+    early_fb.base = bootboot.fb_ptr;
+    early_fb.width = bootboot.fb_width;
+    early_fb.height = bootboot.fb_height;
+    early_fb.scanline = bootboot.fb_scanline;
+    early_fb.format = (FbFormat)bootboot.fb_type;
+    early_fb.bpp = 4;
+
+    return init_kernel_logger(&early_fb, font_binary_ptr);
+}
+
 Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
     if (fb == NULL || font_binary_ptr == NULL) return KERNEL_INVALID_ARGS;
     if (load_raw_font(font_binary_ptr, &logger.font) != KERNEL_OK) return KERNEL_INVALID_ARGS;
@@ -80,6 +101,7 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
     logger.max_row = logger.fb->height / logger.font.height;
 
     logger_set_color(COLOR_LGRAY);
+    is_initialized = TRUE;
 
     return KERNEL_OK;
 }
@@ -181,10 +203,10 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
 
     if (is_negative) number = -number;
 
-    while (number > 0) {
+    do {
         *(--cursor) = digit_table[number % notation];
         number /= notation;
-    }
+    } while (number > 0);
 
     // Print notation prefix (0b, 0o, 0x)
     cursor -= 2;
@@ -266,7 +288,7 @@ void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
                 break;
             case 's': // String
                 arg_value = va_arg(args, uint64_t);
-                raw_puts((const char*)arg_value);
+                if (arg_value != NULL) raw_puts((const char*)arg_value);
                 break;
             case 'c': // Char
                 arg_value = va_arg(args, uint64_t);

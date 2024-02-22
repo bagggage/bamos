@@ -10,11 +10,15 @@ extern unsigned char environment[4096]; // configuration, UTF-8 text key=value p
 void _start() {
   Status status = init_kernel();
 
-  if (status != KERNEL_OK) {
+  if (status == KERNEL_ERROR) {
     // TODO: handle kernel panic
-    kernel_error("Initialization failed: %e", status);
+    kernel_error("Initialization failed: (%e) %s", status, error_str);
+  }
+  else if (status == KERNEL_PANIC) {
     while (1);
   }
+
+  kernel_msg("Kernel initialized successfuly\n");
 
   KeyboardDevice* keyboard = dev_pool.data[DEV_KEYBOARD_ID];
 
