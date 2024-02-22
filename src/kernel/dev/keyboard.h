@@ -4,7 +4,7 @@
 #include "definitions.h"
 
 typedef enum KernelScancode {
-    NONE = 0x00,
+    SCAN_CODE_NONE = 0x00,
     SCAN_CODE_ESC = 0x01,
     SCAN_CODE_1 = 0x02,
     SCAN_CODE_2 = 0x03,

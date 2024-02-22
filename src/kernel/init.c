@@ -36,10 +36,12 @@ Status init_io_devices() {
     if (add_device(DEV_DISPLAY, &display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
 
+    if (init_kernel_logger(display->fb, &_binary_font_psf_start) != KERNEL_OK) return KERNEL_ERROR;
+
     if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
-    return init_kernel_logger(display->fb, &_binary_font_psf_start);
+    return KERNEL_OK;
 }
 
 Status init_io_streams() {
