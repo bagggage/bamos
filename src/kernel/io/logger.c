@@ -88,9 +88,21 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
 void scroll_logger_fb(uint8_t rows_offset) {
 }
 
-void move_cursor(uint8_t row_offset, uint8_t col_offset) {
-    logger.row += row_offset;
-    logger.col += col_offset;
+void move_cursor(int8_t row_offset, int8_t col_offset) {
+    if (col_offset > 0 || logger.col >= -col_offset) {
+        logger.col += col_offset;
+    }
+    else {
+        if (logger.row == logger.col && logger.col == 0)
+            return;
+
+        row_offset -= ((-col_offset) / logger.max_col) + 1;
+        logger.col = logger.max_col + col_offset + logger.col;
+    }
+
+    if (row_offset > 0 || logger.row >= -row_offset) {
+        logger.row += row_offset;
+    }
 
     if (logger.col >= logger.max_col) {
         logger.col = logger.col % logger.max_col;
@@ -102,7 +114,12 @@ void move_cursor(uint8_t row_offset, uint8_t col_offset) {
     }
 }
 
+uint64_t calc_logger_fb_offset() {
+    return (logger.row * (logger.fb->scanline * logger.font.height)) + ((logger.col * logger.font.width) << 2);
+}
+
 void raw_putc(char c) {
+    if (c == '\0') return;
     if (c == '\n') {
         logger.col = 0;
         move_cursor(1, 0);
@@ -110,8 +127,25 @@ void raw_putc(char c) {
         return;
     }
 
+    uint64_t curr_offset;
+
+    if (c == '\b') {
+        move_cursor(0, -1);
+        curr_offset = calc_logger_fb_offset();
+
+        for (int y = 0; y < logger.font.height; ++y) {
+            for (int x = 0; x < logger.font.width; ++x) {
+                *(uint32_t*)(logger.fb->base + curr_offset + (x << 2)) = 0x00000000;
+            }
+
+            curr_offset += logger.fb->scanline;
+        }
+
+        return;
+    }
+
     const uint8_t* const glyph = logger.font.glyphs + (logger.font.charsize * c);
-    uint64_t curr_offset = (logger.row * (logger.fb->scanline * logger.font.height)) + ((logger.col * logger.font.width) << 2);
+    curr_offset = calc_logger_fb_offset();
 
     for (int y = 0; y < logger.font.height; ++y) {
         uint32_t y_bit_idx = 0;

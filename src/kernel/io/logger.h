@@ -16,6 +16,9 @@ typedef enum LogType {
 
 Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr);
 
+void raw_putc(char c);
+void raw_puts(const char* string);
+
 // Prints log to display framebuffer
 void kernel_log(LogType log_type, const char* fmt, ...);
 
