@@ -16,12 +16,35 @@ void outb(uint16_t port, uint8_t value) {
     asm volatile("out %%al, %%dx" : : "a"(value), "d"(port));
 }
 
+void wait() {
+    for (size_t i = 0; i < 0xFF000000; ++i) {
+        asm volatile("");
+    }
+}
+
 Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
     if (keyboard_device == NULL) return KERNEL_ERROR;
 
-    //outb(PS2_COMMAND_PORT, SET_DEFAULT_PARAMETERS); 
-    if (inb(PS2_DATA_PORT) != ACK) return KERNEL_ERROR;
+    outb(PS2_DATA_PORT, SET_DEFAULT_PARAMETERS);
 
+    uint8_t result;
+
+    if ((result = inb(PS2_DATA_PORT)) != ACK) {
+        for (size_t i = 0; i < 10; ++i) {
+            outb(PS2_DATA_PORT, SET_DEFAULT_PARAMETERS);
+
+            wait();
+
+            if (result = inb(PS2_DATA_PORT) == ACK) goto init_interface; 
+        }
+
+        if (result != ACK) {
+            error_str = "PS/2 Keyboard uninitialized successfull";
+            return result == RESEND ? KERNEL_ERROR : KERNEL_PANIC;
+        }
+    }
+
+init_interface:
     keyboard_device->interface.get_scan_code = &ps2_get_scan_code;
 
     return KERNEL_OK;
