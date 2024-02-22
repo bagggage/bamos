@@ -40,6 +40,9 @@ typedef struct DevicePool {
     size_t size;
 } DevicePool;
 
+#define DEV_DISPLAY_ID 0
+#define DEV_KEYBOARD_ID 1
+
 /*
 Dynamic pool of devices, must be used only inside kernel.
 There are two devices that should be always available after initialization: display and keyboard,
