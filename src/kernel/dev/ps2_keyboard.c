@@ -3,6 +3,7 @@
 #include "io/logger.h"
 #include "keyboard.h"
 #include "mem.h"
+#include "tty.h"
 
 // for more info see PS/2 commands
 typedef enum Commands {
