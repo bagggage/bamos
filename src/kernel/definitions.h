@@ -29,3 +29,5 @@ typedef enum Status {
     KERNEL_ERROR,
     KERNEL_PANIC,
 } Status;
+
+#define ATTR_PACKED __attribute__((packed))
