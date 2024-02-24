@@ -1,8 +1,8 @@
 #include "keyboard.h"
 
-uint8_t keyboard_scan_code_to_kernel_scan_code(uint8_t (*keyboard_scan_code) (void)) {
+uint8_t keyboard_scan_code_to_kernel_scan_code() {
     // TODO: convert keyboard scan code to kernel scan code
-    return keyboard_scan_code();
+    return 0;
 }
 
 unsigned char scan_code_to_ascii(KernelScancode scan_code) {

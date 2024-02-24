@@ -47,7 +47,7 @@ void debug_point() {
     offset += 200;
 }
 
-void logger_set_color(uint8_t r, uint8_t g, uint8_t b) {
+static void logger_set_color(uint8_t r, uint8_t g, uint8_t b) {
     switch (logger.fb->format)
     {
     case FB_FORMAT_ABGR:
@@ -107,10 +107,10 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
 }
 
 // Scrolls raw terminal up
-void scroll_logger_fb(uint8_t rows_offset) {
+static void scroll_logger_fb(uint8_t rows_offset) {
 }
 
-void move_cursor(int8_t row_offset, int8_t col_offset) {
+static void move_cursor(int8_t row_offset, int8_t col_offset) {
     if (col_offset > 0 || logger.col >= -col_offset) {
         logger.col += col_offset;
     }
@@ -136,7 +136,7 @@ void move_cursor(int8_t row_offset, int8_t col_offset) {
     }
 }
 
-uint64_t calc_logger_fb_offset() {
+static uint64_t calc_logger_fb_offset() {
     return (logger.row * (logger.fb->scanline * logger.font.height)) + ((logger.col * logger.font.width) << 2);
 }
 
@@ -232,7 +232,7 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
     raw_puts(cursor);
 }
 
-void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
+static void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
     switch (log_type)
     {
     case LOG_MSG:
