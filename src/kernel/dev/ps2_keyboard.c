@@ -2,7 +2,6 @@
 
 #include "io/tty.h"
 #include "io/logger.h"
-#include "io/tty.h"
 #include "keyboard.h"
 #include "mem.h"
 
