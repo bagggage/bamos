@@ -2,19 +2,17 @@
 
 #include <bootboot.h>
 #include <cpuid.h>
+#include <stddef.h>
 
 #include "dev/bootboot_display.h"
 #include "dev/keyboard.h"
 #include "dev/ps2_keyboard.h"
+#include "mem.h"
+#include "io/acpi.h"
 #include "io/logger.h"
+#include "io/pci.h"
 
 #define CPUID_GET_FEATURE 1
-
-#ifdef MEM_RAW_PATCH
-Status init_memory() {
-    return KERNEL_OK;
-}
-#endif
 
 extern BOOTBOOT bootboot;
 extern volatile unsigned char _binary_font_psf_start;
@@ -24,11 +22,11 @@ void halt_logical_core() {
 }
 
 void logical_core_delay(uint64_t idx) {
-    uint64_t end_point = idx << 21;
+    uint64_t end_point = idx << 23;
 
     do {
         ++idx;
-        __asm__ __volatile__("");
+        asm volatile("");
     } while (idx < end_point);
 }
 
@@ -55,17 +53,20 @@ Status split_logical_cores() {
     // Only core with ID = 0 pass
     if (ebx != 0) halt_logical_core();
 
-    logical_core_delay(32);
+    logical_core_delay(bootboot.numcores);
     kernel_msg("Kernel startup on CPU %u\n", ebx);
 
     return KERNEL_OK;
 }
 
+extern uint32_t fb[];
+
 Status init_kernel() {
     if (split_logical_cores() != KERNEL_OK) return KERNEL_PANIC;
-
     // After this step we should be able to use memory allocations, otherwise drop kernel =)
     if (init_memory() != KERNEL_OK) return KERNEL_PANIC;
+
+    if (init_acpi() != KERNEL_OK) return KERNEL_ERROR;
 
     Status status = init_io_devices();
 
@@ -84,8 +85,20 @@ Status init_io_devices() {
     if (add_device(DEV_DISPLAY, &display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
 
-    if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
-    if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
+    for (uint8_t bus = 0; bus < 4; ++bus) {
+        for (uint8_t dev = 0; dev < 32; ++dev) {
+            for (uint8_t func = 0; func < 8; ++func) {
+                uint16_t vendor_id = pci_config_readw(bus, dev, func, 0);
+
+                if (vendor_id == 0xFFFF) break;
+
+                kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id - %x\n", (uint32_t)bus, (uint32_t)dev, (uint32_t)func, (uint64_t)vendor_id);
+            }
+        }
+    }
+
+    //if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    //if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }

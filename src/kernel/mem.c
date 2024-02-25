@@ -1,5 +1,21 @@
 #include "mem.h"
 
+#include <bootboot.h>
+
+#include "io/logger.h"
+
+static PageMapLevel4Entry* get_current_pml4() {
+    uint64_t ptr = NULL;
+
+    asm volatile("mov %%cr3,%0":"=a"(ptr));
+
+    return (PageMapLevel4Entry*)ptr;
+}
+
+static void set_pml4(PageMapLevel4Entry* pml4) {
+    asm volatile("mov %0,%%cr3"::"a"(pml4));
+}
+
 #define MEM_RAW_PATCH
 #ifdef MEM_RAW_PATCH
 typedef struct MemBlock {
@@ -108,3 +124,105 @@ void* kmalloc(size_t size) {
 void kfree(void* allocated_mem) {
 }
 #endif
+
+extern BOOTBOOT bootboot;
+
+Status init_memory() {
+    kernel_msg("Memory map:\n");
+
+    MMapEnt* mem_map = &bootboot.mmap.ptr;
+    size_t used_mem_size_in_kb = 0;
+
+    for (size_t i = 0; i < (bootboot.size - (sizeof(bootboot))) / sizeof(MMapEnt); ++i) {
+        const char* type_str = NULL;
+
+        switch (MMapEnt_Type(mem_map + i))
+        {
+        case MMAP_USED: type_str = "USED"; break;
+        case MMAP_FREE: type_str = "FREE"; break;
+        case MMAP_ACPI: type_str = "ACPI"; break;
+        case MMAP_MMIO: type_str = "MMIO"; break;
+        default:
+            type_str = "INVALID TYPE";
+            break;
+        }
+
+        if (MMapEnt_Type(mem_map + i) != MMAP_FREE) used_mem_size_in_kb += mem_map[i].size;
+
+        kernel_msg("Entry - ptr: %x; size: %u; type: %s\n", mem_map[i].ptr, mem_map[i].size, type_str);
+    }
+
+    kernel_msg("Used memmory: %u KB (%u MB)\n", used_mem_size_in_kb / 1024, used_mem_size_in_kb / (1024*1024));
+
+    return KERNEL_OK;
+}
+
+void log_memory_page_tables() {
+    PageMapLevel4Entry* pml4 = get_current_pml4();
+    kernel_msg("PLM4: %x\n", pml4);
+
+    for (size_t i = 0; i < PAGE_TABLE_MAX_SIZE; ++i) {
+        if (pml4[i].present == FALSE) continue;
+
+        PageDirPtrEntry* pdpe = (PageDirPtrEntry*)(pml4[i].page_ppn << 12);
+        kernel_msg("Page map level 4 entry[%u]: %x\n", i, pdpe);
+
+        for (size_t j = 0; j < PAGE_TABLE_MAX_SIZE; ++j) {
+            if (pdpe[j].present == FALSE) continue;
+
+            PageDirEntry* pde = (PageDirEntry*)(pdpe[j].page_ppn << 12);
+            kernel_msg("|---Page directory ptr entry[%u]: %x %s\n", j, pde, pdpe[i].size ? "1 GB" : "");
+
+            for (size_t g = 0; g < PAGE_TABLE_MAX_SIZE; ++g) {
+                if (pde[g].present == FALSE) continue;
+
+                PageTableEntry* pte = (PageDirEntry*)(pde[g].page_ppn << 12);
+                kernel_msg("|---|---Page directory entry[%u]: %x\n", g, pte);
+            }
+        }
+    }
+}
+
+static inline bool_t is_virt_addr_valid(uint64_t address) {
+    VirtualAddress virtual_addr = *(VirtualAddress*)&address;
+
+    return (virtual_addr.sign_extended == 0 || virtual_addr.sign_extended == 0xFFFF);
+}
+
+static inline bool_t is_page_table_entry_valid(PageTableEntry* pte) {
+    return *(uint64_t*)pte != 0;
+}
+
+PageTableEntry* get_pte_of_virt_addr(uint64_t address) {
+    if (is_virt_addr_valid(address) == FALSE) return NULL;
+
+    VirtualAddress virtual_addr = *(VirtualAddress*)&address;
+    PageMapLevel4Entry* plm4e = get_current_pml4() + virtual_addr.p4_index;
+
+    if (is_page_table_entry_valid(plm4e) == FALSE) return NULL;
+
+    PageDirPtrEntry* pdpe = (plm4e->page_ppn << 12) + virtual_addr.p3_index;
+
+    if (is_page_table_entry_valid(pdpe) == FALSE) return NULL;
+
+    PageDirEntry* pde = (pdpe->page_ppn << 12) + virtual_addr.p2_index;
+
+    if (is_page_table_entry_valid(pde) == FALSE) return NULL;
+
+    PageTableEntry* pte = (pdpe->page_ppn << 12) + virtual_addr.p1_index;
+
+    return (is_page_table_entry_valid(pte) == FALSE ? NULL : pte);
+}
+
+bool_t is_virt_addr_mapped(uint64_t address) {
+    return get_pte_of_virt_addr(address) != NULL;
+}
+
+uint64_t get_phys_address(uint64_t virt_addr) {
+    VirtualAddress virtual_addr = *(VirtualAddress*)&virt_addr;
+    PageTableEntry* pte = get_pte_of_virt_addr(virt_addr);
+
+    if (pte == NULL) return INVALID_ADDRESS;
+
+    return (pte->page_ppn << 12) + virtual_addr.offset;
+}
