@@ -3,8 +3,9 @@
 #include <bootboot.h>
 
 extern BOOTBOOT bootboot; // see bootboot.h
+extern uint32_t fb[];
 
-static Framebuffer display_fb;
+Framebuffer display_fb;
 
 #define BOOTBOOT_FB_BPP 4
 
@@ -13,7 +14,7 @@ Status init_bootboot_display(DisplayDevice* dev) {
         return KERNEL_ERROR;
     }
 
-    display_fb.base = (uint8_t*)bootboot.fb_ptr;
+    display_fb.base = (uint8_t*)fb;
     display_fb.width = bootboot.fb_width;
     display_fb.height = bootboot.fb_height;
     display_fb.scanline = bootboot.fb_scanline;

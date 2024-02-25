@@ -19,6 +19,9 @@
 #define COLOR_ORANGE    255,    165,    0
 
 extern BOOTBOOT bootboot;
+extern uint32_t fb[];
+
+#define BOOTBOOT_FB_BPP 4
 
 const char* error_str = NULL;
 
@@ -38,7 +41,7 @@ Framebuffer early_fb;
 void debug_point() {
     static uint32_t offset = 0;
 
-    uint32_t* base = (uint32_t*)bootboot.fb_ptr + offset;
+    uint32_t* base = fb + offset;
 
     for (size_t i = 0; i < 100; ++i) {
         base[i] = 0x00FFFFFF;
@@ -82,12 +85,12 @@ bool_t is_logger_initialized() {
 }
 
 Status init_kernel_logger_raw(const uint8_t* font_binary_ptr) {
-    early_fb.base = bootboot.fb_ptr;
+    early_fb.base = fb;
     early_fb.width = bootboot.fb_width;
     early_fb.height = bootboot.fb_height;
     early_fb.scanline = bootboot.fb_scanline;
     early_fb.format = (FbFormat)bootboot.fb_type;
-    early_fb.bpp = 4;
+    early_fb.bpp = BOOTBOOT_FB_BPP;
 
     return init_kernel_logger(&early_fb, font_binary_ptr);
 }
@@ -110,7 +113,7 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
 void scroll_logger_fb(uint8_t rows_offset) {
 }
 
-void move_cursor(int8_t row_offset, int8_t col_offset) {
+static void move_cursor(int8_t row_offset, int8_t col_offset) {
     if (col_offset > 0 || logger.col >= -col_offset) {
         logger.col += col_offset;
     }
@@ -136,7 +139,7 @@ void move_cursor(int8_t row_offset, int8_t col_offset) {
     }
 }
 
-uint64_t calc_logger_fb_offset() {
+static uint64_t calc_logger_fb_offset() {
     return (logger.row * (logger.fb->scanline * logger.font.height)) + ((logger.col * logger.font.width) << 2);
 }
 
@@ -193,7 +196,7 @@ void raw_puts(const char* string) {
     }
 }
 
-void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
+static void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
     static const char digit_table[] = "0123456789ABCDEF";
     static char out_buffer[32] = { '\0' };
 
@@ -232,7 +235,7 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
     raw_puts(cursor);
 }
 
-void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
+static void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
     switch (log_type)
     {
     case LOG_MSG:
