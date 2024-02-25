@@ -13,19 +13,13 @@ void _start() {
   if (status == KERNEL_ERROR) {
     // TODO: handle kernel panic
     kernel_error("Initialization failed: (%e) %s", status, error_str);
+    while (1);    
   }
   else if (status == KERNEL_PANIC) {
     while (1);
   }
 
   kernel_msg("Kernel initialized successfuly\n");
-
-  KeyboardDevice* keyboard = dev_pool.data[DEV_KEYBOARD_ID];
-
-  while (1) {
-    char c = scan_code_to_ascii(keyboard->interface.get_scan_code());
-    raw_putc(c);
-  }
 
   // TODO: handle user space, do some stuff
 
