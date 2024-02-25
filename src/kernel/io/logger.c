@@ -50,7 +50,7 @@ void debug_point() {
     offset += 200;
 }
 
-void logger_set_color(uint8_t r, uint8_t g, uint8_t b) {
+static void logger_set_color(uint8_t r, uint8_t g, uint8_t b) {
     switch (logger.fb->format)
     {
     case FB_FORMAT_ABGR:
@@ -110,8 +110,11 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
 }
 
 // Scrolls raw terminal up
-void scroll_logger_fb(uint8_t rows_offset) {
+static void scroll_logger_fb(uint8_t rows_offset) {
 }
+
+// FIXME: when array size set to uint32_max - program terminated 1 error
+uint32_t last_cursor_positions_in_columns[UINT16_MAX];
 
 static void move_cursor(int8_t row_offset, int8_t col_offset) {
     if (col_offset > 0 || logger.col >= -col_offset) {
@@ -122,14 +125,19 @@ static void move_cursor(int8_t row_offset, int8_t col_offset) {
             return;
 
         row_offset -= ((-col_offset) / logger.max_col) + 1;
-        logger.col = logger.max_col + col_offset + logger.col;
+
+        (logger.row > 0) ? (logger.col = last_cursor_positions_in_columns[logger.row - 1]) :
+                           (logger.col = 0);
+
     }
 
     if (row_offset > 0 || logger.row >= -row_offset) {
+        last_cursor_positions_in_columns[logger.row] = logger.col;
         logger.row += row_offset;
     }
 
     if (logger.col >= logger.max_col) {
+        last_cursor_positions_in_columns[logger.row] = logger.max_col;
         logger.col = logger.col % logger.max_col;
         ++logger.row;
     }
@@ -139,15 +147,15 @@ static void move_cursor(int8_t row_offset, int8_t col_offset) {
     }
 }
 
-static uint64_t calc_logger_fb_offset() {
+static static uint64_t calc_logger_fb_offset() {
     return (logger.row * (logger.fb->scanline * logger.font.height)) + ((logger.col * logger.font.width) << 2);
 }
 
 void raw_putc(char c) {
     if (c == '\0') return;
     if (c == '\n') {
-        logger.col = 0;
         move_cursor(1, 0);
+        logger.col = 0;
 
         return;
     }

@@ -26,6 +26,8 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr);
 void raw_putc(char c);
 void raw_puts(const char* string);
 
+void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation);
+
 // Prints log to display framebuffer
 void kernel_log(LogType log_type, const char* fmt, ...);
 

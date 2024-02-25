@@ -8,7 +8,7 @@ DevicePool dev_pool = { NULL, 0 };
 
 size_t last_id = 0;
 
-size_t get_avail_dev_id() {
+static size_t get_avail_dev_id() {
     return last_id++;
 }
 
