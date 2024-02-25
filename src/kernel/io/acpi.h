@@ -2,6 +2,34 @@
 
 #include "definitions.h"
 
+typedef enum AddressSpace {
+    ADDRESS_SPACE_SYSTEM_MEM = 0,
+    ADDRESS_SPACE_SYSTEM_IO,
+    ADDRESS_SPACE_PCI_CONFIG_SPACE,
+    ADDRESS_SPACE_EMBEDDED_CONTROLLER,
+    ADDRESS_SPACE_SYSTEM_MANAGEMENT_BUS,
+    ADDRESS_SPACE_SYSTEM_CMOS,
+    ADDRESS_SPACE_PCI_DEV_BAR,
+    ADDRESS_SPACE_IPMI,
+    ADDRESS_SPACE_GENERIC_IO,
+    ADDRESS_SPACE_GENERIC_SERIAL_BUS,
+    ADDRESS_SPACE_PLATFORM_COMM_CHANNEL,
+
+    ADDRESS_SPACE_RESERVED,
+    ADDRESS_SPACE_RESERVED_END = 0x80,
+
+    ADDRESS_SPACE_OEM_DEFINED = 0x80
+} AddressSpace;
+
+typedef enum AccessSize {
+    ACCESS_UNDEFINED = 0,
+    ACCESS_BYTE,
+    ACCESS_WORD,
+    ACCESS_DWORD,
+    ACCESS_QWORD
+} AccessSize;
+
+// General address structure
 typedef struct GAS {
     uint8_t address_space_id;    // 0 - system memory, 1 - system I/O
     uint8_t register_bit_width;
@@ -20,19 +48,37 @@ typedef struct ACPISDTHeader {
     uint32_t oem_revision;
     uint32_t creator_id;
     uint32_t creator_revision;
-} ATTR_PACKED ACPISTDHeader;
+} ATTR_PACKED ACPISDTHeader;
 
 typedef struct RSDT {
     ACPISDTHeader header;
-    uint32_t* other_sdt; // Size of pointers array [(header.length - sizeof(header)) / 4]
-} RSDT;
+    uint32_t other_sdt[]; // Size of pointers array [(header.length - sizeof(header)) / 4]
+} ATTR_PACKED RSDT;
 
 typedef struct XSDT {
     ACPISDTHeader header;
-    uint64_t* other_sdt; // Size of pointers array [(header.length - sizeof(header)) / 8]
-} XSDT;
+    uint64_t other_sdt[]; // Size of pointers array [(header.length - sizeof(header)) / 8]
+} ATTR_PACKED XSDT;
 
-struct FADT
+extern XSDT* acpi_xsdt; // 64-bit version of RSDT
+extern RSDT* acpi_rsdt; // 32-bit System Descriptor Table
+
+extern size_t acpi_xsdt_size;
+extern size_t acpi_rsdt_size;
+
+typedef enum PreferredPowerManagementProfile {
+    PREF_POWER_PROFILE_UNSPECIFIED = 0,
+    PREF_POWER_PROFILE_DESKTOP,
+    PREF_POWER_PROFILE_MOBILE,
+    PREF_POWER_PROFILE_WORKSTATION,
+    PREF_POWER_PROFILE_ENTERPRICE_SERVER,
+    PREF_POWER_PROFILE_SOHO_SERVER,
+    PREF_POWER_PROFILE_APLLIANCE_PC,
+    PREF_POWER_PROFILE_PERFORMANCE_SERVER,
+    PREF_POWER_PROFILE_RESERVED
+} PreferredPowerManagementProfile;
+
+typedef struct FADT
 {
     ACPISDTHeader header;
     uint32_t firmware_ctrl;
@@ -98,6 +144,15 @@ struct FADT
     GAS x_pm_timer_block;
     GAS x_gpe0_block;
     GAS x_gpe1_block;
-};
+} FADT;
 
+bool_t acpi_checksum(ACPISDTHeader* header);
 
+Status init_acpi();
+
+/*
+Search ACPI SDT entry by signature.
+Returns pointer to ACPI SDT structure if found.
+Otherwise returns nullptr.
+*/
+ACPISDTHeader* acpi_find_entry(const char signature[4]);
