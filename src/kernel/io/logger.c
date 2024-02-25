@@ -147,7 +147,7 @@ static void move_cursor(int8_t row_offset, int8_t col_offset) {
     }
 }
 
-static static uint64_t calc_logger_fb_offset() {
+static uint64_t calc_logger_fb_offset() {
     return (logger.row * (logger.fb->scanline * logger.font.height)) + ((logger.col * logger.font.width) << 2);
 }
 
@@ -204,7 +204,7 @@ void raw_puts(const char* string) {
     }
 }
 
-static void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
+void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
     static const char digit_table[] = "0123456789ABCDEF";
     static char out_buffer[32] = { '\0' };
 
