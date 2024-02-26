@@ -4,6 +4,7 @@
 #include <stdarg.h>
 
 #include "font.h"
+#include "mem.h"
 
 #define COLOR_BLACK     0,      0,      0
 #define COLOR_WHITE     255,    255,    255
@@ -109,8 +110,26 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
     return KERNEL_OK;
 }
 
+uint16_t kernel_logger_get_rows() {
+    return logger.max_row;
+}
+
+uint16_t kernel_logger_get_cols() {
+    return logger.max_col;
+}
+
+void kernel_logger_set_cursor_pos(uint16_t row, uint16_t col) {
+    logger.row = row % logger.max_row;
+    logger.col = col % logger.max_col;
+}
+
 // Scrolls raw terminal up
 static void scroll_logger_fb(uint8_t rows_offset) {
+    size_t rows_byte_offset = rows_offset * logger.fb->scanline * logger.font.height;
+    size_t fb_size = logger.fb->height * logger.fb->scanline;
+
+    memcpy(logger.fb->base + rows_byte_offset, logger.fb->base, fb_size - rows_byte_offset);
+    memset(logger.fb->base + (fb_size - rows_byte_offset), rows_byte_offset, 0x0);
 }
 
 // FIXME: when array size set to uint32_max - program terminated 1 error
@@ -296,6 +315,10 @@ static void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
             case 'x': // Unsigned hex
                 arg_value = va_arg(args, uint64_t);
                 raw_print_number(arg_value, FALSE, 16);
+                break;
+            case 'b':
+                arg_value = va_arg(args, uint32_t);
+                raw_print_number(arg_value, FALSE, 2);
                 break;
             case 's': // String
                 arg_value = va_arg(args, uint64_t);
