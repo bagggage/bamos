@@ -193,6 +193,12 @@ static inline bool_t is_page_table_entry_valid(PageTableEntry* pte) {
     return *(uint64_t*)pte != 0;
 }
 
+static inline void log_page_table_entry(PageTableEntry* pte) {
+    kernel_msg("PTE %x:\n", pte);
+    kernel_msg("|---Present: %u\n", (uint32_t)pte->present);
+    kernel_msg("|---Page base: %u\n", (uint32_t)pte->page_ppn);
+}
+
 PageTableEntry* get_pte_of_virt_addr(uint64_t address) {
     if (is_virt_addr_valid(address) == FALSE) return NULL;
 
@@ -201,15 +207,15 @@ PageTableEntry* get_pte_of_virt_addr(uint64_t address) {
 
     if (is_page_table_entry_valid(plm4e) == FALSE) return NULL;
 
-    PageDirPtrEntry* pdpe = (plm4e->page_ppn << 12) + virtual_addr.p3_index;
+    PageDirPtrEntry* pdpe = (PageDirPtrEntry*)(plm4e->page_ppn << 12) + virtual_addr.p3_index;
 
     if (is_page_table_entry_valid(pdpe) == FALSE) return NULL;
 
-    PageDirEntry* pde = (pdpe->page_ppn << 12) + virtual_addr.p2_index;
+    PageDirEntry* pde = (PageDirPtrEntry*)(pdpe->page_ppn << 12) + virtual_addr.p2_index;
 
     if (is_page_table_entry_valid(pde) == FALSE) return NULL;
 
-    PageTableEntry* pte = (pdpe->page_ppn << 12) + virtual_addr.p1_index;
+    PageTableEntry* pte = (PageDirPtrEntry*)(pde->page_ppn << 12) + virtual_addr.p1_index;
 
     return (is_page_table_entry_valid(pte) == FALSE ? NULL : pte);
 }
@@ -225,4 +231,16 @@ uint64_t get_phys_address(uint64_t virt_addr) {
     if (pte == NULL) return INVALID_ADDRESS;
 
     return (pte->page_ppn << 12) + virtual_addr.offset;
+}
+
+void memcpy(const void* src, void* dst, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+        ((uint8_t*)dst)[i] = ((const uint8_t*)src)[i];
+    }
+}
+
+void memset(void* dst, size_t size, uint8_t value) {
+    for (size_t i = 0; i < size; ++i) {
+        ((uint8_t*)dst)[i] = value;
+    }
 }
