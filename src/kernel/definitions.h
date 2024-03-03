@@ -31,3 +31,4 @@ typedef enum Status {
 } Status;
 
 #define ATTR_PACKED __attribute__((packed))
+#define ATTR_INTRRUPT __attribute__((interrupt, target("general-regs-only")))
