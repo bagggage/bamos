@@ -3,8 +3,9 @@
 #include <bootboot.h>
 #include <stdarg.h>
 
-#include "font.h"
 #include "mem.h"
+
+#include "video/font.h"
 
 #define COLOR_BLACK     0,      0,      0
 #define COLOR_WHITE     255,    255,    255
@@ -36,7 +37,7 @@ typedef struct Logger {
     uint8_t color[4];
 } Logger;
 
-Logger logger = { NULL, {}, 0, 0, 0, 0, 0xFFFFFFFF };
+Logger logger = { NULL, {}, 0, 0, 0, 0, { 0xFF, 0xFF, 0xFF, 0xFF } };
 Framebuffer early_fb;
 
 void debug_point() {
@@ -86,7 +87,7 @@ bool_t is_logger_initialized() {
 }
 
 Status init_kernel_logger_raw(const uint8_t* font_binary_ptr) {
-    early_fb.base = fb;
+    early_fb.base = (uint8_t*)fb;
     early_fb.width = bootboot.fb_width;
     early_fb.height = bootboot.fb_height;
     early_fb.scanline = bootboot.fb_scanline;
@@ -123,12 +124,18 @@ void kernel_logger_set_cursor_pos(uint16_t row, uint16_t col) {
     logger.col = col % logger.max_col;
 }
 
+static inline void fast_memcpy(const uint32_t* src, uint32_t* dst, const size_t size) {
+    for (size_t i = 0; i < (size / sizeof(uint32_t)); ++i) {
+        dst[i] = src[i];
+    }
+}
+
 // Scrolls raw terminal up
-static void scroll_logger_fb(uint8_t rows_offset) {
+static inline void scroll_logger_fb(uint8_t rows_offset) {
     size_t rows_byte_offset = rows_offset * logger.fb->scanline * logger.font.height;
     size_t fb_size = logger.fb->height * logger.fb->scanline;
 
-    memcpy(logger.fb->base + rows_byte_offset, logger.fb->base, fb_size - rows_byte_offset);
+    fast_memcpy((uint32_t*)(logger.fb->base + rows_byte_offset), (uint32_t*)logger.fb->base, fb_size - rows_byte_offset);
     memset(logger.fb->base + (fb_size - rows_byte_offset), rows_byte_offset, 0x0);
 }
 
@@ -244,13 +251,13 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
     switch (notation)
     {
     case 2:
-        *(uint16_t*)cursor = 'b0';
+        *(uint16_t*)cursor = (uint16_t)('0' | ('b' << 8)); // '0b' - prefix
         break;
     case 8:
-        *(uint16_t*)cursor = 'o0';
+        *(uint16_t*)cursor = (uint16_t)('0' | ('o' << 8)); // '0o' - prefix
         break;
     case 16:
-        *(uint16_t*)cursor = 'x0';
+        *(uint16_t*)cursor = (uint16_t)('0' | ('x' << 8)); // '0x' - prefix
         break;
     default:
         cursor += 2;
@@ -322,7 +329,7 @@ static void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
                 break;
             case 's': // String
                 arg_value = va_arg(args, uint64_t);
-                if (arg_value != NULL) raw_puts((const char*)arg_value);
+                if ((const char*)arg_value != NULL) raw_puts((const char*)arg_value);
                 break;
             case 'c': // Char
                 arg_value = va_arg(args, uint64_t);
@@ -331,7 +338,7 @@ static void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
             case 'p': // Pointer
                 arg_value = va_arg(args, uint64_t);
                 
-                if (arg_value == NULL) {
+                if ((void*)arg_value == NULL) {
                     raw_puts("nullptr");
                 }
                 else {
