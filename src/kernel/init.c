@@ -27,17 +27,8 @@ static void halt_logical_core() {
     while (1);
 }
 
-static void logical_core_delay(uint64_t idx) {
-    uint64_t end_point = idx << 23;
-
-    do {
-        ++idx;
-        asm volatile("");
-    } while (idx < end_point);
-}
-
 static Status split_logical_cores() {
-    uint32_t eax, ebx, ecx, edx;
+    uint32_t eax, ebx = 0, ecx, edx;
 
     __get_cpuid(CPUID_GET_FEATURE, &eax, &ebx, &ecx, &edx);
 
@@ -95,7 +86,7 @@ Status init_kernel() {
 Status init_io_devices() {
     // TODO
     DisplayDevice* display;
-    KeyboardDevice* keyboard;
+    //KeyboardDevice* keyboard;
 
     if (add_device(DEV_DISPLAY, (void**)&display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;

@@ -24,7 +24,7 @@ bool_t is_acpi_reserved_address_space(const GAS* address) {
 bool_t acpi_checksum(const ACPISDTHeader* header) {
     unsigned char sum = 0;
 
-    for (int i = 0; i < header->length; i++) {
+    for (uint32_t i = 0; i < header->length; i++) {
         sum += ((char*)header)[i];
     }
  

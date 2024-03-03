@@ -10,7 +10,7 @@ Framebuffer display_fb;
 #define BOOTBOOT_FB_BPP 4
 
 bool_t bootboot_display_is_avail() {
-    return ((void*)bootboot.fb_ptr != NULL && (void*)fb != NULL && bootboot.fb_size > 0);
+    return ((void*)bootboot.fb_ptr != NULL && bootboot.fb_size > 0);
 }
 
 Status init_bootboot_display(DisplayDevice* dev) {

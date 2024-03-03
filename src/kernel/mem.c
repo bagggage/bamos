@@ -32,7 +32,7 @@ MemBlock* get_next_allocated_block(size_t i) {
         ++i;
     }
 
-    return NULL;
+    return last_block;
 }
 
 void* kmalloc(size_t size) {
@@ -180,9 +180,9 @@ void log_memory_page_tables() {
 }
 
 static inline bool_t is_virt_addr_valid(uint64_t address) {
-    VirtualAddress virtual_addr = *(VirtualAddress*)&address;
+    VirtualAddress* virtual_addr = (VirtualAddress*)&address;
 
-    return (virtual_addr.sign_extended == 0 || virtual_addr.sign_extended == 0xFFFF);
+    return (virtual_addr->sign_extended == 0 || virtual_addr->sign_extended == 0xFFFF);
 }
 
 static inline bool_t is_page_table_entry_valid(PageXEntry* pte) {
@@ -198,20 +198,20 @@ static inline void log_page_table_entry(PageXEntry* pte) {
 PageTableEntry* get_pte_of_virt_addr(uint64_t address) {
     if (is_virt_addr_valid(address) == FALSE) return NULL;
 
-    VirtualAddress virtual_addr = *(VirtualAddress*)&address;
-    PageMapLevel4Entry* plm4e = cpu_get_current_pml4() + virtual_addr.p4_index;
+    VirtualAddress* virtual_addr = (VirtualAddress*)&address;
+    PageMapLevel4Entry* plm4e = cpu_get_current_pml4() + virtual_addr->p4_index;
 
     if (is_page_table_entry_valid(plm4e) == FALSE) return NULL;
 
-    PageDirPtrEntry* pdpe = (PageDirPtrEntry*)(uint64_t)(plm4e->page_ppn << 12) + virtual_addr.p3_index;
+    PageDirPtrEntry* pdpe = (PageDirPtrEntry*)(uint64_t)(plm4e->page_ppn << 12) + virtual_addr->p3_index;
 
     if (is_page_table_entry_valid(pdpe) == FALSE) return NULL;
 
-    PageDirEntry* pde = (PageDirEntry*)(uint64_t)(pdpe->page_ppn << 12) + virtual_addr.p2_index;
+    PageDirEntry* pde = (PageDirEntry*)(uint64_t)(pdpe->page_ppn << 12) + virtual_addr->p2_index;
 
     if (is_page_table_entry_valid(pde) == FALSE) return NULL;
 
-    PageTableEntry* pte = (PageTableEntry*)(uint64_t)(pde->page_ppn << 12) + virtual_addr.p1_index;
+    PageTableEntry* pte = (PageTableEntry*)(uint64_t)(pde->page_ppn << 12) + virtual_addr->p1_index;
 
     return (is_page_table_entry_valid((PageXEntry*)pte) == FALSE ? NULL : pte);
 }
@@ -221,12 +221,12 @@ bool_t is_virt_addr_mapped(uint64_t address) {
 }
 
 uint64_t get_phys_address(uint64_t virt_addr) {
-    VirtualAddress virtual_addr = *(VirtualAddress*)&virt_addr;
+    VirtualAddress* virtual_addr = (VirtualAddress*)&virt_addr;
     PageTableEntry* pte = get_pte_of_virt_addr(virt_addr);
 
     if (pte == NULL) return INVALID_ADDRESS;
 
-    return (pte->page_ppn << 12) + virtual_addr.offset;
+    return (pte->page_ppn << 12) + virtual_addr->offset;
 }
 
 void memcpy(const void* src, void* dst, size_t size) {

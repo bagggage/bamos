@@ -273,7 +273,7 @@ Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
 
             wait();
 
-            if (result = inb(PS2_DATA_PORT) == ACK) goto init_interface; 
+            if ((result = inb(PS2_DATA_PORT)) == ACK) goto init_interface; 
         }
 
         if (result != ACK) {

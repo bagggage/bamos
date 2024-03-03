@@ -143,7 +143,7 @@ static inline void scroll_logger_fb(uint8_t rows_offset) {
 uint32_t last_cursor_positions_in_columns[UINT16_MAX];
 
 static void move_cursor(int8_t row_offset, int8_t col_offset) {
-    if (col_offset > 0 || logger.col >= -col_offset) {
+    if (col_offset > 0 || (int64_t)logger.col >= -col_offset) {
         logger.col += col_offset;
     }
     else {
@@ -157,7 +157,7 @@ static void move_cursor(int8_t row_offset, int8_t col_offset) {
 
     }
 
-    if (row_offset > 0 || logger.row >= -row_offset) {
+    if (row_offset > 0 || (int64_t)logger.row >= -row_offset) {
         last_cursor_positions_in_columns[logger.row] = logger.col;
         logger.row += row_offset;
     }
@@ -192,8 +192,8 @@ void raw_putc(char c) {
         move_cursor(0, -1);
         curr_offset = calc_logger_fb_offset();
 
-        for (int y = 0; y < logger.font.height; ++y) {
-            for (int x = 0; x < logger.font.width; ++x) {
+        for (uint32_t y = 0; y < logger.font.height; ++y) {
+            for (uint32_t x = 0; x < logger.font.width; ++x) {
                 *(uint32_t*)(logger.fb->base + curr_offset + (x << 2)) = 0x00000000;
             }
 
@@ -206,11 +206,10 @@ void raw_putc(char c) {
     const uint8_t* const glyph = logger.font.glyphs + (logger.font.charsize * c);
     curr_offset = calc_logger_fb_offset();
 
-    for (int y = 0; y < logger.font.height; ++y) {
-        uint32_t y_bit_idx = 0;
+    for (uint32_t y = 0; y < logger.font.height; ++y) {
         uint32_t mask = (1 << (logger.font.width - 1));
 
-        for (int x = 0; x < logger.font.width; ++x) {
+        for (uint32_t x = 0; x < logger.font.width; ++x) {
             *(uint32_t*)(logger.fb->base + curr_offset + (x << 2)) = (glyph[y] & mask ? *(uint32_t*)logger.color : 0x00000000);
             mask >>= 1;
         }
@@ -305,7 +304,7 @@ static void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
             case '\0':
                 return;
             case 'u': // Unsigned
-                is_signed = FALSE;
+                is_signed = FALSE; FALLTHROUGH;
             case 'd': // Decimal
             case 'i':
                 arg_value = va_arg(args, int);

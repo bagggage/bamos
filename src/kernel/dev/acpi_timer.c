@@ -17,12 +17,12 @@ bool_t is_acpi_timer_avail() {
     return acpi_fadt->pm_timer_length == 4;
 }
 
-static uint64_t get_acpi_mmio_clock_counter(TimerDevice* acpi_timer) {
+static uint64_t get_acpi_mmio_clock_counter(TimerDevice*) {
     // TODO
     return 0;
 }
 
-static uint64_t get_acpi_io_clock_counter(TimerDevice* acpi_timer) {
+static uint64_t get_acpi_io_clock_counter(TimerDevice*) {
     uint32_t counter;
 
     counter = inl(acpi_fadt->pm_timer_block);
