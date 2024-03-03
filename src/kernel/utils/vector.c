@@ -16,7 +16,7 @@ Status vector_push_back(Vector* vector, const void* src, size_t sizeof_element) 
     if (new_buffer == NULL) return KERNEL_ERROR;
 
     if (vector->data != NULL) {
-        for (size_t i = 0; i < vector->size; ++i) {
+        for (size_t i = 0; i < vector->size * sizeof_element; ++i) {
             ((uint8_t*)new_buffer)[i] = ((uint8_t*)vector->data)[i];
         }
     }

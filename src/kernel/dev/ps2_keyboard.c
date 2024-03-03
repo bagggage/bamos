@@ -1,9 +1,11 @@
 #include "ps2_keyboard.h"
 
-#include "io/tty.h"
-#include "io/logger.h"
-#include "keyboard.h"
+#include "logger.h"
 #include "mem.h"
+
+#include "cpu/io.h"
+
+#include "dev/keyboard.h"
 
 // for more info see PS/2 commands
 typedef enum Commands {
