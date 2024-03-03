@@ -27,5 +27,5 @@ uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset
     outl(PCI_CONFIG_ADDRESS_PORT, address);
 
     // (offset & 2) * 8) = 0 will choose the first word of the 32-bit register
-    return inw(PCI_CONFIG_DATA_PORT);
+    return inl(PCI_CONFIG_DATA_PORT);
 }
