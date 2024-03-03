@@ -5,6 +5,9 @@
 #define PCI_CONFIG_ADDRESS_PORT 0xCF8
 #define PCI_CONFIG_DATA_PORT 0xCFC
 
+#define PCI_SUBCLASS_SATA_CONTROLLER 0X6
+#define PCI_PROGIF_AHCI 0X1
+
 typedef struct PciConfigurationSpace {
     uint16_t vendor_id;
     uint16_t device_id;

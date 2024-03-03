@@ -9,6 +9,7 @@
 #include "dev/ps2_keyboard.h"
 #include "mem.h"
 #include "io/acpi.h"
+#include "io/ahci.h"
 #include "io/logger.h"
 #include "io/pci.h"
 
@@ -84,19 +85,30 @@ Status init_io_devices() {
 
     if (add_device(DEV_DISPLAY, &display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
-
+	
     for (uint8_t bus = 0; bus < 4; ++bus) {
         for (uint8_t dev = 0; dev < 32; ++dev) {
             for (uint8_t func = 0; func < 8; ++func) {
-                uint16_t vendor_id = pci_config_readw(bus, dev, func, 0);
+                uint16_t vendor_id = pci_config_readw(bus, dev, func, 0x0);
+				uint16_t device_id = (pci_config_readw(bus, dev, func, 0x2));
 
-                if (vendor_id == 0xFFFF) break;
+               	uint8_t prog_if = pci_config_readb(bus, dev, func, 0x9);
+               	uint8_t subclass = pci_config_readb(bus, dev, func, 0xA);
 
-                kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id - %x\n", (uint32_t)bus, (uint32_t)dev, (uint32_t)func, (uint64_t)vendor_id);
+				if (vendor_id == 0xffff) continue;
+
+				if (is_ahci(prog_if, subclass)) {
+					init_HBA_memory(bus, dev, func);
+					detect_ahci_devices_type();
+				}
+
+                kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id - %x: device id - %x: prog if: - %x: subclass - %x\n",
+                (uint32_t)bus, (uint32_t)dev, (uint32_t)func, (uint64_t)vendor_id, 
+                (uint32_t)device_id, (uint32_t)prog_if, (uint32_t)subclass);
             }
         }
     }
-
+	
     //if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
     //if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
