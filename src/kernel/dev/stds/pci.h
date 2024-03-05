@@ -16,3 +16,5 @@ typedef struct PciConfigurationSpace {
 uint8_t pci_config_readb(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 uint16_t pci_config_readw(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+
+void log_pci_devices();

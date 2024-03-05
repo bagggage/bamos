@@ -1,7 +1,7 @@
 #pragma once
 
-#include "device.h"
 #include "definitions.h"
+#include "device.h"
 
 typedef enum FbFormat {
     FB_FORMAT_ARGB = 0,

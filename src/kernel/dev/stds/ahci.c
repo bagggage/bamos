@@ -21,6 +21,28 @@
 
 HBAMemory* HBA_memory = NULL;
 
+Status init_ahci() {
+    for (uint8_t bus = 0; bus < 4; ++bus) {
+        for (uint8_t dev = 0; dev < 32; ++dev) {
+            for (uint8_t func = 0; func < 8; ++func) {
+                uint16_t vendor_id = pci_config_readw(bus, dev, func, 0x0);
+
+                uint8_t prog_if = pci_config_readb(bus, dev, func, 0x9);
+                uint8_t subclass = pci_config_readb(bus, dev, func, 0xA);
+
+                if (vendor_id == 0xffff) continue;
+
+                if (is_ahci(prog_if, subclass)) {
+                    init_HBA_memory(bus, dev, func);
+                    detect_ahci_devices_type();
+                }
+            }
+        }
+    }
+
+    return KERNEL_OK;
+}
+
 Status init_HBA_memory(uint8_t bus, uint8_t dev, uint8_t func) {
     uint64_t bar5 = pci_config_readl(bus, dev, func, 0x24);
     uint64_t bar5_type;
@@ -81,7 +103,7 @@ static uint8_t check_device_type(HBAPort* port) {
         default:
             return AHCI_DEV_SATA;
         }
-    }
+}
 
 void detect_ahci_devices_type() {
 	uint32_t port_implemented = HBA_memory->port_implemented;

@@ -4,57 +4,42 @@
 #include <cpuid.h>
 #include <stddef.h>
 
+#include "dev/acpi_timer.h"
 #include "dev/bootboot_display.h"
+#include "dev/hpet_timer.h"
 #include "dev/keyboard.h"
 #include "dev/ps2_keyboard.h"
+#include "dev/stds/acpi.h"
+#include "dev/stds/ahci.h"
+
+#include "logger.h"
 #include "mem.h"
-#include "io/acpi.h"
-#include "io/ahci.h"
-#include "io/logger.h"
-#include "io/pci.h"
+
+#include "intr/apic.h"
+#include "intr/intr.h"
+#include "intr/ioapic.h"
+
 
 #define CPUID_GET_FEATURE 1
 
 extern BOOTBOOT bootboot;
-extern volatile unsigned char _binary_font_psf_start;
+extern const uint8_t _binary_font_psf_start;
 
-void halt_logical_core() {
+static void halt_logical_core() {
     while (1);
 }
 
-void logical_core_delay(uint64_t idx) {
-    uint64_t end_point = idx << 23;
-
-    do {
-        ++idx;
-        asm volatile("");
-    } while (idx < end_point);
-}
-
-Status split_logical_cores() {
-    uint32_t eax, ebx, ecx, edx;
+static Status split_logical_cores() {
+    uint32_t eax, ebx = 0, ecx, edx;
 
     __get_cpuid(CPUID_GET_FEATURE, &eax, &ebx, &ecx, &edx);
 
     // Get logical core ID (31-24 bit)
     ebx = ebx >> 24;
 
-    // Debug
-    // Delay between output for different logical cores 
-    logical_core_delay(ebx);
-
-    if (is_logger_initialized() == FALSE) {
-        if (init_kernel_logger_raw(&_binary_font_psf_start) != KERNEL_OK) {
-            return KERNEL_PANIC;
-        }
-    }
-
-    kernel_msg("CPU %u\n", ebx);
-
-    // Only core with ID = 0 pass
     if (ebx != 0) halt_logical_core();
+    if (init_kernel_logger_raw(&_binary_font_psf_start) != KERNEL_OK) return KERNEL_PANIC;
 
-    logical_core_delay(bootboot.numcores);
     kernel_msg("Kernel startup on CPU %u\n", ebx);
 
     return KERNEL_OK;
@@ -62,61 +47,55 @@ Status split_logical_cores() {
 
 extern uint32_t fb[];
 
+static Status init_timer() {
+    if (is_acpi_timer_avail() == FALSE) {
+        error_str = "There is no supported timer device";
+        return KERNEL_ERROR;
+    }
+
+    TimerDevice* acpi_timer;
+
+    if (add_device(DEV_TIMER, (void**)&acpi_timer, sizeof(TimerDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_acpi_timer(acpi_timer) != KERNEL_OK) return KERNEL_ERROR;
+
+    //if (is_hpet_timer_avail() == FALSE) {
+    //    error_str = "There is no supported timer device";
+    //    return KERNEL_ERROR;
+    //}
+    //
+    //TimerDevice* timer;
+    //
+    //if (add_device(DEV_TIMER, &timer, sizeof(TimerDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    //if (init_hpet_timer(timer) != KERNEL_OK) return KERNEL_ERROR;
+
+    return KERNEL_OK;
+}
+
 Status init_kernel() {
     if (split_logical_cores() != KERNEL_OK) return KERNEL_PANIC;
     // After this step we should be able to use memory allocations, otherwise drop kernel =)
     if (init_memory() != KERNEL_OK) return KERNEL_PANIC;
-
+    if (init_intr() != KERNEL_OK) return KERNEL_PANIC;
     if (init_acpi() != KERNEL_OK) return KERNEL_ERROR;
-
-    Status status = init_io_devices();
-
-    if (status != KERNEL_OK) return status;
-
-    status |= init_io_streams();
-
-    return status;
+    if (init_apic() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ioapic() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_io_devices() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_timer() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ahci() != KERNEL_OK) return KERNEL_ERROR;
+    
+    return KERNEL_OK;
 }
 
 Status init_io_devices() {
     // TODO
     DisplayDevice* display;
-    KeyboardDevice* keyboard;
+    //KeyboardDevice* keyboard;
 
-    if (add_device(DEV_DISPLAY, &display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (add_device(DEV_DISPLAY, (void**)&display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
-	
-    for (uint8_t bus = 0; bus < 4; ++bus) {
-        for (uint8_t dev = 0; dev < 32; ++dev) {
-            for (uint8_t func = 0; func < 8; ++func) {
-                uint16_t vendor_id = pci_config_readw(bus, dev, func, 0x0);
-				uint16_t device_id = (pci_config_readw(bus, dev, func, 0x2));
 
-               	uint8_t prog_if = pci_config_readb(bus, dev, func, 0x9);
-               	uint8_t subclass = pci_config_readb(bus, dev, func, 0xA);
-
-				if (vendor_id == 0xffff) continue;
-
-				if (is_ahci(prog_if, subclass)) {
-					init_HBA_memory(bus, dev, func);
-					detect_ahci_devices_type();
-				}
-
-                kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id - %x: device id - %x: prog if: - %x: subclass - %x\n",
-                (uint32_t)bus, (uint32_t)dev, (uint32_t)func, (uint64_t)vendor_id, 
-                (uint32_t)device_id, (uint32_t)prog_if, (uint32_t)subclass);
-            }
-        }
-    }
-	
     //if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
     //if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
-
-    return KERNEL_OK;
-}
-
-Status init_io_streams() {
-    // TODO
 
     return KERNEL_OK;
 }

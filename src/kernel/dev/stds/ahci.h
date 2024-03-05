@@ -41,6 +41,8 @@ typedef volatile struct HBAMemory {
 	HBAPort	 ports[1];	                // 1 ~ 32 0x100 - 0x10FF, Port control registers
 } ATTR_PACKED HBAMemory;
 
+Status init_ahci();
+
 Status init_HBA_memory(uint8_t bus, uint8_t dev, uint8_t func);
 
 bool_t is_ahci(uint8_t prog_if, uint8_t subclass);

@@ -16,9 +16,10 @@ typedef enum AddressSpace {
     ADDRESS_SPACE_PLATFORM_COMM_CHANNEL,
 
     ADDRESS_SPACE_RESERVED,
-    ADDRESS_SPACE_RESERVED_END = 0x80,
+    ADDRESS_SPACE_RESERVED_END = 0x7E,
 
-    ADDRESS_SPACE_OEM_DEFINED = 0x80
+    ADDRESS_SPACE_RESERVED0 = 0x80,
+    ADDRESS_SPACE_RESERVED0_END = 0xBF
 } AddressSpace;
 
 typedef enum AccessSize {
@@ -144,9 +145,12 @@ typedef struct FADT
     GAS x_pm_timer_block;
     GAS x_gpe0_block;
     GAS x_gpe1_block;
-} FADT;
+} ATTR_PACKED FADT;
 
-bool_t acpi_checksum(ACPISDTHeader* header);
+extern FADT* acpi_fadt;
+
+bool_t is_acpi_reserved_address_space(const GAS* address);
+bool_t acpi_checksum(const ACPISDTHeader* header);
 
 Status init_acpi();
 

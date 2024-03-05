@@ -9,6 +9,10 @@ Framebuffer display_fb;
 
 #define BOOTBOOT_FB_BPP 4
 
+bool_t bootboot_display_is_avail() {
+    return ((void*)bootboot.fb_ptr != NULL && bootboot.fb_size > 0);
+}
+
 Status init_bootboot_display(DisplayDevice* dev) {
     if (bootboot_display_is_avail() == FALSE) {
         return KERNEL_ERROR;
@@ -24,8 +28,4 @@ Status init_bootboot_display(DisplayDevice* dev) {
     dev->fb = &display_fb;
 
     return KERNEL_OK;
-}
-
-bool_t bootboot_display_is_avail() {
-    return (bootboot.fb_ptr != NULL && bootboot.fb_size != 0);
 }

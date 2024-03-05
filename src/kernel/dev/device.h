@@ -19,14 +19,13 @@ typedef enum DevType {
     DEV_DISPLAY,
     DEV_MOUSE,
     DEV_DRIVE,
+    DEV_TIMER,
     DEV_USB,
     DEV_PCI,
-    DEV_SERIAL
+    DEV_SERIAL,
 } DevType;
 
 typedef struct Device Device;
-
-typedef Status (*DevRemove_t)(Device*);
 
 // Common device structure
 typedef struct Device {
@@ -39,6 +38,13 @@ typedef struct DevicePool {
     Device** data;
     size_t size;
 } DevicePool;
+
+#define DEV_FUNC(device_name, ret_t, func_name, ...) \
+   typedef ret_t (* device_name ## _ ## func_name ## _t)(__VA_ARGS__)
+
+#define DEVICE_STRUCT_IMPL(dev_name) \
+    Device common; \
+    dev_name ## Interface interface
 
 #define DEV_DISPLAY_ID 0
 #define DEV_KEYBOARD_ID 1
@@ -72,10 +78,3 @@ Remove device from 'dev_pool', all pointers to that device becomes invalid.
 Returns 'KERNEL_OK' if successed, otherwise leaves 'dev_pool' unchanged.
 */
 Status remove_device(size_t dev_idx);
-
-#define DEV_FUNC(device_name, ret_t, func_name, ...) \
-   typedef ret_t (* device_name ## _ ## func_name ## _t)(__VA_ARGS__)
-
-#define DEVICE_STRUCT_IMPL(dev_name) \
-    Device common; \
-    dev_name ## Interface interface

@@ -3,7 +3,7 @@
 #include "definitions.h"
 
 typedef struct RawFont {
-    uint8_t *glyphs;
+    const uint8_t *glyphs;
     uint32_t length;
     uint32_t charsize;
     uint32_t height;

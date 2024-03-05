@@ -1,9 +1,11 @@
 #include "ps2_keyboard.h"
 
-#include "io/tty.h"
-#include "io/logger.h"
-#include "keyboard.h"
+#include "logger.h"
 #include "mem.h"
+
+#include "cpu/io.h"
+
+#include "dev/keyboard.h"
 
 // for more info see PS/2 commands
 typedef enum Commands {
@@ -271,7 +273,7 @@ Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
 
             wait();
 
-            if (result = inb(PS2_DATA_PORT) == ACK) goto init_interface; 
+            if ((result = inb(PS2_DATA_PORT)) == ACK) goto init_interface; 
         }
 
         if (result != ACK) {
