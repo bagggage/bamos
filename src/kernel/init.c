@@ -10,13 +10,15 @@
 #include "dev/keyboard.h"
 #include "dev/ps2_keyboard.h"
 #include "dev/stds/acpi.h"
+#include "dev/stds/ahci.h"
 
 #include "logger.h"
 #include "mem.h"
 
-#include "intr/intr.h"
 #include "intr/apic.h"
+#include "intr/intr.h"
 #include "intr/ioapic.h"
+
 
 #define CPUID_GET_FEATURE 1
 
@@ -80,7 +82,8 @@ Status init_kernel() {
     if (init_ioapic() != KERNEL_OK) return KERNEL_ERROR;
     if (init_io_devices() != KERNEL_OK) return KERNEL_ERROR;
     if (init_timer() != KERNEL_OK) return KERNEL_ERROR;
-
+    if (init_ahci() != KERNEL_OK) return KERNEL_ERROR;
+    
     return KERNEL_OK;
 }
 
