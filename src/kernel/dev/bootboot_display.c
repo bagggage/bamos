@@ -2,6 +2,8 @@
 
 #include <bootboot.h>
 
+#include "logger.h"
+
 extern BOOTBOOT bootboot; // see bootboot.h
 extern uint32_t fb[];
 
@@ -15,6 +17,7 @@ bool_t bootboot_display_is_avail() {
 
 Status init_bootboot_display(DisplayDevice* dev) {
     if (bootboot_display_is_avail() == FALSE) {
+        error_str = "Bootloader display framebuffer not available";
         return KERNEL_ERROR;
     }
 
