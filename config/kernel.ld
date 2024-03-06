@@ -34,7 +34,8 @@ mmio        = 0xfffffffff8000000;              /* these are configurable for lev
 fb          = 0xfffffffffc000000;
 bootboot    = 0xffffffffffe00000;
 environment = 0xffffffffffe01000;
-/* initstack = 1024; */
+initstack = 1024;
+
 PHDRS
 {
   boot PT_LOAD;                                /* one single loadable segment */
@@ -42,6 +43,8 @@ PHDRS
 SECTIONS
 {
     . = 0xffffffffffe02000;
+    kernel_elf_start = .;
+
     .text : {
         KEEP(*(.text.boot)) *(.text .text.*)   /* code */
         *(.rodata .rodata.*)                   /* data */
@@ -52,6 +55,8 @@ SECTIONS
         *(.bss .bss.*)
         *(COMMON)
     } :boot
+
+    kernel_elf_end = .;
 
     /DISCARD/ : { *(.eh_frame) *(.comment) }
 }
