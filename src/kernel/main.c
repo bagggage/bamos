@@ -26,7 +26,5 @@ void _start() {
   kernel_msg("Kernel initialized successfuly\n");
   // TODO: handle user space, do some stuff
 
-  log_pci_devices();
-
   while (1);
 }
