@@ -2,10 +2,6 @@
 
 #include "definitions.h"
 
-#define KB_SIZE 1024
-#define MB_SIZE (KB_SIZE * 1024)
-#define GB_SIZE (MB_SIZE * 1024)
-
 Status init_memory();
 
 // Kernel space memory allocation

@@ -2,9 +2,13 @@
 
 #include <bootboot.h>
 
+#include "cpu/paging.h"
+
+#include "efi-st.h"
+
 #include "logger.h"
 
-#include "cpu/paging.h"
+#include "vm/vm.h"
 
 #define PAGE_KB_SIZE (PAGE_BYTE_SIZE / KB_SIZE)
 
@@ -118,14 +122,11 @@ void kfree(void* allocated_mem) {
 
 extern BOOTBOOT bootboot;
 
-Status init_memory() {
-    kernel_msg("Memory map:\n");
+static inline void log_memory_map(MMapEnt* mem_map, size_t size) {
+    size_t used_mem_size = 0;
+    size_t mem_size = 0;
 
-    MMapEnt* mem_map = (MMapEnt*)&bootboot.mmap.ptr;
-    size_t used_mem_size_in_kb = 0;
-    size_t mem_size_in_kb = 0;
-
-    for (size_t i = 0; i < (bootboot.size - (sizeof(bootboot))) / sizeof(MMapEnt); ++i) {
+    for (size_t i = 0; i < size; ++i) {
         const char* type_str = NULL;
 
         switch (MMapEnt_Type(mem_map + i))
@@ -139,23 +140,131 @@ Status init_memory() {
             break;
         }
 
-        if (MMapEnt_Type(mem_map + i) != MMAP_FREE) used_mem_size_in_kb += mem_map[i].size;
+        if (MMapEnt_IsFree(mem_map + i) == FALSE) used_mem_size += MMapEnt_Size(mem_map + i);
 
-        mem_size_in_kb += mem_map[i].size;
+        mem_size = MMapEnt_Ptr(mem_map + i) + MMapEnt_Size(mem_map + i);
 
-        kernel_msg("Entry - ptr: %x; size: %u; type: %s\n", mem_map[i].ptr, mem_map[i].size, type_str);
+        kernel_msg("Entry - ptr: %x; size: %x; type: %s\n", MMapEnt_Ptr(mem_map + i), MMapEnt_Size(mem_map + i), type_str);
     }
 
-    kernel_msg("Used memmory: %u KB (%u MB)\n", used_mem_size_in_kb / 1024, used_mem_size_in_kb / (1024*1024));
-    kernel_msg("Memory size: %u KB (%u MB)\n", mem_size_in_kb / 1024, mem_size_in_kb / (1024*1024));
+    kernel_msg("Used memmory: %u KB (%u MB)\n", used_mem_size / 1024, used_mem_size / (1024*1024));
+    kernel_msg("Memory size: %u KB (%u MB)\n", mem_size / 1024, mem_size / (1024*1024));
+}
+
+void log_pages_count() {
+    size_t current_block_number = 0;
+    size_t pages_count = 0;
+    uint64_t previous_phys_address = 0;
+
+    for (uint64_t current_page_virt_address = 0x0;
+        current_page_virt_address <= MAX_PAGE_ADDRESS;
+        current_page_virt_address += PAGE_BYTE_SIZE) {
+        uint64_t current_phys_address = get_phys_address(current_page_virt_address);
+        
+        if (current_phys_address == INVALID_ADDRESS) {
+            if (pages_count != 0) {
+                kernel_msg("Block [%u]: %x; pages count: %u\n", 
+                            current_block_number,
+                            current_page_virt_address - (PAGE_BYTE_SIZE * (pages_count + 1)),
+                            pages_count + 1);
+
+                ++current_block_number;
+            }
+
+            pages_count = 0;
+            previous_phys_address = 0;
+            continue;
+        }
+
+        if (previous_phys_address == 0 || current_phys_address == previous_phys_address + PAGE_BYTE_SIZE) {
+            ++pages_count;
+            previous_phys_address = current_phys_address;
+        } else {
+            //if (pages_count > 1) {
+                kernel_msg("Block [%u]: %x; pages count: %u\n",
+                            current_block_number,
+                            current_page_virt_address - (PAGE_BYTE_SIZE * (pages_count + 1)),
+                            pages_count + 1);
+            //}
+
+            ++current_block_number;
+            pages_count = 0;
+            previous_phys_address = 0;
+        }
+    }
+
+    if (pages_count != 0) {
+        kernel_msg("Pages count: %u\n", pages_count);
+    }
+}
+
+extern uint64_t kernel_elf_start;
+extern uint64_t kernel_elf_end;
+
+Status init_memory() {
+    kernel_msg("Memory map:\n");
+
+    MMapEnt* mem_map = (MMapEnt*)&bootboot.mmap.ptr;
+    size_t map_size = (bootboot.size - (sizeof(bootboot))) / sizeof(MMapEnt);
+
+    kernel_msg("Memory map entries count: %u\n", map_size);
+    log_memory_map(mem_map, map_size);
+
+    if (init_virtual_memory(mem_map, map_size) != KERNEL_OK) return KERNEL_PANIC;
+
+    kernel_msg("Kernel start: %x; end: %x; size: %x\n",
+                &kernel_elf_start,
+                &kernel_elf_end,
+                (uint64_t)&kernel_elf_end - (uint64_t)&kernel_elf_start);
+
+    kernel_msg("Initrd %x\n", bootboot.initrd_ptr);
+
+    return KERNEL_OK;
+
+    size_t count_of_mapped_memory = 0;
+    PageMapLevel4Entry* pml4 = cpu_get_current_pml4();
+
+    for (uint16_t i = 0; i < 512; ++i) {
+        PageDirEntry* pde = (PageDirEntry*)(pml4[i].page_ppn << 12);
+        if (pml4[i].present == 0) continue;
+
+        kernel_msg("PDPE [%u]: %x:%x\n", (uint32_t)i, (uint64_t)pde, get_phys_address((uint64_t)pde));
+
+        for (uint16_t j = 0; j < 512; ++j) {
+            PageDirPtrEntry* pdpe = (PageDirPtrEntry*)(pde[j].page_ppn << 12);
+            if (pde[j].present == 0) continue;
+            if (pde[j].size == 1) {
+                count_of_mapped_memory += 1024 * 1024 * 1024;
+                continue;
+            }
+
+            for (uint16_t g = 0; g < 512; ++g) {
+                PageTableEntry* pte = (PageTableEntry*)(pdpe[g].page_ppn << 12);
+                if (pdpe[g].present == 0) continue;
+                if (pdpe[g].size == 1) {
+                    count_of_mapped_memory += 2048 * 1024;
+                    continue;
+                }
+
+                for (uint16_t h = 0; h < 512; ++h) {
+                    if (pte[h].present == 0) continue;
+
+                    count_of_mapped_memory += 4096;
+                }
+            }
+        }
+    }
+
+    kernel_msg("Count of mapped pages: %x\n", count_of_mapped_memory);
+    //kernel_msg("Random kernel virt/phys address: %x:%x\n", (uint64_t)&init_memory, get_phys_address(&init_memory));
+    //kernel_msg("Bootboot structure phys address: %x\n", get_phys_address(&bootboot));
+    //kernel_msg("MMIO start phys address: %x\n", get_phys_address(bootboot.arch.x86_64.acpi_ptr));
 
     return KERNEL_OK;
 }
 
 void log_memory_page_tables() {
     PageMapLevel4Entry* pml4 = cpu_get_current_pml4();
-
-    kernel_msg("PLM4: %x\n", pml4);
 
     for (size_t i = 0; i < PAGE_TABLE_MAX_SIZE; ++i) {
         if (pml4[i].present == FALSE) continue;
@@ -195,38 +304,57 @@ static inline void log_page_table_entry(PageXEntry* pte) {
     kernel_msg("|---Page base: %u\n", (uint32_t)pte->page_ppn);
 }
 
-PageTableEntry* get_pte_of_virt_addr(uint64_t address) {
-    if (is_virt_addr_valid(address) == FALSE) return NULL;
+typedef struct PxE {
+    uint64_t entry : 62;
+    uint64_t level : 2;
+} ATTR_PACKED PxE;
+
+PxE get_pxe_of_virt_addr(uint64_t address) {
+    PxE result;
+
+    result.entry = 0;
+    result.level = 0;
+
+    if (is_virt_addr_valid(address) == FALSE) return result;
 
     VirtualAddress* virtual_addr = (VirtualAddress*)&address;
     PageMapLevel4Entry* plm4e = cpu_get_current_pml4() + virtual_addr->p4_index;
 
-    if (is_page_table_entry_valid(plm4e) == FALSE) return NULL;
+    if (is_page_table_entry_valid(plm4e) == FALSE) return (PxE){ 0, 0 };
 
     PageDirPtrEntry* pdpe = (PageDirPtrEntry*)(uint64_t)(plm4e->page_ppn << 12) + virtual_addr->p3_index;
+    result.entry = (uint64_t)pdpe;
+    result.level++;
 
-    if (is_page_table_entry_valid(pdpe) == FALSE) return NULL;
+    if (is_page_table_entry_valid(pdpe) == FALSE) return (PxE){ 0, 0 };
+    if (pdpe->size == 1) return result;
 
     PageDirEntry* pde = (PageDirEntry*)(uint64_t)(pdpe->page_ppn << 12) + virtual_addr->p2_index;
+    result.entry = (uint64_t)pde;
+    result.level++;
 
-    if (is_page_table_entry_valid(pde) == FALSE) return NULL;
+    if (is_page_table_entry_valid(pde) == FALSE) return (PxE){ 0, 0 };
+    if (pde->size == 1) return result;
 
     PageTableEntry* pte = (PageTableEntry*)(uint64_t)(pde->page_ppn << 12) + virtual_addr->p1_index;
+    result.entry = (uint64_t)pte;
+    result.level++;
 
-    return (is_page_table_entry_valid((PageXEntry*)pte) == FALSE ? NULL : pte);
+    return (is_page_table_entry_valid((PageXEntry*)pte) == FALSE ? (PxE){ 0, 0 } : result);
 }
 
 bool_t is_virt_addr_mapped(uint64_t address) {
-    return get_pte_of_virt_addr(address) != NULL;
+    return get_pxe_of_virt_addr(address).entry != 0;
 }
 
 uint64_t get_phys_address(uint64_t virt_addr) {
-    VirtualAddress* virtual_addr = (VirtualAddress*)&virt_addr;
-    PageTableEntry* pte = get_pte_of_virt_addr(virt_addr);
+    PxE pxe = get_pxe_of_virt_addr(virt_addr);
 
-    if (pte == NULL) return INVALID_ADDRESS;
+    if (pxe.entry == 0) return INVALID_ADDRESS;
 
-    return (pte->page_ppn << 12) + virtual_addr->offset;
+    pxe.level--;
+
+    return (((PageXEntry*)pxe.entry)->page_ppn << 12) + (virt_addr & (0x3FFFFFFF >> (9 * pxe.level)));
 }
 
 void memcpy(const void* src, void* dst, size_t size) {
