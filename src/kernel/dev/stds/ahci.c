@@ -27,10 +27,10 @@ Status init_ahci() {
             for (uint8_t func = 0; func < 8; ++func) {
                 uint16_t vendor_id = pci_config_readw(bus, dev, func, 0x0);
 
+                if (vendor_id == 0xffff) continue;
+
                 uint8_t prog_if = pci_config_readb(bus, dev, func, 0x9);
                 uint8_t subclass = pci_config_readb(bus, dev, func, 0xA);
-
-                if (vendor_id == 0xffff) continue;
 
                 if (is_ahci(prog_if, subclass)) {
                     init_HBA_memory(bus, dev, func);
