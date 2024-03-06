@@ -39,6 +39,7 @@ static Status split_logical_cores() {
     if (init_kernel_logger_raw(&_binary_font_psf_start) != KERNEL_OK) return KERNEL_PANIC;
 
     kernel_msg("Kernel startup on CPU %u\n", ebx);
+    kernel_msg("CPUs detected: %u\n", bootboot.numcores);
 
     return KERNEL_OK;
 }
@@ -71,9 +72,9 @@ static Status init_timer() {
 
 Status init_kernel() {
     if (split_logical_cores() != KERNEL_OK) return KERNEL_PANIC;
-    // After this step we should be able to use memory allocations, otherwise drop kernel =)
-    if (init_memory() != KERNEL_OK) return KERNEL_PANIC;
+    
     if (init_intr() != KERNEL_OK) return KERNEL_PANIC;
+    if (init_memory() != KERNEL_OK) return KERNEL_PANIC;
     if (init_acpi() != KERNEL_OK) return KERNEL_ERROR;
     if (init_apic() != KERNEL_OK) return KERNEL_ERROR;
     if (init_ioapic() != KERNEL_OK) return KERNEL_ERROR;
