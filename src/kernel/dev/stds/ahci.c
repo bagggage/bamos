@@ -31,8 +31,10 @@ Status init_ahci() {
 
                 uint8_t prog_if = pci_config_readb(bus, dev, func, 0x9);
                 uint8_t subclass = pci_config_readb(bus, dev, func, 0xA);
+                uint8_t class_code = (pci_config_readw(bus, dev, func, 0xB) >> 8);  // for no reason readbyte on 0xB we always get 0xFF
+                
 
-                if (is_ahci(prog_if, subclass)) {
+                if (is_ahci(class_code, prog_if, subclass)) {
                     init_HBA_memory(bus, dev, func);
                     detect_ahci_devices_type();
                 }
@@ -74,8 +76,10 @@ Status init_HBA_memory(uint8_t bus, uint8_t dev, uint8_t func) {
     return KERNEL_OK;
 }
 
-bool_t is_ahci(uint8_t prog_if, uint8_t subclass) {
-    if (prog_if == PCI_PROGIF_AHCI && subclass == PCI_SUBCLASS_SATA_CONTROLLER) {
+bool_t is_ahci(uint8_t class_code, uint8_t prog_if, uint8_t subclass) {
+    if (class_code == PCI_CLASS_CODE_STORAGE_CONTROLLER &&
+        prog_if == PCI_PROGIF_AHCI &&
+        subclass == PCI_SUBCLASS_SATA_CONTROLLER) {
         return TRUE;
     }
 
