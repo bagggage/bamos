@@ -57,14 +57,28 @@ typedef struct VirtualAddress {
     uint64_t sign_extended : 16; // All this bites must be euals to last major bit of 'p4_index' (0xFFFF or 0x0000)
 } ATTR_PACKED VirtualAddress;
 
+typedef struct CR3 {
+    uint64_t ignored_0  : 3;
+    uint64_t pwt        : 1;
+    uint64_t pcd        : 1;
+    uint64_t ignored_1  : 7;
+    uint64_t pml4_base  : 52; 
+} ATTR_PACKED CR3; 
+
 static inline PageMapLevel4Entry* cpu_get_current_pml4() {
-    uint64_t ptr = 0;
+    CR3 cr3;
 
-    asm volatile("mov %%cr3,%0":"=a"(ptr));
+    asm volatile("mov %%cr3,%0":"=a"(cr3));
 
-    return (PageMapLevel4Entry*)ptr;
+    return (PageMapLevel4Entry*)(cr3.pml4_base << 12);
 }
 
-static inline void cpu_set_pml4(PageMapLevel4Entry* pml4) {
-    asm volatile("mov %0,%%cr3"::"a"(pml4));
+static inline void cpu_set_pml4(PageMapLevel4Entry* pml4_phys_addr) {
+    CR3 cr3;
+
+    asm volatile("mov %%cr3,%0":"=a"(cr3));
+
+    cr3.pml4_base = ((uint64_t)pml4_phys_addr >> 12);
+
+    asm volatile("mov %0,%%cr3"::"a"(cr3));
 }

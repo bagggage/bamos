@@ -1,0 +1,3 @@
+[submodule "third-party/uefi/include"]
+	path = third-party/uefi/include
+	url = https://github.com/yoppeh/efi.git
