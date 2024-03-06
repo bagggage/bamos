@@ -14,13 +14,15 @@ MKDIR:=mkdir -p
 BUILD_KER:=${BUILD_DIR}/kernel
 SRC_KER:=${SRC_DIR}/kernel
 
+CC_INCLUDE:=-I${BOOTBOOT} -I${SRC_KER} -I${UEFI_DIR}/include
+
 SRCS:=$(shell find ${SRC_KER} -name '*.c')
 OBJS:=$(patsubst ${SRC_KER}/%.c, ${BUILD_KER}/%.o, ${SRCS})
 LINKLD:=${CONFIG_DIR}/kernel.ld
 
 ${OBJS}: ${SRCS}
 	@${MKDIR} ${@D}
-	@${CC} ${CC_FLAGS} ${PP_DEF} -I${BOOTBOOT} -I${SRC_KER} -c $(patsubst ${BUILD_KER}/%.o, ${SRC_KER}/%.c, $@) -o $@
+	@${CC} ${CC_FLAGS} ${PP_DEF} ${CC_INCLUDE} -c $(patsubst ${BUILD_KER}/%.o, ${SRC_KER}/%.c, $@) -o $@
 
 bin: ${OBJS}
 	@${LD} -nostdlib -n -T ${LINKLD} -o ${KERNEL_BIN} ${BUILD_KER}/font.o ${OBJS}
