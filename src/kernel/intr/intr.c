@@ -11,6 +11,8 @@
 InterruptDescriptor64 idt_64[IDT_ENTRIES_COUNT];
 IDTR64 idtr_64;
 
+extern uint64_t kernel_elf_start;
+
 uint16_t get_current_kernel_cs() {
     uint16_t cs;
 
@@ -36,8 +38,8 @@ void set_idt_descriptor(uint8_t idx, void* isr, uint8_t flags) {
 }
 
 __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame64* frame) {
-    kernel_warn("Interrupt Frame:\nrip: %x\nrsp: %x\neflags: %b\ncs: %x\nss: %x\n", 
-    frame->rip,
+    kernel_warn("Interrupt Frame:\nrip: %x:%x\nrsp: %x\neflags: %b\ncs: %x\nss: %x\n", 
+    frame->rip, (uint64_t)frame->rip - (uint64_t)&kernel_elf_start,
     frame->rsp,
     frame->eflags,
     frame->cs,

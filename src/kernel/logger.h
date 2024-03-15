@@ -3,6 +3,8 @@
 #include "definitions.h"
 #include "dev/display.h"
 
+#include <stdarg.h>
+
 /*
 Raw kernel logger.
 Can be used only after display device initialization.
@@ -33,14 +35,43 @@ void raw_puts(const char* string);
 
 void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation);
 
+void kernel_raw_log(LogType log_type, const char* fmt, va_list args);
+
 // Prints log to display framebuffer
-void kernel_log(LogType log_type, const char* fmt, ...);
+static inline void kernel_log(LogType log_type, const char* fmt, ...) {
+    va_list args;
 
-// Prints msg log
-void kernel_msg(const char* fmt, ...);
-// Prints warning log
-void kernel_warn(const char* fmt, ...);
-// Prints error log
-void kernel_error(const char* fmt, ...);
+    va_start(args, fmt);
+    kernel_raw_log(log_type, fmt, args);
+    va_end(args);
+}
 
+// Prints message to log
+static inline void kernel_msg(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    kernel_raw_log(LOG_MSG, fmt, args);
+    va_end(args);
+}
+
+// Prints warning to log
+static inline void kernel_warn(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    kernel_raw_log(LOG_WARN, fmt, args);
+    va_end(args);
+}
+
+// Prints error to log
+static inline void kernel_error(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    kernel_raw_log(LOG_ERROR, fmt, args);
+    va_end(args);
+}
+
+void draw_kpanic_screen();
 void debug_point();

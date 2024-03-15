@@ -6,7 +6,7 @@ CC:=${TOOLCHAIN}/x86_64-elf-gcc ${CROSS_ENV}
 
 CC_FLAGS:=-Wall -Wextra -O2
 
-PP_DEF:=-DMEM_RAW_PATCH
+PP_DEF:=-DKDEBUG -DMEM_RAW_PATCH
 
 OBJCOPY:=objcopy
 MKDIR:=mkdir -p
