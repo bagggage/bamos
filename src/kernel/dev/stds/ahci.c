@@ -48,7 +48,7 @@ Status init_HBA_memory(uint8_t bus, uint8_t dev, uint8_t func) {
     uint64_t bar5_type;
 
     if (bar5 == 0) {
-        kernel_error("bar5 is 0\n");
+        kernel_error("Bar 5 is 0\n");
 
         return KERNEL_ERROR;
     } else {
@@ -56,21 +56,21 @@ Status init_HBA_memory(uint8_t bus, uint8_t dev, uint8_t func) {
             bar5_type = (bar5 >> 1) & 0x3;
 
             if ((bar5_type & 2) == 0 ) {    //bar5 is in 32bit memory space
- 				kernel_msg("bar5 is in 32bit on bus: %u, dev: %u, func: %u\n", bus, dev, func);
+ 				kernel_msg("Bar 5 is in 32bit on bus: %u, dev: %u, func: %u\n", bus, dev, func);
 
                 HBA_memory = bar5 & 0xFFFFFFF0; // Clear flags
             } else {
-                kernel_msg("bar5 is in 64bit on bus: %u, dev: %u, func: %u\n", bus, dev, func);
+                kernel_msg("Bar 5 is in 64bit on bus: %u, dev: %u, func: %u\n", bus, dev, func);
 
                 HBA_memory = bar5 & 0xFFFFFFFFFFFFFFF0; // Clear flags
             }
         } else {    // bar5 is in i/o space 
-            kernel_msg("bar5 is in I/O space on bus: %u, dev: %u, func: %u\n", bus, dev, func);
+            kernel_msg("Bar 5 is in I/O space on bus: %u, dev: %u, func: %u\n", bus, dev, func);
 
             HBA_memory = bar5 & 0xFFFFFFFC; // Clear flags
         } 
     }
-				
+  
     return KERNEL_OK;
 }
 
@@ -130,7 +130,7 @@ void detect_ahci_devices_type() {
                 break;
             }
             default: {
-				kernel_msg("No drive found at port %d\n", i);
+				//kernel_msg("No drive found at port %d\n", i);
                 break;
             }
             }
