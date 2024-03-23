@@ -20,6 +20,9 @@
 #define COLOR_LYELLOW   255,    235,    75
 #define COLOR_ORANGE    255,    165,    0
 
+#define _RGB_TO_UINT32(r, g, b) (uint32_t)((r << 16) | (g << 8) | (b))
+#define RGB_TO_UINT32(color) _RGB_TO_UINT32(color)
+
 extern BOOTBOOT bootboot;
 extern uint32_t fb[];
 
@@ -268,7 +271,7 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
     raw_puts(cursor);
 }
 
-static void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
+void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
     switch (log_type)
     {
     case LOG_MSG:
@@ -385,34 +388,10 @@ static void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
     }
 }
 
-void kernel_log(LogType log_type, const char* fmt, ...) {
-    va_list args;
+void draw_kpanic_screen() {
+    const size_t pixels_count = bootboot.fb_size / sizeof(uint32_t);
 
-    va_start(args, fmt);
-    kernel_raw_log(log_type, fmt, args);
-    va_end(args);
-}
-
-void kernel_msg(const char* fmt, ...) {
-    va_list args;
-
-    va_start(args, fmt);
-    kernel_raw_log(LOG_MSG, fmt, args);
-    va_end(args);
-}
-
-void kernel_warn(const char* fmt, ...) {
-    va_list args;
-
-    va_start(args, fmt);
-    kernel_raw_log(LOG_WARN, fmt, args);
-    va_end(args);
-}
-
-void kernel_error(const char* fmt, ...) {
-    va_list args;
-
-    va_start(args, fmt);
-    kernel_raw_log(LOG_ERROR, fmt, args);
-    va_end(args);
+    for (uint32_t i = 0; i < pixels_count; ++i) {
+        fb[i] = RGB_TO_UINT32(COLOR_LRED);
+    }
 }

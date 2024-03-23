@@ -26,7 +26,7 @@ extern BOOTBOOT bootboot;
 extern const uint8_t _binary_font_psf_start;
 
 static void halt_logical_core() {
-    while (1);
+    _kernel_break();
 }
 
 static Status split_logical_cores() {
@@ -74,12 +74,12 @@ static Status init_timer() {
 
 Status init_kernel() {
     if (split_logical_cores() != KERNEL_OK) return KERNEL_PANIC;
-    
-    if (init_intr() != KERNEL_OK) return KERNEL_PANIC;
-    if (init_memory() != KERNEL_OK) return KERNEL_PANIC;
-    if (init_acpi() != KERNEL_OK) return KERNEL_ERROR;
-    if (init_apic() != KERNEL_OK) return KERNEL_ERROR;
-    if (init_ioapic() != KERNEL_OK) return KERNEL_ERROR;
+
+    if (init_intr()     != KERNEL_OK) return KERNEL_PANIC;
+    if (init_memory()   != KERNEL_OK) return KERNEL_ERROR;
+    if (init_acpi()     != KERNEL_OK) return KERNEL_ERROR;
+    if (init_apic()     != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ioapic()   != KERNEL_OK) return KERNEL_ERROR;
     if (init_io_devices() != KERNEL_OK) return KERNEL_ERROR;
     if (init_timer() != KERNEL_OK) return KERNEL_ERROR;
     if (init_pci_devices() != KERNEL_OK) return KERNEL_ERROR;

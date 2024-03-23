@@ -30,12 +30,14 @@ typedef enum Status {
     KERNEL_PANIC,
 } Status;
 
-#define KB_SIZE 1024
-#define MB_SIZE (KB_SIZE * 1024)
-#define GB_SIZE (MB_SIZE * 1024)
+#define KB_SIZE 1024U
+#define MB_SIZE ((uint64_t)KB_SIZE * 1024U)
+#define GB_SIZE (MB_SIZE * 1024U)
 
 #define ATTR_PACKED __attribute__((packed))
 #define ATTR_ALIGN(align) __attribute__((aligned(align)))
 #define ATTR_INTRRUPT __attribute__((interrupt, target("general-regs-only")))
 
 #define FALLTHROUGH __attribute__ ((fallthrough))
+
+static inline void _kernel_break() { while(1); }
