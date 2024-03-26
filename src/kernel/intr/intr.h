@@ -29,3 +29,7 @@ typedef struct InterruptFrame64 {
 } ATTR_PACKED InterruptFrame64;
 
 Status init_intr();
+
+void intr_set_idt_descriptor(const uint8_t idx, const void* isr, uint8_t flags);
+
+void log_intr_frame(InterruptFrame64* frame);

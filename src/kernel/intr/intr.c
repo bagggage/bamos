@@ -1,5 +1,7 @@
 #include "intr.h"
 
+#include "exceptions.h"
+
 #include "logger.h"
 #include "mem.h"
 
@@ -27,7 +29,7 @@ typedef struct OffsetAddress {
     uint32_t offset_3;
 } ATTR_PACKED OffsetAddress;
 
-void set_idt_descriptor(uint8_t idx, void* isr, uint8_t flags) {
+void intr_set_idt_descriptor(const uint8_t idx, const void* isr, uint8_t flags) {
     idt_64[idx].offset_1 = (uint64_t)isr & 0xFFFF;
     idt_64[idx].offset_2 = ((uint64_t)isr >> 16) & 0xFFFF;
     idt_64[idx].offset_3 = (uint64_t)isr >> 32;
@@ -38,7 +40,7 @@ void set_idt_descriptor(uint8_t idx, void* isr, uint8_t flags) {
 }
 
 __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame64* frame) {
-    kernel_warn("Interrupt Frame:\nrip: %x:%x\nrsp: %x\neflags: %b\ncs: %x\nss: %x\n", 
+    kernel_warn("Interrupt Frame:\nrip: %x:%x\nrsp: %x\nrflags: %b\ncs: %x\nss: %x\n", 
     frame->rip, (uint64_t)frame->rip - (uint64_t)&kernel_elf_start,
     frame->rsp,
     frame->eflags,
@@ -50,7 +52,7 @@ __attribute__((target("general-regs-only"))) void intr_excp_panic(InterruptFrame
     kernel_error("[KERNEL PANIC] Unhandled interrupt exception: %x\n", error_code);
     log_intr_frame(frame);
     // Halt
-    while (1);
+    _kernel_break();
 }
 
 // Default interrupt exception handler
@@ -73,22 +75,22 @@ Status init_intr() {
     idtr_64.limit = sizeof(idt_64) - 1;
     idtr_64.base = (uint64_t)&idt_64;
 
-    // Setup interrupt descriptors
-
     // Setup exception heandlers
     for (uint8_t i = 0; i < IDT_EXCEPTION_ENTRIES_COUNT; ++i) {
         if (i == 8 || i == 10 || i == 11 || i == 12 ||
             i == 13 || i == 14 || i == 17 || i == 21) {
-            set_idt_descriptor(i, &intr_excp_error_code_handler, TRAP_GATE_FLAGS);
+            intr_set_idt_descriptor(i, &intr_excp_error_code_handler, TRAP_GATE_FLAGS);
         }
         else {
-            set_idt_descriptor(i, &intr_excp_handler, TRAP_GATE_FLAGS);
+            intr_set_idt_descriptor(i, &intr_excp_handler, TRAP_GATE_FLAGS);
         }
     }
 
+    if (init_intr_exceptions() != KERNEL_OK) return KERNEL_PANIC;
+
     // Setup regular interrupts
     for (uint16_t i = IDT_EXCEPTION_ENTRIES_COUNT; i < IDT_ENTRIES_COUNT; ++i) {
-        set_idt_descriptor(i, &intr_handler, INTERRUPT_GATE_FLAGS);
+        intr_set_idt_descriptor(i, &intr_handler, INTERRUPT_GATE_FLAGS);
     }
 
     asm volatile("lidt %0"::"memory"(idtr_64));
