@@ -19,7 +19,7 @@
 
 #define MAX_IMPLEMENTED_PORTS   32
 
-HBAMemory* HBA_memory = NULL;
+HBAMemory* hba_memory = NULL;
 
 bool_t is_ahci(uint8_t class_code, uint8_t prog_if, uint8_t subclass) {
     if (class_code == PCI_CLASS_CODE_STORAGE_CONTROLLER &&
@@ -55,11 +55,11 @@ static uint8_t check_device_type(HBAPort* port) {
 }
 
 void detect_ahci_devices_type() {
-	uint32_t port_implemented = HBA_memory->port_implemented;
+	uint32_t port_implemented = hba_memory->port_implemented;
 
     for (size_t i = 0; i < MAX_IMPLEMENTED_PORTS; ++i) {
         if (port_implemented & 1) {
-            uint8_t device_type = check_device_type(&HBA_memory->ports[i]);
+            uint8_t device_type = check_device_type(&hba_memory->ports[i]);
 
             switch (device_type) {
             case AHCI_DEV_SATA: {
