@@ -6,4 +6,8 @@ set -e
 export UEFI=${THIRD_PRT}/uefi/OVMF-efi.fd
 
 unset GTK_PATH
-qemu-system-x86_64 -bios ${UEFI} -smp cores=4 ${DIST_DIR}/bamos.iso
+qemu-img create -f raw ${DIST_DIR}/nvme.img 10G
+qemu-system-x86_64 -bios ${UEFI} -smp cores=4 \
+-drive file=${DIST_DIR}/bamos.iso,media=cdrom \
+-drive format=raw,file=${DIST_DIR}/nvme.img,if=none,id=nvme \
+-device nvme,drive=nvme,serial=1234
