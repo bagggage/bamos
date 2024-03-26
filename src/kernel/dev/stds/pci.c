@@ -122,10 +122,7 @@ bool_t add_new_pci_device(PciDeviceNode* new_pci_device) {
 }
 
 void remove_pci_device(PciDevice* pci_device, size_t index) {
-    if(index < 0) {
-        kernel_msg("index is < 0\n");
-        return;
-    }
+    if(index < 0) return;
 
     PciDeviceNode* current = pci_device->device_list;
     PciDeviceNode* previous = NULL;
