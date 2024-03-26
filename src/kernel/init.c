@@ -10,7 +10,7 @@
 #include "dev/keyboard.h"
 #include "dev/ps2_keyboard.h"
 #include "dev/stds/acpi.h"
-#include "dev/stds/ahci.h"
+#include "dev/stds/pci.h"
 
 #include "logger.h"
 #include "mem.h"
@@ -81,8 +81,8 @@ Status init_kernel() {
     if (init_apic()     != KERNEL_OK) return KERNEL_ERROR;
     if (init_ioapic()   != KERNEL_OK) return KERNEL_ERROR;
     if (init_io_devices() != KERNEL_OK) return KERNEL_ERROR;
-    if (init_timer()    != KERNEL_OK) return KERNEL_ERROR;
-    if (init_ahci()     != KERNEL_OK) return KERNEL_ERROR;
+    if (init_timer() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_pci_devices() != KERNEL_OK) return KERNEL_ERROR;
     
     return KERNEL_OK;
 }

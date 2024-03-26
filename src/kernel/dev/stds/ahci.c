@@ -21,61 +21,10 @@
 
 HBAMemory* HBA_memory = NULL;
 
-Status init_ahci() {
-    for (uint8_t bus = 0; bus < 4; ++bus) {
-        for (uint8_t dev = 0; dev < 32; ++dev) {
-            for (uint8_t func = 0; func < 8; ++func) {
-                uint16_t vendor_id = pci_config_readw(bus, dev, func, 0x0);
-
-                uint8_t prog_if = pci_config_readb(bus, dev, func, 0x9);
-                uint8_t subclass = pci_config_readb(bus, dev, func, 0xA);
-
-                if (vendor_id == 0xffff) continue;
-
-                if (is_ahci(prog_if, subclass)) {
-                    init_HBA_memory(bus, dev, func);
-                    detect_ahci_devices_type();
-                }
-            }
-        }
-    }
-
-    return KERNEL_OK;
-}
-
-Status init_HBA_memory(uint8_t bus, uint8_t dev, uint8_t func) {
-    uint64_t bar5 = pci_config_readl(bus, dev, func, 0x24);
-    uint64_t bar5_type;
-
-    if (bar5 == 0) {
-        kernel_error("Bar 5 is 0\n");
-
-        return KERNEL_ERROR;
-    } else {
-        if ((bar5 & 1) == 0) {  // bar5 is in memory space
-            bar5_type = (bar5 >> 1) & 0x3;
-
-            if ((bar5_type & 2) == 0 ) {    //bar5 is in 32bit memory space
- 				kernel_msg("Bar 5 is in 32bit on bus: %u, dev: %u, func: %u\n", bus, dev, func);
-
-                HBA_memory = bar5 & 0xFFFFFFF0; // Clear flags
-            } else {
-                kernel_msg("Bar 5 is in 64bit on bus: %u, dev: %u, func: %u\n", bus, dev, func);
-
-                HBA_memory = bar5 & 0xFFFFFFFFFFFFFFF0; // Clear flags
-            }
-        } else {    // bar5 is in i/o space 
-            kernel_msg("Bar 5 is in I/O space on bus: %u, dev: %u, func: %u\n", bus, dev, func);
-
-            HBA_memory = bar5 & 0xFFFFFFFC; // Clear flags
-        } 
-    }
-  
-    return KERNEL_OK;
-}
-
-bool_t is_ahci(uint8_t prog_if, uint8_t subclass) {
-    if (prog_if == PCI_PROGIF_AHCI && subclass == PCI_SUBCLASS_SATA_CONTROLLER) {
+bool_t is_ahci(uint8_t class_code, uint8_t prog_if, uint8_t subclass) {
+    if (class_code == PCI_CLASS_CODE_STORAGE_CONTROLLER &&
+        prog_if == PCI_PROGIF_AHCI &&
+        subclass == PCI_SUBCLASS_SATA_CONTROLLER) {
         return TRUE;
     }
 
