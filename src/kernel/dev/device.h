@@ -48,6 +48,8 @@ typedef struct DevicePool {
 
 #define DEV_DISPLAY_ID 0
 #define DEV_KEYBOARD_ID 1
+#define DEV_TIMER_ID 2
+#define DEV_PCI_ID 3
 
 /*
 Dynamic pool of devices, must be used only inside kernel.

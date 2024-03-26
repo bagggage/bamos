@@ -2,6 +2,8 @@
 
 #include "definitions.h"
 
+#include "dev/device.h"
+
 #define PCI_CONFIG_ADDRESS_PORT 0xCF8
 #define PCI_CONFIG_DATA_PORT 0xCFC
 
@@ -19,12 +21,55 @@
 typedef struct PciConfigurationSpace {
     uint16_t vendor_id;
     uint16_t device_id;
-} PciConfigurationSpace;
+    uint16_t command;
+    uint16_t status;
+    uint8_t revision_id;
+    uint8_t prog_if;
+    uint8_t subclass;
+    uint8_t class_code;
+    uint8_t cache_line_size;
+    uint8_t latency_timer;
+    uint8_t header_type;
+    uint8_t bist;
+    uint32_t bar0;
+    uint32_t bar1;
+    uint32_t bar2;
+    uint32_t bar3;
+    uint32_t bar4;
+    uint32_t bar5;
+    uint32_t cardbus_cis_pointer;
+    uint16_t subsystem_vendor_id;
+    uint16_t subsystem_id;
+    uint32_t expansion_rom_base_address;
+    uint8_t capabilities_pointer;
+    uint8_t reserved1;
+    uint16_t reserved2;
+    uint32_t reserved3;
+    uint8_t interrupt_line;
+    uint8_t interrupt_pin;
+    uint8_t min_grant;
+    uint8_t max_latency;
+} ATTR_PACKED PciConfigurationSpace;
+
+typedef struct PciDeviceNode {
+    PciConfigurationSpace pci_header;
+    struct PciDeviceNode* next;
+} PciDeviceNode;
+
+typedef struct PciInterface {
+    // TODO
+} PciInterface;
+
+typedef struct PciDevice {
+    DEVICE_STRUCT_IMPL(Pci);
+
+   PciDeviceNode* device_list;
+} PciDevice;
 
 uint8_t pci_config_readb(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 uint16_t pci_config_readw(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 
-uint64_t read_BAR(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
-
-Status init_pci_devices();
+Status init_pci_devices(PciDevice* pci_device);
+bool_t add_new_pci_device(PciDeviceNode* new_pci_device);
+void remove_pci_device(PciDevice* pci_device, size_t index);

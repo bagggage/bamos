@@ -72,17 +72,26 @@ static Status init_timer() {
     return KERNEL_OK;
 }
 
+Status init_pci() {
+    PciDevice* pci_device;
+
+    if (add_device(DEV_PCI, (void**)&pci_device, sizeof(PciDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_pci_devices(pci_device) != KERNEL_OK) return KERNEL_ERROR;
+
+    return KERNEL_OK;
+}
+
 Status init_kernel() {
     if (split_logical_cores() != KERNEL_OK) return KERNEL_PANIC;
 
-    if (init_intr()     != KERNEL_OK) return KERNEL_PANIC;
-    if (init_memory()   != KERNEL_OK) return KERNEL_ERROR;
-    if (init_acpi()     != KERNEL_OK) return KERNEL_ERROR;
-    if (init_apic()     != KERNEL_OK) return KERNEL_ERROR;
-    if (init_ioapic()   != KERNEL_OK) return KERNEL_ERROR;
-    if (init_io_devices() != KERNEL_OK) return KERNEL_ERROR;
-    if (init_timer() != KERNEL_OK) return KERNEL_ERROR;
-    if (init_pci_devices() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_intr()         != KERNEL_OK) return KERNEL_PANIC;
+    if (init_memory()       != KERNEL_OK) return KERNEL_ERROR;
+    if (init_acpi()         != KERNEL_OK) return KERNEL_ERROR;
+    if (init_apic()         != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ioapic()       != KERNEL_OK) return KERNEL_ERROR;
+    if (init_io_devices()   != KERNEL_OK) return KERNEL_ERROR;
+    if (init_timer()        != KERNEL_OK) return KERNEL_ERROR;
+    if (init_pci()          != KERNEL_OK) return KERNEL_ERROR;
     
     return KERNEL_OK;
 }
