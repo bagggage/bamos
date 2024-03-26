@@ -14,8 +14,7 @@ extern BOOTBOOT bootboot;
 extern uint64_t kernel_elf_start;
 extern uint64_t kernel_elf_end;
 
-RawMemoryBlock vm_kernel_stack;
-RawMemoryBlock vm_kernel_segments = { 0, &kernel_elf_start, 0 };
+KernelAddressSpace kernel_addr_space;
 
 // PML4
 ATTR_ALIGN(PAGE_BYTE_SIZE)
@@ -28,13 +27,14 @@ ATTR_ALIGN(PAGE_BYTE_SIZE)
 PageDirPtrEntry vm_high_pdpt[PAGE_TABLE_MAX_SIZE];
 
 // Pool of memory that used to allocating page tables
-static PageXEntry* vm_page_table_pool = NULL;
+typedef struct PageTablePool {
+    PageXEntry* buffer;
+    size_t size;
+    uint8_t bitmap[PAGE_TABLE_POOL_TABLES_COUNT / 8];
+} PageTablePool;
 
-// Count of page tables in pool
-static size_t vm_page_table_pool_size = 0;
-static uint8_t vm_page_table_pool_bitmap[PAGE_TABLE_POOL_TABLES_COUNT / 8];
-
-uint64_t vm_kernel_virt_to_phys_offset = 0;
+static PageTablePool vm_page_table_pool = { NULL, 0 };
+static uint64_t vm_kernel_virt_to_phys_offset = 0;
 
 // Linker setted stack size
 extern uint64_t initstack[];
@@ -56,7 +56,7 @@ static inline const MMapEnt* find_free_mem_map_entry(MMapEnt* mem_map, const siz
     return most_suitable_entry;
 }
 
-static const MMapEnt find_first_suitable_mmap_block(MMapEnt* begin_entry, const size_t entries_count, const size_t pages_count) {
+static MMapEnt find_first_suitable_mmap_block(MMapEnt* begin_entry, const size_t entries_count, const size_t pages_count) {
     for (size_t i = 0; i < entries_count - (((uint64_t)begin_entry - (uint64_t)&bootboot.mmap.ptr) / sizeof(MMapEnt)); ++i) {
         MMapEnt* entry = begin_entry + i;
 
@@ -96,17 +96,19 @@ static void vm_init_page_table(PageXEntry* page_table) {
 static void vm_config_page_table_entry(PageXEntry* page_table_entry, const uint64_t redirection_base, VMMapFlags flags) {
     page_table_entry->present               = 1;
     page_table_entry->writeable             = ((flags & VMMAP_WRITE) != 0);
-    page_table_entry->execution_disabled    = ((flags & VMMAP_EXEC) == 0);
     page_table_entry->user_access           = ((flags & VMMAP_USER_ACCESS) != 0);
     page_table_entry->size                  = ((flags & VMMAP_USE_LARGE_PAGES) != 0);
+    page_table_entry->cache_disabled        = ((flags & VMMAP_CACHE_DISABLED) != 0);
+    page_table_entry->write_through         = ((flags & VMMAP_WRITE_THROW) != 0);
     page_table_entry->page_ppn              = (redirection_base >> 12);
+    page_table_entry->execution_disabled    = ((flags & VMMAP_EXEC) == 0);
 }
 
 static void vm_init_page_tables() {
     // Init with zeroes
-    vm_init_page_table(&vm_pml4);
-    vm_init_page_table(&vm_low_pdpt);
-    vm_init_page_table(&vm_high_pdpt);
+    vm_init_page_table(vm_pml4);
+    vm_init_page_table(vm_low_pdpt);
+    vm_init_page_table(vm_high_pdpt);
 
     // Low half
     vm_config_page_table_entry(&vm_pml4[0],
@@ -119,62 +121,79 @@ static void vm_init_page_tables() {
                             VMMAP_EXEC | VMMAP_WRITE);
 }
 
-Status init_virtual_memory(MMapEnt* bootboot_mem_map, const size_t entries_count) {
-    kassert(bootboot_mem_map != NULL && entries_count > 0);
+static void vm_init_memory_map(VMMemoryMap* memory_map, MMapEnt* boot_memory_map, const size_t entries_count) {
+    uint8_t prev_entry_type = 0xFF;
+    uint32_t uniqe_blocks_count = 0;
 
-    vm_kernel_virt_to_phys_offset = get_phys_address(vm_kernel_segments.virt_address) - vm_kernel_segments.virt_address;
+    for (uint32_t i = 0; i < entries_count; ++i) {
+        if (prev_entry_type != MMapEnt_Type(boot_memory_map + i)) {
+            prev_entry_type = MMapEnt_Type(boot_memory_map + i);
+            ++uniqe_blocks_count;
+        }
+    }
 
-    vm_kernel_segments.phys_address = vm_kernel_virt_to_phys(vm_kernel_segments.virt_address);
-    vm_kernel_segments.size = (uint64_t)&kernel_elf_end - (uint64_t)&kernel_elf_start;
+    // Calculate required entries count to know how much memory need to store entries.
+    memory_map->count = uniqe_blocks_count + 2; // Include kernel block and stack
+
+    //const uint32_t required_array_byte_size = memory_map->count * sizeof(VMMemoryMapEntry);
+
+    // TODO
+}
+
+Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count, VMMemoryMap* out_memory_map) {
+    kassert(boot_memory_map != NULL && entries_count > 0);
+
+    kernel_addr_space.segments.virt_address = (uint64_t)&kernel_elf_start;
+    vm_kernel_virt_to_phys_offset = get_phys_address(kernel_addr_space.segments.virt_address) - kernel_addr_space.segments.virt_address;
+
+    kernel_addr_space.segments.phys_address = vm_kernel_virt_to_phys(kernel_addr_space.segments.virt_address);
+    kernel_addr_space.segments.size = (uint64_t)&kernel_elf_end - (uint64_t)&kernel_elf_start;
 
     kernel_msg("Kernel: %x\n", get_phys_address((uint64_t)&kernel_elf_start));
-    kernel_msg("Kernel size: %u KB (%u MB)\n", vm_kernel_segments.size / KB_SIZE, vm_kernel_segments.size / MB_SIZE);
+    kernel_msg("Kernel size: %u KB (%u MB)\n", kernel_addr_space.segments.size / KB_SIZE, kernel_addr_space.segments.size / MB_SIZE);
     kernel_msg("Framebuffer: %x\n", get_phys_address((uint64_t)BOOTBOOT_FB));
     kernel_msg("Kernel virtual address space offset: %x\n", vm_kernel_virt_to_phys_offset);
 
     // Init pages pool
     const MMapEnt pages_pool_mmap_entry =
-        find_first_suitable_mmap_block(bootboot_mem_map, entries_count, PAGE_TABLE_POOL_TABLES_COUNT);
-    //
+        find_first_suitable_mmap_block(boot_memory_map, entries_count, PAGE_TABLE_POOL_TABLES_COUNT);
 
     if (pages_pool_mmap_entry.size == 0) {
         error_str = "Not found suitable memory block for paging tables pool";
         return KERNEL_ERROR;
     }
 
-    vm_page_table_pool = (PageXEntry*)pages_pool_mmap_entry.ptr;
-    vm_page_table_pool_size = PAGE_TABLE_POOL_TABLES_COUNT;
+    vm_page_table_pool.buffer = (PageXEntry*)pages_pool_mmap_entry.ptr;
+    vm_page_table_pool.size = PAGE_TABLE_POOL_TABLES_COUNT;
 
     vm_init_page_tables();
 
     // Replace and map stack
     const MMapEnt stack_mmap_entry =
-        find_first_suitable_mmap_block(bootboot_mem_map, entries_count, KERNEL_STACK_SIZE / PAGE_BYTE_SIZE);
+        find_first_suitable_mmap_block(boot_memory_map, entries_count, KERNEL_STACK_SIZE / PAGE_BYTE_SIZE);
 
     if (stack_mmap_entry.size == 0) {
         error_str = "Not found suitable memory block for replacing stack";
         return KERNEL_ERROR;
     }
 
-    vm_kernel_stack.phys_address = stack_mmap_entry.ptr;
-    vm_kernel_stack.virt_address = (UINT64_MAX - KERNEL_STACK_SIZE) + 1;
-    vm_kernel_stack.size = KERNEL_STACK_SIZE;
+    kernel_addr_space.stack.phys_address = stack_mmap_entry.ptr;
+    kernel_addr_space.stack.virt_address = (UINT64_MAX - KERNEL_STACK_SIZE) + 1;
+    kernel_addr_space.stack.size = KERNEL_STACK_SIZE;
 
     const void* stack_src_virt_ptr = (void*)((UINT64_MAX - (uint64_t)initstack) + 1);
 
-    //Map 2GB physical identity
+    //Map 8GB physical identity
     vm_map_phys_to_virt(0x0,
                         0x0,
                         div_with_roundup(8 * GB_SIZE, PAGE_BYTE_SIZE),
-                        (VMMAP_FORCE | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
-    //
+                        (VMMAP_FORCE | VMMAP_EXEC | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
 
     // Map framebuffer
     vm_map_phys_to_virt(bootboot.fb_ptr,
                         BOOTBOOT_FB,
                         div_with_roundup(bootboot.fb_size, (2 * MB_SIZE)) * PAGES_PER_2MB,
-                        (VMMAP_FORCE | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
-    //
+                        (VMMAP_FORCE | VMMAP_WRITE_THROW | VMMAP_CACHE_DISABLED | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
 
     // Map bootboot
     vm_map_phys_to_virt(get_phys_address((uint64_t)&bootboot),
@@ -183,20 +202,18 @@ Status init_virtual_memory(MMapEnt* bootboot_mem_map, const size_t entries_count
                         (VMMAP_FORCE | VMMAP_WRITE));
 
     // Map kernel
-    vm_map_phys_to_virt(vm_kernel_segments.phys_address,
-                        vm_kernel_segments.virt_address,
-                        div_with_roundup(vm_kernel_segments.size, PAGE_BYTE_SIZE),
+    vm_map_phys_to_virt(kernel_addr_space.segments.phys_address,
+                        kernel_addr_space.segments.virt_address,
+                        div_with_roundup(kernel_addr_space.segments.size, PAGE_BYTE_SIZE),
                         (VMMAP_FORCE | VMMAP_EXEC | VMMAP_WRITE));
-    //
 
     // Map stack
     vm_map_phys_to_virt(get_phys_address((uint64_t)stack_src_virt_ptr),
-                        stack_src_virt_ptr,
-                        vm_kernel_stack.size / PAGE_BYTE_SIZE,
+                        (uint64_t)stack_src_virt_ptr,
+                        kernel_addr_space.stack.size / PAGE_BYTE_SIZE,
                         (VMMAP_FORCE | VMMAP_EXEC | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
-    //
 
-    log_memory_page_tables((PageMapLevel4Entry*)vm_kernel_virt_to_phys(&vm_pml4));
+    log_memory_page_tables((PageMapLevel4Entry*)vm_kernel_virt_to_phys((uint64_t)&vm_pml4));
 
     // Enable OS paging
     cpu_set_pml4((PageMapLevel4Entry*)vm_kernel_virt_to_phys((uint64_t)&vm_pml4));
@@ -206,26 +223,28 @@ Status init_virtual_memory(MMapEnt* bootboot_mem_map, const size_t entries_count
 }
 
 PageXEntry* vm_alloc_page_table() {
-    for (uint16_t i = 0; i < sizeof(vm_page_table_pool_bitmap); ++i) {
-        if (vm_page_table_pool_bitmap[i] == 0xFF) continue;
+    for (uint16_t i = 0; i < sizeof(vm_page_table_pool.bitmap); ++i) {
+        if (vm_page_table_pool.bitmap[i] == 0xFF) continue;
 
         uint8_t bitmask = 1;
 
         for (uint8_t j = 0; j < 8; ++j) {
-            if (vm_page_table_pool_bitmap[i] & bitmask) {
+            if (vm_page_table_pool.bitmap[i] & bitmask) {
                 bitmask <<= 1;
                 continue;
             }
 
-            vm_page_table_pool_bitmap[i] |= bitmask;
+            vm_page_table_pool.bitmap[i] |= bitmask;
 
-            PageXEntry* page_table = &vm_page_table_pool[((i * 8) + j) * PAGE_TABLE_MAX_SIZE];
+            PageXEntry* page_table = &vm_page_table_pool.buffer[((i * 8) + j) * PAGE_TABLE_MAX_SIZE];
 
             vm_init_page_table(page_table);
 
             return page_table;
         }
     }
+
+    error_str = "Page table pool is empty";
 
     return NULL;
 }
@@ -234,11 +253,11 @@ PageXEntry* vm_alloc_page_table() {
 void vm_free_page_table(PageXEntry* page_table) {
     kassert(page_table != NULL);
 
-    const uint64_t table_idx_offset_in_pool = (((uint64_t)vm_page_table_pool - (uint64_t)page_table) / 8) / PAGE_TABLE_MAX_SIZE;
+    const uint64_t table_idx_offset_in_pool = (((uint64_t)vm_page_table_pool.buffer - (uint64_t)page_table) / 8) / PAGE_TABLE_MAX_SIZE;
     const uint32_t bitmap_byte_idx = table_idx_offset_in_pool / 8;
     const uint8_t bitmap_bit_idx = table_idx_offset_in_pool % 8;
 
-    vm_page_table_pool_bitmap[bitmap_byte_idx] &= (~(0x1 << bitmap_bit_idx));
+    vm_page_table_pool.bitmap[bitmap_byte_idx] &= (~(0x1 << bitmap_bit_idx));
 }
 
 static inline bool_t vm_is_pxe_valid(const PageXEntry* pxe) {
@@ -259,11 +278,33 @@ PageXEntry* vm_get_page_x_entry(const uint64_t virt_address, unsigned int level)
     return pxe;
 }
 
-static inline void vm_allow_pxe_flags(PageXEntry* pxe, VMMapFlags flags) {
+static inline void vm_prioritize_pxe_flags(PageXEntry* pxe, VMMapFlags flags) {
     pxe->present            = 1;
-    pxe->writeable          |= ((flags & VMMAP_WRITE) == 1);
-    pxe->user_access        |= ((flags & VMMAP_USER_ACCESS) == 1);
+    pxe->writeable          |= ((flags & VMMAP_WRITE) != 0);
+    pxe->user_access        |= ((flags & VMMAP_USER_ACCESS) != 0);
     pxe->execution_disabled &= ((flags & VMMAP_EXEC) == 0);
+}
+
+static void vm_remap_large_page(PageXEntry* pxe, PageXEntry* child_pxe, VMMapFlags flags, const uint8_t level) {
+    static const uint64_t level_size_table[2] = { (2 * MB_SIZE), PAGE_BYTE_SIZE };
+
+    uint64_t phys_address = ((uint64_t)pxe->page_ppn << 12);
+
+    pxe->size = 0;
+    pxe->page_ppn = ((uint64_t)child_pxe >> 12);
+
+    for (uint32_t i = 0; i < PAGE_TABLE_MAX_SIZE; ++i) {
+        child_pxe[i].present = 1;
+        child_pxe[i].writeable = (pxe->writeable | (flags & VMMAP_WRITE));
+        child_pxe[i].user_access = (pxe->user_access | (flags & VMMAP_USER_ACCESS));
+        child_pxe[i].execution_disabled = (pxe->execution_disabled & ((flags & VMMAP_EXEC) == 0));
+        child_pxe[i].write_through = pxe->write_through;
+        child_pxe[i].cache_disabled = pxe->cache_disabled;
+        child_pxe[i].size = (level == 1 ? 0 : 1);
+        child_pxe[i].page_ppn = (phys_address >> 12);
+
+        phys_address += level_size_table[level];
+    }
 }
 
 Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const size_t pages_count, VMMapFlags flags) {
@@ -307,10 +348,17 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
 
             if (page_table == NULL) return KERNEL_ERROR;
 
-            vm_config_page_table_entry(pxe, (uint64_t)page_table, flags & (~VMMAP_USE_LARGE_PAGES));
+            if (pxe->size == 1) {
+                kassert(i > 0);
+                vm_remap_large_page(pxe, page_table, flags, i - 1);
+            }
+            else {
+                vm_config_page_table_entry(pxe, (uint64_t)page_table, flags & (~VMMAP_USE_LARGE_PAGES));
+            }
         }
         else if (i < 3 && is_need_to_map_on_this_level == FALSE && has_pages_to_allocate) {
-            vm_allow_pxe_flags(pxe, flags);
+            // Prioritize high page x entry flags to sure that flags are compatible with mapping requirements
+            vm_prioritize_pxe_flags(pxe, flags);
         }
 
         if (is_need_to_map_on_this_level) {
@@ -341,10 +389,9 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
         }
         else if (i < 3) {
             pxe = (PageXEntry*)((uint64_t)pxe->page_ppn << 12) + ((virt_address >> offset_shift) & 0x1FF);
+            offset_shift -= 9;
 
             //kernel_msg("Next entry [%u]: %x\n", i, (uint64_t)pxe);
-
-            offset_shift -= 9;
         }
     }
 

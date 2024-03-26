@@ -2,7 +2,14 @@
 
 #include "definitions.h"
 
+#include <bootboot.h>
+
 #include "cpu/paging.h"
+
+/*
+Kernel high-level memory interface.
+This file provide high-level memory functions for kernel-space.
+*/
 
 Status init_memory();
 
@@ -12,6 +19,7 @@ void* kmalloc(size_t size);
 void kfree(void* allocated_mem);
 
 void log_memory_page_tables(PageMapLevel4Entry* pml4);
+void log_boot_memory_map(const MMapEnt* memory_map, const size_t entries_count);
 
 // Allocate pages in common heap
 void* alloc_pages(size_t count);

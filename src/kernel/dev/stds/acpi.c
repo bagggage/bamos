@@ -50,7 +50,7 @@ ACPISDTHeader* acpi_find_entry(const char signature[4]) {
 
 Status init_acpi() {
     acpi_xsdt = (XSDT*)bootboot.arch.x86_64.acpi_ptr;
-    acpi_xsdt_size = (acpi_xsdt->header.length - sizeof(acpi_xsdt->header)) >> 3; // divide by 8
+    acpi_xsdt_size = (acpi_xsdt->header.length - sizeof(acpi_xsdt->header)) / 8U;
 
     if (acpi_checksum(&acpi_xsdt->header) == FALSE) {
         error_str = "XSDT Checksum failed";

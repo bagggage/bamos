@@ -78,7 +78,7 @@ static inline PageMapLevel4Entry* cpu_get_current_pml4() {
 
     asm volatile("mov %%cr3,%0":"=a"(cr3));
 
-    return (PageMapLevel4Entry*)(cr3.pml4_base << 12);
+    return (PageMapLevel4Entry*)((uint64_t)cr3.pml4_base << 12);
 }
 
 static inline void cpu_set_pml4(PageMapLevel4Entry* pml4_phys_addr) {

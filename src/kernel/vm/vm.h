@@ -21,23 +21,60 @@ typedef struct RawMemoryBlock {
     size_t size;
 } RawMemoryBlock;
 
+typedef struct KernelAddressSpace {
+    RawMemoryBlock segments;
+    RawMemoryBlock stack;
+    RawMemoryBlock heap;
+} KernelAddressSpace;
+
 typedef enum VMMapFlags{
     VMMAP_DEFAULT = 0x0,            // Use default flags: no large pages, collision checks enabled, read-only, no user access.
     VMMAP_FORCE = 0x1,              // Force to map, does't check collisions.
     VMMAP_USE_LARGE_PAGES = 0x2,    // Uses large pages (2MB or 1GB) for long regions.
     VMMAP_WRITE = 0x4,              // Allow to write to memory.
     VMMAP_EXEC = 0x8,               // Allow execute instructions from this memory.
-    VMMAP_USER_ACCESS = 0x10        // Allow user access.
+    VMMAP_USER_ACCESS = 0x10,       // Allow user access.
+    VMMAP_WRITE_THROW = 0x20,       // Write to cache and memory at the same time.
+    VMMAP_CACHE_DISABLED = 0x40     // Disable writing to cache.
 } VMMapFlags;
+
+/*
+Virtual memory page frame descriptor.
+*/
+typedef struct VMPageFrame {
+    uint32_t count;
+    uint32_t phys_address_base;
+    uint64_t virt_address;
+    VMMapFlags flags;
+} VMPageFrame;
+
+typedef struct VMMemoryMapEntry {
+    uint32_t phys_address;
+
+    enum VMMemmoryMapEntryType {
+        VMMEM_TYPE_FREE,    // free to use
+        VMMEM_TYPE_USED,    // used for unknown perposes
+        VMMEM_TYPE_DEV,     // reserved for devices
+        VMMEM_TYPE_KERNEL,  // kernel code/data/stack segments
+        VMMEM_TYPE_ALLOC    // pre-allocated by direct searching of free memory block
+    } type;
+} VMMemoryMapEntry;
+
+/*
+Structure that returned after virtual memory initialization.
+Map contains information about all physical ram.
+Entries array stored in a random free memory region, and don't need to be freed.
+This map actually used only for page allocator initialization and can't
+be accessed after it.
+*/
+typedef struct VMMemoryMap {
+    VMMemoryMapEntry* entries;
+    uint32_t count;
+} VMMemoryMap;
 
 #define VMMAP_PRIOR_FLAGS (VMMAP_EXEC | VMMAP_WRITE | VMMAP_USER_ACCESS)
 
 extern PageMapLevel4Entry vm_pml4[PAGE_TABLE_MAX_SIZE];
-
-extern RawMemoryBlock vm_kernel_stack;
-extern RawMemoryBlock vm_kernel_segments;
-
-extern uint64_t vm_kernel_virt_to_phys_offset;
 
 // Conver any kernel space address from virtual to physical
 static inline uint64_t vm_kernel_virt_to_phys(const uint64_t kernel_virt_address) {
@@ -49,7 +86,7 @@ static inline uint64_t div_with_roundup(const uint64_t value, const uint64_t div
     return (value / divider) + ((value % divider) == 0 ? 0 : 1);
 }
 
-Status init_virtual_memory(MMapEnt* bootboot_mem_map, const size_t entries_count);
+Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count, VMMemoryMap* out_memory_map);
 
 /*
 Map physical pages to virtual in required count.

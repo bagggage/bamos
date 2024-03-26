@@ -7,6 +7,7 @@
 
 #include "logger.h"
 
+#include "vm/buddy_page_alloc.h"
 #include "vm/vm.h"
 
 #define PAGE_KB_SIZE (PAGE_BYTE_SIZE / KB_SIZE)
@@ -122,16 +123,16 @@ void kfree(void* allocated_mem) {
 
 extern BOOTBOOT bootboot;
 
-static inline void log_memory_map(MMapEnt* mem_map, size_t size) {
-    kassert(mem_map != NULL);
+void log_boot_memory_map(const MMapEnt* memory_map, const size_t entries_count) {
+    kassert(memory_map != NULL);
 
     size_t used_mem_size = 0;
     size_t mem_size = 0;
 
-    for (size_t i = 0; i < size; ++i) {
+    for (size_t i = 0; i < entries_count; ++i) {
         const char* type_str = NULL;
 
-        switch (MMapEnt_Type(mem_map + i))
+        switch (MMapEnt_Type(memory_map + i))
         {
         case MMAP_USED: type_str = "USED"; break;
         case MMAP_FREE: type_str = "FREE"; break;
@@ -142,11 +143,11 @@ static inline void log_memory_map(MMapEnt* mem_map, size_t size) {
             break;
         }
 
-        if (MMapEnt_IsFree(mem_map + i) == FALSE) used_mem_size += MMapEnt_Size(mem_map + i);
+        if (MMapEnt_IsFree(memory_map + i) == FALSE) used_mem_size += MMapEnt_Size(memory_map + i);
 
-        mem_size = MMapEnt_Ptr(mem_map + i) + MMapEnt_Size(mem_map + i);
+        mem_size = MMapEnt_Ptr(memory_map + i) + MMapEnt_Size(memory_map + i);
 
-        kernel_msg("Entry - ptr: %x; size: %x; type: %s\n", MMapEnt_Ptr(mem_map + i), MMapEnt_Size(mem_map + i), type_str);
+        kernel_msg("Entry - ptr: %x; size: %x; type: %s\n", MMapEnt_Ptr(memory_map + i), MMapEnt_Size(memory_map + i), type_str);
     }
 
     kernel_msg("Used memmory: %u KB (%u MB)\n", used_mem_size / 1024, used_mem_size / (1024*1024));
@@ -204,10 +205,18 @@ extern uint64_t kernel_elf_start;
 extern uint64_t kernel_elf_end;
 
 Status init_memory() {
-    MMapEnt* mem_map = (MMapEnt*)&bootboot.mmap.ptr;
+    MMapEnt* boot_memory_map = (MMapEnt*)&bootboot.mmap.ptr;
     size_t map_size = (bootboot.size - (sizeof(bootboot))) / sizeof(MMapEnt);
 
-    if (init_virtual_memory(mem_map, map_size) != KERNEL_OK) return KERNEL_PANIC;
+    log_boot_memory_map(boot_memory_map, map_size);
+
+    VMMemoryMap vm_memory_map = { NULL, 0 };
+
+    if (init_virtual_memory(boot_memory_map, map_size, &vm_memory_map) != KERNEL_OK) return KERNEL_PANIC;
+    if (init_buddy_page_allocator(&vm_memory_map) != KERNEL_OK) {
+        error_str = "Failed to initialize buddy page allocator";
+        return KERNEL_ERROR;
+    }
 
     return KERNEL_OK;
 }
@@ -265,7 +274,6 @@ void log_memory_page_tables(PageMapLevel4Entry* pml4) {
 
                 uint64_t address = (uint64_t)((uint64_t)pde[g].page_ppn << 12);
                 PageTableEntry* pte = (PageTableEntry*)address;
-
 
                 if (pde[g].size == 1) { 
                     if (base_address == UINT64_MAX) {
@@ -388,7 +396,7 @@ uint64_t get_phys_address(const uint64_t virt_addr) {
 
     pxe.level--;
 
-    return ((uint64_t)((PageXEntry*)pxe.entry)->page_ppn << 12) + (virt_addr & (0x3FFFFFFF >> (9 * (uint64_t)pxe.level)));
+    return ((uint64_t)((uint64_t)((PageXEntry*)(uint64_t)pxe.entry)->page_ppn) << 12) + (virt_addr & (0x3FFFFFFF >> (9 * (uint64_t)pxe.level)));
 }
 
 void memcpy(const void* src, void* dst, size_t size) {

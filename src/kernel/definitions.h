@@ -37,7 +37,8 @@ typedef enum Status {
 #define ATTR_PACKED __attribute__((packed))
 #define ATTR_ALIGN(align) __attribute__((aligned(align)))
 #define ATTR_INTRRUPT __attribute__((interrupt, target("general-regs-only")))
+#define ATTR_NORETURN __attribute__((noreturn))
 
 #define FALLTHROUGH __attribute__ ((fallthrough))
 
-static inline void _kernel_break() { while(1); }
+static inline ATTR_NORETURN void _kernel_break() { while(1); }
