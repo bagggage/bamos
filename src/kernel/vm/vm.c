@@ -93,6 +93,11 @@ static void vm_init_page_table(PageXEntry* page_table) {
     }
 }
 
+// Conver any kernel space address from virtual to physical
+static inline uint64_t vm_kernel_virt_to_phys(const uint64_t kernel_virt_address) {
+    return kernel_virt_address + vm_kernel_virt_to_phys_offset;
+}
+
 static void vm_config_page_table_entry(PageXEntry* page_table_entry, const uint64_t redirection_base, VMMapFlags flags) {
     page_table_entry->present               = 1;
     page_table_entry->writeable             = ((flags & VMMAP_WRITE) != 0);

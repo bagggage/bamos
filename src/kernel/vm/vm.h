@@ -76,11 +76,6 @@ typedef struct VMMemoryMap {
 
 extern PageMapLevel4Entry vm_pml4[PAGE_TABLE_MAX_SIZE];
 
-// Conver any kernel space address from virtual to physical
-static inline uint64_t vm_kernel_virt_to_phys(const uint64_t kernel_virt_address) {
-    return kernel_virt_address + vm_kernel_virt_to_phys_offset;
-}
-
 // Round value to upper bound
 static inline uint64_t div_with_roundup(const uint64_t value, const uint64_t divider) {
     return (value / divider) + ((value % divider) == 0 ? 0 : 1);

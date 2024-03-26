@@ -20,7 +20,6 @@ void _start() {
     }
 
     kernel_msg("Kernel initialized successfuly\n");
-    log_pci_devices();
 
     _kernel_break();
 }
