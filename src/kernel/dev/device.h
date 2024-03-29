@@ -46,10 +46,10 @@ typedef struct DevicePool {
     Device common; \
     dev_name ## Interface interface
 
-#define DEV_DISPLAY_ID 0
+#define DEV_DISPLAY_ID  0
 #define DEV_KEYBOARD_ID 1
-#define DEV_TIMER_ID 2
-#define DEV_PCI_ID 3
+#define DEV_TIMER_ID    2
+#define DEV_PCI_ID      3
 
 /*
 Dynamic pool of devices, must be used only inside kernel.

@@ -16,6 +16,7 @@
 
 #define PCI_CLASS_CODE_STORAGE_CONTROLLER 0x1
 #define PCI_SUBCLASS_SATA_CONTROLLER 0X6
+#define PCI_SUBCLASS_NVME_CONTROLLER 0x8
 #define PCI_PROGIF_AHCI 0X1
 
 typedef struct PciConfigurationSpace {
@@ -57,12 +58,10 @@ typedef struct PciDeviceNode {
 } PciDeviceNode;
 
 typedef struct PciInterface {
-    // TODO
 } PciInterface;
 
 typedef struct PciDevice {
     DEVICE_STRUCT_IMPL(Pci);
-
    PciDeviceNode* device_list;
 } PciDevice;
 

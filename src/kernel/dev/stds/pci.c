@@ -39,7 +39,7 @@ static uint64_t read_bar(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset)
     uint64_t bar_type;
 
     if (bar == 0) {
-        kernel_error("Bar with offset %x is 0\n", offset);
+        //kernel_error("Bar with offset %x is 0\n", offset);
 
         return NULL;
     } else {
@@ -47,16 +47,16 @@ static uint64_t read_bar(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset)
             bar_type = (bar >> 1) & 0x3;
 
             if ((bar_type & 2) == 0 ) {    //bar is in 32bit memory space
- 				kernel_msg("Bar with offset %x is in 32bit on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
+ 				//kernel_msg("Bar with offset %x is in 32bit on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
 
                 return (bar & 0xFFFFFFF0); // Clear flags
             } else {     //bar is in 64bit memory space
-                kernel_msg("Bar with offset %x is in 64bit on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
+                //kernel_msg("Bar with offset %x is in 64bit on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
 
                 return (bar & 0xFFFFFFFFFFFFFFF0); // Clear flags
             }
         } else {    // bar is in i/o space 
-            kernel_msg("Bar with offset %x is in I/O space on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
+            //kernel_msg("Bar with offset %x is in I/O space on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
 
             return (bar & 0xFFFFFFFC); // Clear flags
         } 
