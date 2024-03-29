@@ -34,9 +34,9 @@ uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset
     return inl(PCI_CONFIG_DATA_PORT);
 }
 
-static uint64_t read_bar(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
-    uint64_t bar = pci_config_readl(bus, dev, func, offset);
-    uint64_t bar_type;
+static uint32_t read_bar(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
+    uint32_t bar = pci_config_readl(bus, dev, func, offset);
+    uint32_t bar_type;
 
     if (bar == 0) {
         //kernel_error("Bar with offset %x is 0\n", offset);
