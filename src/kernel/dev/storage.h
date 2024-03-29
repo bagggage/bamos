@@ -8,9 +8,6 @@ typedef enum StorageDevType {
     STORAGE_DEV_NVME
 } StorageDevType;
 
-typedef struct StorageInterface {
-} StorageInterface;
-
 typedef struct StorageDevice {
     StorageDevType type;
 } StorageDevice;
