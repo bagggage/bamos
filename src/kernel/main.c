@@ -1,9 +1,6 @@
 #include "init.h"
 #include "logger.h"
 
-#include "dev/stds/pci.h"
-#include "dev/stds/ahci.h"
-
 #include "vm/vm.h"
 
 // Entry point called from bootloader

@@ -11,6 +11,7 @@
 #include "dev/ps2_keyboard.h"
 #include "dev/stds/acpi.h"
 #include "dev/stds/pci.h"
+#include "dev/storage.h"
 
 #include "logger.h"
 #include "mem.h"
@@ -71,17 +72,33 @@ static Status init_timer() {
     return KERNEL_OK;
 }
 
+Status init_pci() {
+    PciDevice* pci_device;
+
+    if (add_device(DEV_PCI, (void**)&pci_device, sizeof(PciDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_pci_devices(pci_device) != KERNEL_OK) return KERNEL_ERROR;
+
+    return KERNEL_OK;
+}
+
+Status init_storage() {
+    if (init_storage_devices() != KERNEL_OK) return KERNEL_ERROR;
+
+    return KERNEL_OK;
+}
+
 Status init_kernel() {
     if (split_logical_cores() != KERNEL_OK) return KERNEL_PANIC;
 
-    if (init_intr()     != KERNEL_OK) return KERNEL_PANIC;
-    if (init_memory()   != KERNEL_OK) return KERNEL_ERROR;
-    if (init_acpi()     != KERNEL_OK) return KERNEL_ERROR;
-    if (init_apic()     != KERNEL_OK) return KERNEL_ERROR;
-    if (init_ioapic()   != KERNEL_OK) return KERNEL_ERROR;
-    if (init_io_devices() != KERNEL_OK) return KERNEL_ERROR;
-    if (init_timer() != KERNEL_OK) return KERNEL_ERROR;
-    if (init_pci_devices() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_intr()         != KERNEL_OK) return KERNEL_PANIC;
+    if (init_memory()       != KERNEL_OK) return KERNEL_ERROR;
+    if (init_acpi()         != KERNEL_OK) return KERNEL_ERROR;
+    if (init_apic()         != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ioapic()       != KERNEL_OK) return KERNEL_ERROR;
+    if (init_io_devices()   != KERNEL_OK) return KERNEL_ERROR;
+    if (init_timer()        != KERNEL_OK) return KERNEL_ERROR;
+    if (init_pci()          != KERNEL_OK) return KERNEL_ERROR;
+    if (init_storage()      != KERNEL_OK) return KERNEL_ERROR;
     
     return KERNEL_OK;
 }
@@ -89,12 +106,12 @@ Status init_kernel() {
 Status init_io_devices() {
     // TODO
     DisplayDevice* display;
-    //KeyboardDevice* keyboard;
+    KeyboardDevice* keyboard;
 
     if (add_device(DEV_DISPLAY, (void**)&display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
 
-    //if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (add_device(DEV_KEYBOARD, &keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
     //if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
