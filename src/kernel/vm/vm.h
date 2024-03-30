@@ -49,7 +49,8 @@ typedef struct VMPageFrame {
 } VMPageFrame;
 
 typedef struct VMMemoryMapEntry {
-    uint32_t phys_address;
+    uint32_t compact_phys_address;
+    uint32_t pages_count;
 
     enum VMMemmoryMapEntryType {
         VMMEM_TYPE_FREE,    // free to use
@@ -72,14 +73,14 @@ typedef struct VMMemoryMap {
     uint32_t count;
 } VMMemoryMap;
 
-#define VMMAP_PRIOR_FLAGS (VMMAP_EXEC | VMMAP_WRITE | VMMAP_USER_ACCESS)
-
 extern PageMapLevel4Entry vm_pml4[PAGE_TABLE_MAX_SIZE];
 
 // Round value to upper bound
 static inline uint64_t div_with_roundup(const uint64_t value, const uint64_t divider) {
     return (value / divider) + ((value % divider) == 0 ? 0 : 1);
 }
+
+void log_memory_map(const VMMemoryMap* memory_map);
 
 Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count, VMMemoryMap* out_memory_map);
 

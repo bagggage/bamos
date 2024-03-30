@@ -3,6 +3,7 @@
 #include <bootboot.h>
 
 #include "assert.h"
+#include "bitmap_mem_alloc.h"
 
 #include "cpu/regs.h"
 
@@ -26,14 +27,7 @@ PageDirPtrEntry vm_low_pdpt[PAGE_TABLE_MAX_SIZE];
 ATTR_ALIGN(PAGE_BYTE_SIZE)
 PageDirPtrEntry vm_high_pdpt[PAGE_TABLE_MAX_SIZE];
 
-// Pool of memory that used to allocating page tables
-typedef struct PageTablePool {
-    PageXEntry* buffer;
-    size_t size;
-    uint8_t bitmap[PAGE_TABLE_POOL_TABLES_COUNT / 8];
-} PageTablePool;
-
-static PageTablePool vm_page_table_pool = { NULL, 0 };
+static BitmapMemoryAllocator vm_page_table_pool;
 static uint64_t vm_kernel_virt_to_phys_offset = 0;
 
 // Linker setted stack size
@@ -60,7 +54,7 @@ static MMapEnt find_first_suitable_mmap_block(MMapEnt* begin_entry, const size_t
     for (size_t i = 0; i < entries_count - (((uint64_t)begin_entry - (uint64_t)&bootboot.mmap.ptr) / sizeof(MMapEnt)); ++i) {
         MMapEnt* entry = begin_entry + i;
 
-        if (MMapEnt_Type(entry) != MMAP_FREE || MMapEnt_Size(entry) < pages_count * PAGE_BYTE_SIZE) continue;
+        if (MMapEnt_Type(entry) & (MMAP_FREE | MMAP_USED) == 0 || MMapEnt_Size(entry) < pages_count * PAGE_BYTE_SIZE) continue;
 
         MMapEnt result = *entry;
         result.size = pages_count * PAGE_BYTE_SIZE;
@@ -126,23 +120,172 @@ static void vm_init_page_tables() {
                             VMMAP_EXEC | VMMAP_WRITE);
 }
 
+#define VM_MEMMAP_PHYS_ADDRESS(entry_ptr) ((uint64_t)((entry_ptr)->compact_phys_address) << 12)
+
+static inline void config_next_memmap_entry(
+    VMMemoryMapEntry* vm_memmap_entry,
+    const MMapEnt* boot_memmap_entry,
+    const uint8_t boot_entry_type) {
+    (vm_memmap_entry - 1)->pages_count =
+        (uint32_t)((MMapEnt_Ptr(boot_memmap_entry) - VM_MEMMAP_PHYS_ADDRESS(vm_memmap_entry - 1)) / PAGE_BYTE_SIZE);
+
+    vm_memmap_entry->compact_phys_address = (MMapEnt_Ptr(boot_memmap_entry) >> 12);
+    vm_memmap_entry->type = (boot_entry_type == MMAP_FREE ? VMMEM_TYPE_FREE : VMMEM_TYPE_DEV);
+}
+
 static void vm_init_memory_map(VMMemoryMap* memory_map, MMapEnt* boot_memory_map, const size_t entries_count) {
-    uint8_t prev_entry_type = 0xFF;
-    uint32_t uniqe_blocks_count = 0;
+    const uint32_t pool_pages_count = div_with_roundup(((entries_count + 1) * sizeof(VMMemoryMapEntry)), PAGE_BYTE_SIZE);
+    const MMapEnt memmap_entries_pool = find_first_suitable_mmap_block(boot_memory_map, entries_count, pool_pages_count + 1);
+
+    if (memmap_entries_pool.size == 0) return;
+
+    memory_map->entries = (VMMemoryMapEntry*)(memmap_entries_pool.ptr + MMapEnt_Size(&memmap_entries_pool) - ((uint64_t)pool_pages_count * PAGE_BYTE_SIZE));
+    memory_map->count = 1;
+
+    uint32_t begin_entry_idx = 0;
+    uint8_t prev_entry_type = 0;
+    MMapEnt* prev_entry = NULL;
 
     for (uint32_t i = 0; i < entries_count; ++i) {
-        if (prev_entry_type != MMapEnt_Type(boot_memory_map + i)) {
-            prev_entry_type = MMapEnt_Type(boot_memory_map + i);
-            ++uniqe_blocks_count;
+        const uint8_t curr_entry_type =
+            (MMapEnt_Type(boot_memory_map + i) == MMAP_FREE || MMapEnt_Type(boot_memory_map + i) == MMAP_USED) ?
+            MMAP_FREE : MMapEnt_Type(boot_memory_map + i);
+
+        if (i == 0) {
+            memory_map->entries->compact_phys_address = 0;
+            memory_map->entries->type = (curr_entry_type == MMAP_FREE ? VMMEM_TYPE_FREE : VMMEM_TYPE_DEV);
+
+            prev_entry_type = curr_entry_type;
+            prev_entry = boot_memory_map;
+
+            continue;
+        }
+
+        VMMemoryMapEntry* curr_vm_memmap_entry = &memory_map->entries[memory_map->count - 1];
+
+        if (MMapEnt_Ptr(prev_entry) + MMapEnt_Size(prev_entry) == MMapEnt_Ptr(boot_memory_map + i)) {
+            if (curr_entry_type != MMapEnt_Type(prev_entry) &&
+                !(curr_entry_type == MMAP_FREE && MMapEnt_Type(prev_entry) == MMAP_USED)) {
+                config_next_memmap_entry(&memory_map->entries[memory_map->count++], boot_memory_map + i, curr_entry_type);
+            }
+        }
+        else {
+            if (curr_entry_type != MMAP_FREE || prev_entry_type != MMAP_FREE) {
+                if (prev_entry_type == MMAP_FREE) {
+                    config_next_memmap_entry(&memory_map->entries[memory_map->count++], boot_memory_map + i, curr_entry_type);
+                }
+                else {
+                    const uint64_t mem_block_end = MMapEnt_Ptr(prev_entry) + MMapEnt_Size(prev_entry);
+                    curr_vm_memmap_entry->pages_count = MMapEnt_Size(prev_entry) / PAGE_BYTE_SIZE;
+
+                    if (curr_entry_type == MMAP_FREE) {
+                        memory_map->entries[memory_map->count].compact_phys_address = (uint32_t)(mem_block_end >> 12);
+                        memory_map->entries[memory_map->count++].type = VMMEM_TYPE_FREE;
+                    }
+                    else {
+                        // Need to insert free block between previouse and current blocks
+                        memory_map->entries[memory_map->count].compact_phys_address = (uint32_t)(mem_block_end >> 12);
+                        memory_map->entries[memory_map->count].pages_count = (MMapEnt_Ptr(boot_memory_map + i) - mem_block_end) / PAGE_BYTE_SIZE;
+                        memory_map->entries[memory_map->count++].type = VMMEM_TYPE_FREE;
+
+                        config_next_memmap_entry(&memory_map->entries[memory_map->count++], boot_memory_map + i, curr_entry_type);
+                    }
+                }
+            }
+        }
+
+        if (i == entries_count - 1) {
+            memory_map->entries[memory_map->count - 1].pages_count =
+                ((MMapEnt_Ptr(boot_memory_map + i) + MMapEnt_Size(boot_memory_map + i)) -
+                VM_MEMMAP_PHYS_ADDRESS(memory_map->entries + memory_map->count - 1)) / PAGE_BYTE_SIZE;
+
+            break;
+        }
+
+        prev_entry_type = curr_entry_type;
+        prev_entry = boot_memory_map + i;
+    }
+}
+
+static void insert_memmap_entry(VMMemoryMap* memory_map,
+    const uint64_t mem_phys_address,
+    const uint32_t mem_pages_count,
+    const uint8_t type) {
+    kassert((mem_phys_address & 0xFFF) == 0 && mem_pages_count > 0);
+
+    const uint64_t mem_end_phys_address = mem_phys_address + ((uint64_t)mem_pages_count * PAGE_BYTE_SIZE);
+
+    for (uint32_t i = 0; i < memory_map->count; ++i) {
+        const uint64_t begin_phys_address = VM_MEMMAP_PHYS_ADDRESS(memory_map->entries + i);
+        const uint64_t end_phys_address = begin_phys_address + ((uint64_t)memory_map->entries[i].pages_count * PAGE_BYTE_SIZE);
+
+        if (begin_phys_address <= mem_phys_address && end_phys_address >= mem_end_phys_address) {
+            const uint64_t begin_offset = mem_phys_address - begin_phys_address;
+            const uint64_t end_offset = end_phys_address - mem_end_phys_address;
+
+            if (begin_offset == 0 && end_offset == 0) {
+                memory_map->entries[i].type = type;
+                break;
+            }
+
+            const uint32_t count_of_new_entries = (begin_offset > 0 ? 1 : 0) + (end_offset > 0 ? 1 : 0);
+
+            // Resize array
+            for (uint32_t j = memory_map->count + (count_of_new_entries - 1); j > i + count_of_new_entries; --j) {
+                memory_map->entries[j] = memory_map->entries[j - count_of_new_entries];
+            }
+
+            if (begin_offset == 0) {
+                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_end_phys_address >> 12);
+                memory_map->entries[i + 1].pages_count = memory_map->entries[i].pages_count - mem_pages_count;
+                memory_map->entries[i].pages_count = mem_pages_count;
+                memory_map->entries[i].type = type;
+            }
+            else if (end_offset == 0) {
+                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_phys_address >> 12);
+                memory_map->entries[i + 1].pages_count = mem_pages_count;
+                memory_map->entries[i + 1].type = type;
+                memory_map->entries[i].pages_count -= mem_pages_count;
+            }
+            else {
+                const uint32_t temp_pages_count = memory_map->entries[i].pages_count;
+
+                memory_map->entries[i].pages_count = (uint32_t)(begin_offset / PAGE_BYTE_SIZE);
+                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_phys_address >> 12);
+                memory_map->entries[i + 1].pages_count = mem_pages_count;
+                memory_map->entries[i + 1].type = type;
+                memory_map->entries[i + 2].compact_phys_address = (uint32_t)(mem_end_phys_address >> 12);
+                memory_map->entries[i + 2].pages_count = temp_pages_count - memory_map->entries[i].pages_count - mem_pages_count;
+            }
+
+            memory_map->count += count_of_new_entries;
+            break;
         }
     }
+}
 
-    // Calculate required entries count to know how much memory need to store entries.
-    memory_map->count = uniqe_blocks_count + 2; // Include kernel block and stack
+void log_memory_map(const VMMemoryMap* memory_map) {
+    for (uint32_t i = 0; i < memory_map->count; ++i) {
+        VMMemoryMapEntry* curr_entry = memory_map->entries + i;
 
-    //const uint32_t required_array_byte_size = memory_map->count * sizeof(VMMemoryMapEntry);
+        const char* type_str = NULL;
 
-    // TODO
+        switch (curr_entry->type)
+        {
+        case VMMEM_TYPE_FREE: type_str = "FREE"; break;
+        case VMMEM_TYPE_USED: type_str = "USED"; break;
+        case VMMEM_TYPE_DEV: type_str = "DEV"; break;
+        case VMMEM_TYPE_KERNEL: type_str = "KERNEL"; break;
+        case VMMEM_TYPE_ALLOC: type_str = "ALLOCATED"; break;
+        default:
+            break;
+        }
+
+        kernel_msg("Memmap entry: %x; size: %x; type: %s\n",
+            ((uint64_t)curr_entry->compact_phys_address << 12),
+            (uint64_t)curr_entry->pages_count * PAGE_BYTE_SIZE,
+            type_str);
+    }
 }
 
 Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count, VMMemoryMap* out_memory_map) {
@@ -152,26 +295,48 @@ Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count,
     vm_kernel_virt_to_phys_offset = get_phys_address(kernel_addr_space.segments.virt_address) - kernel_addr_space.segments.virt_address;
 
     kernel_addr_space.segments.phys_address = vm_kernel_virt_to_phys(kernel_addr_space.segments.virt_address);
-    kernel_addr_space.segments.size = (uint64_t)&kernel_elf_end - (uint64_t)&kernel_elf_start;
+    kernel_addr_space.segments.size = div_with_roundup((uint64_t)&kernel_elf_end - (uint64_t)&kernel_elf_start, PAGE_BYTE_SIZE) * PAGE_BYTE_SIZE;
 
+#ifdef KDEBUG
     kernel_msg("Kernel: %x\n", get_phys_address((uint64_t)&kernel_elf_start));
     kernel_msg("Kernel size: %u KB (%u MB)\n", kernel_addr_space.segments.size / KB_SIZE, kernel_addr_space.segments.size / MB_SIZE);
     kernel_msg("Framebuffer: %x\n", get_phys_address((uint64_t)BOOTBOOT_FB));
     kernel_msg("Kernel virtual address space offset: %x\n", vm_kernel_virt_to_phys_offset);
+#endif
 
     // Init pages pool
     const MMapEnt pages_pool_mmap_entry =
-        find_first_suitable_mmap_block(boot_memory_map, entries_count, PAGE_TABLE_POOL_TABLES_COUNT);
+        find_first_suitable_mmap_block(boot_memory_map, entries_count, PAGE_TABLE_POOL_TABLES_COUNT + 1);
 
     if (pages_pool_mmap_entry.size == 0) {
         error_str = "Not found suitable memory block for paging tables pool";
         return KERNEL_ERROR;
     }
 
-    vm_page_table_pool.buffer = (PageXEntry*)pages_pool_mmap_entry.ptr;
-    vm_page_table_pool.size = PAGE_TABLE_POOL_TABLES_COUNT;
+    vm_page_table_pool = bma_create(pages_pool_mmap_entry.ptr, (PAGE_TABLE_POOL_TABLES_COUNT + 1) * PAGE_BYTE_SIZE, PAGE_BYTE_SIZE);
+    
+    if (vm_page_table_pool.memory_pool == NULL) {
+        error_str = "Failuer while initialization page table pool";
+        return KERNEL_ERROR;
+    }
 
     vm_init_page_tables();
+    vm_init_memory_map(out_memory_map, boot_memory_map, entries_count);
+
+    if (out_memory_map->count == 0) {
+        error_str = "Memory map initialization failed";
+        return KERNEL_ERROR;
+    }
+
+    insert_memmap_entry(out_memory_map,
+        kernel_addr_space.segments.phys_address,
+        kernel_addr_space.segments.size / PAGE_BYTE_SIZE,
+        VMMEM_TYPE_KERNEL);
+
+    insert_memmap_entry(out_memory_map,
+        (uint64_t)vm_page_table_pool.memory_pool,
+        vm_page_table_pool.capacity,
+        VMMEM_TYPE_ALLOC);
 
     // Replace and map stack
     const MMapEnt stack_mmap_entry =
@@ -228,41 +393,23 @@ Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count,
 }
 
 PageXEntry* vm_alloc_page_table() {
-    for (uint16_t i = 0; i < sizeof(vm_page_table_pool.bitmap); ++i) {
-        if (vm_page_table_pool.bitmap[i] == 0xFF) continue;
+    PageXEntry* page_table = bma_alloc(&vm_page_table_pool);
 
-        uint8_t bitmask = 1;
-
-        for (uint8_t j = 0; j < 8; ++j) {
-            if (vm_page_table_pool.bitmap[i] & bitmask) {
-                bitmask <<= 1;
-                continue;
-            }
-
-            vm_page_table_pool.bitmap[i] |= bitmask;
-
-            PageXEntry* page_table = &vm_page_table_pool.buffer[((i * 8) + j) * PAGE_TABLE_MAX_SIZE];
-
-            vm_init_page_table(page_table);
-
-            return page_table;
-        }
+    if (page_table == NULL) {
+        error_str = "Page table pool is empty";
+        return NULL;
     }
 
-    error_str = "Page table pool is empty";
+    vm_init_page_table(page_table);
 
-    return NULL;
+    return page_table;
 }
 
 // Takes physical address
 void vm_free_page_table(PageXEntry* page_table) {
     kassert(page_table != NULL);
 
-    const uint64_t table_idx_offset_in_pool = (((uint64_t)vm_page_table_pool.buffer - (uint64_t)page_table) / 8) / PAGE_TABLE_MAX_SIZE;
-    const uint32_t bitmap_byte_idx = table_idx_offset_in_pool / 8;
-    const uint8_t bitmap_bit_idx = table_idx_offset_in_pool % 8;
-
-    vm_page_table_pool.bitmap[bitmap_byte_idx] &= (~(0x1 << bitmap_bit_idx));
+    bma_free((void*)page_table, &vm_page_table_pool);
 }
 
 static inline bool_t vm_is_pxe_valid(const PageXEntry* pxe) {
@@ -348,7 +495,7 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
             i < 3 &&
             has_pages_to_allocate) {
             //kernel_msg("Allocate table[%u]\n", i);
-            
+
             PageXEntry* page_table = vm_alloc_page_table();
 
             if (page_table == NULL) return KERNEL_ERROR;
