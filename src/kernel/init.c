@@ -19,7 +19,6 @@
 #include "intr/intr.h"
 #include "intr/ioapic.h"
 
-
 #define CPUID_GET_FEATURE 1
 
 extern BOOTBOOT bootboot;
