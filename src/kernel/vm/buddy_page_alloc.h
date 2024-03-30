@@ -1,8 +1,8 @@
 #pragma once
 
-#include "definitions.h"
+#include "cpu/spinlock.h"
 
-#include <bootboot.h>
+#include "definitions.h"
 
 #include "vm.h"
 #include "utils/list.h"
@@ -11,7 +11,7 @@
 Buddy page allocator.
 */
 
-#define MAX_BLOCK_RANK 11
+#define BPA_MAX_BLOCK_RANK 11
 
 typedef struct VMPageList {
     LIST_STRUCT_IMPL(VMPageList);
@@ -20,29 +20,32 @@ typedef struct VMPageList {
 } VMPageList;
 
 typedef struct BuddyPageAllocator {
-    ListHead* free_list[MAX_BLOCK_RANK];
+    ListHead free_list[BPA_MAX_BLOCK_RANK];
 
     /*
     Contains state of buddies in each bit:
     0 - buddies have the same state (allocated or free);
     1 - states are different (one allocated, other free);
     */
-    uint8_t bitmap[];
+    uint8_t* bitmap;
+    Spinlock lock;
 } BuddyPageAllocator;
 
-Status init_buddy_page_allocator(VMMemoryMap* memory_map);
+Status init_buddy_page_allocator(const VMMemoryMap* memory_map);
 
 /*
-Allocate virtualy linear block of requested count of 4KB pages.
-Returns virtual address of the begining of the block in case of success.
-In case of failure returs nullptr.
+Allocate virtualy linear block of requested number of 4KB pages.
+BPA can allocate a number of pages equal to a power of two, the rank argument is just a power.
+Returns physical address of the begining of the block in case of success.
+In case of failure returns 'INVALID_ADDRESS' constant.
 */
-VMPageFrame bpa_allocate_pages(uint32_t count);
+uint64_t bpa_allocate_pages(const uint32_t rank);
 
 /*
-Free requested count of 4KB pages that was allocated with 'bpa_allocate_pages' function before.
-It's works for any count of allocated pages. But if you are frees less amount of pages that was allocated,
-you must save 'new' base address of block according to deallocated pages: ((uint8_t*)base) += (count * (4 * KB_SIZE));
-Also don't forget about 'new' size of block: block_size -= count; //in pages//, block_size -= count * (4 * KB_SIZE); //in bytes//.
+Free pages that was allocated with 'bpa_allocate_pages' function before.
+It's works properly only with same rank argument that was used to allocate pages.
+Otherwise the behavior is undefined.
 */
-void bpa_free_pages(VMPageFrame* page_frame);
+void bpa_free_pages(const uint64_t page_address, const uint32_t rank);
+
+void bpa_log_free_lists();

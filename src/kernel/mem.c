@@ -150,8 +150,8 @@ void log_boot_memory_map(const MMapEnt* memory_map, const size_t entries_count) 
         kernel_msg("Entry - ptr: %x; size: %x; type: %s\n", MMapEnt_Ptr(memory_map + i), MMapEnt_Size(memory_map + i), type_str);
     }
 
-    kernel_msg("Used memmory: %u KB (%u MB)\n", used_mem_size / 1024, used_mem_size / (1024*1024));
-    kernel_msg("Memory size: %u KB (%u MB)\n", mem_size / 1024, mem_size / (1024*1024));
+    kernel_msg("Used memmory: %u KB (%u MB)\n", used_mem_size / KB_SIZE, used_mem_size / MB_SIZE);
+    kernel_msg("Memory size: %u KB (%u MB)\n", mem_size / KB_SIZE, mem_size / MB_SIZE);
 }
 
 void log_pages_count() {
@@ -208,11 +208,14 @@ Status init_memory() {
     MMapEnt* boot_memory_map = (MMapEnt*)&bootboot.mmap.ptr;
     size_t map_size = (bootboot.size - (sizeof(bootboot))) / sizeof(MMapEnt);
 
-    log_boot_memory_map(boot_memory_map, map_size);
-
     VMMemoryMap vm_memory_map = { NULL, 0 };
 
     if (init_virtual_memory(boot_memory_map, map_size, &vm_memory_map) != KERNEL_OK) return KERNEL_PANIC;
+
+#ifdef KDEBUG
+    log_memory_map(&vm_memory_map);
+#endif
+
     if (init_buddy_page_allocator(&vm_memory_map) != KERNEL_OK) {
         error_str = "Failed to initialize buddy page allocator";
         return KERNEL_ERROR;
