@@ -7,19 +7,6 @@
 
 #include "video/font.h"
 
-#define COLOR_BLACK     0,      0,      0
-#define COLOR_WHITE     255,    255,    255
-#define COLOR_LGRAY     165,    165,    165
-#define COLOR_RED       255,    0,      0
-#define COLOR_LRED      250,    5,      50
-#define COLOR_GREEN     0,      255,    0
-#define COLOR_LGREEN    5,      250,    70
-#define COLOR_BLUE      0,      0,      255
-#define COLOR_LBLUE     5,      70,     250
-#define COLOR_YELLOW    250,    240,    5
-#define COLOR_LYELLOW   255,    235,    75
-#define COLOR_ORANGE    255,    165,    0
-
 #define _RGB_TO_UINT32(r, g, b) (uint32_t)((r << 16) | (g << 8) | (b))
 #define RGB_TO_UINT32(color) _RGB_TO_UINT32(color)
 
@@ -55,7 +42,7 @@ void debug_point() {
     offset += 200;
 }
 
-static void logger_set_color(uint8_t r, uint8_t g, uint8_t b) {
+void kernel_logger_set_color(uint8_t r, uint8_t g, uint8_t b) {
     switch (logger.fb->format)
     {
     case FB_FORMAT_ABGR:
@@ -83,6 +70,30 @@ static void logger_set_color(uint8_t r, uint8_t g, uint8_t b) {
     }
 }
 
+Color kernel_logger_get_color() {
+    Color color;
+
+    switch (logger.fb->format)
+    {
+    case FB_FORMAT_ABGR:
+        color = (Color){ logger.color[0], logger.color[1], logger.color[2] };
+        break;
+    case FB_FORMAT_ARGB:
+        color = (Color){ logger.color[2], logger.color[1], logger.color[0] };
+        break;
+    case FB_FORMAT_BGRA:
+        color = (Color){ logger.color[1], logger.color[2], logger.color[3] };
+        break;
+    case FB_FORMAT_RGBA:
+        color = (Color){ logger.color[3], logger.color[2], logger.color[1] };
+        break;
+    default:
+        break;
+    }
+
+    return color;
+}
+
 bool_t is_initialized = FALSE;
 
 bool_t is_logger_initialized() {
@@ -108,7 +119,7 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
     logger.max_col = logger.fb->width / logger.font.width;
     logger.max_row = logger.fb->height / logger.font.height;
 
-    logger_set_color(COLOR_LGRAY);
+    kernel_logger_set_color(COLOR_LGRAY);
     is_initialized = TRUE;
 
     return KERNEL_OK;
@@ -275,15 +286,15 @@ void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
     switch (log_type)
     {
     case LOG_MSG:
-        logger_set_color(COLOR_LGRAY);
+        kernel_logger_set_color(COLOR_LGRAY);
         raw_puts("[Debug]: ");
         break;
     case LOG_WARN:
-        logger_set_color(COLOR_LYELLOW);
+        kernel_logger_set_color(COLOR_LYELLOW);
         raw_puts("[Warn]:  ");
         break;
     case LOG_ERROR:
-        logger_set_color(COLOR_LRED);
+        kernel_logger_set_color(COLOR_LRED);
         raw_puts("[Error]: ");
         break;
     default:
@@ -353,23 +364,23 @@ void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
                 switch (arg_value)
                 {
                 case KERNEL_OK:
-                    logger_set_color(COLOR_LGREEN);
+                    kernel_logger_set_color(COLOR_LGREEN);
                     raw_puts("KERNEL OK");
                     break;
                 case KERNEL_INVALID_ARGS:
-                    logger_set_color(COLOR_LYELLOW);
+                    kernel_logger_set_color(COLOR_LYELLOW);
                     raw_puts("KERNEL INVALID ARGS");
                     break;
                 case KERNEL_ERROR:
-                    logger_set_color(COLOR_LRED);
+                    kernel_logger_set_color(COLOR_LRED);
                     raw_puts("KERNEL ERROR");
                     break;
                 case KERNEL_PANIC:
-                    logger_set_color(COLOR_LRED);
+                    kernel_logger_set_color(COLOR_LRED);
                     raw_puts("KERNEL PANIC");
                     break;
                 default:
-                    logger_set_color(COLOR_LRED);
+                    kernel_logger_set_color(COLOR_LRED);
                     raw_puts("KERNEL INVALID RESULT");
                     break;
                 }
