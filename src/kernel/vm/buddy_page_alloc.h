@@ -13,12 +13,6 @@ Buddy page allocator.
 
 #define BPA_MAX_BLOCK_RANK 11
 
-typedef struct VMPageList {
-    LIST_STRUCT_IMPL(VMPageList);
-
-    uint32_t phys_page_base;
-} VMPageList;
-
 typedef struct BuddyPageAllocator {
     ListHead free_list[BPA_MAX_BLOCK_RANK];
 
@@ -31,7 +25,7 @@ typedef struct BuddyPageAllocator {
     Spinlock lock;
 } BuddyPageAllocator;
 
-Status init_buddy_page_allocator(const VMMemoryMap* memory_map);
+Status init_buddy_page_allocator(VMMemoryMap* memory_map);
 
 /*
 Allocate virtualy linear block of requested number of 4KB pages.

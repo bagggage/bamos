@@ -2,23 +2,21 @@
 
 #include "assert.h"
 
-#include "bitmap_mem_alloc.h"
+#include "object_mem_alloc.h"
 #include "logger.h"
 #include "mem.h"
 
 #define NODES_PER_MB_COVERAGE (MB_SIZE / PAGE_BYTE_SIZE)
 
-static BitmapMemoryAllocator free_list_bma;
+static ObjectMemoryAllocator free_list_oma;
 static BuddyPageAllocator bpa;
 
 static uint64_t get_total_mem_size(const VMMemoryMap* memory_map) {
-    const VMMemoryMapEntry* last_entry = &memory_map->entries[memory_map->count - 1];
-
-    return ((uint64_t)last_entry->compact_phys_address + last_entry->pages_count) * PAGE_BYTE_SIZE;
+    return (uint64_t)memory_map->total_pages_count * PAGE_BYTE_SIZE;
 }
 
 static bool_t free_list_push_first(ListHead* free_list, const uint32_t first_page_number) {
-    VMPageList* new_node = (VMPageList*)bma_alloc(&free_list_bma);
+    VMPageList* new_node = (VMPageList*)oma_alloc(&free_list_oma);
 
     if (new_node == NULL) return FALSE;
 
@@ -54,7 +52,7 @@ static void free_list_remove_first(ListHead* free_list) {
         free_list->next = free_list->next->next;
     }
 
-    bma_free((void*)temp_entry, &free_list_bma);
+    oma_free((void*)temp_entry, &free_list_oma);
 }
 
 static void free_list_find_and_remove(ListHead* free_list, const uint32_t page_base) {
@@ -100,7 +98,7 @@ static void free_list_find_and_remove(ListHead* free_list, const uint32_t page_b
         entry->prev->next = entry->next;
     }
 
-    bma_free((void*)entry, &free_list_bma);
+    oma_free((void*)entry, &free_list_oma);
 }
 
 static inline void bpa_clear_page_bit(const uint32_t page_base, const uint32_t rank) {
@@ -166,7 +164,7 @@ static inline bool_t bpa_push_free_mem_block(const uint32_t first_page_number, c
 
 void bpa_log_free_lists() {
     for (int i = 0; i < BPA_MAX_BLOCK_RANK; ++i) {
-        VMPageList* temp_entry = bpa.free_list[i].next;
+        VMPageList* temp_entry = (VMPageList*)(void*)bpa.free_list[i].next;
 
         kernel_msg("Free list[%i]: ", i);
 
@@ -203,7 +201,11 @@ static bool_t init_bpa_free_lists(const VMMemoryMap* memory_map) {
     return TRUE;
 }
 
-Status init_buddy_page_allocator(const VMMemoryMap* memory_map) {
+void debug_trace();
+
+static VMPageList oma_phys_page = { NULL, NULL, 0 };
+
+Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
     kassert(memory_map != NULL && memory_map->count > 0);
 
     // Search for free memory pool for free list bma
@@ -215,45 +217,72 @@ Status init_buddy_page_allocator(const VMMemoryMap* memory_map) {
         div_with_roundup(total_mem_size, MB_SIZE),
         total_mem_size / GB_SIZE);
 #endif
-
-    const uint64_t required_bma_mem_pool_size = ((total_mem_size / MB_SIZE) * NODES_PER_MB_COVERAGE) * sizeof(VMPageList);
-    const uint64_t required_bitmap_pool_size = (div_with_roundup(total_mem_size, PAGE_BYTE_SIZE) / 8);
+    const uint64_t requited_nodes_count = ((total_mem_size / MB_SIZE) * NODES_PER_MB_COVERAGE);
+    const uint64_t required_oma_mem_pool_size = requited_nodes_count * sizeof(VMPageList) / 2;
+    const uint64_t required_bitmap_pool_size = div_with_roundup(requited_nodes_count, 8);
+    const uint64_t required_mem_pool_pages_count =
+        div_with_roundup(required_oma_mem_pool_size, PAGE_BYTE_SIZE) +
+        div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE);
 
     kernel_warn("BPA: Bitmap size: %u KB; %u MB\n", required_bitmap_pool_size / KB_SIZE, required_bitmap_pool_size / MB_SIZE);
 
-    const uint64_t required_mem_pool_pages_count =
-        div_with_roundup(required_bma_mem_pool_size + required_bitmap_pool_size, PAGE_BYTE_SIZE);
+    VMPageFrame oma_page_frame;
+    VMMemoryMapEntry* bpa_memory_block = _vm_boot_alloc(memory_map, required_mem_pool_pages_count);
 
-    uint64_t bma_memory_block = INVALID_ADDRESS;
-
-    for (uint32_t i = 0; i < memory_map->count; ++i) {
-        if (memory_map->entries[i].type != VMMEM_TYPE_FREE ||
-            memory_map->entries[i].pages_count < required_mem_pool_pages_count) continue;
-
-        bma_memory_block = ((uint64_t)memory_map->entries[i].compact_phys_address << 12);
-    }
-
-    if (bma_memory_block == INVALID_ADDRESS) {
+    if (bpa_memory_block == NULL) {
         error_str = "There is no available memory for buddy page allocator";
         return KERNEL_ERROR;
     }
 
-    is_virt_addr_mapped(bma_memory_block);
+    kernel_warn("BPA: Memory block allocated: %x\n", (uint64_t)bpa_memory_block->compact_phys_address * PAGE_BYTE_SIZE);
 
-    free_list_bma = bma_create(bma_memory_block, required_bma_mem_pool_size, sizeof(VMPageList));
+    oma_phys_page.phys_page_base = bpa_memory_block->compact_phys_address;
 
-    if (free_list_bma.capacity == 0) {
+    oma_page_frame.phys_pages.next = &oma_phys_page;
+    oma_page_frame.phys_pages.prev = &oma_phys_page;
+    oma_page_frame.count = bpa_memory_block->pages_count - div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE);
+    oma_page_frame.virt_address = vm_find_free_virt_address(vm_get_kernel_pml4(), bpa_memory_block->pages_count);
+    oma_page_frame.flags = (VMMAP_FORCE | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES);
+
+    if (oma_page_frame.virt_address == INVALID_ADDRESS) {
+        error_str = "BPA: Pool can't be mapped";
+        return KERNEL_ERROR;
+    }
+
+    kernel_warn("BPA: Virtual addresses rage found: %x\n", oma_page_frame.virt_address);
+    kassert(is_virt_address_valid(oma_page_frame.virt_address));
+
+    if (vm_map_phys_to_virt((uint64_t)oma_phys_page.phys_page_base * PAGE_BYTE_SIZE,
+        oma_page_frame.virt_address,
+        bpa_memory_block->pages_count,
+        oma_page_frame.flags) != KERNEL_OK) {
+        error_str = "BPA: Mapping failed";
+        return KERNEL_ERROR;
+    }
+
+    free_list_oma = _oma_manual_init(&oma_page_frame, sizeof(VMPageList));
+
+    if (free_list_oma.bucket_capacity == 0) {
         error_str = "BPA: Free list initialization failed";
         return KERNEL_ERROR;
     }
 
+    kernel_msg("BPA: Oma initialized\n");
+
+    bpa.bitmap = (uint8_t*)(oma_page_frame.virt_address +
+        (div_with_roundup(required_oma_mem_pool_size, PAGE_BYTE_SIZE) * PAGE_BYTE_SIZE));
+
 #ifdef KDEBUG
-    kernel_warn("BPA: Free list pool size: %u KB\n", required_mem_pool_pages_count * (PAGE_BYTE_SIZE / KB_SIZE));
-    kernel_warn("BPA: Free list capacity: %u\n", free_list_bma.capacity);
+    kernel_warn("BPA: Memory pool: %x (%x)\n",
+        oma_page_frame.virt_address,
+        (uint64_t)bpa_memory_block->compact_phys_address * PAGE_BYTE_SIZE);
+    kernel_warn("BPA: Memory pool size: %u KB\n", required_mem_pool_pages_count * (PAGE_BYTE_SIZE / KB_SIZE));
+    kernel_warn("BPA: Free list capacity: %u (was requested: %u)\n",
+        free_list_oma.bucket_capacity,
+        required_oma_mem_pool_size / sizeof(VMPageList));
+    kernel_warn("BPA: Bitmap: %x\n", (uint64_t)bpa.bitmap);
 #endif
 
-    bpa.bitmap = bma_memory_block + required_bma_mem_pool_size;
-    
     if (init_bpa_free_lists(memory_map) == FALSE) {
         error_str = "BPA: Failed to fill free lists according to memory map";
         return KERNEL_ERROR;
@@ -270,7 +299,7 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
     uint64_t result = INVALID_ADDRESS;
 
     // Get first entry
-    VMPageList* free_entry = bpa.free_list[rank].next;
+    VMPageList* free_entry = (VMPageList*)(void*)bpa.free_list[rank].next;
 
     if (free_entry == NULL) {
         uint8_t temp_rank = rank + 1;
@@ -278,7 +307,7 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
         while (temp_rank < BPA_MAX_BLOCK_RANK)
         {
             if (bpa.free_list[temp_rank].next != NULL) {
-                free_entry = bpa.free_list[temp_rank].next;
+                free_entry = (VMPageList*)(void*)bpa.free_list[temp_rank].next;
                 break;
             }
 
