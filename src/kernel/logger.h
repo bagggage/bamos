@@ -98,5 +98,17 @@ static inline void kernel_error(const char* fmt, ...) {
     va_end(args);
 }
 
+#ifdef KDEBUG
+static inline void kernel_debug(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    kernel_raw_log(LOG_MSG, fmt, args);
+    va_end(args);
+}
+#else
+#define kernel_debug(...)
+#endif
+
 void draw_kpanic_screen();
 void debug_point();

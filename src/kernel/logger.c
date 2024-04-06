@@ -101,7 +101,7 @@ bool_t is_logger_initialized() {
 }
 
 Status init_kernel_logger_raw(const uint8_t* font_binary_ptr) {
-    early_fb.base = (uint8_t*)fb;
+    early_fb.base = (uint8_t*)&fb;
     early_fb.width = bootboot.fb_width;
     early_fb.height = bootboot.fb_height;
     early_fb.scanline = bootboot.fb_scanline;
@@ -146,8 +146,8 @@ static inline void fast_memcpy(const uint32_t* src, uint32_t* dst, const size_t 
 
 // Scrolls raw terminal up
 static inline void scroll_logger_fb(uint8_t rows_offset) {
-    size_t rows_byte_offset = rows_offset * logger.fb->scanline * logger.font.height;
-    size_t fb_size = logger.fb->height * logger.fb->scanline;
+    size_t rows_byte_offset = (uint64_t)rows_offset * logger.fb->scanline * logger.font.height;
+    size_t fb_size = (uint64_t)logger.fb->height * logger.fb->scanline;
 
     fast_memcpy((uint32_t*)(logger.fb->base + rows_byte_offset), (uint32_t*)logger.fb->base, fb_size - rows_byte_offset);
     memset(logger.fb->base + (fb_size - rows_byte_offset), rows_byte_offset, 0x0);
@@ -188,7 +188,8 @@ static void move_cursor(int8_t row_offset, int8_t col_offset) {
 }
 
 static uint64_t calc_logger_fb_offset() {
-    return (logger.row * (logger.fb->scanline * logger.font.height)) + ((logger.col * logger.font.width) << 2);
+    return ((uint64_t)logger.row * ((uint64_t)logger.fb->scanline * logger.font.height)) +
+        ((logger.col * logger.font.width) * sizeof(uint32_t));
 }
 
 void raw_putc(char c) {
