@@ -4,13 +4,16 @@
 
 #include "assert.h"
 #include "bitmap_mem_alloc.h"
+#include "buddy_page_alloc.h"
 
 #include "cpu/regs.h"
 
 #include "logger.h"
 #include "mem.h"
+#include "object_mem_alloc.h"
 
 extern BOOTBOOT bootboot;
+extern uint8_t  environment;
 
 extern uint64_t kernel_elf_start;
 extern uint64_t kernel_elf_end;
@@ -28,10 +31,16 @@ ATTR_ALIGN(PAGE_BYTE_SIZE)
 PageDirPtrEntry vm_high_pdpt[PAGE_TABLE_MAX_SIZE];
 
 static BitmapMemoryAllocator vm_page_table_pool;
+static ObjectMemoryAllocator vm_page_frame_oma;
 static uint64_t vm_kernel_virt_to_phys_offset = 0;
 
 // Linker setted stack size
 extern uint64_t initstack[];
+extern uint8_t fb[];
+
+static Status _vm_map_phys_to_virt(uint64_t phys_address,
+    uint64_t virt_address, PageMapLevel4Entry* pml4,
+    const size_t pages_count, VMMapFlags flags);
 
 static inline const MMapEnt* find_free_mem_map_entry(MMapEnt* mem_map, const size_t entries_count, const size_t required_size) {
     const MMapEnt* most_suitable_entry = NULL;
@@ -54,13 +63,12 @@ static MMapEnt find_first_suitable_mmap_block(MMapEnt* begin_entry, const size_t
     for (size_t i = 0; i < entries_count - (((uint64_t)begin_entry - (uint64_t)&bootboot.mmap.ptr) / sizeof(MMapEnt)); ++i) {
         MMapEnt* entry = begin_entry + i;
 
-        if (MMapEnt_Type(entry) & (MMAP_FREE | MMAP_USED) == 0 || MMapEnt_Size(entry) < pages_count * PAGE_BYTE_SIZE) continue;
+        if (MMapEnt_Ptr(entry) == 0 || MMapEnt_IsFree(entry) == FALSE ||
+            (MMapEnt_Size(entry) < pages_count * PAGE_BYTE_SIZE))
+            continue;
 
         MMapEnt result = *entry;
         result.size = pages_count * PAGE_BYTE_SIZE;
-
-        entry->ptr = entry->ptr + result.size;
-        entry->size = (MMapEnt_Size(entry) - result.size) | MMAP_FREE;
 
         return result;
     }
@@ -133,80 +141,6 @@ static inline void config_next_memmap_entry(
     vm_memmap_entry->type = (boot_entry_type == MMAP_FREE ? VMMEM_TYPE_FREE : VMMEM_TYPE_DEV);
 }
 
-static void vm_init_memory_map(VMMemoryMap* memory_map, MMapEnt* boot_memory_map, const size_t entries_count) {
-    const uint32_t pool_pages_count = div_with_roundup(((entries_count + 1) * sizeof(VMMemoryMapEntry)), PAGE_BYTE_SIZE);
-    const MMapEnt memmap_entries_pool = find_first_suitable_mmap_block(boot_memory_map, entries_count, pool_pages_count + 1);
-
-    if (memmap_entries_pool.size == 0) return;
-
-    memory_map->entries = (VMMemoryMapEntry*)(memmap_entries_pool.ptr + MMapEnt_Size(&memmap_entries_pool) - ((uint64_t)pool_pages_count * PAGE_BYTE_SIZE));
-    memory_map->count = 1;
-
-    uint32_t begin_entry_idx = 0;
-    uint8_t prev_entry_type = 0;
-    MMapEnt* prev_entry = NULL;
-
-    for (uint32_t i = 0; i < entries_count; ++i) {
-        const uint8_t curr_entry_type =
-            (MMapEnt_Type(boot_memory_map + i) == MMAP_FREE || MMapEnt_Type(boot_memory_map + i) == MMAP_USED) ?
-            MMAP_FREE : MMapEnt_Type(boot_memory_map + i);
-
-        if (i == 0) {
-            memory_map->entries->compact_phys_address = 0;
-            memory_map->entries->type = (curr_entry_type == MMAP_FREE ? VMMEM_TYPE_FREE : VMMEM_TYPE_DEV);
-
-            prev_entry_type = curr_entry_type;
-            prev_entry = boot_memory_map;
-
-            continue;
-        }
-
-        VMMemoryMapEntry* curr_vm_memmap_entry = &memory_map->entries[memory_map->count - 1];
-
-        if (MMapEnt_Ptr(prev_entry) + MMapEnt_Size(prev_entry) == MMapEnt_Ptr(boot_memory_map + i)) {
-            if (curr_entry_type != MMapEnt_Type(prev_entry) &&
-                !(curr_entry_type == MMAP_FREE && MMapEnt_Type(prev_entry) == MMAP_USED)) {
-                config_next_memmap_entry(&memory_map->entries[memory_map->count++], boot_memory_map + i, curr_entry_type);
-            }
-        }
-        else {
-            if (curr_entry_type != MMAP_FREE || prev_entry_type != MMAP_FREE) {
-                if (prev_entry_type == MMAP_FREE) {
-                    config_next_memmap_entry(&memory_map->entries[memory_map->count++], boot_memory_map + i, curr_entry_type);
-                }
-                else {
-                    const uint64_t mem_block_end = MMapEnt_Ptr(prev_entry) + MMapEnt_Size(prev_entry);
-                    curr_vm_memmap_entry->pages_count = MMapEnt_Size(prev_entry) / PAGE_BYTE_SIZE;
-
-                    if (curr_entry_type == MMAP_FREE) {
-                        memory_map->entries[memory_map->count].compact_phys_address = (uint32_t)(mem_block_end >> 12);
-                        memory_map->entries[memory_map->count++].type = VMMEM_TYPE_FREE;
-                    }
-                    else {
-                        // Need to insert free block between previouse and current blocks
-                        memory_map->entries[memory_map->count].compact_phys_address = (uint32_t)(mem_block_end >> 12);
-                        memory_map->entries[memory_map->count].pages_count = (MMapEnt_Ptr(boot_memory_map + i) - mem_block_end) / PAGE_BYTE_SIZE;
-                        memory_map->entries[memory_map->count++].type = VMMEM_TYPE_FREE;
-
-                        config_next_memmap_entry(&memory_map->entries[memory_map->count++], boot_memory_map + i, curr_entry_type);
-                    }
-                }
-            }
-        }
-
-        if (i == entries_count - 1) {
-            memory_map->entries[memory_map->count - 1].pages_count =
-                ((MMapEnt_Ptr(boot_memory_map + i) + MMapEnt_Size(boot_memory_map + i)) -
-                VM_MEMMAP_PHYS_ADDRESS(memory_map->entries + memory_map->count - 1)) / PAGE_BYTE_SIZE;
-
-            break;
-        }
-
-        prev_entry_type = curr_entry_type;
-        prev_entry = boot_memory_map + i;
-    }
-}
-
 static void insert_memmap_entry(VMMemoryMap* memory_map,
     const uint64_t mem_phys_address,
     const uint32_t mem_pages_count,
@@ -236,13 +170,14 @@ static void insert_memmap_entry(VMMemoryMap* memory_map,
             }
 
             if (begin_offset == 0) {
-                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_end_phys_address >> 12);
+                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_end_phys_address / PAGE_BYTE_SIZE);
                 memory_map->entries[i + 1].pages_count = memory_map->entries[i].pages_count - mem_pages_count;
+                memory_map->entries[i + 1].type = memory_map->entries[i].type;
                 memory_map->entries[i].pages_count = mem_pages_count;
                 memory_map->entries[i].type = type;
             }
             else if (end_offset == 0) {
-                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_phys_address >> 12);
+                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_phys_address / PAGE_BYTE_SIZE);
                 memory_map->entries[i + 1].pages_count = mem_pages_count;
                 memory_map->entries[i + 1].type = type;
                 memory_map->entries[i].pages_count -= mem_pages_count;
@@ -251,45 +186,147 @@ static void insert_memmap_entry(VMMemoryMap* memory_map,
                 const uint32_t temp_pages_count = memory_map->entries[i].pages_count;
 
                 memory_map->entries[i].pages_count = (uint32_t)(begin_offset / PAGE_BYTE_SIZE);
-                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_phys_address >> 12);
+                memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_phys_address / PAGE_BYTE_SIZE);
                 memory_map->entries[i + 1].pages_count = mem_pages_count;
                 memory_map->entries[i + 1].type = type;
-                memory_map->entries[i + 2].compact_phys_address = (uint32_t)(mem_end_phys_address >> 12);
+                memory_map->entries[i + 2].type = memory_map->entries[i].type;
+                memory_map->entries[i + 2].compact_phys_address = (uint32_t)(mem_end_phys_address / PAGE_BYTE_SIZE);
                 memory_map->entries[i + 2].pages_count = temp_pages_count - memory_map->entries[i].pages_count - mem_pages_count;
             }
 
             memory_map->count += count_of_new_entries;
             break;
         }
+        else if (begin_phys_address > mem_phys_address) {
+            i--;
+
+            for (uint32_t j = memory_map->count; j > i + 1; --j) {
+                memory_map->entries[j] = memory_map->entries[j - 1];
+            }
+
+            memory_map->entries[i + 1].compact_phys_address = (uint32_t)(mem_phys_address / PAGE_BYTE_SIZE);
+            memory_map->entries[i + 1].pages_count = mem_pages_count;
+            memory_map->entries[i + 1].type = type;
+
+            memory_map->count++;
+            break;
+        }
     }
+}
+
+static void _map_linear_phys_gb(const uint64_t phys_address) {
+    const uint64_t gb_aligned_address = GB_SIZE * (phys_address / GB_SIZE);
+
+    _vm_map_phys_to_virt(
+            gb_aligned_address,
+            gb_aligned_address,
+            cpu_get_current_pml4(),
+            GB_SIZE / PAGE_BYTE_SIZE,
+            (VMMAP_FORCE | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
+}
+
+// Additional regions that will be used for kernel segments and pages pool
+#define VM_MEMMAP_ADD_COUNT 3
+
+static void vm_init_memory_map(VMMemoryMap* memory_map, MMapEnt* boot_memory_map, const size_t entries_count) {
+    const uint32_t pool_pages_count =
+        div_with_roundup(((entries_count + VM_MEMMAP_ADD_COUNT) * sizeof(VMMemoryMapEntry)), PAGE_BYTE_SIZE);
+    const MMapEnt memmap_entries_pool = find_first_suitable_mmap_block(boot_memory_map, entries_count, pool_pages_count);
+
+    if (memmap_entries_pool.size == 0) return;
+
+    if (get_phys_address(MMapEnt_Ptr(&memmap_entries_pool)) != MMapEnt_Ptr(&memmap_entries_pool)) {
+        kernel_debug("Memmap maping...\n");
+       _map_linear_phys_gb(MMapEnt_Ptr(&memmap_entries_pool));
+    }
+
+    memory_map->entries = (VMMemoryMapEntry*)(memmap_entries_pool.ptr + MMapEnt_Size(&memmap_entries_pool) - ((uint64_t)pool_pages_count * PAGE_BYTE_SIZE));
+    memory_map->count = entries_count;
+
+    uint32_t idx = 0;
+
+    for (uint32_t i = 0; i < entries_count; ++i) {
+        MMapEnt* curr_entry = boot_memory_map + i;
+
+        if (MMapEnt_Ptr(curr_entry) % PAGE_BYTE_SIZE != 0) {
+            memory_map->count = i;
+            break;
+        }
+
+        const uint8_t curr_entry_type = MMapEnt_Type(curr_entry);
+
+        memory_map->entries[idx].compact_phys_address = (uint32_t)(MMapEnt_Ptr(curr_entry) / PAGE_BYTE_SIZE);
+        memory_map->entries[idx].pages_count = MMapEnt_Size(curr_entry) / PAGE_BYTE_SIZE;
+
+        switch (curr_entry_type)
+        {
+        case MMAP_FREE:
+            memory_map->entries[idx].type = VMMEM_TYPE_FREE;
+            memory_map->total_pages_count += memory_map->entries[i].pages_count;
+            break;
+        case MMAP_USED:
+            memory_map->entries[idx].type = VMMEM_TYPE_USED;
+            break;
+        case MMAP_ACPI: FALLTHROUGH;
+        case MMAP_MMIO:
+            memory_map->entries[idx].type = VMMEM_TYPE_DEV;
+            break;
+        default:
+            kassert(FALSE);
+            break;
+        }
+
+        idx++;
+    }
+
+    insert_memmap_entry(memory_map, (uint64_t)memory_map->entries, pool_pages_count, VMMEM_TYPE_ALLOC);
+}
+
+VMMemoryMapEntry* _vm_boot_alloc(VMMemoryMap* memory_map, const uint32_t pages_count) {
+    for (uint32_t i = 0; i < memory_map->count; ++i) {
+        if (memory_map->entries[i].compact_phys_address != 0 &&
+            memory_map->entries[i].pages_count >= pages_count &&
+            memory_map->entries[i].type == VMMEM_TYPE_FREE) {
+            insert_memmap_entry(memory_map,
+                (uint64_t)memory_map->entries[i].compact_phys_address * PAGE_BYTE_SIZE,
+                pages_count, VMMEM_TYPE_ALLOC);
+
+            return &memory_map->entries[i];
+        }
+    }
+
+    return NULL;
+}
+
+PageMapLevel4Entry* vm_get_kernel_pml4() {
+    return (PageMapLevel4Entry*)&vm_pml4;
 }
 
 void log_memory_map(const VMMemoryMap* memory_map) {
     for (uint32_t i = 0; i < memory_map->count; ++i) {
-        VMMemoryMapEntry* curr_entry = memory_map->entries + i;
+        const VMMemoryMapEntry* curr_entry = memory_map->entries + i;
 
         const char* type_str = NULL;
 
         switch (curr_entry->type)
         {
-        case VMMEM_TYPE_FREE: type_str = "FREE"; break;
-        case VMMEM_TYPE_USED: type_str = "USED"; break;
-        case VMMEM_TYPE_DEV: type_str = "DEV"; break;
+        case VMMEM_TYPE_FREE:   type_str = "FREE"; break;
+        case VMMEM_TYPE_USED:   type_str = "USED"; break;
+        case VMMEM_TYPE_DEV:    type_str = "DEV"; break;
         case VMMEM_TYPE_KERNEL: type_str = "KERNEL"; break;
-        case VMMEM_TYPE_ALLOC: type_str = "ALLOCATED"; break;
-        default:
-            break;
+        case VMMEM_TYPE_ALLOC:  type_str = "ALLOCATED"; break;
+        default: kassert(FALSE); break;
         }
 
         kernel_msg("Memmap entry: %x; size: %x; type: %s\n",
-            ((uint64_t)curr_entry->compact_phys_address << 12),
+            ((uint64_t)curr_entry->compact_phys_address * PAGE_BYTE_SIZE),
             (uint64_t)curr_entry->pages_count * PAGE_BYTE_SIZE,
             type_str);
     }
 }
 
 Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count, VMMemoryMap* out_memory_map) {
-    kassert(boot_memory_map != NULL && entries_count > 0);
+    kassert(boot_memory_map != NULL && entries_count > 0 && out_memory_map != NULL);
 
     kernel_addr_space.segments.virt_address = (uint64_t)&kernel_elf_start;
     vm_kernel_virt_to_phys_offset = get_phys_address(kernel_addr_space.segments.virt_address) - kernel_addr_space.segments.virt_address;
@@ -301,26 +338,8 @@ Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count,
     kernel_msg("Kernel: %x\n", get_phys_address((uint64_t)&kernel_elf_start));
     kernel_msg("Kernel size: %u KB (%u MB)\n", kernel_addr_space.segments.size / KB_SIZE, kernel_addr_space.segments.size / MB_SIZE);
     kernel_msg("Framebuffer: %x\n", get_phys_address((uint64_t)BOOTBOOT_FB));
-    kernel_msg("Kernel virtual address space offset: %x\n", vm_kernel_virt_to_phys_offset);
 #endif
 
-    // Init pages pool
-    const MMapEnt pages_pool_mmap_entry =
-        find_first_suitable_mmap_block(boot_memory_map, entries_count, PAGE_TABLE_POOL_TABLES_COUNT + 1);
-
-    if (pages_pool_mmap_entry.size == 0) {
-        error_str = "Not found suitable memory block for paging tables pool";
-        return KERNEL_ERROR;
-    }
-
-    vm_page_table_pool = bma_create(pages_pool_mmap_entry.ptr, (PAGE_TABLE_POOL_TABLES_COUNT + 1) * PAGE_BYTE_SIZE, PAGE_BYTE_SIZE);
-    
-    if (vm_page_table_pool.memory_pool == NULL) {
-        error_str = "Failuer while initialization page table pool";
-        return KERNEL_ERROR;
-    }
-
-    vm_init_page_tables();
     vm_init_memory_map(out_memory_map, boot_memory_map, entries_count);
 
     if (out_memory_map->count == 0) {
@@ -333,43 +352,58 @@ Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count,
         kernel_addr_space.segments.size / PAGE_BYTE_SIZE,
         VMMEM_TYPE_KERNEL);
 
-    insert_memmap_entry(out_memory_map,
-        (uint64_t)vm_page_table_pool.memory_pool,
-        vm_page_table_pool.capacity,
-        VMMEM_TYPE_ALLOC);
+    // Init pages pool
+    const VMMemoryMapEntry* pages_pool_mmap_entry = _vm_boot_alloc(out_memory_map, PAGE_TABLE_POOL_TABLES_COUNT + 1);
 
-    // Replace and map stack
-    const MMapEnt stack_mmap_entry =
-        find_first_suitable_mmap_block(boot_memory_map, entries_count, KERNEL_STACK_SIZE / PAGE_BYTE_SIZE);
-
-    if (stack_mmap_entry.size == 0) {
-        error_str = "Not found suitable memory block for replacing stack";
+    if (pages_pool_mmap_entry == NULL) {
+        error_str = "Not found suitable memory block for paging tables pool";
         return KERNEL_ERROR;
     }
 
-    kernel_addr_space.stack.phys_address = stack_mmap_entry.ptr;
-    kernel_addr_space.stack.virt_address = (UINT64_MAX - KERNEL_STACK_SIZE) + 1;
-    kernel_addr_space.stack.size = KERNEL_STACK_SIZE;
+    if (get_phys_address((uint64_t)pages_pool_mmap_entry->compact_phys_address * PAGE_BYTE_SIZE) !=
+        (uint64_t)pages_pool_mmap_entry->compact_phys_address * PAGE_BYTE_SIZE) {
+        _map_linear_phys_gb((uint64_t)pages_pool_mmap_entry->compact_phys_address * PAGE_BYTE_SIZE);
+    }
 
-    const void* stack_src_virt_ptr = (void*)((UINT64_MAX - (uint64_t)initstack) + 1);
+    vm_page_table_pool = bma_create(
+        (void*)((uint64_t)pages_pool_mmap_entry->compact_phys_address * PAGE_BYTE_SIZE),
+        (PAGE_TABLE_POOL_TABLES_COUNT + 1) * PAGE_BYTE_SIZE,
+        PAGE_BYTE_SIZE
+    );
+
+    if (vm_page_table_pool.memory_pool == NULL) {
+        error_str = "Failuer while initialization page table pool";
+        return KERNEL_ERROR;
+    }
+
+    vm_init_page_tables();
+
+    kernel_addr_space.stack.virt_address = (UINT64_MAX & (~0xFFF));
+    kernel_addr_space.stack.phys_address = get_phys_address(kernel_addr_space.stack.virt_address);
+    kernel_addr_space.stack.size = ((uint64_t)&initstack * (uint64_t)bootboot.numcores);
 
     //Map 8GB physical identity
     vm_map_phys_to_virt(0x0,
                         0x0,
-                        div_with_roundup(8 * GB_SIZE, PAGE_BYTE_SIZE),
-                        (VMMAP_FORCE | VMMAP_EXEC | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
+                        div_with_roundup(16 * GB_SIZE, PAGE_BYTE_SIZE),
+                        (VMMAP_FORCE | VMMAP_WRITE | VMMAP_EXEC | VMMAP_USE_LARGE_PAGES));
 
     // Map framebuffer
     vm_map_phys_to_virt(bootboot.fb_ptr,
-                        BOOTBOOT_FB,
-                        div_with_roundup(bootboot.fb_size, (2 * MB_SIZE)) * PAGES_PER_2MB,
+                        (uint64_t)&fb,
+                        div_with_roundup(div_with_roundup(bootboot.fb_size, MB_SIZE * 2) * MB_SIZE * 2, PAGE_BYTE_SIZE),
                         (VMMAP_FORCE | VMMAP_WRITE_THROW | VMMAP_CACHE_DISABLED | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
 
     // Map bootboot
     vm_map_phys_to_virt(get_phys_address((uint64_t)&bootboot),
                         (uint64_t)&bootboot,
                         div_with_roundup(bootboot.size, PAGE_BYTE_SIZE),
-                        (VMMAP_FORCE | VMMAP_WRITE));
+                        VMMAP_FORCE);
+
+    vm_map_phys_to_virt(get_phys_address((uint64_t)&environment),
+                        (uint64_t)&environment,
+                        1,
+                        VMMAP_FORCE);
 
     // Map kernel
     vm_map_phys_to_virt(kernel_addr_space.segments.phys_address,
@@ -378,16 +412,64 @@ Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count,
                         (VMMAP_FORCE | VMMAP_EXEC | VMMAP_WRITE));
 
     // Map stack
-    vm_map_phys_to_virt(get_phys_address((uint64_t)stack_src_virt_ptr),
-                        (uint64_t)stack_src_virt_ptr,
-                        kernel_addr_space.stack.size / PAGE_BYTE_SIZE,
-                        (VMMAP_FORCE | VMMAP_EXEC | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
+    for (uint32_t i = 0; i < bootboot.numcores; ++i) {
+        if (((uint64_t)i * (uint64_t)&initstack) % PAGE_BYTE_SIZE != 0) continue;
 
-    log_memory_page_tables((PageMapLevel4Entry*)vm_kernel_virt_to_phys((uint64_t)&vm_pml4));
+        const uint64_t core_stack_virt_addr = (UINT64_MAX - ((i + 1) * (uint64_t)&initstack)) + 1;
+
+        vm_map_phys_to_virt(get_phys_address(core_stack_virt_addr),
+                            core_stack_virt_addr,
+                            1,
+                            (VMMAP_FORCE | VMMAP_EXEC | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
+    }
 
     // Enable OS paging
-    cpu_set_pml4((PageMapLevel4Entry*)vm_kernel_virt_to_phys((uint64_t)&vm_pml4));
+    EFER efer = cpu_get_efer();
+    efer.noexec_enable = 1;
+
+    cpu_set_efer(efer);
+    cpu_set_pml4((PageMapLevel4Entry*)get_phys_address((uint64_t)&vm_pml4));
+
     kernel_warn("OS Page tables enabled\n");
+
+    return KERNEL_OK;
+}
+
+Status init_vm_allocator() {
+    static VMPageList vm_frame_oma_phys_page;
+
+    VMPageFrame frame;
+    frame.phys_pages.next = (ListHead*)(void*)&vm_frame_oma_phys_page;
+    frame.phys_pages.prev = (ListHead*)(void*)&vm_frame_oma_phys_page;
+
+    // Allocate two pages
+    vm_frame_oma_phys_page.phys_page_base = bpa_allocate_pages(2) / PAGE_BYTE_SIZE;
+
+    if (((uint64_t)vm_frame_oma_phys_page.phys_page_base * PAGE_BYTE_SIZE) == INVALID_ADDRESS) {
+        error_str = "VM Frame oma can't be allocated";
+        return KERNEL_ERROR;
+    }
+
+    frame.count = 2;
+    frame.virt_address = vm_find_free_virt_address(&vm_pml4, frame.count);
+    frame.flags = (VMMAP_FORCE | VMMAP_WRITE);
+
+    if (frame.virt_address == INVALID_ADDRESS) {
+        error_str = "VM Frame oma can't be mapped";
+        return KERNEL_ERROR;
+    }
+
+    vm_map_phys_to_virt((uint64_t)vm_frame_oma_phys_page.phys_page_base * PAGE_BYTE_SIZE,
+        frame.virt_address,
+        2,
+        frame.flags);
+
+    vm_page_frame_oma = _oma_manual_init(&frame, sizeof(VMPageFrame));
+
+#ifdef KDEBUG
+    kernel_warn("VM Frame oma: %x (%x)\n", frame.virt_address, (uint64_t)vm_frame_oma_phys_page.phys_page_base * PAGE_BYTE_SIZE);
+    kernel_warn("VM Frame oma bucket capacity: %u\n", vm_page_frame_oma.bucket_capacity);
+#endif
 
     return KERNEL_OK;
 }
@@ -413,17 +495,37 @@ void vm_free_page_table(PageXEntry* page_table) {
 }
 
 static inline bool_t vm_is_pxe_valid(const PageXEntry* pxe) {
-    return pxe->present && (pxe->size == 1 || pxe->page_ppn != 0);
+    return pxe->present && (pxe->size == 1 || pxe->page_ppn != 0 || pxe->writeable == 1);
 }
 
 PageXEntry* vm_get_page_x_entry(const uint64_t virt_address, unsigned int level) {
     kassert(level < 4);
 
-    PageXEntry* pxe = (PageXEntry*)vm_kernel_virt_to_phys((uint64_t)&vm_pml4) + (uint16_t)((const VirtualAddress*)&virt_address)->p4_index;
+    PageXEntry* pxe =
+        (PageXEntry*)vm_kernel_virt_to_phys((uint64_t)&vm_pml4) +
+        (uint64_t)((const VirtualAddress*)(const void*)&virt_address)->p4_index;
+
     uint8_t offset_shift = 30;
 
     for (uint16_t i = 0; i < level; ++i) {
-        pxe = (PageXEntry*)((uint64_t)pxe->page_ppn << 12) + ((*(uint64_t*)&virt_address >> offset_shift) & 0x1FF);
+        pxe = (PageXEntry*)((uint64_t)pxe->page_ppn << 12) + ((*(const uint64_t*)&virt_address >> offset_shift) & 0x1FF);
+        offset_shift -= 9;
+    }
+
+    return pxe;
+}
+
+PageXEntry* _get_page_x_entry(PageMapLevel4Entry* pml4, const uint64_t virt_address, unsigned int level) {
+    kassert(level < 4);
+
+    PageXEntry* pxe =
+        (PageXEntry*)vm_kernel_virt_to_phys((uint64_t)pml4) +
+        (uint64_t)((const VirtualAddress*)(const void*)&virt_address)->p4_index;
+
+    uint8_t offset_shift = 30;
+
+    for (uint16_t i = 0; i < level; ++i) {
+        pxe = (PageXEntry*)((uint64_t)pxe->page_ppn * PAGE_BYTE_SIZE) + ((*(const uint64_t*)&virt_address >> offset_shift) & 0x1FF);
         offset_shift -= 9;
     }
 
@@ -435,15 +537,17 @@ static inline void vm_prioritize_pxe_flags(PageXEntry* pxe, VMMapFlags flags) {
     pxe->writeable          |= ((flags & VMMAP_WRITE) != 0);
     pxe->user_access        |= ((flags & VMMAP_USER_ACCESS) != 0);
     pxe->execution_disabled &= ((flags & VMMAP_EXEC) == 0);
+    pxe->cache_disabled     &= ((flags & VMMAP_CACHE_DISABLED) != 0);
+    pxe->write_through      &= ((flags & VMMAP_WRITE_THROW) != 0);
 }
 
 static void vm_remap_large_page(PageXEntry* pxe, PageXEntry* child_pxe, VMMapFlags flags, const uint8_t level) {
     static const uint64_t level_size_table[2] = { (2 * MB_SIZE), PAGE_BYTE_SIZE };
 
-    uint64_t phys_address = ((uint64_t)pxe->page_ppn << 12);
+    uint64_t phys_address = ((uint64_t)pxe->page_ppn * PAGE_BYTE_SIZE);
 
     pxe->size = 0;
-    pxe->page_ppn = ((uint64_t)child_pxe >> 12);
+    pxe->page_ppn = ((uint64_t)child_pxe / PAGE_BYTE_SIZE);
 
     for (uint32_t i = 0; i < PAGE_TABLE_MAX_SIZE; ++i) {
         child_pxe[i].present = 1;
@@ -453,19 +557,25 @@ static void vm_remap_large_page(PageXEntry* pxe, PageXEntry* child_pxe, VMMapFla
         child_pxe[i].write_through = pxe->write_through;
         child_pxe[i].cache_disabled = pxe->cache_disabled;
         child_pxe[i].size = (level == 1 ? 0 : 1);
-        child_pxe[i].page_ppn = (phys_address >> 12);
+        child_pxe[i].page_ppn = (phys_address / PAGE_BYTE_SIZE);
 
         phys_address += level_size_table[level];
     }
 }
 
-Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const size_t pages_count, VMMapFlags flags) {
+static Status _vm_map_phys_to_virt(uint64_t phys_address,
+    uint64_t virt_address, PageMapLevel4Entry* pml4,
+    const size_t pages_count, VMMapFlags flags) {
     kassert(phys_address <= MAX_PHYS_ADDRESS);
     kassert(pages_count < MAX_PAGE_BASE);
 
     if (is_virt_addr_valid(virt_address) == FALSE) return KERNEL_ERROR;
 
     static const uint64_t level_size_table[3] = { GB_SIZE, (2 * MB_SIZE), PAGE_BYTE_SIZE };
+
+    if ((flags & VMMAP_USE_LARGE_PAGES) != 0 && (phys_address % (PAGE_BYTE_SIZE * 512)) != 0) {
+        flags ^= VMMAP_USE_LARGE_PAGES;
+    }
 
     uint32_t pages_by_size_count[4] = { 0, 0, pages_count, 0 };
 
@@ -483,7 +593,7 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
 
     uint32_t offset_shift = 39;
 
-    PageXEntry* pxe = (PageXEntry*)vm_kernel_virt_to_phys((uint64_t)&vm_pml4) + ((virt_address >> offset_shift) & 0x1FF);
+    PageXEntry* pxe = (PageXEntry*)pml4 + ((virt_address >> offset_shift) & 0x1FF);
     offset_shift -= 9;
 
     for (int i = 0; i < 4; ++i) {
@@ -516,18 +626,20 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
         if (is_need_to_map_on_this_level) {
             //kernel_msg("Need to map[%u][%u] -> %x\n", i, ((uint64_t)pxe & 0xFFF) / 8, phys_address);
             // Check if need to free allocated page tables
-            if (i < 3 && pxe->present == 1 && pxe->size != 1) vm_free_page_table((PageXEntry*)((uint64_t)pxe->page_ppn << 12));
+            if (i < 3 && pxe->present == 1 && pxe->size != 1) vm_free_page_table((PageXEntry*)((uint64_t)pxe->page_ppn * PAGE_BYTE_SIZE));
 
             --i;
 
             vm_config_page_table_entry(pxe, (uint64_t)phys_address, flags);
+            if (pxe->size == 1) kassert((pxe->page_ppn & 0x1FF) == 0);
+
             phys_address += level_size_table[i];
             virt_address += level_size_table[i];
 
             --pages_by_size_count[i];
 
             // Check if it is not the last entry in table 
-            if (((uint64_t)pxe & 0xFFF) / 8 < 511) {
+            if (((uint64_t)pxe & 0xFFF) / sizeof(PageXEntry) < 511) {
                 ++pxe;
             }
             else {
@@ -540,7 +652,7 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
             }
         }
         else if (i < 3) {
-            pxe = (PageXEntry*)((uint64_t)pxe->page_ppn << 12) + ((virt_address >> offset_shift) & 0x1FF);
+            pxe = (PageXEntry*)((uint64_t)pxe->page_ppn * PAGE_BYTE_SIZE) + ((virt_address >> offset_shift) & 0x1FF);
             offset_shift -= 9;
 
             //kernel_msg("Next entry [%u]: %x\n", i, (uint64_t)pxe);
@@ -550,4 +662,308 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
     //kernel_msg("Mapped: %x:%x\n", virt_address - (PAGE_BYTE_SIZE * pages_count), phys_address - (PAGE_BYTE_SIZE * pages_count));
 
     return KERNEL_OK;
+}
+
+static inline uint32_t get_virt_addres_px_idx(const uint64_t virt_address, const uint8_t px) {
+    return ((virt_address >> (12 + (9 * (uint32_t)px))) & 0x1FF);
+}
+
+static bool_t is_page_table_empty(const PageMapLevel4Entry* page_table) {
+    for (uint32_t i = 0; i < PAGE_TABLE_MAX_SIZE; ++i) {
+        if (vm_is_pxe_valid(page_table + i) != FALSE) return FALSE;
+    }
+
+    return TRUE;
+}
+
+void vm_unmap(const uint64_t virt_address, PageMapLevel4Entry* pml4, const uint32_t pages_count) {
+    kassert(pml4 != NULL && pages_count > 0 && pages_count < INT32_MAX);
+
+    const VirtualAddress* virt_addr = (const VirtualAddress*)(const void*)&virt_address;
+
+    int32_t pages_to_unmap_count = pages_count;
+
+    PageXEntry* pxe_stack[4] = { NULL, NULL, NULL, NULL };
+    PageXEntry* pxe = pml4 + virt_addr->p4_index;
+
+    for (uint32_t level = 4;;) {
+    table_entries_unmap_pass:
+        const uint32_t pxe_pages_count = 1 << ((level - 1) * 9);
+        const uint32_t idx = ((uint64_t)pxe % PAGE_TABLE_SIZE) / sizeof(PageXEntry);
+
+        pxe -= idx;
+
+        for (uint32_t i = idx; i < PAGE_TABLE_MAX_SIZE && pages_to_unmap_count > 0; ++i) {
+            if (pxe[i].size == 1 || level == 1) {
+                *(uint64_t*)(pxe + i) = 0;
+                pages_to_unmap_count -= pxe_pages_count;
+
+                if (pages_to_unmap_count <= 0) break;
+            }
+            else {
+                bool_t is_first_level_down = (pxe_stack[level - 1] == NULL);
+                bool_t is_page_table_covered =
+                    (is_first_level_down ?
+                    (get_virt_addres_px_idx(virt_address, level - 2) == 0) : 
+                    (TRUE));
+
+                if (level == 2 && is_page_table_covered && pages_to_unmap_count >= pxe_pages_count) {
+                    vm_free_page_table((PageXEntry*)((uint64_t)pxe[i].page_ppn * PAGE_BYTE_SIZE));
+
+                    *(uint64_t*)(pxe + i) = 0;
+                    pages_to_unmap_count -= pxe_pages_count;
+
+                    if (pages_to_unmap_count <= 0) break;
+                }
+                else {
+                    pxe_stack[level - 1] = pxe + i;
+                    pxe = (PageXEntry*)((uint64_t)pxe[i].page_ppn * PAGE_BYTE_SIZE);
+
+                    level--;
+
+                    if (is_first_level_down) {
+                        pxe += get_virt_addres_px_idx(virt_address, level - 1);
+                    }
+
+                    goto table_entries_unmap_pass;
+                }
+            }
+        }
+
+        if (level == 4) break;
+
+        level++;
+        pxe = pxe_stack[level - 1];
+
+        PageXEntry* child_pxe = (PageXEntry*)((uint64_t)pxe->page_ppn * PAGE_BYTE_SIZE);
+
+        if (child_pxe != NULL && is_page_table_empty(child_pxe)) {
+            vm_free_page_table(child_pxe);
+            *(uint64_t*)pxe = 0;
+        }
+
+        pxe++;
+    }
+}
+
+Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const size_t pages_count, VMMapFlags flags) {
+    return _vm_map_phys_to_virt(phys_address, virt_address, &vm_pml4, pages_count, flags);
+}
+
+static uint32_t get_max_near_rank_of(const uint32_t number) {
+    uint32_t rank = BPA_MAX_BLOCK_RANK - 1; 
+
+    while (number < (1 << rank)) {
+        rank--;
+    }
+
+    return rank;
+}
+
+static bool_t frame_push_phys_page(VMPageFrame* frame, const uint64_t phys_page) {
+    VMPageList* node = oma_alloc(&vm_page_frame_oma);
+
+    if (node == NULL) return FALSE;
+
+    if (frame->phys_pages.next == NULL) {
+        frame->phys_pages.next = (ListHead*)(void*)node;
+        frame->phys_pages.prev = (ListHead*)(void*)node;
+    }
+    else {
+        node->prev = (VMPageList*)(void*)frame->phys_pages.prev;
+        frame->phys_pages.prev->next = (ListHead*)(void*)node;
+        frame->phys_pages.prev = (ListHead*)(void*)node;
+    }
+
+    return TRUE;
+}
+
+static void frame_clear_phys_pages(VMPageFrame* frame) {
+    VMPageList* page = (VMPageList*)(void*)frame->phys_pages.next;
+
+    while (page != NULL) {
+        VMPageList* temp_page = page;
+
+        page = page->next;
+
+        oma_free((void*)temp_page, &vm_page_frame_oma);
+    }
+
+    frame->phys_pages.next = NULL;
+    frame->phys_pages.prev = NULL;
+}
+
+static void frame_free_phys_pages(VMPageFrame* frame) {
+    uint32_t rank = get_max_near_rank_of(frame->count);
+    uint32_t rank_pages_count = 1 << rank;
+    uint32_t pages_to_free_count = frame->count;
+
+    VMPageList* page = (VMPageList*)(void*)frame->phys_pages.next;
+
+    while (page != NULL) {
+        bpa_free_pages(page->phys_page_base * PAGE_BYTE_SIZE, rank);
+
+        pages_to_free_count -= rank_pages_count;
+
+        while (pages_to_free_count < rank_pages_count) {
+            rank_pages_count >>= 1;
+            rank--;
+        }
+
+        page = page->next;
+    }
+
+    frame_clear_phys_pages(&frame);
+    frame->count = 0;
+}
+
+uint64_t vm_find_free_virt_address(const PageMapLevel4Entry* pml4 ,const uint32_t pages_count) {
+    PageXEntry* pxe = pml4;
+    uint64_t virt_address = 0;
+    uint32_t temp_pages_count = 0;
+
+    PageXEntry* pxe_stack[4] = { NULL, NULL, NULL, pml4 };
+
+    for (uint32_t level = 4; level > 0;) {
+    table_entries_pass:
+        const uint32_t pxe_pages_count = 1 << ((level - 1) * 9);
+        const uint32_t idx = ((uint64_t)pxe % PAGE_TABLE_SIZE) / sizeof(PageXEntry);
+
+        pxe -= idx;
+
+        for (uint32_t i = idx; i < PAGE_TABLE_MAX_SIZE; ++i) {
+            if (vm_is_pxe_valid(pxe + i) == FALSE) {
+                temp_pages_count += pxe_pages_count;
+
+                if (temp_pages_count >= pages_count) return virt_address;
+            }
+            else if (pxe[i].size == 1 || level == 1) {
+                virt_address += (uint64_t)(pxe_pages_count + temp_pages_count) * PAGE_BYTE_SIZE;
+                temp_pages_count = 0;
+            }
+            else {
+                pxe_stack[level - 1] = pxe + i;
+                pxe = (const PageXEntry*)((uint64_t)pxe[i].page_ppn * PAGE_BYTE_SIZE);
+
+                level--;
+                goto table_entries_pass;
+            }
+        }
+
+        if (level == 4) break;
+
+        level++;
+        pxe = pxe_stack[level - 1] + 1;
+    }
+
+    return INVALID_ADDRESS;
+}
+
+static bool_t vm_map_page_frame(VMPageFrame* frame, PageMapLevel4Entry* pml4, VMMapFlags flags) {
+    uint32_t rank_pages_count = 1 << get_max_near_rank_of(frame->count);
+    uint32_t pages_to_map_count = frame->count;
+    uint64_t virt_address = frame->virt_address;
+
+    VMPageList* page = (VMPageList*)(void*)frame->phys_pages.next;
+
+    while (page != NULL) {
+        if (vm_map_phys_to_virt(page->phys_page_base * PAGE_BYTE_SIZE, virt_address, rank_pages_count, flags) != KERNEL_OK) {
+            return FALSE;
+        }
+
+        pages_to_map_count -= rank_pages_count;
+        virt_address += rank_pages_count;
+
+        while (pages_to_map_count < rank_pages_count) {
+            rank_pages_count <<= 1;
+        }
+
+        page = page->next;
+    }
+
+    frame->flags = flags;
+
+    return TRUE;
+}
+
+VMPageFrame vm_alloc_pages(const uint32_t pages_count, PageMapLevel4Entry* pml4, VMMapFlags flags) {
+    kassert(pml4 != NULL && pages_count > 0);
+
+    uint32_t rank = BPA_MAX_BLOCK_RANK - 1;
+    uint32_t rank_pages_count = 1 << rank;
+
+    VMPageFrame frame = { 0, 0, { NULL, NULL }, 0 };
+    uint32_t temp_pages_count = pages_count;
+
+    frame.virt_address = vm_find_free_virt_address(pml4, pages_count);
+
+    if (frame.virt_address == INVALID_ADDRESS) return frame;
+
+    while (TRUE) {
+        if (temp_pages_count >= rank_pages_count) {
+            temp_pages_count -= rank_pages_count;
+
+            uint64_t phys_address = bpa_allocate_pages(rank);
+
+            if (phys_address == INVALID_ADDRESS) {
+                frame_free_phys_pages(&frame);
+                return frame;
+            }
+            else if (frame_push_phys_page(&frame, phys_address) == FALSE) {
+                bpa_free_pages(phys_address ,rank);
+                frame_free_phys_pages(&frame);
+                return frame;
+            }
+
+            frame.count += rank_pages_count;
+
+            if (frame.count == pages_count) break;
+
+            kassert(frame.count < pages_count);
+        }
+        else {
+            rank_pages_count >>= 1;
+            rank--;
+        }
+    }
+
+    if (vm_map_page_frame(&frame, pml4, flags) == FALSE) {
+        frame_free_phys_pages(&frame);
+        return frame;
+    }
+
+    return frame;
+}
+
+void vm_free_pages(VMPageFrame* frame, PageMapLevel4Entry* pml4) {
+    kassert(frame != NULL);
+
+    vm_unmap(frame->virt_address, pml4, frame->count);
+    frame_free_phys_pages(frame);
+
+    frame->virt_address = 0;
+    frame->flags = 0;
+}
+
+bool_t vm_test() {
+    uint64_t small_virt_address = vm_find_free_virt_address(&vm_pml4, 10);
+    kassert(is_virt_addr_mapped(small_virt_address) == FALSE);
+
+    vm_map_phys_to_virt(0x0, small_virt_address, 10, VMMAP_FORCE);
+    kassert(is_virt_addr_mapped(small_virt_address));
+
+    uint64_t virt_address = vm_find_free_virt_address(&vm_pml4, (MB_SIZE * 3) / PAGE_BYTE_SIZE);
+    kassert(is_virt_addr_mapped(virt_address) == FALSE);
+    kassert(virt_address == small_virt_address + (PAGE_BYTE_SIZE * 10));
+
+    vm_map_phys_to_virt(0x0, virt_address, (MB_SIZE * 3) / PAGE_BYTE_SIZE, VMMAP_FORCE);
+    kassert(is_virt_addr_mapped(small_virt_address) && is_virt_addr_mapped(virt_address));
+    
+    vm_unmap(virt_address, &vm_pml4, (MB_SIZE * 3) / PAGE_BYTE_SIZE);
+    kassert(is_virt_addr_mapped(small_virt_address) && is_virt_addr_mapped(virt_address) == FALSE);
+
+    vm_unmap(small_virt_address, &vm_pml4, 10);
+    kassert(is_virt_addr_mapped(small_virt_address) == FALSE && is_virt_addr_mapped(virt_address) == FALSE);
+
+    return TRUE;
 }
