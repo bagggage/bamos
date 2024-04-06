@@ -4,6 +4,7 @@
 
 /*
 Bitmap memory allocator.
+Has consntant capacity and can be used only for limited allocations.
 */
 
 typedef struct BitmapMemoryAllocator {

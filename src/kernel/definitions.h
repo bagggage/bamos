@@ -30,6 +30,7 @@ typedef enum Status {
     KERNEL_PANIC,
 } Status;
 
+#define BYTE_SIZE 8
 #define KB_SIZE 1024U
 #define MB_SIZE ((uint64_t)KB_SIZE * 1024U)
 #define GB_SIZE (MB_SIZE * 1024U)
