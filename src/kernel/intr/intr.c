@@ -23,6 +23,31 @@ uint16_t get_current_kernel_cs() {
     return cs;
 }
 
+#ifdef KTRACE
+typedef struct DebugSymbol {
+    uint64_t virt_address;
+    uint32_t size;
+    const char name[32];
+} ATTR_PACKED DebugSymbol;
+
+typedef struct DebugSymbolTable {
+    uint64_t magic;
+    uint64_t count;
+    
+    DebugSymbol symbols[];
+} ATTR_PACKED DebugSymbolTable;
+
+typedef struct StackFrame { 
+    struct StackFrame* rbp;
+    uint64_t rip;
+} StackFrame;
+
+extern BOOTBOOT bootboot;
+
+static const DebugSymbolTable* sym_table = NULL;
+static const unsigned char sym_table_magic[] = { 0xAC, 'D', 'B', 'G' };
+#endif
+
 typedef struct OffsetAddress {
     uint16_t offset_1;
     uint16_t offset_2;
@@ -39,7 +64,56 @@ void intr_set_idt_descriptor(const uint8_t idx, const void* isr, uint8_t flags) 
     idt_64[idx].reserved = 0;
 }
 
+#ifdef KTRACE
+const DebugSymbol* get_debug_symbol(const uint64_t symbol_virt_address) {
+    for (uint32_t i = 0; i < sym_table->count; ++i) {
+        const uint64_t end_address = sym_table->symbols[i].virt_address + sym_table->symbols[i].size;
+
+        if (sym_table->symbols[i].virt_address <= symbol_virt_address &&
+            symbol_virt_address < end_address) {
+            return sym_table->symbols + i;
+        }
+    }
+
+    return NULL;
+}
+
+#define TRACE_INTERRUPT_DEPTH 2
+
+static inline void log_trace() {
+    kernel_warn("Trace:\n");
+
+    StackFrame* frame = (StackFrame*)__builtin_frame_address(0);
+
+    for (unsigned int i = 0; i < 6; ++i) {
+        if (frame->rbp == NULL) break;
+        if (i < TRACE_INTERRUPT_DEPTH || frame->rip == 0) {
+            frame = frame->rbp;
+            continue;
+        }
+
+        const DebugSymbol* dbg_symbol = get_debug_symbol(frame->rip);
+
+        kernel_warn("%x: %s(...)+%x\n",
+            frame->rip,
+            dbg_symbol == NULL ? "UNKNOWN SYMBOL" : dbg_symbol->name,
+            dbg_symbol == NULL ? 0 : frame->rip - dbg_symbol->virt_address);
+        frame = frame->rbp;
+    }
+}
+#endif
+
 __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame64* frame) {
+#ifdef KTRACE
+    const DebugSymbol* dbg_symbol = get_debug_symbol(frame->rip);
+
+    kernel_warn("-> %x: %s(...)+%x\n",
+        frame->rip,
+        dbg_symbol == NULL ? "UNKNOWN SYMBOL" : dbg_symbol->name,
+        dbg_symbol == NULL ? 0 : frame->rip - dbg_symbol->virt_address);
+    log_trace();
+#endif
+
     kernel_warn("Interrupt Frame:\nrip: %x:%x\nrsp: %x\nrflags: %b\ncs: %x\nss: %x\n", 
     frame->rip, (uint64_t)frame->rip - (uint64_t)&kernel_elf_start,
     frame->rsp,
@@ -71,9 +145,38 @@ ATTR_INTRRUPT void intr_handler(InterruptFrame64* frame) {
     log_intr_frame(frame);
 }
 
+#ifdef KTRACE
+static bool_t find_debug_sym_table(const uint8_t* initrd, const uint64_t initrd_size) {
+    // Magic is divided into 2 parts to prevent finding kernel code in initrd
+    const uint32_t second_part_magic = 0xFE015223;
+    const uint8_t* ptr = initrd; 
+
+    while (ptr < initrd + initrd_size) {
+        if (*(const uint32_t*)ptr == *(const uint32_t*)sym_table_magic) {
+            if (*(const uint32_t*)(ptr + sizeof(uint32_t)) == second_part_magic) {
+                sym_table = (const DebugSymbolTable*)ptr;
+                return TRUE;
+            }
+        }
+
+        ptr++;
+    }
+
+    return FALSE;
+}
+#endif
+
 Status init_intr() {
     idtr_64.limit = sizeof(idt_64) - 1;
     idtr_64.base = (uint64_t)&idt_64;
+
+#ifdef KTRACE
+    if (find_debug_sym_table((const uint8_t*)bootboot.initrd_ptr, bootboot.initrd_size) == FALSE) {
+        draw_kpanic_screen();
+        kernel_error("Kernel debug information for trace('KTRACE') is not located");
+        _kernel_break();
+    }
+#endif
 
     // Setup exception heandlers
     for (uint8_t i = 0; i < IDT_EXCEPTION_ENTRIES_COUNT; ++i) {
