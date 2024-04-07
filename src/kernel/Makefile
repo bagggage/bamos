@@ -1,10 +1,10 @@
-CROSS_ENV:=-fpic -ffreestanding -fno-omit-frame-pointer -fno-stack-protector -mno-red-zone -nostdlib
+CROSS_ENV:=-fpic -ffreestanding -fno-omit-frame-pointer -fno-stack-protector -mincoming-stack-boundary=3 -mno-red-zone -nostdlib
 
 AS:=${TOOLCHAIN}/x86_64-elf-as
 LD:=${TOOLCHAIN}/x86_64-elf-ld
 CC:=${TOOLCHAIN}/x86_64-elf-gcc ${CROSS_ENV}
 
-CC_FLAGS:=-Wall -Wextra -O2 -g
+CC_FLAGS:=-Wall -Wextra -O2
 
 PP_DEF:=-DKDEBUG -DKTRACE -DMEM_RAW_PATCH
 
