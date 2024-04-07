@@ -30,6 +30,14 @@ static inline void cpu_set_rsp(uint64_t rsp) {
     asm volatile("mov %0,%%rsp"::"a"(rsp));
 }
 
+static inline uint64_t cpu_get_rbp() {
+    uint64_t rbp;
+
+    asm volatile("movq %%rbp,%0":"=r"(rbp));
+
+    return rbp;
+}
+
 static inline uint64_t cpu_get_cr2() {
     uint64_t cr2;
 
