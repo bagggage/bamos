@@ -1,7 +1,6 @@
 #include "buddy_page_alloc.h"
 
 #include "assert.h"
-
 #include "object_mem_alloc.h"
 #include "logger.h"
 #include "mem.h"
@@ -237,7 +236,6 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
     kernel_warn("BPA: Memory block allocated: %x\n", (uint64_t)bpa_memory_block->compact_phys_address * PAGE_BYTE_SIZE);
 
     oma_phys_page.phys_page_base = bpa_memory_block->compact_phys_address;
-
     oma_page_frame.phys_pages.next = &oma_phys_page;
     oma_page_frame.phys_pages.prev = &oma_phys_page;
     oma_page_frame.count = bpa_memory_block->pages_count - div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE);
@@ -266,8 +264,6 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
         error_str = "BPA: Free list initialization failed";
         return KERNEL_ERROR;
     }
-
-    kernel_msg("BPA: Oma initialized\n");
 
     bpa.bitmap = (uint8_t*)(oma_page_frame.virt_address +
         (div_with_roundup(required_oma_mem_pool_size, PAGE_BYTE_SIZE) * PAGE_BYTE_SIZE));
