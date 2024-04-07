@@ -108,10 +108,6 @@ ObjectMemoryAllocator _oma_manual_init(VMPageFrame* bucket_page_frame, const uin
 
     ObjectMemoryAllocator oma = _oma_init(bucket_page_frame->count, object_size);
 
-#ifdef KDEBUG
-    kernel_msg("OMA: Struct constructed\n");
-#endif
-
     oma_push_bucket(bucket_page_frame, &oma);
 
     return oma;
