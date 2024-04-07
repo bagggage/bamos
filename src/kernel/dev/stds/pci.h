@@ -53,6 +53,9 @@ typedef struct PciConfigurationSpace {
 } ATTR_PACKED PciConfigurationSpace;
 
 typedef struct PciDeviceNode {
+    uint8_t bus;
+    uint8_t dev;
+    uint8_t func;
     PciConfigurationSpace pci_header;
     struct PciDeviceNode* next;
 } PciDeviceNode;
@@ -68,6 +71,8 @@ typedef struct PciDevice {
 uint8_t pci_config_readb(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 uint16_t pci_config_readw(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
 uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+
+void pci_config_writel(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t value);
 
 Status init_pci_devices(PciDevice* pci_device);
 bool_t add_new_pci_device(PciDeviceNode* new_pci_device);

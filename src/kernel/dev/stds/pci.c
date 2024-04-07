@@ -34,6 +34,16 @@ uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset
     return inl(PCI_CONFIG_DATA_PORT);
 }
 
+void pci_config_writel(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t value) {
+    uint32_t address = (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC) | 0x80000000;
+
+    outl(PCI_CONFIG_ADDRESS_PORT, address);
+
+    outl(PCI_CONFIG_DATA_PORT, value);
+}
+
+
+
 static uint32_t read_bar(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
     uint32_t bar = pci_config_readl(bus, dev, func, offset);
     uint32_t bar_type;
@@ -77,7 +87,10 @@ Status init_pci_devices(PciDevice* pci_device) {
                 uint16_t vendor_id = pci_config_readw(bus, dev, func, 0);
 
                 if (vendor_id == 0xFFFF) break;
-
+                
+                device_list->bus = bus;
+                device_list->dev = dev;
+                device_list->func = func;
                 device_list->pci_header.vendor_id = vendor_id;
                 device_list->pci_header.device_id = pci_config_readw(bus, dev, func, 2);
                 device_list->pci_header.prog_if = pci_config_readb(bus, dev, func, 0x9);

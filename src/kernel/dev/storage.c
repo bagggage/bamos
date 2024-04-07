@@ -46,11 +46,11 @@ Status init_storage_devices() {
 
     while (device != NULL) {
         if (is_nvme(device->pci_header.class_code, device->pci_header.subclass)) {
-            NvmeDevice* nvme_device;
-            add_storage_device(STORAGE_DEV_NVME, (void**)&nvme_device, sizeof(NvmeDevice));
-            nvme_device->bar0 = (NvmeBar0*)device->pci_header.bar0;
+            kernel_msg("Nvme device detected\n");
 
-            kernel_msg("Nvme device detected: version - %x\n", nvme_device->bar0->version);
+            NvmeDevice* nvme_device;
+            if (add_storage_device(STORAGE_DEV_NVME, (void**)&nvme_device, sizeof(NvmeDevice)) != KERNEL_OK) return KERNEL_ERROR;
+            if (init_nvme_device(nvme_device, device) != TRUE) return KERNEL_ERROR;
         }
 
         device = device->next;
