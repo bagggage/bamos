@@ -6,6 +6,7 @@
 #include "mem.h"
 
 #include "cpu/gdt.h"
+#include "cpu/regs.h"
 
 #define IDT_ENTRIES_COUNT 256
 #define IDT_EXCEPTION_ENTRIES_COUNT 32
@@ -114,12 +115,14 @@ __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame6
     log_trace();
 #endif
 
-    kernel_warn("Interrupt Frame:\nrip: %x:%x\nrsp: %x\nrflags: %b\ncs: %x\nss: %x\n", 
-    frame->rip, (uint64_t)frame->rip - (uint64_t)&kernel_elf_start,
-    frame->rsp,
-    frame->eflags,
-    frame->cs,
-    frame->ss);
+    kernel_warn("Interrupt Frame:\ncr2: %x\ncr3: %x\nrip: %x:%x\nrsp: %x\nrflags: %b\ncs: %x\nss: %x\n",
+        cpu_get_cr2(),
+        cpu_get_cr3(),
+        frame->rip, (uint64_t)frame->rip - (uint64_t)&kernel_elf_start,
+        frame->rsp,
+        frame->eflags,
+        frame->cs,
+        frame->ss);
 }
 
 __attribute__((target("general-regs-only"))) void intr_excp_panic(InterruptFrame64* frame, uint32_t error_code) {
