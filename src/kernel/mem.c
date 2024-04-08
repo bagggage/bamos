@@ -3,123 +3,98 @@
 #include <bootboot.h>
 
 #include "assert.h"
+
 #include "cpu/paging.h"
+#include "cpu/spinlock.h"
 
 #include "logger.h"
+#include "math.h"
 
 #include "vm/buddy_page_alloc.h"
+#include "vm/object_mem_alloc.h"
 #include "vm/vm.h"
 
 #define PAGE_KB_SIZE (PAGE_BYTE_SIZE / KB_SIZE)
 
-#ifdef MEM_RAW_PATCH
-typedef struct MemBlock {
-    void* ptr;
-    uint64_t size;
-} MemBlock;
+#define UMA_MIN_RANK 3
+#define UMA_RANKS_COUNT 13
+#define UMA_MAX_RANK (UMA_MIN_RANK + UMA_RANKS_COUNT - 1)
 
-#define MAX_BLOCKS 1024
+typedef struct UniversalMemoryAllocator {
+    ObjectMemoryAllocator* oma_pool[UMA_RANKS_COUNT];
+    uint64_t allocated_bytes;
 
-MemBlock allocated_blocks[MAX_BLOCKS] = { 0 }; 
-size_t allocated_blocks_count = 0;
+    Spinlock lock;
+} UniversalMemoryAllocator;
 
-uint8_t mem_buffer[MB_SIZE] = { 0 };
-uint8_t* buffer_ptr = mem_buffer;
+static UniversalMemoryAllocator uma;
 
-MemBlock* get_next_allocated_block(size_t i) {
-    MemBlock* last_block = NULL;
+void* kmalloc(const size_t size) {
+    kassert(size > 0 && size <= (1 << UMA_MAX_RANK));
 
-    ++i;
+    uint32_t near_rank = log2upper(size);
+    if (near_rank < UMA_MIN_RANK) near_rank = UMA_MIN_RANK;
 
-    while (i < MAX_BLOCKS && allocated_blocks[i].size == 0) {
-        last_block = &allocated_blocks[i];
-        ++i;
-    }
+    spin_lock(&uma.lock);
 
-    return last_block;
+    void* memory_block = oma_alloc(uma.oma_pool[near_rank - UMA_MIN_RANK]);
+
+    if (memory_block != NULL) uma.allocated_bytes += size;
+
+    spin_release(&uma.lock);
+
+    return memory_block;
 }
 
-void* kmalloc(size_t size) {
-    if (allocated_blocks_count >= MAX_BLOCKS || size == 0) return NULL;
+void* kcalloc(const size_t size) {
+    uint8_t* memory_block = (uint8_t*)kmalloc(size);
 
-    size_t allocated_i = 0;
+    if (memory_block == NULL) return memory_block;
 
-    for (size_t i = 0; i < MAX_BLOCKS; ++i) {
-        if (allocated_blocks[i].size == 0) {
-            bool_t is_last = FALSE;
+    memset(memory_block, size, 0);
 
-            if (allocated_blocks[i].ptr == NULL) {
-                is_last = TRUE;
-            }
-            else {
-                MemBlock* next_block = get_next_allocated_block(i);
+    return memory_block;
+}
 
-                if (next_block->ptr == NULL) {
-                    is_last = TRUE;
-                }
-                else {
-                    size_t max_block_size = next_block->ptr - allocated_blocks[i].ptr;
+void kfree(void* memory_block) {
+    if (memory_block == NULL) return;
 
-                    if (max_block_size >= size) {
-                        next_block->ptr = allocated_blocks[i].ptr + size;
-                        
-                        allocated_blocks[i].size = size;
-                        ++allocated_blocks_count;
+    spin_lock(&uma.lock);
 
-                        return allocated_blocks[i].ptr;
-                    }
+    for (uint32_t i = 0; i < UMA_RANKS_COUNT; ++i) {
+        if (_oma_is_containing_mem_block(memory_block, uma.oma_pool[i]) == FALSE) continue;
 
-                    continue;
-                }
-            }
+        oma_free(memory_block, uma.oma_pool[i]);
+        uma.allocated_bytes -= (1 << (i + UMA_MIN_RANK));
 
-            if (is_last) {
-                if ((buffer_ptr - mem_buffer) + size >= sizeof(mem_buffer)) return NULL;
+        spin_release(&uma.lock);
+        return;
+    }
 
-                allocated_blocks[i].ptr = buffer_ptr;
-                allocated_blocks[i].size = size;
+    // This branch should be never accessed
+    spin_release(&uma.lock);
 
-                buffer_ptr += size;
-                ++allocated_blocks_count;
+    kassert(FALSE);
+}
 
-                return allocated_blocks[i].ptr;
-            }
+static Status init_kernel_uma() {
+    uma.allocated_bytes = 0;
+
+    for (uint32_t rank = UMA_MIN_RANK; rank <= UMA_MAX_RANK; ++rank) {
+        const uint32_t obj_rank_size = 1 << rank;
+
+        ObjectMemoryAllocator* new_oma = oma_new(obj_rank_size);
+
+        if (new_oma == NULL) {
+            error_str = "UMA: Can't create new OMA";
+            return KERNEL_ERROR;
         }
-        else {
-            ++allocated_i;
-        }
+
+        uma.oma_pool[rank - UMA_MIN_RANK] = new_oma;
     }
 
-    return NULL;
+    return KERNEL_OK;
 }
-
-MemBlock* find_block(void* allocated_mem) {
-    for (size_t i = 0; i < MAX_BLOCKS; ++i) {
-        if (allocated_blocks[i].ptr == allocated_mem) return &allocated_blocks[i];
-    }
-
-    return NULL;
-}
-
-void kfree(void* allocated_mem) {
-    if (allocated_mem == NULL) return;
-
-    MemBlock* block = find_block(allocated_mem);
-
-    if (block == NULL) return;
-
-    block->size = 0;
-    --allocated_blocks_count;
-}
-#else
-void* kmalloc(size_t size) {
-    return NULL;
-}
-
-void kfree(void* allocated_mem) {
-    kassert(allocated_mem != NULL);
-}
-#endif
 
 extern BOOTBOOT bootboot;
 
@@ -242,6 +217,8 @@ Status init_memory() {
     kernel_msg("Testing virtual memory manager...\n");
     vm_test();
 #endif
+
+    if (init_kernel_uma() != KERNEL_OK) return KERNEL_ERROR; 
 
     return KERNEL_OK;
 }

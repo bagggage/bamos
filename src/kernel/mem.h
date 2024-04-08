@@ -28,6 +28,7 @@ void free_pages(void* begin, size_t count);
 
 // Check if virtual address is mapped (but also can be not presented)
 bool_t is_virt_addr_mapped(const uint64_t address);
+bool_t is_virt_addr_range_mapped(const uint64_t address, const uint32_t pages_count);
 
 /*
 Returns physical address that mapped to virtual.
