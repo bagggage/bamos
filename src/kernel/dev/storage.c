@@ -49,6 +49,7 @@ Status init_storage_devices() {
             kernel_msg("Nvme device detected\n");
 
             NvmeDevice* nvme_device;
+
             if (add_storage_device(STORAGE_DEV_NVME, (void**)&nvme_device, sizeof(NvmeDevice)) != KERNEL_OK) return KERNEL_ERROR;
             if (init_nvme_device(nvme_device, device) != TRUE) return KERNEL_ERROR;
         }

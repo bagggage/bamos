@@ -1,5 +1,6 @@
 #include "pci.h"
 
+#include "assert.h"
 #include "logger.h"
 
 #include "cpu/io.h"
@@ -42,8 +43,6 @@ void pci_config_writel(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, u
     outl(PCI_CONFIG_DATA_PORT, value);
 }
 
-
-
 static uint32_t read_bar(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
     uint32_t bar = pci_config_readl(bus, dev, func, offset);
     uint32_t bar_type;
@@ -56,17 +55,17 @@ static uint32_t read_bar(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset)
         if ((bar & 1) == 0) {  // bar is in memory space
             bar_type = (bar >> 1) & 0x3;
 
-            if ((bar_type & 2) == 0 ) {    //bar is in 32bit memory space
- 				//kernel_msg("Bar with offset %x is in 32bit on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
+            if ((bar_type & 2) == 0) {    //bar is in 32bit memory space
+ 				//kernel_msg("Bar %x with offset %x is in 32bit on bus: %u, dev: %u, func: %u\n", bar, offset, bus, dev, func);
 
                 return (bar & 0xFFFFFFF0); // Clear flags
             } else {     //bar is in 64bit memory space
-                //kernel_msg("Bar with offset %x is in 64bit on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
+                //kernel_msg("Bar %x with offset %x is in 64bit on bus: %u, dev: %u, func: %u\n", bar, offset, bus, dev, func);
 
                 return (bar & 0xFFFFFFFFFFFFFFF0); // Clear flags
             }
-        } else {    // bar is in i/o space 
-            //kernel_msg("Bar with offset %x is in I/O space on bus: %u, dev: %u, func: %u\n", offset, bus, dev, func);
+        } else {  // bar is in i/o space 
+            //kernel_msg("Bar %x with offset %x is in I/O space on bus: %u, dev: %u, func: %u\n", bar, offset, bus, dev, func);
 
             return (bar & 0xFFFFFFFC); // Clear flags
         } 
@@ -86,8 +85,10 @@ Status init_pci_devices(PciDevice* pci_device) {
             for (uint8_t func = 0; func < 8; ++func) {
                 uint16_t vendor_id = pci_config_readw(bus, dev, func, 0);
 
-                if (vendor_id == 0xFFFF) break;
-                
+                if (vendor_id == 0xFFFF || vendor_id == 0) continue;
+
+                //device_list->next = (PciDeviceNode*)kmalloc(sizeof(PciDeviceNode));
+                //device_list = device_list->next;
                 device_list->bus = bus;
                 device_list->dev = dev;
                 device_list->func = func;
@@ -102,15 +103,19 @@ Status init_pci_devices(PciDevice* pci_device) {
                 device_list->pci_header.bar3 = read_bar(bus, dev, func, PCI_BAR3_OFFSET);
                 device_list->pci_header.bar4 = read_bar(bus, dev, func, PCI_BAR4_OFFSET);
                 device_list->pci_header.bar5 = read_bar(bus, dev, func, PCI_BAR5_OFFSET);
-                
-                device_list->next = (PciDeviceNode*)kmalloc(sizeof(PciDeviceNode));
-                device_list = device_list->next;
 
-                kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id - %x\n",
+                //kernel_msg("PCI Dev: %x\n", device_list);
+
+                kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id: %x: class: %x: subclass: %x\n",
                     (uint32_t)bus,
                     (uint32_t)dev,
                     (uint32_t)func,
-                    (uint64_t)vendor_id);
+                    (uint64_t)vendor_id,
+                    (uint64_t)device_list->pci_header.class_code,
+                    (uint64_t)device_list->pci_header.subclass);
+                
+                device_list->next = (PciDeviceNode*)kmalloc(sizeof(PciDeviceNode));
+                device_list = device_list->next;
             }
         }
     }

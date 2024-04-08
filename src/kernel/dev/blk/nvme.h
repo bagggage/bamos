@@ -26,7 +26,7 @@ typedef struct NvmeCapRegister {
     uint16_t mqes;              // Bits 15:00 - Maximum Queue Entries Supported
 } NvmeCapRegister;
 
-typedef struct {
+typedef struct NvmeComplQueueEntry {
     unsigned int cint0;
     unsigned int rsvd;
 
@@ -44,6 +44,7 @@ typedef struct {
             unsigned short phase : 1;
             unsigned short stat : 15;
         } ATTR_PACKED;
+
         unsigned int cint3_raw;
     };
 
@@ -59,8 +60,8 @@ typedef struct NvmeBar0 {
     uint32_t csts;              // Controller Status
     uint32_t nssr;              // NVM Subsystem Reset
     uint32_t aqa;               // Admin Queue Attributes
-    uint64_t* asq;              // Admin Submission Queue Base Address
-    volatile NvmeComplQueueEntry* acq;              // Admin Completion Queue Base Address
+    uint64_t asq;               // Admin Submission Queue Base Address
+    uint64_t acq;               // Admin Completion Queue Base Address
     // uint32_t cmbloc;            // Controller Memory Buffer Location
     // uint32_t cmbsz;             // Controller Memory Buffer Size
     // uint32_t bpinfo;            // Boot Partition Information
@@ -98,17 +99,15 @@ typedef struct Command {
     uint16_t command_id;        // Bits 16-31: Command identifier
 } Command;
 
-typedef struct NvmeAdminCmd {
+typedef struct NvmeSubmissionCmd {
     Command command;
     uint32_t nsid;
     uint64_t reserved;
     uint64_t metadata;
     uint64_t prp1;
     uint64_t prp2;
-    uint32_t command_dword[5];
+    uint32_t command_dword[6];
 } ATTR_PACKED NvmeSubmissionCmd;
-
-
 
 typedef struct NvmeInterface {
 } NvmeInterface;
@@ -116,6 +115,8 @@ typedef struct NvmeInterface {
 typedef struct NvmeDevice {
     STORAGE_DEVICE_STRUCT_IMPL(Nvme);
     NvmeBar0* bar0;
+    NvmeComplQueueEntry* acq;
+    NvmeComplQueueEntry* asq;
 } NvmeDevice;
 
 bool_t init_nvme_device(NvmeDevice* nvme_device, PciDeviceNode* pci_device);
