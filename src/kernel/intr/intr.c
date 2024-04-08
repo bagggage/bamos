@@ -81,14 +81,14 @@ const DebugSymbol* get_debug_symbol(const uint64_t symbol_virt_address) {
 
 #define TRACE_INTERRUPT_DEPTH 2
 
-static inline void log_trace() {
+void log_trace(const uint32_t trace_start_depth) {
     kernel_warn("Trace:\n");
 
     StackFrame* frame = (StackFrame*)__builtin_frame_address(0);
 
     for (unsigned int i = 0; i < 6; ++i) {
         if (frame->rbp == NULL) break;
-        if (i < TRACE_INTERRUPT_DEPTH || frame->rip == 0) {
+        if (i < trace_start_depth || frame->rip == 0) {
             frame = frame->rbp;
             continue;
         }
@@ -112,7 +112,7 @@ __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame6
         frame->rip,
         dbg_symbol == NULL ? "UNKNOWN SYMBOL" : dbg_symbol->name,
         dbg_symbol == NULL ? 0 : frame->rip - dbg_symbol->virt_address);
-    log_trace();
+    log_trace(TRACE_INTERRUPT_DEPTH);
 #endif
 
     kernel_warn("Interrupt Frame:\ncr2: %x\ncr3: %x\nrip: %x:%x\nrsp: %x\nrflags: %b\ncs: %x\nss: %x\n",

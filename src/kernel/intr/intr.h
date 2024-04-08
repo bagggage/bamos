@@ -32,4 +32,8 @@ Status init_intr();
 
 void intr_set_idt_descriptor(const uint8_t idx, const void* isr, uint8_t flags);
 
+#ifdef KTRACE
+void log_trace(const uint32_t trace_start_depth);
+#endif
+
 void log_intr_frame(InterruptFrame64* frame);

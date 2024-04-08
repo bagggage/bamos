@@ -1,6 +1,7 @@
 #pragma once
 
 #include "definitions.h"
+#include "intr/intr.h"
 #include "logger.h"
 
 #ifdef KDEBUG
@@ -13,6 +14,9 @@ static inline void _kernel_assert(const char* expression_str,
                 file_str,
                 line,
                 func_str);
+#ifdef KTRACE
+    log_trace(0);
+#endif
 }
 
 #define kassert(expression) \
