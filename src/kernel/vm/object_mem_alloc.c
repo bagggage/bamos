@@ -3,6 +3,8 @@
 #include "assert.h"
 #include "bitmap.h"
 #include "logger.h"
+#include "math.h"
+#include "mem.h"
 #include "vm.h"
 
 #define OMA_MAX_FREE_BUCKETS 1
@@ -12,9 +14,11 @@ static bool_t is_oma_pool_initialized = FALSE;
 static ObjectMemoryAllocator oma_pool;
 
 ObjectMemoryAllocator _oma_init(const uint32_t bucket_pages_count, const uint32_t object_size) {
-    ObjectMemoryAllocator oma = { { NULL, NULL }, 0, 0 };
+    ObjectMemoryAllocator oma;
 
     oma.object_size = object_size;
+    oma.bucket_list.next = NULL;
+    oma.bucket_list.prev = NULL;
 
     uint32_t capacity = ((uint64_t)bucket_pages_count * PAGE_BYTE_SIZE) / object_size;
     uint32_t bitmap_size = div_with_roundup(capacity, BYTE_SIZE);
@@ -76,18 +80,22 @@ void oma_delete(ObjectMemoryAllocator* oma) {
 }
 
 static MemoryBucket* oma_push_bucket(VMPageFrame* bucket_page_frame, ObjectMemoryAllocator* oma) {
-    kassert(bucket_page_frame->virt_address != NULL);
+    kassert(bucket_page_frame->virt_address != 0);
 
     const uint32_t bitmap_size = div_with_roundup(oma->bucket_capacity, BYTE_SIZE);
 
     uint8_t* bitmap =
-        (uint8_t*)((bucket_page_frame->virt_address + ((uint64_t)bucket_page_frame->count * PAGE_BYTE_SIZE)) - bitmap_size);
+        (uint8_t*)((bucket_page_frame->virt_address + ((uint64_t)bucket_page_frame->count * PAGE_BYTE_SIZE)) - (uint64_t)bitmap_size);
     MemoryBucket* bucket = (MemoryBucket*)((uint64_t)bitmap - sizeof(MemoryBucket));
+
+    for (uint32_t i = 0; i < bitmap_size; ++i) {
+        bitmap[i] = 0;
+    }
 
     bucket->bitmap = bitmap;
     bucket->page_frame = *bucket_page_frame;
     bucket->next = NULL;
-    bucket->prev = NULL;
+    bucket->prev = (MemoryBucket*)(void*)oma->bucket_list.prev;
     bucket->allocated_count = 0;
 
     if (oma->bucket_list.next == NULL) {
@@ -97,7 +105,6 @@ static MemoryBucket* oma_push_bucket(VMPageFrame* bucket_page_frame, ObjectMemor
         oma->bucket_list.prev->next = (ListHead*)(void*)bucket;
     }
 
-    bucket->prev = (MemoryBucket*)(void*)oma->bucket_list.prev;
     oma->bucket_list.prev = (ListHead*)(void*)bucket;
 
     return bucket;
@@ -124,7 +131,26 @@ static MemoryBucket* oma_push_new_bucket(ObjectMemoryAllocator* oma) {
         return NULL;
     }
 
-    return oma_push_bucket(&page_frame, oma);
+    MemoryBucket* bucket = oma_push_bucket(&page_frame, oma);
+
+    return bucket;
+}
+
+bool_t _oma_is_containing_mem_block(const void* memory_block, const ObjectMemoryAllocator* oma) {
+    kassert(oma != NULL);
+
+    const MemoryBucket* bucket = (const MemoryBucket*)(const void*)oma->bucket_list.next;
+
+    while (bucket != NULL) {
+        if (bucket->page_frame.virt_address <= (uint64_t)memory_block &&
+            (uint64_t)memory_block < (uint64_t)bucket->bitmap) {
+            return TRUE;
+        }
+
+        bucket = bucket->next;
+    }
+
+    return FALSE;
 }
 
 void* oma_alloc(ObjectMemoryAllocator* oma) {
