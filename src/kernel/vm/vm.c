@@ -9,6 +9,7 @@
 #include "cpu/regs.h"
 
 #include "logger.h"
+#include "math.h"
 #include "mem.h"
 #include "object_mem_alloc.h"
 
@@ -451,7 +452,7 @@ Status init_vm_allocator() {
     }
 
     frame.count = 2;
-    frame.virt_address = vm_find_free_virt_address(&vm_pml4, frame.count);
+    frame.virt_address = vm_find_free_virt_address(&vm_pml4[0], frame.count);
     frame.flags = (VMMAP_FORCE | VMMAP_WRITE);
 
     if (frame.virt_address == INVALID_ADDRESS) {
@@ -765,15 +766,19 @@ static bool_t frame_push_phys_page(VMPageFrame* frame, const uint64_t phys_page)
 
     if (node == NULL) return FALSE;
 
+    node->phys_page_base = (phys_page / PAGE_BYTE_SIZE);
+    node->next = NULL;
+    node->prev = NULL;
+
     if (frame->phys_pages.next == NULL) {
         frame->phys_pages.next = (ListHead*)(void*)node;
-        frame->phys_pages.prev = (ListHead*)(void*)node;
     }
     else {
         node->prev = (VMPageList*)(void*)frame->phys_pages.prev;
         frame->phys_pages.prev->next = (ListHead*)(void*)node;
-        frame->phys_pages.prev = (ListHead*)(void*)node;
     }
+
+    frame->phys_pages.prev = (ListHead*)(void*)node;
 
     return TRUE;
 }
@@ -813,7 +818,7 @@ static void frame_free_phys_pages(VMPageFrame* frame) {
         page = page->next;
     }
 
-    frame_clear_phys_pages(&frame);
+    frame_clear_phys_pages(frame);
     frame->count = 0;
 }
 
@@ -867,15 +872,15 @@ static bool_t vm_map_page_frame(VMPageFrame* frame, PageMapLevel4Entry* pml4, VM
     VMPageList* page = (VMPageList*)(void*)frame->phys_pages.next;
 
     while (page != NULL) {
-        if (vm_map_phys_to_virt(page->phys_page_base * PAGE_BYTE_SIZE, virt_address, rank_pages_count, flags) != KERNEL_OK) {
+        if (vm_map_phys_to_virt((uint64_t)page->phys_page_base * PAGE_BYTE_SIZE, virt_address, rank_pages_count, flags) != KERNEL_OK) {
             return FALSE;
         }
 
         pages_to_map_count -= rank_pages_count;
-        virt_address += rank_pages_count;
+        virt_address += ((uint64_t)rank_pages_count * PAGE_BYTE_SIZE);
 
-        while (pages_to_map_count < rank_pages_count) {
-            rank_pages_count <<= 1;
+        while (pages_to_map_count < rank_pages_count && rank_pages_count > 0) {
+            rank_pages_count >>= 1;
         }
 
         page = page->next;
@@ -929,6 +934,7 @@ VMPageFrame vm_alloc_pages(const uint32_t pages_count, PageMapLevel4Entry* pml4,
 
     if (vm_map_page_frame(&frame, pml4, flags) == FALSE) {
         frame_free_phys_pages(&frame);
+        frame.count = 0;
         return frame;
     }
 
