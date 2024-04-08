@@ -17,7 +17,7 @@ Status vector_push_back(Vector* vector, const void* src, uint32_t sizeof_element
 
     if (vector->data != NULL) {
         for (size_t i = 0; i < vector->size * sizeof_element; ++i) {
-            ((uint8_t*)new_buffer)[i] = ((uint8_t*)vector->data)[i];
+            ((uint8_t*)new_buffer)[i] = ((const uint8_t*)vector->data)[i];
         }
     }
 
@@ -26,7 +26,7 @@ Status vector_push_back(Vector* vector, const void* src, uint32_t sizeof_element
     vector->data = new_buffer;
     ++vector->size;
 
-    for (uint32_t i = 0; i < sizeof_element; ++i) {
+    for (uint32_t i = 0; i < sizeof_element && src != NULL; ++i) {
         ((uint8_t*)vector->data + ((vector->size - 1) * sizeof_element))[i] = ((const uint8_t*)src)[i];
     }
 

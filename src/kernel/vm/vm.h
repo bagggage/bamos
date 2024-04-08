@@ -5,7 +5,7 @@
 #include <bootboot.h>
 
 #include "cpu/paging.h"
-#include "utils/list.h";
+#include "utils/list.h"
 
 /*
 Virtual memory.
@@ -82,11 +82,6 @@ typedef struct VMMemoryMap {
     // Total count of pages that can be used by OS
     uint32_t total_pages_count;
 } VMMemoryMap;
-
-// Round value to upper bound
-static inline uint64_t div_with_roundup(const uint64_t value, const uint64_t divider) {
-    return (value / divider) + ((value % divider) == 0 ? 0 : 1);
-}
 
 void log_memory_map(const VMMemoryMap* memory_map);
 
