@@ -14,7 +14,8 @@ This file provide high-level memory functions for kernel-space.
 Status init_memory();
 
 // Kernel space memory allocation
-void* kmalloc(size_t size);
+void* kmalloc(const size_t size);
+void* kcalloc(const size_t size);
 // Kernel space memory free
 void kfree(void* allocated_mem);
 
