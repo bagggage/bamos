@@ -3,6 +3,7 @@
 #include "assert.h"
 #include "object_mem_alloc.h"
 #include "logger.h"
+#include "math.h"
 #include "mem.h"
 
 #define NODES_PER_MB_COVERAGE (MB_SIZE / PAGE_BYTE_SIZE)
@@ -217,7 +218,7 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
         total_mem_size / GB_SIZE);
 #endif
     const uint64_t requited_nodes_count = ((total_mem_size / MB_SIZE) * NODES_PER_MB_COVERAGE);
-    const uint64_t required_oma_mem_pool_size = requited_nodes_count * sizeof(VMPageList) / 2;
+    const uint64_t required_oma_mem_pool_size = requited_nodes_count * sizeof(VMPageList) / 4;
     const uint64_t required_bitmap_pool_size = div_with_roundup(requited_nodes_count, 8);
     const uint64_t required_mem_pool_pages_count =
         div_with_roundup(required_oma_mem_pool_size, PAGE_BYTE_SIZE) +
@@ -236,8 +237,8 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
     kernel_warn("BPA: Memory block allocated: %x\n", (uint64_t)bpa_memory_block->compact_phys_address * PAGE_BYTE_SIZE);
 
     oma_phys_page.phys_page_base = bpa_memory_block->compact_phys_address;
-    oma_page_frame.phys_pages.next = &oma_phys_page;
-    oma_page_frame.phys_pages.prev = &oma_phys_page;
+    oma_page_frame.phys_pages.next = (ListHead*)(void*)&oma_phys_page;
+    oma_page_frame.phys_pages.prev = (ListHead*)(void*)&oma_phys_page;
     oma_page_frame.count = bpa_memory_block->pages_count - div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE);
     oma_page_frame.virt_address = vm_find_free_virt_address(vm_get_kernel_pml4(), bpa_memory_block->pages_count);
     oma_page_frame.flags = (VMMAP_FORCE | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES);
