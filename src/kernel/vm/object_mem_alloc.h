@@ -31,5 +31,7 @@ void oma_delete(ObjectMemoryAllocator* oma);
 
 ObjectMemoryAllocator _oma_manual_init(VMPageFrame* bucket_page_frame, const uint32_t object_size);
 
+bool_t _oma_is_containing_mem_block(const void* memory_block, const ObjectMemoryAllocator* oma);
+
 void* oma_alloc(ObjectMemoryAllocator* oma);
 void oma_free(void* memory_block, ObjectMemoryAllocator* oma);
