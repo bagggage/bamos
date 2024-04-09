@@ -134,12 +134,14 @@ bool_t add_new_pci_device(PciDeviceNode* new_pci_device) {
     if (new_pci_device == NULL) return FALSE;
     
     PciDevice* pci_device = dev_pool.data[DEV_PCI_ID];
-    while (pci_device->device_list != NULL) {
-        pci_device->device_list = pci_device->device_list->next;
+    PciDeviceNode* device_list = pci_device->device_list;
+
+    while (device_list->next != NULL) {
+        device_list = device_list->next;
     }
 
-    pci_device->device_list = new_pci_device;
-    pci_device->device_list->next = NULL;
+    device_list->next = new_pci_device;
+    device_list->next->next = NULL;
 
     return TRUE;
 }
@@ -159,11 +161,16 @@ void remove_pci_device(PciDevice* pci_device, size_t index) {
     }
 
     size_t i = 0;
-    while (current->next != NULL && i < index) { 
+    while (current->next != NULL) { 
         previous = current;
         current = current->next;
 
         ++i;
+    }
+
+    if (i < index) {
+        kernel_msg("Node with index %u not found\n", index);
+        return;
     }
 
     if (current == NULL) return;
