@@ -21,7 +21,7 @@
 
 HBAMemory* hba_memory = NULL;
 
-bool_t is_ahci(uint8_t class_code, uint8_t prog_if, uint8_t subclass) {
+bool_t is_ahci(const uint8_t class_code, const uint8_t prog_if, const uint8_t subclass) {
     if (class_code == PCI_CLASS_CODE_STORAGE_CONTROLLER &&
         prog_if == PCI_PROGIF_AHCI &&
         subclass == PCI_SUBCLASS_SATA_CONTROLLER) {
@@ -31,7 +31,7 @@ bool_t is_ahci(uint8_t class_code, uint8_t prog_if, uint8_t subclass) {
     return FALSE;
 }
 
-static uint8_t check_device_type(HBAPort* port) {
+static uint8_t check_device_type(const HBAPort* port) {
     uint32_t sata_status = port->sata_status;
 
     uint8_t ipm = (sata_status >> 8) & 0x0F;
