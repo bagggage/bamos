@@ -6,52 +6,8 @@
 
 #include "dev/stds/pci.h"
 
-typedef struct NvmeCapRegister {
-    uint16_t reserved1 : 2;     // Bits 63:61 - Reserved
-    uint16_t crms : 2;          // Bit 60:59 - Controller Ready With Media Support
-    uint16_t nsss : 1;          // Bit 58 - NVM Subsystem Shutdown Supported
-    uint16_t cmbs : 1;          // Bit 57 - Controller Memory Buffer Supported
-    uint16_t pmrs : 1;          // Bit 56 - Persistent Memory Region Supported
-    uint16_t mpsmax : 4;        // Bits 55:52 - Memory Page Size Maximum
-    uint16_t mpsmin : 4;        // Bits 51:48 - Memory Page Size Minimum
-    uint16_t cps : 2;           // Bits 47:46 - Controller Power Scope
-    uint16_t bps : 1;           // Bit 45 - Boot Partition Support
-    uint16_t css : 8;           // Bits 44:37 - Command Sets Supported
-    uint16_t nssrs : 1;         // Bit 36 - NVM Subsystem Reset Supported
-    uint16_t dstrd : 4;         // Bits 35:32 - Doorbell Stride
-    uint16_t to : 8;            // Bits 31:24 - Timeout
-    uint16_t reserved2 : 5;     // Bits 23:19 - Reserved
-    uint16_t ams : 2;           // Bits 18:17 - Arbitration Mechanism Supported
-    uint16_t cqr : 1;           // Bit 16 - Contiguous Queues Required
-    uint16_t mqes;              // Bits 15:00 - Maximum Queue Entries Supported
-} NvmeCapRegister;
-
-typedef struct NvmeComplQueueEntry {
-    unsigned int cint0;
-    unsigned int rsvd;
-
-    union{
-        struct{
-            unsigned short sub_queue_idx;
-            unsigned short sub_queue_id;
-        };
-        unsigned int cint2_raw;
-    };
-
-    volatile union{
-        struct{
-            unsigned short cmd_id;
-            unsigned short phase : 1;
-            unsigned short stat : 15;
-        } ATTR_PACKED;
-
-        unsigned int cint3_raw;
-    };
-
-} ATTR_PACKED NvmeComplQueueEntry;
-
 typedef struct NvmeBar0 {
-    NvmeCapRegister cap;        // Controller Capabilities
+    uint64_t cap;               // Controller Capabilities
     uint32_t version;           // Version
     uint32_t intms;             // Interrupt Mask Set
     uint32_t intmc;             // Interrupt Mask Clear
@@ -81,14 +37,11 @@ typedef struct NvmeBar0 {
     // uint32_t pmrswtp;           // Persistent Memory Region Sustained Write Throughput
     // uint32_t pmrcmscl;          // Persistent Memory Region Controller Memory Space Control Lower
     // uint32_t pmrcmscu;          // Persistent Memory Region Controller Memory Space Control Upper
-
     uint8_t reserved1[0xFC8];
-
-    volatile unsigned int sub_queue_tail_doorbell;
-    volatile unsigned int comp_queue_tail_doorbell;
-
-    volatile unsigned int io_sub_queue_tail_doorbell;
-    volatile unsigned int io_cmpl_queue_tail_doorbell;
+    uint32_t asq_admin_tail_doorbell;
+    uint32_t acq_admin_tail_doorbell;
+    uint32_t asq_io1_tail_doorbell;
+    uint32_t acq_io1_tail_doorbell;
 } ATTR_PACKED NvmeBar0;
 
 typedef struct Command {
@@ -99,7 +52,7 @@ typedef struct Command {
     uint16_t command_id;        // Bits 16-31: Command identifier
 } Command;
 
-typedef struct NvmeSubmissionCmd {
+typedef struct NvmeSubmissionQueueEntry {
     Command command;
     uint32_t nsid;
     uint64_t reserved;
@@ -107,18 +60,77 @@ typedef struct NvmeSubmissionCmd {
     uint64_t prp1;
     uint64_t prp2;
     uint32_t command_dword[6];
-} ATTR_PACKED NvmeSubmissionCmd;
+} ATTR_PACKED NvmeSubmissionQueueEntry;
+
+typedef struct NvmeComplQueueEntry {
+    unsigned int cint0;
+    unsigned int rsvd;
+
+    union{
+        struct{
+            unsigned short sub_queue_idx;
+            unsigned short sub_queue_id;
+        };
+        unsigned int cint2_raw;
+    };
+
+    volatile union{
+        struct{
+            unsigned short cmd_id;
+            unsigned short phase : 1;
+            unsigned short stat : 15;
+        } ATTR_PACKED;
+
+        unsigned int cint3_raw;
+    };
+
+} ATTR_PACKED NvmeComplQueueEntry;
+
+typedef struct lba_format{
+    unsigned short meta_sz;
+    unsigned short lba_data_sz:8;
+    unsigned short rel_perf : 2;
+    unsigned short rsvd : 6;
+}__attribute__((packed))lba_format;
+
+typedef struct nvme_disk_info{
+    unsigned long sz_in_sects;
+    unsigned long cap_in_sects;
+    unsigned long used_in_sects;
+    unsigned char features;
+    unsigned char no_of_formats;
+    unsigned char lba_format_sz;
+    unsigned char meta_caps;
+    unsigned char prot_caps;
+    unsigned char prot_types;
+    unsigned char nmic_caps;
+    unsigned char res_caps;
+    char rsvd[88];
+    unsigned long euid;
+    lba_format lba_format_supports[15];
+    char rsvd2 [202];
+}__attribute__((packed)) nvme_disk_info;
+
+typedef struct NvmeController {
+    NvmeBar0* bar0;
+    NvmeSubmissionQueueEntry* asq;
+    NvmeComplQueueEntry* acq;
+    NvmeSubmissionQueueEntry* iosq;
+    NvmeComplQueueEntry* iocq;
+    uint32_t* namespace_list;
+
+} NvmeController;
 
 typedef struct NvmeInterface {
 } NvmeInterface;
 
 typedef struct NvmeDevice {
     STORAGE_DEVICE_STRUCT_IMPL(Nvme);
-    NvmeBar0* bar0;
-    NvmeComplQueueEntry* acq;
-    NvmeComplQueueEntry* asq;
+    NvmeController controller;
+    nvme_disk_info* disk_info;
+    uint64_t namespace_id;
 } NvmeDevice;
 
-bool_t init_nvme_device(NvmeDevice* nvme_device, PciDeviceNode* pci_device);
+bool_t init_nvme_device(NvmeDevice* nvme_device, const PciDeviceNode* pci_device);
 
-bool_t is_nvme(uint8_t class_code, uint8_t subclass);
+bool_t is_nvme(const uint8_t class_code, const uint8_t subclass);

@@ -28,6 +28,7 @@ static Status add_storage_device(StorageDevType dev_type, void** out_dev_struct_
         storage_pool = new_node;
     } else {
         StorageNode* temp = storage_pool;
+        
         while (temp->next != NULL) {
             temp = temp->next;
         }
