@@ -2,14 +2,13 @@
 
 #include "assert.h"
 #include "logger.h"
+#include "mem.h"
 
 #include "cpu/io.h"
 
-#include "mem.h"
-
 #define PCI_INVALID_VENDOR_ID 0xFFFF
 
-uint8_t pci_config_readb(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
+uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset) {
     uint32_t address = (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC) | 0x80000000;
 
     outl(PCI_CONFIG_ADDRESS_PORT, address);
@@ -18,7 +17,7 @@ uint8_t pci_config_readb(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset)
     return inw(PCI_CONFIG_DATA_PORT + (offset & 3));
 }
 
-uint16_t pci_config_readw(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
+uint16_t pci_config_readw(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset) {
     uint32_t address = (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC) | 0x80000000;
 
     outl(PCI_CONFIG_ADDRESS_PORT, address);
@@ -27,7 +26,7 @@ uint16_t pci_config_readw(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset
     return inw(PCI_CONFIG_DATA_PORT + (offset & 2));
 }
 
-uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
+uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset) {
     uint32_t address = (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC) | 0x80000000;
 
     outl(PCI_CONFIG_ADDRESS_PORT, address);
@@ -35,7 +34,7 @@ uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset
     return inl(PCI_CONFIG_DATA_PORT);
 }
 
-void pci_config_writel(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t value) {
+void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset, const uint32_t value) {
     uint32_t address = (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC) | 0x80000000;
 
     outl(PCI_CONFIG_ADDRESS_PORT, address);
@@ -43,7 +42,7 @@ void pci_config_writel(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, u
     outl(PCI_CONFIG_DATA_PORT, value);
 }
 
-static uint32_t read_bar(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset) {
+static uint32_t read_bar(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset) {
     uint32_t bar = pci_config_readl(bus, dev, func, offset);
     uint32_t bar_type;
 
@@ -106,15 +105,13 @@ Status init_pci_devices(PciDevice* pci_device) {
                 current_node->pci_header.bar4 = read_bar(bus, dev, func, PCI_BAR4_OFFSET);
                 current_node->pci_header.bar5 = read_bar(bus, dev, func, PCI_BAR5_OFFSET);
 
-                //kernel_msg("PCI Dev: %x\n", device_list);
-
-                kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id: %x: class: %x: subclass: %x\n",
-                    (uint32_t)bus,
-                    (uint32_t)dev,
-                    (uint32_t)func,
-                    (uint64_t)vendor_id,
-                    (uint64_t)current_node->pci_header.class_code,
-                    (uint64_t)current_node->pci_header.subclass);
+                // kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id: %x: class: %x: subclass: %x\n",
+                //     (uint32_t)bus,
+                //     (uint32_t)dev,
+                //     (uint32_t)func,
+                //     (uint64_t)vendor_id,
+                //     (uint64_t)current_node->pci_header.class_code,
+                //     (uint64_t)current_node->pci_header.subclass);
                 
                 if (pci_device->device_list == NULL) {
                     device_list = current_node;
@@ -130,7 +127,7 @@ Status init_pci_devices(PciDevice* pci_device) {
     return KERNEL_OK;
 }
 
-bool_t add_new_pci_device(PciDeviceNode* new_pci_device) {
+bool_t add_new_pci_device(const PciDeviceNode* new_pci_device) {
     if (new_pci_device == NULL) return FALSE;
     
     PciDevice* pci_device = dev_pool.data[DEV_PCI_ID];
@@ -146,7 +143,7 @@ bool_t add_new_pci_device(PciDeviceNode* new_pci_device) {
     return TRUE;
 }
 
-void remove_pci_device(PciDevice* pci_device, size_t index) {
+void remove_pci_device(PciDevice* pci_device, const size_t index) {
     if (index < 0) return;
 
     PciDeviceNode* current = pci_device->device_list;
@@ -156,7 +153,7 @@ void remove_pci_device(PciDevice* pci_device, size_t index) {
         pci_device->device_list = current->next;
 
         kfree(current);
-        
+
         return;
     }
 

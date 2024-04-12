@@ -68,12 +68,12 @@ typedef struct PciDevice {
    PciDeviceNode* device_list;
 } PciDevice;
 
-uint8_t pci_config_readb(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
-uint16_t pci_config_readw(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
-uint32_t pci_config_readl(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset);
+uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
+uint16_t pci_config_readw(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
+uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
 
-void pci_config_writel(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset, uint32_t value);
+void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset, const uint32_t value);
 
 Status init_pci_devices(PciDevice* pci_device);
-bool_t add_new_pci_device(PciDeviceNode* new_pci_device);
-void remove_pci_device(PciDevice* pci_device, size_t index);
+bool_t add_new_pci_device(const PciDeviceNode* new_pci_device);
+void remove_pci_device(PciDevice* pci_device, const size_t index);
