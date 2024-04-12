@@ -1,7 +1,5 @@
 #include "vm.h"
 
-#include <bootboot.h>
-
 #include "assert.h"
 #include "bitmap_mem_alloc.h"
 #include "buddy_page_alloc.h"
@@ -19,7 +17,8 @@ extern uint8_t  environment;
 extern uint64_t kernel_elf_start;
 extern uint64_t kernel_elf_end;
 
-KernelAddressSpace kernel_addr_space;
+static KernelAddressSpace kernel_addr_space;
+static VMHeap kernel_heap;
 
 // PML4
 ATTR_ALIGN(PAGE_BYTE_SIZE)
@@ -303,6 +302,10 @@ PageMapLevel4Entry* vm_get_kernel_pml4() {
     return (PageMapLevel4Entry*)&vm_pml4;
 }
 
+VMHeap* vm_get_kernel_heap() {
+    return &kernel_heap;
+}
+
 void log_memory_map(const VMMemoryMap* memory_map) {
     for (uint32_t i = 0; i < memory_map->count; ++i) {
         const VMMemoryMapEntry* curr_entry = memory_map->entries + i;
@@ -424,13 +427,10 @@ Status init_virtual_memory(MMapEnt* boot_memory_map, const size_t entries_count,
                             (VMMAP_FORCE | VMMAP_EXEC | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES));
     }
 
+    vm_heap_construct(&kernel_heap, KERNEL_HEAP_VIRT_ADDRESS);
+
     // Enable OS paging
-    EFER efer = cpu_get_efer();
-    efer.noexec_enable = 1;
-
-    cpu_set_efer(efer);
-    cpu_set_pml4((PageMapLevel4Entry*)get_phys_address((uint64_t)&vm_pml4));
-
+    vm_setup_paging(&vm_pml4);
     kernel_warn("OS Page tables enabled\n");
 
     return KERNEL_OK;
@@ -452,13 +452,8 @@ Status init_vm_allocator() {
     }
 
     frame.count = 2;
-    frame.virt_address = vm_find_free_virt_address(&vm_pml4[0], frame.count);
+    frame.virt_address = vm_heap_reserve(&kernel_heap, frame.count);
     frame.flags = (VMMAP_FORCE | VMMAP_WRITE);
-
-    if (frame.virt_address == INVALID_ADDRESS) {
-        error_str = "VM Frame oma can't be mapped";
-        return KERNEL_ERROR;
-    }
 
     vm_map_phys_to_virt((uint64_t)vm_frame_oma_phys_page.phys_page_base * PAGE_BYTE_SIZE,
         frame.virt_address,
@@ -471,6 +466,11 @@ Status init_vm_allocator() {
     kernel_warn("VM Frame oma: %x (%x)\n", frame.virt_address, (uint64_t)vm_frame_oma_phys_page.phys_page_base * PAGE_BYTE_SIZE);
     kernel_warn("VM Frame oma bucket capacity: %u\n", vm_page_frame_oma.bucket_capacity);
 #endif
+
+    if (vm_init_heap_manager() == FALSE) {
+        error_str = "VM: Failed to initialize heap manager";
+        return KERNEL_ERROR;
+    }
 
     return KERNEL_OK;
 }
@@ -891,18 +891,14 @@ static bool_t vm_map_page_frame(VMPageFrame* frame, PageMapLevel4Entry* pml4, VM
     return TRUE;
 }
 
-VMPageFrame vm_alloc_pages(const uint32_t pages_count, PageMapLevel4Entry* pml4, VMMapFlags flags) {
-    kassert(pml4 != NULL && pages_count > 0);
+VMPageFrame vm_alloc_pages(const uint32_t pages_count, VMHeap* heap, PageMapLevel4Entry* pml4, VMMapFlags flags) {
+    kassert(heap != NULL && pml4 != NULL && pages_count > 0);
 
     uint32_t rank = BPA_MAX_BLOCK_RANK - 1;
     uint32_t rank_pages_count = 1 << rank;
 
     VMPageFrame frame = { 0, 0, { NULL, NULL }, 0 };
     uint32_t temp_pages_count = pages_count;
-
-    frame.virt_address = vm_find_free_virt_address(pml4, pages_count);
-
-    if (frame.virt_address == INVALID_ADDRESS) return frame;
 
     while (TRUE) {
         if (temp_pages_count >= rank_pages_count) {
@@ -932,6 +928,8 @@ VMPageFrame vm_alloc_pages(const uint32_t pages_count, PageMapLevel4Entry* pml4,
         }
     }
 
+    frame.virt_address = vm_heap_reserve(heap, pages_count);
+
     if (vm_map_page_frame(&frame, pml4, flags) == FALSE) {
         frame_free_phys_pages(&frame);
         frame.count = 0;
@@ -941,10 +939,12 @@ VMPageFrame vm_alloc_pages(const uint32_t pages_count, PageMapLevel4Entry* pml4,
     return frame;
 }
 
-void vm_free_pages(VMPageFrame* frame, PageMapLevel4Entry* pml4) {
+void vm_free_pages(VMPageFrame* frame, VMHeap* heap, PageMapLevel4Entry* pml4) {
     kassert(frame != NULL);
 
     vm_unmap(frame->virt_address, pml4, frame->count);
+    vm_heap_release(heap, frame->virt_address, frame->count);
+
     frame_free_phys_pages(frame);
 
     frame->virt_address = 0;
@@ -972,4 +972,12 @@ bool_t vm_test() {
     kassert(is_virt_addr_mapped(small_virt_address) == FALSE && is_virt_addr_mapped(virt_address) == FALSE);
 
     return TRUE;
+}
+
+void vm_setup_paging(PageMapLevel4Entry* pml4) {
+    EFER efer = cpu_get_efer();
+    efer.noexec_enable = 1;
+
+    cpu_set_efer(efer);
+    cpu_set_pml4((PageMapLevel4Entry*)get_phys_address((uint64_t)pml4));
 }

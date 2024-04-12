@@ -68,7 +68,7 @@ void oma_clear(ObjectMemoryAllocator* oma) {
 
         oma->bucket_list.next = (ListHead*)(void*)bucket->next;
 
-        vm_free_pages(&bucket->page_frame, vm_get_kernel_pml4());
+        vm_free_pages(&bucket->page_frame, vm_get_kernel_heap(), vm_get_kernel_pml4());
     }
 }
 
@@ -125,7 +125,8 @@ static MemoryBucket* oma_push_new_bucket(ObjectMemoryAllocator* oma) {
     const uint32_t bucket_pages_count =
         div_with_roundup(((uint64_t)oma->bucket_capacity * oma->object_size) + bitmap_size + sizeof(MemoryBucket), PAGE_BYTE_SIZE);
 
-    VMPageFrame page_frame = vm_alloc_pages(bucket_pages_count, vm_get_kernel_pml4(), VMMAP_WRITE | VMMAP_USE_LARGE_PAGES);
+    VMPageFrame page_frame =
+        vm_alloc_pages(bucket_pages_count, vm_get_kernel_heap(), vm_get_kernel_pml4(), VMMAP_WRITE | VMMAP_USE_LARGE_PAGES);
 
     if (page_frame.count == 0) {
         return NULL;

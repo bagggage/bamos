@@ -1,6 +1,7 @@
 #include "buddy_page_alloc.h"
 
 #include "assert.h"
+#include "heap.h"
 #include "object_mem_alloc.h"
 #include "logger.h"
 #include "math.h"
@@ -240,13 +241,8 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
     oma_page_frame.phys_pages.next = (ListHead*)(void*)&oma_phys_page;
     oma_page_frame.phys_pages.prev = (ListHead*)(void*)&oma_phys_page;
     oma_page_frame.count = bpa_memory_block->pages_count - div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE);
-    oma_page_frame.virt_address = vm_find_free_virt_address(vm_get_kernel_pml4(), bpa_memory_block->pages_count);
+    oma_page_frame.virt_address = vm_heap_reserve(vm_get_kernel_heap(), bpa_memory_block->pages_count);
     oma_page_frame.flags = (VMMAP_FORCE | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES);
-
-    if (oma_page_frame.virt_address == INVALID_ADDRESS) {
-        error_str = "BPA: Pool can't be mapped";
-        return KERNEL_ERROR;
-    }
 
     kernel_warn("BPA: Virtual addresses rage found: %x\n", oma_page_frame.virt_address);
     kassert(is_virt_address_valid(oma_page_frame.virt_address));
