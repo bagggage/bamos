@@ -3,6 +3,8 @@
 #include <bootboot.h>
 #include <stdarg.h>
 
+#include "cpu/spinlock.h"
+
 #include "mem.h"
 
 #include "video/font.h"
@@ -25,9 +27,11 @@ typedef struct Logger {
     uint32_t max_row;
     uint32_t max_col;
     uint8_t color[4];
+
+    Spinlock lock;
 } Logger;
 
-Logger logger = { NULL, {}, 0, 0, 0, 0, { 0xFF, 0xFF, 0xFF, 0xFF } };
+Logger logger = { NULL, {}, 0, 0, 0, 0, { 0xFF, 0xFF, 0xFF, 0xFF }, { 0 } };
 Framebuffer early_fb;
 
 void debug_point() {
@@ -138,8 +142,8 @@ void kernel_logger_set_cursor_pos(uint16_t row, uint16_t col) {
     logger.col = col % logger.max_col;
 }
 
-static inline void fast_memcpy(const uint32_t* src, uint32_t* dst, const size_t size) {
-    for (size_t i = 0; i < (size / sizeof(uint32_t)); ++i) {
+static inline void fast_memcpy(const uint64_t* src, uint64_t* dst, const size_t size) {
+    for (size_t i = 0; i < (size / sizeof(uint64_t)); ++i) {
         dst[i] = src[i];
     }
 }
@@ -149,7 +153,7 @@ static inline void scroll_logger_fb(uint8_t rows_offset) {
     size_t rows_byte_offset = (uint64_t)rows_offset * logger.fb->scanline * logger.font.height;
     size_t fb_size = (uint64_t)logger.fb->height * logger.fb->scanline;
 
-    fast_memcpy((uint32_t*)(logger.fb->base + rows_byte_offset), (uint32_t*)logger.fb->base, fb_size - rows_byte_offset);
+    fast_memcpy((uint64_t*)(logger.fb->base + rows_byte_offset), (uint64_t*)logger.fb->base, fb_size - rows_byte_offset);
     memset(logger.fb->base + (fb_size - rows_byte_offset), rows_byte_offset, 0x0);
 }
 
@@ -284,6 +288,8 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
 }
 
 void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
+    spin_lock(&logger.lock);
+
     switch (log_type)
     {
     case LOG_MSG:
@@ -317,6 +323,7 @@ void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
             switch (c)
             {
             case '\0':
+                spin_release(&logger.lock);
                 return;
             case 'u': // Unsigned
                 is_signed = FALSE; FALLTHROUGH;
@@ -398,6 +405,8 @@ void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
             raw_putc(c);
         }
     }
+
+    spin_release(&logger.lock);
 }
 
 void draw_kpanic_screen() {
