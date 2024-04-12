@@ -140,13 +140,14 @@ bool_t add_new_pci_device(PciDeviceNode* new_pci_device) {
 }
 
 void remove_pci_device(PciDevice* pci_device, size_t index) {
-    if(index < 0) return;
+    if (index < 0) return;
 
     PciDeviceNode* current = pci_device->device_list;
     PciDeviceNode* previous = NULL;
 
     if (index == 0) {
         pci_device->device_list = current->next;
+        
         kfree(current);
         
         return;
