@@ -6,10 +6,22 @@
 Kernel math library.
 */
 
-static inline uint32_t popcount(const uint32_t number) {
-    uint32_t result;
+//extern bool_t _is_cpu_popcnt;
 
-    asm volatile("popcnt %1,%0":"=r"(result):"r"(number));
+static inline uint32_t popcount(const uint32_t number) {
+    uint32_t result = number;
+
+    //if (_is_cpu_popcnt) {
+    //    asm volatile("popcnt %1,%0":"=r"(result):"r"(number));
+//
+    //}
+    //else {
+        result = (result & 0x55555555u) + ((result >> 1) & 0x55555555u);
+        result = (result & 0x33333333u) + ((result >> 2) & 0x33333333u);
+        result = (result & 0x0f0f0f0fu) + ((result >> 4) & 0x0f0f0f0fu);
+        result = (result & 0x00ff00ffu) + ((result >> 8) & 0x00ff00ffu);
+        result = (result & 0x0000ffffu) + ((result >>16) & 0x0000ffffu);
+    //}
 
     return result;
 }
