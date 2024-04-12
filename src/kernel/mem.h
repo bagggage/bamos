@@ -11,6 +11,8 @@ Kernel high-level memory interface.
 This file provide high-level memory functions for kernel-space.
 */
 
+bool_t is_memory_initialized();
+
 Status init_memory();
 
 // Kernel space memory allocation

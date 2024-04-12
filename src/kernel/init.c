@@ -1,8 +1,11 @@
 #include "init.h"
 
 #include <bootboot.h>
-#include <cpuid.h>
 #include <stddef.h>
+
+#include "assert.h"
+
+#include "cpu/feature.h"
 
 #include "dev/acpi_timer.h"
 #include "dev/bootboot_display.h"
@@ -20,27 +23,34 @@
 #include "intr/intr.h"
 #include "intr/ioapic.h"
 
-#define CPUID_GET_FEATURE 1
+#include "rawtsk/task.h"
+
+#include "vm/vm.h"
 
 extern BOOTBOOT bootboot;
 extern const uint8_t _binary_font_psf_start;
 
+static Spinlock cpus_init_lock = { 1 };
+
 static void halt_logical_core() {
-    _kernel_break();
+    spin_lock(&cpus_init_lock);
+    vm_setup_paging(vm_get_kernel_pml4());
+    spin_release(&cpus_init_lock);
+
+    while (TRUE) {
+        tsk_exec();
+    }
+
+    kassert(FALSE);
 }
 
 static Status split_logical_cores() {
-    uint32_t eax, ebx = 0, ecx, edx;
+    const uint32_t cpu_idx = cpu_get_idx();
 
-    __get_cpuid(CPUID_GET_FEATURE, &eax, &ebx, &ecx, &edx);
-
-    // Get logical core ID (31-24 bit)
-    ebx = ebx >> 24;
-
-    if (ebx != 0) halt_logical_core();
+    if (cpu_idx != 0) halt_logical_core();
     if (init_kernel_logger_raw(&_binary_font_psf_start) != KERNEL_OK) return KERNEL_PANIC;
 
-    kernel_msg("Kernel startup on CPU %u\n", ebx);
+    kernel_msg("Kernel startup on CPU %u\n", cpu_idx);
     kernel_msg("CPUs detected: %u\n", bootboot.numcores);
 
     return KERNEL_OK;
@@ -92,6 +102,9 @@ Status init_kernel() {
 
     if (init_intr()         != KERNEL_OK) return KERNEL_PANIC;
     if (init_memory()       != KERNEL_OK) return KERNEL_ERROR;
+
+    spin_release(&cpus_init_lock);
+
     if (init_acpi()         != KERNEL_OK) return KERNEL_ERROR;
     if (init_apic()         != KERNEL_OK) return KERNEL_ERROR;
     if (init_ioapic()       != KERNEL_OK) return KERNEL_ERROR;

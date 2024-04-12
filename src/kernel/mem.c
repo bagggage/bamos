@@ -194,11 +194,17 @@ void log_pages_count() {
 extern uint64_t kernel_elf_start;
 extern uint64_t kernel_elf_end;
 
+static bool_t _is_mem_initialized = FALSE;
+
+bool_t is_memory_initialized() {
+    return _is_mem_initialized;
+}
+
 Status init_memory() {
     MMapEnt* boot_memory_map = (MMapEnt*)&bootboot.mmap;
     size_t map_size = ((uint64_t)bootboot.size - 128) / 16;
 
-    kernel_warn("Boot memmap: %x (%x)\n", (uint64_t)boot_memory_map, get_phys_address((uint64_t)boot_memory_map));
+    //kernel_warn("Boot memmap: %x (%x)\n", (uint64_t)boot_memory_map, get_phys_address((uint64_t)boot_memory_map));
 
     VMMemoryMap vm_memory_map = { NULL, 0, 0 };
 
@@ -218,7 +224,9 @@ Status init_memory() {
     vm_test();
 #endif
 
-    if (init_kernel_uma() != KERNEL_OK) return KERNEL_ERROR; 
+    if (init_kernel_uma() != KERNEL_OK) return KERNEL_ERROR;
+
+    _is_mem_initialized = TRUE;
 
     return KERNEL_OK;
 }
