@@ -47,7 +47,7 @@ typedef struct NvmeBar0 {
 typedef struct Command {
     uint8_t opcode;             // Bits 0-7: Opcode
     uint8_t fused_op    : 2;    // Bits 8-9: Fused operation
-    uint8_t reserved_1  : 4;    // Bits 10-13: Reserved
+    uint8_t reserved    : 4;    // Bits 10-13: Reserved
     uint8_t prp_sgl     : 2;    // Bits 14-15: PRP or SGL selection
     uint16_t command_id;        // Bits 16-31: Command identifier
 } Command;
@@ -63,53 +63,45 @@ typedef struct NvmeSubmissionQueueEntry {
 } ATTR_PACKED NvmeSubmissionQueueEntry;
 
 typedef struct NvmeComplQueueEntry {
-    unsigned int cint0;
-    unsigned int rsvd;
-
-    union{
-        struct{
-            unsigned short sub_queue_idx;
-            unsigned short sub_queue_id;
-        };
-        unsigned int cint2_raw;
-    };
-
-    volatile union{
-        struct{
-            unsigned short cmd_id;
-            unsigned short phase : 1;
-            unsigned short stat : 15;
+    uint32_t command_specific;
+    uint32_t reserved;
+    uint16_t sq_idx;
+    uint16_t sq_id;
+    volatile union {
+        struct {
+            uint16_t cmd_id;
+            uint16_t phase : 1;
+            uint16_t status : 15;
         } ATTR_PACKED;
-
-        unsigned int cint3_raw;
+        uint32_t command_raw;
     };
-
 } ATTR_PACKED NvmeComplQueueEntry;
 
-typedef struct lba_format{
-    unsigned short meta_sz;
-    unsigned short lba_data_sz:8;
-    unsigned short rel_perf : 2;
-    unsigned short rsvd : 6;
-}__attribute__((packed))lba_format;
+typedef struct LbaFormat {
+    uint16_t metadata_size;
+    uint16_t lba_data_size  : 8;
+    uint16_t rel_perf       : 2;
+    uint16_t reserved       : 6;
+} ATTR_PACKED LbaFormat;
 
-typedef struct nvme_disk_info{
-    unsigned long sz_in_sects;
-    unsigned long cap_in_sects;
-    unsigned long used_in_sects;
-    unsigned char features;
-    unsigned char no_of_formats;
-    unsigned char lba_format_sz;
-    unsigned char meta_caps;
-    unsigned char prot_caps;
-    unsigned char prot_types;
-    unsigned char nmic_caps;
-    unsigned char res_caps;
-    char rsvd[88];
-    unsigned long euid;
-    lba_format lba_format_supports[15];
-    char rsvd2 [202];
-}__attribute__((packed)) nvme_disk_info;
+typedef struct NvmeNamespaceInfo {
+    uint64_t size_in_sects;
+    uint64_t cap_in_sects;
+    uint64_t used_in_sects;
+    uint8_t features;
+    uint8_t no_of_formats;
+    uint8_t lba_format_size;
+    uint8_t meta_caps;
+    uint8_t prot_caps;
+    uint8_t prot_types;
+    uint8_t nmic_caps;
+    uint8_t res_caps;
+    uint8_t reserved1[88];
+    uint64_t euid;
+    LbaFormat lba_format_supports[15];
+    uint8_t reserved2[202];
+    uint64_t sector_size;
+} ATTR_PACKED NvmeNamespaceInfo;
 
 typedef struct NvmeController {
     NvmeBar0* bar0;
@@ -118,17 +110,22 @@ typedef struct NvmeController {
     NvmeSubmissionQueueEntry* iosq;
     NvmeComplQueueEntry* iocq;
     uint32_t* namespace_list;
-
 } NvmeController;
 
+typedef struct NvmeDevice NvmeDevice;
+DEV_FUNC(Nvme, void*, nvme_read, const NvmeDevice* nvme_device, const size_t nsid, 
+                                const uint64_t bytes_offset, uint64_t total_bytes);
+
 typedef struct NvmeInterface {
+    Nvme_nvme_read_t nvme_read;
 } NvmeInterface;
 
 typedef struct NvmeDevice {
     STORAGE_DEVICE_STRUCT_IMPL(Nvme);
     NvmeController controller;
-    nvme_disk_info* disk_info;
-    uint64_t namespace_id;
+    NvmeNamespaceInfo** namespace_info;
+    size_t namespace_count;
+    uint64_t page_size;
 } NvmeDevice;
 
 bool_t init_nvme_device(NvmeDevice* nvme_device, const PciDeviceNode* pci_device);
