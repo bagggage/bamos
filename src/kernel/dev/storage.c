@@ -43,19 +43,19 @@ static Status add_storage_device(const StorageDevType dev_type, void** out_dev_s
 
 Status init_storage_devices() {
     PciDevice* pci_device_list = dev_pool.data[DEV_PCI_ID];
-    PciDeviceNode* device = pci_device_list->device_list;
+    PciDeviceNode* device_list = pci_device_list->device_list;
 
-    while (device != NULL) {
-        if (is_nvme(device->pci_header.class_code, device->pci_header.subclass)) {
+    while (device_list != NULL) {
+        if (is_nvme(device_list->pci_header.class_code, device_list->pci_header.subclass)) {
             kernel_msg("Nvme device detected\n");
 
             NvmeDevice* nvme_device;
 
             if (add_storage_device(STORAGE_DEV_NVME, (void**)&nvme_device, sizeof(NvmeDevice)) != KERNEL_OK) return KERNEL_ERROR;
-            if (init_nvme_device(nvme_device, device) != TRUE) return KERNEL_ERROR;
+            if (init_nvme_device(nvme_device, device_list) != TRUE) return KERNEL_ERROR;
         }
 
-        device = device->next;
+        device_list = device_list->next;
     }
 
     return KERNEL_OK;
