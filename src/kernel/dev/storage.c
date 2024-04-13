@@ -42,8 +42,8 @@ static Status add_storage_device(const StorageDevType dev_type, void** out_dev_s
 }
 
 Status init_storage_devices() {
-    PciDevice* device_list = dev_pool.data[DEV_PCI_ID];
-    PciDeviceNode* device = device_list->device_list;
+    PciDevice* pci_device_list = dev_pool.data[DEV_PCI_ID];
+    PciDeviceNode* device = pci_device_list->device_list;
 
     while (device != NULL) {
         if (is_nvme(device->pci_header.class_code, device->pci_header.subclass)) {

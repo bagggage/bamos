@@ -136,7 +136,7 @@ static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t s
     kfree((void*)prp2);
 }
 
-void* nvme_read(const NvmeDevice* nvme_device, const size_t nsid, 
+static void* nvme_read(const NvmeDevice* nvme_device, const size_t nsid, 
                 const uint64_t bytes_offset, uint64_t total_bytes) {
     size_t sector_size = nvme_device->namespace_info[nsid - 1]->sector_size;
     
