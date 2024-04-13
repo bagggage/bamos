@@ -49,7 +49,7 @@ static uint32_t read_bar(const uint8_t bus, const uint8_t dev, const uint8_t fun
     if (bar == 0) {
         //kernel_error("Bar with offset %x is 0\n", offset);
 
-        return NULL;
+        return bar;
     } else {
         if ((bar & 1) == 0) {  // bar is in memory space
             bar_type = (bar >> 1) & 0x3;
@@ -130,7 +130,7 @@ Status init_pci_devices(PciDevice* pci_device) {
 bool_t add_new_pci_device(const PciDeviceNode* new_pci_device) {
     if (new_pci_device == NULL) return FALSE;
     
-    PciDevice* pci_device = dev_pool.data[DEV_PCI_ID];
+    PciDevice* pci_device = (PciDevice*)dev_pool.data[DEV_PCI_ID];
     PciDeviceNode* device_list = pci_device->device_list;
 
     while (device_list->next != NULL) {
