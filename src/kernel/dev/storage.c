@@ -5,13 +5,13 @@
 #include "logger.h"
 #include "mem.h"
 
-#include "dev/stds/pci.h"
-
 #include "dev/blk/nvme.h"
+
+#include "dev/stds/pci.h"
 
 StorageNode* storage_pool = NULL;
 
-static Status add_storage_device(StorageDevType dev_type, void** out_dev_struct_ptr, size_t dev_struct_size) {
+static Status add_storage_device(const StorageDevType dev_type, void** out_dev_struct_ptr, size_t dev_struct_size) {
     if (dev_struct_size < sizeof(StorageDevice) || out_dev_struct_ptr == NULL) return KERNEL_INVALID_ARGS;
 
     StorageDevice* new_device = (StorageDevice*)kmalloc(dev_struct_size);
