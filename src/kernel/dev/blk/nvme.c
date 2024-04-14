@@ -255,7 +255,7 @@ bool_t init_nvme_device(NvmeDevice* nvme_device, const PciDeviceNode* pci_device
     cmd.command.command_id = 1; 
     cmd.command_dword[0] = NVME_IDENTIFY_NAMESPACE;
     
-    nvme_device->controller.namespace_list = (uint32_t*)kcalloc(sizeof(uint32_t));
+    nvme_device->controller.namespace_list = (uint32_t*)kcalloc(PAGE_BYTE_SIZE);
 
     cmd.prp1 = get_phys_address((uint64_t)nvme_device->controller.namespace_list);
 
