@@ -39,9 +39,9 @@ typedef struct NvmeBar0 {
     // uint32_t pmrcmscu;          // Persistent Memory Region Controller Memory Space Control Upper
     uint8_t reserved1[0xFC8];
     uint32_t asq_admin_tail_doorbell;
-    uint32_t acq_admin_tail_doorbell;
+    uint32_t acq_admin_head_doorbell;
     uint32_t asq_io1_tail_doorbell;
-    uint32_t acq_io1_tail_doorbell;
+    uint32_t acq_io1_head_doorbell;
 } ATTR_PACKED NvmeBar0;
 
 typedef struct Command {

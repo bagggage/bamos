@@ -58,27 +58,30 @@ static void send_nvme_admin_command(NvmeDevice* nvme_device, const NvmeSubmissio
     if (nvme_device == NULL || admin_cmd == NULL) return;
 
     static uint8_t admin_tail =  0;
-    //kernel_msg("admin tail %u\n", admin_tail);
+    kernel_msg("admin tail %u\n", admin_tail);
 
     memcpy(admin_cmd, nvme_device->controller.asq + admin_tail, sizeof(*admin_cmd));
     memset(&nvme_device->controller.acq[admin_tail], sizeof(nvme_device->controller.acq[admin_tail]), 0);
 
-    // kernel_msg("//--------------------------------------------------//\n");
+    //kernel_msg("//--------------------------------------------------//\n");
     // kernel_msg("status %x phase %x stat bit %x addr %x \n",nvme_device->controller.bar0->csts, 
     //                                                 nvme_device->controller.acq[admin_tail].phase,
-    //                                                 nvme_device->controller.acq[admin_tail].stat,
+    //                                                 nvme_device->controller.acq[admin_tail].status,
     //                                                 nvme_device->controller.acq[admin_tail]);
 
     const uint8_t old_admin_tail_doorbell = admin_tail;
-    admin_tail = (admin_tail + 1) % NVME_SUB_QUEUE_SIZE;
+    admin_tail++;
+
+    if (admin_tail == NVME_SUB_QUEUE_SIZE) return;
 
     nvme_device->controller.bar0->asq_admin_tail_doorbell = admin_tail;
+    nvme_device->controller.bar0->acq_admin_head_doorbell = old_admin_tail_doorbell;
     
     while (nvme_device->controller.acq[old_admin_tail_doorbell].command_raw == 0);
     
     // kernel_msg("status %x phase %x stat bit %x addr %x \n",nvme_device->controller.bar0->csts, 
     //                                             nvme_device->controller.acq[old_admin_tail_doorbell].phase,
-    //                                             nvme_device->controller.acq[old_admin_tail_doorbell].stat,
+    //                                             nvme_device->controller.acq[old_admin_tail_doorbell].status,
     //                                             nvme_device->controller.acq[old_admin_tail_doorbell]);
     // kernel_msg("//--------------------------------------------------//\n");
 
@@ -128,7 +131,7 @@ static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t s
 
     while (nvme_device->controller.iocq[old_io_tail_doorbell].phase == phase);
 
-    nvme_device->controller.bar0->acq_io1_tail_doorbell = old_io_tail_doorbell;
+    nvme_device->controller.bar0->acq_io1_head_doorbell = old_io_tail_doorbell;
 
     nvme_device->controller.iocq[old_io_tail_doorbell].status = 0;
     nvme_device->controller.iocq[old_io_tail_doorbell].cmd_id = 0;
