@@ -75,7 +75,6 @@ static void send_nvme_admin_command(NvmeDevice* nvme_device, const NvmeSubmissio
     if (admin_tail == NVME_SUB_QUEUE_SIZE) return;
 
     nvme_device->controller.bar0->asq_admin_tail_doorbell = admin_tail;
-    nvme_device->controller.bar0->acq_admin_head_doorbell = old_admin_tail_doorbell;
     
     while (nvme_device->controller.acq[old_admin_tail_doorbell].command_raw == 0);
     
