@@ -58,7 +58,7 @@ static void send_nvme_admin_command(NvmeDevice* nvme_device, const NvmeSubmissio
     if (nvme_device == NULL || admin_cmd == NULL) return;
 
     static uint8_t admin_tail =  0;
-    kernel_msg("admin tail %u\n", admin_tail);
+    //kernel_msg("admin tail %u\n", admin_tail);
 
     memcpy(admin_cmd, nvme_device->controller.asq + admin_tail, sizeof(*admin_cmd));
     memset(&nvme_device->controller.acq[admin_tail], sizeof(nvme_device->controller.acq[admin_tail]), 0);
