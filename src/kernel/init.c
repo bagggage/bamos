@@ -11,6 +11,7 @@
 #include "dev/bootboot_display.h"
 #include "dev/hpet_timer.h"
 #include "dev/keyboard.h"
+#include "dev/lapic_timer.h"
 #include "dev/ps2_keyboard.h"
 #include "dev/stds/acpi.h"
 #include "dev/stds/pci.h"
@@ -32,9 +33,12 @@ extern const uint8_t _binary_font_psf_start;
 
 static Spinlock cpus_init_lock = { 1 };
 
-static void halt_logical_core() {
+static void wait_for_cpu_init() {
     spin_lock(&cpus_init_lock);
+
     vm_setup_paging(vm_get_kernel_pml4());
+    cpu_set_idtr(intr_get_kernel_idtr());
+
     spin_release(&cpus_init_lock);
 
     while (TRUE) {
@@ -47,7 +51,7 @@ static void halt_logical_core() {
 static Status split_logical_cores() {
     const uint32_t cpu_idx = cpu_get_idx();
 
-    if (cpu_idx != 0) halt_logical_core();
+    if (cpu_idx != 0) wait_for_cpu_init();
     if (init_kernel_logger_raw(&_binary_font_psf_start) != KERNEL_OK) return KERNEL_PANIC;
 
     kernel_msg("Kernel startup on CPU %u\n", cpu_idx);
@@ -64,10 +68,13 @@ static Status init_timer() {
         return KERNEL_ERROR;
     }
 
-    TimerDevice* acpi_timer;
+    TimerDevice* acpi_timer = (TimerDevice*)dev_push(DEV_TIMER, sizeof(TimerDevice));
+    TimerDevice* lapic_timer = (TimerDevice*)dev_push(DEV_TIMER, sizeof(TimerDevice));
 
-    if (add_device(DEV_TIMER, (void**)&acpi_timer, sizeof(TimerDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (acpi_timer == NULL || lapic_timer == NULL) return KERNEL_ERROR;
+
     if (init_acpi_timer(acpi_timer) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_lapic_timer(lapic_timer) != KERNEL_OK) return KERNEL_ERROR;
 
     //if (is_hpet_timer_avail() == FALSE) {
     //    error_str = "There is no supported timer device";
@@ -83,10 +90,10 @@ static Status init_timer() {
 }
 
 Status init_pci() {
-    PciDevice* pci_device;
+    //PciDevice* pci_device;
 
-    if (add_device(DEV_PCI, (void**)&pci_device, sizeof(PciDevice)) != KERNEL_OK) return KERNEL_ERROR;
-    if (init_pci_devices(pci_device) != KERNEL_OK) return KERNEL_ERROR;
+    //if (add_device(DEV_PCI, (void**)&pci_device, sizeof(PciDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    //if (init_pci_devices(pci_device) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }
@@ -118,13 +125,12 @@ Status init_kernel() {
 
 Status init_io_devices() {
     // TODO
-    DisplayDevice* display;
-    KeyboardDevice* keyboard;
+    DisplayDevice* display = (DisplayDevice*)dev_push(DEV_DISPLAY, sizeof(DisplayDevice));
+    KeyboardDevice* keyboard = (KeyboardDevice*)dev_push(DEV_KEYBOARD, sizeof(KeyboardDevice));
 
-    if (add_device(DEV_DISPLAY, (void**)&display, sizeof(DisplayDevice)) != KERNEL_OK) return KERNEL_ERROR;
+    if (display == NULL || keyboard == NULL) return KERNEL_ERROR;
+
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
-
-    if (add_device(DEV_KEYBOARD, (void**)&keyboard, sizeof(KeyboardDevice)) != KERNEL_OK) return KERNEL_ERROR;
     //if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;

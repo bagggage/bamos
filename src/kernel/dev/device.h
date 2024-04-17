@@ -2,6 +2,10 @@
 
 #include "definitions.h"
 
+#include "vm/object_mem_alloc.h"
+
+#include "utils/list.h"
+
 /*
 Common header for all devices
 For each unique device needs to define init_<device-name> function in <device-name>.h.
@@ -13,29 +17,30 @@ otherwise if something went wrong, device structure doesn't change.
 */
 
 // Device types
-typedef enum DevType {
+typedef enum DeviceType {
     DEV_UNKNOWN = 0,
     DEV_KEYBOARD,
     DEV_DISPLAY,
     DEV_MOUSE,
-    DEV_DRIVE,
+    DEV_STORAGE,
     DEV_TIMER,
-    DEV_USB,
-    DEV_PCI,
-    DEV_SERIAL,
-} DevType;
+    DEV_USB_BUS,
+    DEV_PCI_BUS
+} DeviceType;
 
 typedef struct Device Device;
 
 // Common device structure
 typedef struct Device {
+    LIST_STRUCT_IMPL(Device);
+
 // TODO: maybe id, name, type idk... something
     uint64_t id;
-    DevType type;
+    DeviceType type;
 } Device;
 
 typedef struct DevicePool {
-    Device** data;
+    ListHead nodes;
     size_t size;
 } DevicePool;
 
@@ -46,37 +51,19 @@ typedef struct DevicePool {
     Device common; \
     dev_name ## Interface interface
 
-#define DEV_DISPLAY_ID  0
-#define DEV_KEYBOARD_ID 1
-#define DEV_TIMER_ID    2
-#define DEV_PCI_ID      3
-
-/*
-Dynamic pool of devices, must be used only inside kernel.
-There are two devices that should be always available after initialization: display and keyboard,
-must be accessible at indexes 0 and 1, respectively.
-
-+===+===============+
-|Idx| Device        |
-+===+===============+
-| 0 | Display       |
-+---+---------------+
-| 1 | Keyboard      |
-+---+---------------+
-| n | ...           |
-+---+---------------+
-*/
-extern DevicePool dev_pool;
-
 /*
 Create and push new device structure into 'dev_pool'. Device structure initialized with valid id
 and type fields, other filelds initialized with zeroes.
-Returns 'KERNEL_OK' and set pointer to valid value, otherwise returns 'KERNEL_ERROR' or
-'KERNEL_INVALID_ARGS' and leaves the pointer unchanged.
+Returns valid pointer to device structure, otherwise returns NULL.
 */
-Status add_device(DevType dev_type, void** out_dev_struct_ptr, size_t dev_struct_size);
+Device* dev_push(const DeviceType dev_type, const uint32_t dev_struct_size);
+
 /*
 Remove device from 'dev_pool', all pointers to that device becomes invalid.
-Returns 'KERNEL_OK' if successed, otherwise leaves 'dev_pool' unchanged.
 */
-Status remove_device(size_t dev_idx);
+void dev_remove(Device* dev);
+
+typedef bool_t (*DevPredicat_t)(Device* dev);
+
+Device* dev_find(Device* begin, DevPredicat_t predicat);
+Device* dev_find_first(DevPredicat_t predicat);
