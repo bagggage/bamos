@@ -24,7 +24,7 @@ typedef enum CpuFeature {
     CPUID_FEAT_ECX_SSE4_2       = (1 << 20), // SSE4.2
     CPUID_FEAT_ECX_x2APIC       = (1 << 21), // x2APIC available
     CPUID_FEAT_ECX_MOVBE        = (1 << 22), // movbe available
-    CPUID_FEAT_ECX_POPCNT       = (1 << 23), // popcnt available (sounds rude)
+    CPUID_FEAT_ECX_POPCNT       = (1 << 23), // popcnt available
     CPUID_FEAT_ECX_XSAVE        = (1 << 26), // xsave/xrstor/xsetbv/xgetbv supported
     CPUID_FEAT_ECX_OSXSAVE      = (1 << 27), // xsetbv/xgetbv has been enabled
 
@@ -56,7 +56,7 @@ typedef enum CpuFeature {
     CPUID_FEAT_EDX_SSE          = CPUID_FEAT_EDX_BEGIN + (1 << 25), // SSE extensions
     CPUID_FEAT_EDX_SSE2         = CPUID_FEAT_EDX_BEGIN + (1 << 26), // SSE2 extensions, obviously
     CPUID_FEAT_EDX_SS           = CPUID_FEAT_EDX_BEGIN + (1 << 27), // self-snoop
-    CPUID_FEAT_EDX_HTT          = CPUID_FEAT_EDX_BEGIN + (1 << 28), // multi-threading (hyper-threading, I think - the afterburner of Intel CPUs)
+    CPUID_FEAT_EDX_HTT          = CPUID_FEAT_EDX_BEGIN + (1 << 28), // multi-threading (hyper-threading, the afterburner of Intel CPUs ?)
     CPUID_FEAT_EDX_TM           = CPUID_FEAT_EDX_BEGIN + (1 << 29), // thermal monitor
     CPUID_FEAT_EDX_PBE          = CPUID_FEAT_EDX_BEGIN + (1 << 31), // Pend. Brk. EN. (wtf?)
 } CpuFeature;
@@ -78,7 +78,7 @@ static inline bool_t cpu_is_feature_supported(const CpuFeature feature) {
     __get_cpuid(CPUID_GET_FEATURE, &eax, &ebx, &ecx, &edx);
 
     if (feature > CPUID_FEAT_EDX_BEGIN) {
-        return (ebx & (feature - CPUID_FEAT_EDX_BEGIN)) != 0 ? TRUE : FALSE;
+        return (edx & (feature - CPUID_FEAT_EDX_BEGIN)) != 0 ? TRUE : FALSE;
     }
     else {
         return (ecx & feature) != 0 ? TRUE : FALSE;
