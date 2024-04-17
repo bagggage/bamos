@@ -1,8 +1,7 @@
 #pragma once
 
 #include "definitions.h"
-
-#include "dev/timer.h"
+#include "timer.h"
 
 bool_t is_acpi_timer_avail();
 
