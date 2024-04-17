@@ -104,7 +104,7 @@ ATTR_INTRRUPT void intr_ss_handler(InterruptFrame64* frame, uint64_t error_code)
     _kernel_break();
 }
 
-// #GP [13] General protection
+// #GP [13] General protection fault
 ATTR_INTRRUPT void intr_gp_handler(InterruptFrame64* frame, uint64_t error_code) {
     kernel_error("#GP General protection: E: %b\n", error_code);
     log_intr_frame(frame);

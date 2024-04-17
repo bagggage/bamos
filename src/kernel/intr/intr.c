@@ -5,14 +5,14 @@
 #include "logger.h"
 #include "mem.h"
 
+#include "cpu/feature.h"
 #include "cpu/gdt.h"
-#include "cpu/regs.h"
 
 #define IDT_ENTRIES_COUNT 256
 #define IDT_EXCEPTION_ENTRIES_COUNT 32
 
-InterruptDescriptor64 idt_64[IDT_ENTRIES_COUNT];
-IDTR64 idtr_64;
+static InterruptDescriptor64 idt_64[IDT_ENTRIES_COUNT];
+static IDTR64 idtr_64;
 
 extern uint64_t kernel_elf_start;
 
@@ -114,8 +114,8 @@ __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame6
         dbg_symbol == NULL ? 0 : frame->rip - dbg_symbol->virt_address);
     log_trace(TRACE_INTERRUPT_DEPTH);
 #endif
-
-    kernel_warn("Interrupt Frame:\ncr2: %x\ncr3: %x\nrip: %x:%x\nrsp: %x\nrflags: %b\ncs: %x\nss: %x\n",
+    kernel_warn("CPU: %u: Interrupt Frame:\ncr2: %x\ncr3: %x\nrip: %x:%x\nrsp: %x\nrflags: %b\ncs: %x\nss: %x\n",
+        cpu_get_idx(),
         cpu_get_cr2(),
         cpu_get_cr3(),
         frame->rip, (uint64_t)frame->rip - (uint64_t)&kernel_elf_start,
@@ -199,7 +199,12 @@ Status init_intr() {
         intr_set_idt_descriptor(i, &intr_handler, INTERRUPT_GATE_FLAGS);
     }
 
-    asm volatile("lidt %0"::"memory"(idtr_64));
+    cpu_set_idtr(idtr_64);
+    intr_enable();
 
     return KERNEL_OK;
+}
+
+IDTR64 intr_get_kernel_idtr() {
+    return idtr_64;
 }

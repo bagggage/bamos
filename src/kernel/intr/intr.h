@@ -2,6 +2,8 @@
 
 #include "definitions.h"
 
+#include "cpu/regs.h"
+
 #define TRAP_GATE_FLAGS 0x8F
 #define INTERRUPT_GATE_FLAGS 0x8E
 
@@ -15,11 +17,6 @@ typedef struct InterruptDescriptor64 {
     uint32_t reserved;
 } ATTR_PACKED InterruptDescriptor64;
 
-typedef struct IDTR64 {
-    uint16_t limit;
-    uint64_t base;
-} ATTR_PACKED IDTR64;
-
 typedef struct InterruptFrame64 {
     uint64_t rip;
     uint64_t cs;
@@ -28,9 +25,22 @@ typedef struct InterruptFrame64 {
     uint64_t ss;
 } ATTR_PACKED InterruptFrame64;
 
+static inline void intr_enable() {
+    asm volatile("sti");
+}
+
+static inline void intr_disable() {
+    asm volatile("cli");
+}
+
 Status init_intr();
 
 void intr_set_idt_descriptor(const uint8_t idx, const void* isr, uint8_t flags);
+
+/*
+Returns kernel IDTR.
+*/
+IDTR64 intr_get_kernel_idtr();
 
 #ifdef KTRACE
 void log_trace(const uint32_t trace_start_depth);
