@@ -2,7 +2,9 @@
 
 #include "definitions.h"
 
-#define EFER_NUM 0xC0000080
+#define MSR_EFER 0xC0000080
+#define MSR_APIC_BASE 0x1B
+#define MSR_APIC_BASE_BSP 0x100
 
 typedef struct EFER {
     uint64_t syscall_ext                : 1;
@@ -17,6 +19,11 @@ typedef struct EFER {
     uint64_t translation_cache_ext      : 1;
     uint64_t reserved_3                 : 48;
 } EFER;
+
+typedef struct IDTR64 {
+    uint16_t limit;
+    uint64_t base;
+} ATTR_PACKED IDTR64;
 
 static inline uint64_t cpu_get_rsp() {
     uint64_t rsp;
@@ -54,6 +61,18 @@ static inline uint64_t cpu_get_cr3() {
     return cr3;
 }
 
+static inline IDTR64 cpu_get_idtr() {
+    IDTR64 idtr_64;
+
+    asm volatile("sidt %0":"=memory"(idtr_64));
+
+    return idtr_64;
+}
+
+static inline IDTR64 cpu_set_idtr(IDTR64 idtr_64) {
+    asm volatile("lidt %0"::"memory"(idtr_64));
+}
+
 static inline uint64_t cpu_get_msr(uint32_t msr) {
     uint64_t value = 0;
 
@@ -68,12 +87,12 @@ static inline void cpu_set_msr(uint32_t msr, uint64_t value) {
 
 // Get extended feature enable register
 static inline EFER cpu_get_efer() {
-    uint64_t efer = cpu_get_msr(EFER_NUM);
+    uint64_t efer = cpu_get_msr(MSR_EFER);
 
     return *(EFER*)(void*)&efer;
 }
 
 // Set extended feature enable register
 static inline void cpu_set_efer(EFER efer) {
-    cpu_set_msr(EFER_NUM, *(uint64_t*)(void*)&efer);
+    cpu_set_msr(MSR_EFER, *(uint64_t*)(void*)&efer);
 }
