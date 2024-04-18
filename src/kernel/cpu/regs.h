@@ -2,7 +2,12 @@
 
 #include "definitions.h"
 
-#define MSR_EFER 0xC0000080
+#define MSR_EFER    0xC0000080
+#define MSR_STAR    0xC0000081
+#define MSR_LSTAR   0xC0000082
+#define MSR_CSTAR   0xC0000083
+#define MSR_SFMASK  0xC0000084
+
 #define MSR_APIC_BASE 0x1B
 #define MSR_APIC_BASE_BSP 0x100
 
@@ -19,6 +24,18 @@ typedef struct EFER {
     uint64_t translation_cache_ext      : 1;
     uint64_t reserved_3                 : 48;
 } EFER;
+
+typedef struct STAR {
+    uint32_t syscall_eip;
+    uint16_t kernel_segment_base;
+    uint16_t user_segment_base;
+} ATTR_PACKED STAR;
+
+// Syscall RIP for long mode
+typedef uint64_t LSTAR;
+
+// Syscall RIP for compat. mode
+typedef uint64_t CSTAR;
 
 typedef struct IDTR64 {
     uint16_t limit;
@@ -95,4 +112,44 @@ static inline EFER cpu_get_efer() {
 // Set extended feature enable register
 static inline void cpu_set_efer(EFER efer) {
     cpu_set_msr(MSR_EFER, *(uint64_t*)(void*)&efer);
+}
+
+static inline uint64_t cpu_get_cs() {
+    uint64_t cs;
+
+    asm volatile("mov %%cs,%0":"=a"(cs));
+
+    return cs;
+}
+
+static inline uint64_t cpu_get_ds() {
+    uint64_t ds;
+
+    asm volatile("mov %%ds,%0":"=a"(ds));
+
+    return ds;
+}
+
+static inline uint64_t cpu_get_ss() {
+    uint64_t ss;
+
+    asm volatile("mov %%ss,%0":"=a"(ss));
+
+    return ss;
+}
+
+static inline uint64_t cpu_get_fs() {
+    uint64_t fs;
+
+    asm volatile("mov %%fs,%0":"=a"(fs));
+
+    return fs;
+}
+
+static inline uint64_t cpu_get_gs() {
+    uint64_t gs;
+
+    asm volatile("mov %%gs,%0":"=a"(gs));
+
+    return gs;
 }

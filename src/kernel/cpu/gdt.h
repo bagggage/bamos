@@ -2,6 +2,9 @@
 
 #include "definitions.h"
 
+#define KERNEL_PRIVILAGE_LEVEL 0
+#define USER_PRIVILAGE_LEVEL 3
+
 typedef struct SegmentAccessByte {
     uint8_t access : 1;
     uint8_t read_write : 1;
@@ -9,7 +12,7 @@ typedef struct SegmentAccessByte {
     uint8_t exec : 1;
     uint8_t descriptor_type : 1;
     uint8_t privilage_level : 2;
-    uint8_t present;
+    uint8_t present : 1;
 } ATTR_PACKED SegmentAccessByte;
 
 typedef struct SegmentDescriptor {
@@ -17,17 +20,24 @@ typedef struct SegmentDescriptor {
     uint16_t base_1;
     uint8_t base_2;
     uint8_t access_byte;
-    //uint8_t limit_flags;
+
     struct {
         uint8_t limit_2 : 4;
         uint8_t flags : 4;
     };
+
     uint8_t base_3;
 } ATTR_PACKED SegmentDescriptor;
 
+typedef struct SegmentSelector {
+    uint16_t rpl : 2;       // Requested privilege level
+    uint16_t table_idx : 1; // GDT (0) or LDT (1)
+    uint16_t segment_idx : 13;
+} ATTR_PACKED SegmentSelector;
+
 // Global descriptor table register
 typedef struct GDTR64 {
-    uint8_t limit;
+    uint16_t size;
     uint64_t base;
 } ATTR_PACKED GDTR64;
 
