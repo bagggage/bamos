@@ -24,6 +24,12 @@ typedef struct MemoryBlock {
     uint32_t pages_count;
 } MemoryBlock;
 
+typedef struct VMMemoryBlock {
+    uint64_t virt_address;
+    uint32_t page_base;
+    uint32_t pages_count;
+} VMMemoryBlock;
+
 typedef struct RawMemoryBlock {
     uint64_t phys_address;
     uint64_t virt_address;
@@ -44,7 +50,8 @@ typedef enum VMMapFlags{
     VMMAP_EXEC = 0x8,               // Allow execute instructions from this memory.
     VMMAP_USER_ACCESS = 0x10,       // Allow user access.
     VMMAP_WRITE_THROW = 0x20,       // Write to cache and memory at the same time.
-    VMMAP_CACHE_DISABLED = 0x40     // Disable writing to cache.
+    VMMAP_CACHE_DISABLED = 0x40,    // Disable writing to cache.
+    VMMAP_GLOBAL = 0x80             // Save translation cache after switching page tables.
 } VMMapFlags;
 
 typedef struct VMPageList {
@@ -141,3 +148,4 @@ void vm_free_pages(VMPageFrame* page_frame, VMHeap* heap, PageMapLevel4Entry* pm
 bool_t vm_test();
 
 void vm_setup_paging(PageMapLevel4Entry* pml4);
+void vm_map_kernel(PageMapLevel4Entry* pml4);
