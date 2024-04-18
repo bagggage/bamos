@@ -5,6 +5,8 @@
 #include "logger.h"
 #include "math.h"
 
+#include "cpu/feature.h"
+
 #include "intr/apic.h"
 #include "intr/intr.h"
 
@@ -30,6 +32,8 @@ static uint8_t divider_value_table[] = {
 };
 
 static ATTR_INTRRUPT void intr_lapic_timer_handler(InterruptFrame64* frame) {
+
+
     lapic_write(LAPIC_EOI_REG, 1);
 }
 
@@ -52,7 +56,7 @@ static void lapic_timer_set_divider_impl(TimerDevice*, const uint32_t value) {
 
 void configure_lapic_timer() {
     lapic_timer_set_divider(1);
-    lapic_write(LAPIC_INIT_COUNTER_REG, 0);
+    lapic_write(LAPIC_INIT_COUNTER_REG, UINT32_MAX);
 
     LVTTimerReg lvt_timer;
 
@@ -67,6 +71,38 @@ void configure_lapic_timer() {
     lapic_write(LAPIC_LVT_TIMER_REG, *(uint32_t*)&lvt_timer);
 }
 
+static bool_t is_timer_dev(Device* dev) {
+    return dev->type == DEV_TIMER;
+}
+
+static uint64_t lapic_calc_min_clock_time() {
+    TimerDevice* timer = NULL;
+
+    while ((timer = (TimerDevice*)dev_find(timer, &is_timer_dev)) != NULL) {
+        if (timer->min_clock_time != 0 &&
+            timer->interface.get_clock_counter != NULL)
+            break;
+    }
+
+    if (timer == NULL) {
+        kernel_error("LAPIC Timer: can't calculate frequency: there is no other timers with known frequency\n");
+        return 0;
+    }
+
+    uint64_t begin_ticks = timer->interface.get_clock_counter(timer);
+    uint64_t lapic_begin_ticks = lapic_read(LAPIC_CURR_COUNTER_REG);
+    uint64_t curr_ticks = 0;
+
+    // Wait for 10000 ticks of other timer
+    while ((curr_ticks = timer->interface.get_clock_counter(timer)) - begin_ticks < 10000);
+
+    uint64_t lapic_curr_ticks = lapic_read(LAPIC_CURR_COUNTER_REG);
+    uint64_t result = (timer->min_clock_time * (curr_ticks - begin_ticks)) / (lapic_begin_ticks - lapic_curr_ticks);
+
+    // Round
+    return ((result + 50) / 100) * 100;
+}
+
 Status init_lapic_timer(TimerDevice* dev) {
     intr_set_idt_descriptor(LAPIC_TIMER_INT_VECTOR, &intr_lapic_timer_handler, INTERRUPT_GATE_FLAGS);
 
@@ -77,6 +113,13 @@ Status init_lapic_timer(TimerDevice* dev) {
 
     dev->interface.get_clock_counter = &lapic_timer_get_clock_counter_impl;
     dev->interface.set_divider = &lapic_timer_set_divider_impl;
+
+    dev->min_clock_time = 0;
+    dev->min_clock_time = lapic_calc_min_clock_time();
+
+    kernel_msg("LAPIC Timer: min clock timer ~ %u ps (%u ns)\n",
+            dev->min_clock_time,
+            (uint32_t)((double)dev->min_clock_time * PS_TO_NS));
 
     return KERNEL_OK;
 }
