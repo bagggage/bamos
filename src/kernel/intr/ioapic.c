@@ -30,8 +30,6 @@ void ioapic_redirect_irq(const uint8_t irq_idx, const uint8_t vector) {
 }
 
 void ioapic_mask_irq(const uint8_t irq_idx, const bool_t is_masked) {
-    //kassert(irq_idx < 24);
-
     const uint8_t redirection_entry_reg_offset = IOAPIC_REDTBL_OFFSET + (irq_idx * IOAPIC_REDIR_ENTRY_LENGTH);
     const uint64_t temp_entry = ioapic_read64(ioapic.base, redirection_entry_reg_offset);
 

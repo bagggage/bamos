@@ -219,7 +219,6 @@ Status init_memory() {
     if (init_vm_allocator() != KERNEL_OK) return KERNEL_ERROR;
 
 #ifdef KDEBUG
-    //log_memory_page_tables(vm_get_kernel_pml4());
     kernel_msg("Testing virtual memory manager...\n");
     vm_test();
 #endif
