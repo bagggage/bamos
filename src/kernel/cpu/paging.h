@@ -22,7 +22,8 @@ typedef struct PageXEntry {
     uint64_t accessed           : 1;
     uint64_t dirty              : 1;
     uint64_t size               : 1; // If set, for P3 size == 1GB; P2 size == 2MB
-    uint64_t ignored_2          : 4;
+    uint64_t global             : 1;
+    uint64_t ignored_2          : 3;
     uint64_t page_ppn           : 28; // Page table base physical address
     uint64_t reserved_1         : 12; // Must be 0
     uint64_t ignored_1          : 11;
