@@ -84,3 +84,7 @@ static inline bool_t cpu_is_feature_supported(const CpuFeature feature) {
         return (ecx & feature) != 0 ? TRUE : FALSE;
     }
 }
+
+static inline void cpuid(uint32_t* eax, uint32_t* ebx, uint32_t* ecx, uint32_t* edx) {
+    __get_cpuid(*eax, eax, ebx, ecx, edx);
+}
