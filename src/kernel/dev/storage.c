@@ -51,6 +51,8 @@ Status init_storage_device(StorageDevice* storage_device) {
 
             NvmeController nvme_controller = create_nvme_controller(pci_device_list->head);
 
+            if (nvme_controller.acq == NULL || nvme_controller.asq == NULL) return KERNEL_ERROR;
+            
             if (init_nvme_devices_for_controller(storage_device, &nvme_controller) == FALSE) return KERNEL_ERROR;            
         }
         

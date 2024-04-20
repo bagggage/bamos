@@ -156,7 +156,7 @@ static void* nvme_read(const NvmeDevice* nvme_device, const uint64_t bytes_offse
 }
 
 NvmeController create_nvme_controller(const PciDeviceNode* const pci_device) {
-    if (pci_device == NULL) return;
+    if (pci_device == NULL) return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
 
     NvmeController nvme_controller;
 
@@ -182,7 +182,7 @@ NvmeController create_nvme_controller(const PciDeviceNode* const pci_device) {
     while ((nvme_controller.bar0->csts & NVME_CTRL_ENABLE)){
         if (nvme_controller.bar0->csts & NVME_CTRL_ERROR){
             kernel_error("Nvme csts.cfs set\n");
-            return;
+            return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
         }
     }
     kernel_msg("Nvme controller ready\n");
@@ -203,7 +203,7 @@ NvmeController create_nvme_controller(const PciDeviceNode* const pci_device) {
     while (!(nvme_controller.bar0->csts & NVME_CTRL_ENABLE)){
         if (nvme_controller.bar0->csts & NVME_CTRL_ERROR){
             kernel_error("Nvme csts.cfs set\n");
-            return;
+            return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
         }
     }
     kernel_msg("Nvme controller ready\n");
