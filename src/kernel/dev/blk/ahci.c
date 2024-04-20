@@ -21,13 +21,15 @@
 
 HBAMemory* hba_memory = NULL;
 
+
 bool_t is_ahci(const uint8_t class_code, const uint8_t prog_if, const uint8_t subclass) {
-    if (class_code == PCI_CLASS_CODE_STORAGE_CONTROLLER &&
+    if (class_code == STORAGE_CONTROLLER &&
         prog_if == PCI_PROGIF_AHCI &&
-        subclass == PCI_SUBCLASS_SATA_CONTROLLER) {
+        subclass == SATA_CONTROLLER) {
         return TRUE;
     }
 
+    
     return FALSE;
 }
 
