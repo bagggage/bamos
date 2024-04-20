@@ -90,28 +90,28 @@ Status init_pci_device(PciDevice* pci_device) {
                 PciDeviceNode* current_node = (PciDeviceNode*)kmalloc(sizeof(PciDeviceNode));
                 current_node->next = NULL;
 
-                current_node->bus = bus;
-                current_node->dev = dev;
-                current_node->func = func;
-                current_node->pci_header.vendor_id = vendor_id;
-                current_node->pci_header.device_id = pci_config_readw(bus, dev, func, 2);
-                current_node->pci_header.prog_if = pci_config_readb(bus, dev, func, 0x9);
-                current_node->pci_header.subclass = pci_config_readb(bus, dev, func, 0xA);
-                current_node->pci_header.class_code = (pci_config_readw(bus, dev, func, 0xB) >> 8);  // for no reason readbyte on 0xB we always get 0xFF
-                current_node->pci_header.bar0 = read_bar(bus, dev, func, PCI_BAR0_OFFSET);
-                current_node->pci_header.bar1 = read_bar(bus, dev, func, PCI_BAR1_OFFSET);
-                current_node->pci_header.bar2 = read_bar(bus, dev, func, PCI_BAR2_OFFSET);
-                current_node->pci_header.bar3 = read_bar(bus, dev, func, PCI_BAR3_OFFSET);
-                current_node->pci_header.bar4 = read_bar(bus, dev, func, PCI_BAR4_OFFSET);
-                current_node->pci_header.bar5 = read_bar(bus, dev, func, PCI_BAR5_OFFSET);
+                current_node->pci_info.bus = bus;
+                current_node->pci_info.dev = dev;
+                current_node->pci_info.func = func;
+                current_node->pci_info.pci_header.vendor_id = vendor_id;
+                current_node->pci_info.pci_header.device_id = pci_config_readw(bus, dev, func, 2);
+                current_node->pci_info.pci_header.prog_if = pci_config_readb(bus, dev, func, 0x9);
+                current_node->pci_info.pci_header.subclass = pci_config_readb(bus, dev, func, 0xA);
+                current_node->pci_info.pci_header.class_code = (pci_config_readw(bus, dev, func, 0xB) >> 8);  // for no reason readbyte on 0xB we always get 0xFF
+                current_node->pci_info.pci_header.bar0 = read_bar(bus, dev, func, PCI_BAR0_OFFSET);
+                current_node->pci_info.pci_header.bar1 = read_bar(bus, dev, func, PCI_BAR1_OFFSET);
+                current_node->pci_info.pci_header.bar2 = read_bar(bus, dev, func, PCI_BAR2_OFFSET);
+                current_node->pci_info.pci_header.bar3 = read_bar(bus, dev, func, PCI_BAR3_OFFSET);
+                current_node->pci_info.pci_header.bar4 = read_bar(bus, dev, func, PCI_BAR4_OFFSET);
+                current_node->pci_info.pci_header.bar5 = read_bar(bus, dev, func, PCI_BAR5_OFFSET);
 
-                kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id: %x: class: %x: subclass: %x\n",
-                    (uint32_t)bus,
-                    (uint32_t)dev,
-                    (uint32_t)func,
-                    (uint64_t)vendor_id,
-                    (uint64_t)current_node->pci_header.class_code,
-                    (uint64_t)current_node->pci_header.subclass);
+                // kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id: %x: class: %x: subclass: %x\n",
+                //     (uint32_t)bus,
+                //     (uint32_t)dev,
+                //     (uint32_t)func,
+                //     (uint64_t)vendor_id,
+                //     (uint64_t)current_node->pci_info.pci_header.class_code,
+                //     (uint64_t)current_node->pci_info.pci_header.subclass);
                 
                 if (pci_device->head == NULL) {
                     device_list = current_node;
@@ -127,16 +127,12 @@ Status init_pci_device(PciDevice* pci_device) {
     return KERNEL_OK;
 }
 
-static bool_t is_pci_device(Device* device) {
-    return device->type == DEV_PCI_BUS;
-}
-
 bool_t add_new_pci_device(const PciDeviceNode* new_pci_device) {
     if (new_pci_device == NULL) return FALSE;
     
     PciDevice* pci_device = NULL;
 
-    if  (!(pci_device = dev_find(pci_device, &is_pci_device))) return FALSE;
+    if  (!(pci_device = dev_find(NULL, &is_pci_device))) return FALSE;
 
     PciDeviceNode* device_list = pci_device->head;
 
@@ -182,4 +178,8 @@ void remove_pci_device(PciDevice* pci_device, const size_t index) {
     previous->next = current->next;
     
     kfree(current);
+}
+
+bool_t is_pci_device(Device* device) {
+    return device->type == DEV_PCI_BUS;
 }
