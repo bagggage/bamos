@@ -58,7 +58,7 @@ static void send_nvme_admin_command(NvmeController* nvme_controller, const NvmeS
     if (nvme_controller == NULL || admin_cmd == NULL) return;
 
     static uint8_t admin_tail =  0;
-    kernel_msg("admin tail %u\n", admin_tail);
+    //kernel_msg("admin tail %u\n", admin_tail);
 
     memcpy(admin_cmd, nvme_controller->asq + admin_tail, sizeof(*admin_cmd));
     memset(&nvme_controller->acq[admin_tail], sizeof(nvme_controller->acq[admin_tail]), 0);
@@ -72,12 +72,7 @@ static void send_nvme_admin_command(NvmeController* nvme_controller, const NvmeS
     const uint8_t old_admin_tail_doorbell = admin_tail;
     admin_tail++;
 
-    if (admin_tail == NVME_SUB_QUEUE_SIZE) {
-        nvme_controller->bar0->asq_admin_tail_doorbell = 0;
-        nvme_controller->bar0->acq_admin_head_doorbell = 0;
-
-        admin_tail = 0;
-    }
+    if (admin_tail == NVME_SUB_QUEUE_SIZE) return;
 
     nvme_controller->bar0->asq_admin_tail_doorbell = admin_tail;
     
@@ -255,22 +250,6 @@ NvmeController create_nvme_controller(const PciDeviceNode* const pci_device) {
     kernel_msg("Sub vendor: %x\n", (uint64_t)ctrl_info->sub_vendor_id);
     kernel_msg("Model: %s\n", ctrl_info->model);
     kernel_msg("Serial: %s\n", ctrl_info->serial);
-
-    for (size_t i = 0; i < 64; i++)
-    {
-        memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
-    cmd.command.opcode = NVME_ADMIN_CREATE_SUBMISSION_QUEUE;
-    cmd.command.command_id = 1;
-    
-    nvme_controller.iosq = (NvmeSubmissionQueueEntry*)kmalloc(QUEUE_SIZE);
-
-    cmd.prp1 = get_phys_address((uint64_t)nvme_controller.iosq);
-    cmd.command_dword[0] = 0x003f0001; // queue id 1, 64 entries
-    cmd.command_dword[1] = 0x00010001; // CQID 1 (31:16), pc enabled (0)
-
-    send_nvme_admin_command(&nvme_controller, &cmd);
-    }
-    
 
     kfree((void*)ctrl_info);
     
