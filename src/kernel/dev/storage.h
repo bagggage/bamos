@@ -18,7 +18,7 @@ typedef struct StorageInterface {
 } StorageInterface;
 
 typedef struct StorageNode {
-    void* device;
+    StorageDevice* device;
     StorageDevType type;
     struct StorageNode* next;
 } StorageNode;
@@ -29,7 +29,7 @@ typedef struct StorageDevice {
 } StorageDevice;
 
 #define STORAGE_DEVICE_STRUCT_IMPL \
-    StorageDevice storage_common; \
+    Device storage_common; \
     StorageInterface storage_interface
 
 Status add_storage_device(StorageDevice* storage_device, const void* const new_device, const StorageDevType type);

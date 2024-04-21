@@ -58,30 +58,32 @@ static void send_nvme_admin_command(NvmeController* nvme_controller, const NvmeS
     if (nvme_controller == NULL || admin_cmd == NULL) return;
 
     static uint8_t admin_tail =  0;
+    static uint8_t admin_head = 0;
     //kernel_msg("admin tail %u\n", admin_tail);
 
     memcpy(admin_cmd, nvme_controller->asq + admin_tail, sizeof(*admin_cmd));
     memset(&nvme_controller->acq[admin_tail], sizeof(nvme_controller->acq[admin_tail]), 0);
 
-    //kernel_msg("//--------------------------------------------------//\n");
-    // kernel_msg("status %x phase %x stat bit %x addr %x \n",nvme_device->controller.bar0->csts, 
-    //                                                 nvme_device->controller.acq[admin_tail].phase,
-    //                                                 nvme_device->controller.acq[admin_tail].status,
-    //                                                 nvme_device->controller.acq[admin_tail]);
+    // kernel_msg("//--------------------------------------------------//\n");
+    // kernel_msg("status %x phase %x stat bit %x addr %x \n",nvme_controller->bar0->csts, 
+    //                                                 nvme_controller->acq[admin_tail].phase,
+    //                                                 nvme_controller->acq[admin_tail].status,
+    //                                                 nvme_controller->acq[admin_tail]);
 
     const uint8_t old_admin_tail_doorbell = admin_tail;
-    admin_tail++;
-
-    if (admin_tail == NVME_SUB_QUEUE_SIZE) return;
+    admin_tail = (admin_tail + 1) % NVME_SUB_QUEUE_SIZE;
+    admin_head = (admin_head + 1) % NVME_SUB_QUEUE_SIZE;
 
     nvme_controller->bar0->asq_admin_tail_doorbell = admin_tail;
     
     while (nvme_controller->acq[old_admin_tail_doorbell].command_raw == 0);
+
+    nvme_controller->bar0->acq_admin_head_doorbell = admin_head;
     
-    // kernel_msg("status %x phase %x stat bit %x addr %x \n",nvme_device->controller.bar0->csts, 
-    //                                             nvme_device->controller.acq[old_admin_tail_doorbell].phase,
-    //                                             nvme_device->controller.acq[old_admin_tail_doorbell].status,
-    //                                             nvme_device->controller.acq[old_admin_tail_doorbell]);
+    // kernel_msg("status %x phase %x stat bit %x addr %x \n",nvme_controller->bar0->csts, 
+    //                                             nvme_controller->acq[old_admin_tail_doorbell].phase,
+    //                                             nvme_controller->acq[old_admin_tail_doorbell].status,
+    //                                             nvme_controller->acq[old_admin_tail_doorbell]);
     // kernel_msg("//--------------------------------------------------//\n");
 
     nvme_controller->acq[old_admin_tail_doorbell].command_raw = 0;
@@ -113,26 +115,24 @@ static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t s
     cmd.command_dword[1] = sector_offset >> 32; // save upper 32 bits
     cmd.command_dword[2] = (total_bytes & 0xffffffff) - 1;
 
-    static uint8_t io_tail_doorbell = 0;
+    static uint8_t io_tail = 0;
+    static uint8_t io_head = 0;
 
-    memcpy(&cmd, nvme_device->controller.iosq + io_tail_doorbell, sizeof(cmd));
+    memcpy(&cmd, nvme_device->controller.iosq + io_tail, sizeof(cmd));
+    memset(&nvme_device->controller.iocq[io_tail], sizeof(nvme_device->controller.iocq[io_tail]), 0);
 
-    static uint8_t phase = 0;
-    const uint8_t old_io_tail_doorbell = io_tail_doorbell;
+    const uint8_t old_io_tail_doorbell = io_tail;
 
-    if (++io_tail_doorbell == NVME_SUB_QUEUE_SIZE) {
-        io_tail_doorbell = 0;
-        phase = !phase;
-    }
+    io_tail = (io_tail + 1) % NVME_SUB_QUEUE_SIZE;
+    io_head = (io_head + 1) % NVME_SUB_QUEUE_SIZE;
 
-    nvme_device->controller.bar0->asq_io1_tail_doorbell = io_tail_doorbell;
+    nvme_device->controller.bar0->asq_io1_tail_doorbell = io_tail;
 
-    while (nvme_device->controller.iocq[old_io_tail_doorbell].phase == phase);
+    while (nvme_device->controller.iocq[old_io_tail_doorbell].command_raw == 0);
 
-    nvme_device->controller.bar0->acq_io1_head_doorbell = old_io_tail_doorbell;
+    nvme_device->controller.bar0->acq_io1_head_doorbell = io_head;
 
-    nvme_device->controller.iocq[old_io_tail_doorbell].status = 0;
-    nvme_device->controller.iocq[old_io_tail_doorbell].cmd_id = 0;
+    nvme_device->controller.iocq[old_io_tail_doorbell].command_raw = 0;
 
     kfree((void*)prp2);
 }
@@ -266,26 +266,26 @@ bool_t init_nvme_devices_for_controller(StorageDevice* storage_device, const Nvm
     cmd.command.command_id = 1; 
     cmd.command_dword[0] = NVME_IDENTIFY_NAMESPACE;     
     
-    uint32_t* namespace_vector = (uint32_t*)kcalloc(PAGE_BYTE_SIZE);
+    uint32_t* namespace_array = (uint32_t*)kcalloc(PAGE_BYTE_SIZE);
 
-    cmd.prp1 = get_phys_address((uint64_t)namespace_vector);
+    cmd.prp1 = get_phys_address((uint64_t)namespace_array);
 
     send_nvme_admin_command(nvme_controller, &cmd);
 
-    for (size_t i = 0; namespace_vector[i] != NULL; ++i) {
-        kernel_msg("Namespace : %x\n", namespace_vector[i]);
+    for (size_t i = 0; namespace_array[i] != NULL; ++i) {
+        kernel_msg("Namespace : %x\n", namespace_array[i]);
 
         memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
         
         cmd.command.opcode = NVME_ADMIN_IDENTIFY;
         cmd.command.command_id = 1; 
-        cmd.nsid = namespace_vector[i];
+        cmd.nsid = namespace_array[i];
 
         NvmeDevice* nvme_device = (NvmeDevice*)kmalloc(sizeof(NvmeDevice));
 
         nvme_device->controller = *nvme_controller;
         nvme_device->namespace_info = (NvmeNamespaceInfo*)kmalloc(sizeof(NvmeNamespaceInfo));
-        nvme_device->nsid = namespace_vector[i];
+        nvme_device->nsid = namespace_array[i];
     
         cmd.prp1 = get_phys_address((uint64_t)nvme_device->namespace_info);
 
@@ -295,12 +295,13 @@ bool_t init_nvme_devices_for_controller(StorageDevice* storage_device, const Nvm
         kernel_msg("Namespace No. %u LBA size: %u\n", i + 1, nvme_device->namespace_info->sector_size);
 
         nvme_device->storage_interface.read = &nvme_read;
+        nvme_device->storage_common = storage_device->common;
 
         add_storage_device(storage_device, nvme_device, STORAGE_DEV_NVME);
     }
-
-    kfree((void*)namespace_vector);
-
+    
+    kfree((void*)namespace_array);
+    
     return TRUE;
 }
 
