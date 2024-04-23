@@ -42,7 +42,7 @@ uint64_t _get_phys_address(PageMapLevel4Entry* pml4, const uint64_t virt_addres)
 
 void memcpy(const void* src, void* dst, size_t size);
 void memset(void* dst, size_t size, uint8_t value);
-int memcmp(const void *s1, const void *s2, size_t n);
+int memcmp(const void* lhs, const void *rhs, size_t size);
 
 // Page X table entry
 typedef struct VMPxE {
