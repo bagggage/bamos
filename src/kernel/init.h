@@ -15,4 +15,4 @@ Status init_io_streams();
 // Init memory allocator
 Status init_memory();
 // Init user space handler
-Status init_userspace();
+Status init_user_space();

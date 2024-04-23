@@ -4,8 +4,13 @@
 #include <stddef.h>
 
 #include "assert.h"
+#include "logger.h"
+#include "mem.h"
+#include "syscalls.h"
 
 #include "cpu/feature.h"
+#include "cpu/gdt.h"
+#include "cpu/regs.h"
 
 #include "dev/acpi_timer.h"
 #include "dev/bootboot_display.h"
@@ -17,18 +22,19 @@
 #include "dev/stds/pci.h"
 #include "dev/storage.h"
 
-#include "logger.h"
-#include "mem.h"
-
 #include "intr/apic.h"
 #include "intr/intr.h"
 #include "intr/ioapic.h"
+
+#include "proc/local.h"
+#include "proc/task_scheduler.h"
 
 #include "rawtsk/task.h"
 
 #include "vm/vm.h"
 
 extern BOOTBOOT bootboot;
+extern uint64_t initstack[];
 extern const uint8_t _binary_font_psf_start;
 
 static Spinlock cpus_init_lock = { 1 };
@@ -36,8 +42,10 @@ static Spinlock cpus_init_lock = { 1 };
 static void wait_for_cpu_init() {
     spin_lock(&cpus_init_lock);
 
-    vm_setup_paging(vm_get_kernel_pml4());
+    vm_configure_cpu_page_table();
     cpu_set_idtr(intr_get_kernel_idtr());
+    configure_lapic_timer();
+    init_user_space();
 
     spin_release(&cpus_init_lock);
 
@@ -56,6 +64,13 @@ static Status split_logical_cores() {
 
     kernel_msg("Kernel startup on CPU %u\n", cpu_idx);
     kernel_msg("CPUs detected: %u\n", bootboot.numcores);
+
+    g_proc_local.idx = cpu_idx;
+    g_proc_local.ioapic_idx = cpu_idx;
+    g_proc_local.current_task = NULL;
+    g_proc_local.kernel_stack = UINT64_MAX - ((uint64_t)initstack * (cpu_idx + 1)) + 1;
+    g_proc_local.user_stack = NULL;
+    g_proc_local.kernel_page_table = NULL;
 
     return KERNEL_OK;
 }
@@ -104,21 +119,68 @@ Status init_storage() {
     return KERNEL_OK;
 }
 
+Status init_user_space() {
+    EFER efer = cpu_get_efer();
+
+    // Enable syscalls
+    efer.syscall_ext = 1;
+
+    cpu_set_efer(efer);
+    cpu_set_msr(MSR_STAR, 0x0);
+    cpu_set_msr(MSR_LSTAR, &_syscall_handler);
+    cpu_set_msr(MSR_CSTAR, 0x0);
+    cpu_set_msr(MSR_SWAPGS_BASE, 0x0);
+
+    if (lapic_get_cpu_idx() != 0) return KERNEL_OK;
+
+    SegmentDescriptor* gdt = (SegmentDescriptor*)cpu_get_current_gdtr().base;
+
+    // Move kernel segments
+    gdt[3] = gdt[7];
+    gdt[4] = gdt[6];
+
+    // Initialize user segments
+    SegmentDescriptor* user_segs = gdt + 1;
+
+    for (uint8_t i = 0; i < 2; ++i) {
+        user_segs[i].base_1 = 0;
+        user_segs[i].base_2 = 0;
+        user_segs[i].base_3 = 0;
+        user_segs[i].limit_1 = 0xFFFF;
+        user_segs[i].limit_2 = 0xF;
+        user_segs[i].flags = (i == 0 ? 0b1010 : 0b1100);
+
+        SegmentAccessByte* access_byte = (SegmentAccessByte*)&user_segs[i].access_byte;
+
+        access_byte->present = 1;
+        access_byte->privilage_level = USER_PRIVILAGE_LEVEL;
+        access_byte->descriptor_type = 1;
+        access_byte->exec = i;
+        access_byte->dc = 0;
+        access_byte->read_write = 1;
+    }
+
+    return KERNEL_OK;
+}
+
 Status init_kernel() {
     if (split_logical_cores() != KERNEL_OK) return KERNEL_PANIC;
 
     if (init_intr()         != KERNEL_OK) return KERNEL_PANIC;
     if (init_memory()       != KERNEL_OK) return KERNEL_ERROR;
 
-    spin_release(&cpus_init_lock);
-
     if (init_acpi()         != KERNEL_OK) return KERNEL_ERROR;
     if (init_apic()         != KERNEL_OK) return KERNEL_ERROR;
     if (init_ioapic()       != KERNEL_OK) return KERNEL_ERROR;
     if (init_io_devices()   != KERNEL_OK) return KERNEL_ERROR;
     if (init_timer()        != KERNEL_OK) return KERNEL_ERROR;
+
+    spin_release(&cpus_init_lock);
+
     if (init_pci()          != KERNEL_OK) return KERNEL_ERROR;
     if (init_storage()      != KERNEL_OK) return KERNEL_ERROR;
+
+    if (init_user_space() != KERNEL_OK) return KERNEL_ERROR;
     
     return KERNEL_OK;
 }

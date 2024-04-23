@@ -13,10 +13,11 @@
 Virtual memory.
 */
 
+#define DMA_VIRT_ADDRESS 0x0
+#define DMA_SIZE (GB_SIZE * 16) 
 #define KERNEL_HEAP_VIRT_ADDRESS 0xFFFFFE0000000000
 #define KERNEL_STACK_SIZE (KB_SIZE * 4)
 
-#define PAGE_TABLE_POOL_TABLES_COUNT 512UL
 #define PAGE_TABLE_SIZE PAGE_BYTE_SIZE
 
 typedef struct MemoryBlock {
@@ -149,3 +150,4 @@ bool_t vm_test();
 
 void vm_setup_paging(PageMapLevel4Entry* pml4);
 void vm_map_kernel(PageMapLevel4Entry* pml4);
+void vm_configure_cpu_page_table();

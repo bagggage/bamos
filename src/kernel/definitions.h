@@ -35,10 +35,11 @@ typedef enum Status {
 #define MB_SIZE ((uint64_t)KB_SIZE * 1024U)
 #define GB_SIZE (MB_SIZE * 1024U)
 
-#define ATTR_PACKED __attribute__((packed))
-#define ATTR_ALIGN(align) __attribute__((aligned(align)))
-#define ATTR_INTRRUPT __attribute__((interrupt, target("general-regs-only")))
-#define ATTR_NORETURN __attribute__((noreturn))
+#define ATTR_ALIGN(align)   __attribute__((aligned(align)))
+#define ATTR_PACKED         __attribute__((packed))
+#define ATTR_INTRRUPT       __attribute__((interrupt, target("general-regs-only")))
+#define ATTR_NORETURN       __attribute__((noreturn))
+#define ATTR_USED           __attribute__((used))
 
 #define FALLTHROUGH __attribute__ ((fallthrough))
 
