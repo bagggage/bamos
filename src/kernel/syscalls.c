@@ -36,7 +36,8 @@ void __syscall_handler_asm() {
         "pushq %%r11 \n"                        // Save rflags
         "movq %%rsp,g_proc_local+%a0 \n"        // Save user stack
         "movq g_proc_local+%a1,%%rsp \n"        // Switch to kernel stack
-        "movq %%rsp,%%rbp \n"
+        "movq %%rsp,%%rbp \n"                   // Might be unnecessary?
+        "movq %%r10,%%rcx \n"                   // r10 contains arg3 (Syscall ABI), mov it to rcx (System V call ABI)
         "call *%%rax \n"                        // Make call
         "movq g_proc_local+%a0,%%rsp \n"        // Restore user stack, return address, flags
         "popq %%r11 \n"
