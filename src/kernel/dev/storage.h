@@ -2,38 +2,25 @@
 
 #include "dev/device.h"
 
-typedef enum StorageDevType {
-    STORAGE_DEV_IDE = 0,
-    STORAGE_DEV_SATA,
-    STORAGE_DEV_NVME
-} StorageDevType;
-
 typedef struct StorageDevice StorageDevice;
 
 DEV_FUNC(Storage, void*, read, const StorageDevice* const storage_device, 
         const uint64_t bytes_offset, uint64_t total_bytes);
 
 typedef struct StorageInterface {
-    Storage_read_t read;
+    Storage_read_t read;    // the bytes_offset will be round down to the nearest lba entry
 } StorageInterface;
-
-typedef struct StorageNode {
-    StorageDevice* device;
-    StorageDevType type;
-    struct StorageNode* next;
-} StorageNode;
 
 typedef struct StorageDevice {
     DEVICE_STRUCT_IMPL(Storage);
-    StorageNode* head;
+    size_t lba_size;
 } StorageDevice;
 
 #define STORAGE_DEVICE_STRUCT_IMPL \
-    Device storage_common; \
-    StorageInterface storage_interface
-
-Status add_storage_device(StorageDevice* storage_device, const void* const new_device, const StorageDevType type);
+    Device common; \
+    StorageInterface interface; \
+    size_t lba_size
 
 bool_t is_storage_device(const Device* const device);
 
-Status init_storage_device(StorageDevice* storage_device);
+Status init_storage_devices();

@@ -51,9 +51,13 @@ typedef struct DevicePool {
     Device common; \
     dev_name ## Interface interface
 
+#define BUS_STRCUT_IMPL \
+    Device common;  \
+    ListHead nodes
+    
 /*
 Create and push new device structure into 'dev_pool'. Device structure initialized with valid id
-and type fields, other filelds initialized with zeroes.
+and type fields, other fields initialized with zeroes.
 Returns valid pointer to device structure, otherwise returns NULL.
 */
 Device* dev_push(const DeviceType dev_type, const uint32_t dev_struct_size);
