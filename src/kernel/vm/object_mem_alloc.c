@@ -27,8 +27,8 @@ ObjectMemoryAllocator _oma_init(const uint32_t bucket_pages_count, const uint32_
         ((uint64_t)bucket_pages_count * PAGE_BYTE_SIZE)) {
         kassert(capacity > BYTE_SIZE);
 
-        bitmap_size--;
-        capacity -= BYTE_SIZE;
+        capacity--;
+        bitmap_size = div_with_roundup(capacity, BYTE_SIZE);
     }
 
     oma.bucket_capacity = capacity;
