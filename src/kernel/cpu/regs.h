@@ -2,11 +2,14 @@
 
 #include "definitions.h"
 
-#define MSR_EFER    0xC0000080
-#define MSR_STAR    0xC0000081
-#define MSR_LSTAR   0xC0000082
-#define MSR_CSTAR   0xC0000083
-#define MSR_SFMASK  0xC0000084
+#define MSR_EFER        0xC0000080
+#define MSR_STAR        0xC0000081
+#define MSR_LSTAR       0xC0000082
+#define MSR_CSTAR       0xC0000083
+#define MSR_SFMASK      0xC0000084
+#define MSR_FG_BASE     0xC0000100
+#define MSR_GS_BASE     0xC0000101
+#define MSR_SWAPGS_BASE 0xC0000102
 
 #define MSR_APIC_BASE 0x1B
 #define MSR_APIC_BASE_BSP 0x100

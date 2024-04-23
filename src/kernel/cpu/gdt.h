@@ -24,7 +24,7 @@ typedef struct SegmentDescriptor {
     struct {
         uint8_t limit_2 : 4;
         uint8_t flags : 4;
-    };
+    } ATTR_PACKED;
 
     uint8_t base_3;
 } ATTR_PACKED SegmentDescriptor;
