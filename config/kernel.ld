@@ -30,6 +30,7 @@
 
 ENTRY(_start)
 
+heap        = 0xfffffe0000000000;
 mmio        = 0xfffffffff8000000; /* these are configurable for level 2 loaders */
 fb          = 0xfffffffffc000000;
 bootboot    = 0xffffffffff000000; /* default = 0xffffffffffe00000 */
@@ -38,7 +39,7 @@ initstack = 1024;
 
 PHDRS
 {
-  boot PT_LOAD;                                /* one single loadable segment */
+    boot PT_LOAD;                                /* one single loadable segment */
 }
 SECTIONS
 {

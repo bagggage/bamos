@@ -3,12 +3,13 @@
 #include <bootboot.h>
 
 #include "assert.h"
+#include "logger.h"
+#include "math.h"
 
 #include "cpu/paging.h"
 #include "cpu/spinlock.h"
 
-#include "logger.h"
-#include "math.h"
+#include "proc/local.h"
 
 #include "vm/buddy_page_alloc.h"
 #include "vm/object_mem_alloc.h"
@@ -224,6 +225,7 @@ Status init_memory() {
 #endif
 
     if (init_kernel_uma() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_proc_local() != TRUE) return KERNEL_ERROR;
 
     _is_mem_initialized = TRUE;
 

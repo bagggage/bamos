@@ -10,8 +10,6 @@
 #include "intr/apic.h"
 #include "intr/intr.h"
 
-#define LAPIC_TIMER_INT_VECTOR 32
-
 // Divider configuration register
 typedef struct DCR {
     uint32_t divider_low    : 2;
@@ -32,8 +30,7 @@ static uint8_t divider_value_table[] = {
 };
 
 static ATTR_INTRRUPT void intr_lapic_timer_handler(InterruptFrame64* frame) {
-
-
+    kernel_msg("RBP: %x\n", cpu_get_rbp());
     lapic_write(LAPIC_EOI_REG, 1);
 }
 
@@ -120,6 +117,9 @@ Status init_lapic_timer(TimerDevice* dev) {
     kernel_msg("LAPIC Timer: min clock timer ~ %u ps (%u ns)\n",
             dev->min_clock_time,
             (uint32_t)((double)dev->min_clock_time * PS_TO_NS));
+
+    // // Enable interrupts
+    // lapic_write(LAPIC_LVT_TIMER_REG, lapic_read(LAPIC_LVT_TIMER_REG) & (~(1 << 16)));
 
     return KERNEL_OK;
 }
