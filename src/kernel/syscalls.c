@@ -39,16 +39,16 @@ void __syscall_handler_asm() {
         "movq %%rsp,%%rbp \n"                   // Might be unnecessary?
         "movq %%r10,%%rcx \n"                   // r10 contains arg3 (Syscall ABI), mov it to rcx (System V call ABI)
         "call *%%rax \n"                        // Make call
-        "movq g_proc_local+%a0,%%rsp \n"        // Restore user stack, return address, flags
-        "popq %%r11 \n"
-        "popq %%rcx \n"
-        "popq %%rbp \n"
         "xor %%rdi,%%rdi \n"                    // Clear registers for safety
         "xor %%rsi,%%rsi \n"
         "xor %%rdx,%%rdx \n"
         "xor %%r8,%%r8 \n"
         "xor %%r9,%%r9 \n"
         "xor %%r10,%%r10 \n"
+        "movq g_proc_local+%a0,%%rsp \n"        // Restore user stack, return address, flags
+        "popq %%r11 \n"
+        "popq %%rcx \n"
+        "popq %%rbp \n"
         "sysretq \n"                            // Return rax;
         "_invalid_syscall: \n"
         "movq $0xffffffffffffffff,%%rax \n"     // Return -1;
