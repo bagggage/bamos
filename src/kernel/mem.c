@@ -444,3 +444,11 @@ void memset(void* dst, size_t size, uint8_t value) {
         ((uint8_t*)dst)[i] = value;
     }
 }
+
+int memcmp(const void *s1, const void *s2, size_t n) {
+    kassert(s1 != NULL && s2 != NULL);
+    
+	const unsigned char *l=s1, *r=s2;
+	for (; n && *l == *r; n--, l++, r++);
+	return n ? *l - *r : 0;
+}
