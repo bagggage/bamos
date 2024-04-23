@@ -109,25 +109,20 @@ typedef struct NvmeController {
     NvmeComplQueueEntry* acq;
     NvmeSubmissionQueueEntry* iosq;
     NvmeComplQueueEntry* iocq;
-    uint32_t* namespace_list;
+    uint64_t page_size;
 } NvmeController;
 
-typedef struct NvmeDevice NvmeDevice;
-DEV_FUNC(Nvme, void*, nvme_read, const NvmeDevice* nvme_device, const size_t nsid, 
-                                const uint64_t bytes_offset, uint64_t total_bytes);
-
-typedef struct NvmeInterface {
-    Nvme_nvme_read_t nvme_read;
-} NvmeInterface;
-
 typedef struct NvmeDevice {
-    STORAGE_DEVICE_STRUCT_IMPL(Nvme);
+    STORAGE_DEVICE_STRUCT_IMPL;
+    PCI_DEVICE_STRUCT_IMPL;
     NvmeController controller;
-    NvmeNamespaceInfo** namespace_info;
-    size_t namespace_count;
-    uint64_t page_size;
+    NvmeNamespaceInfo* namespace_info;
+    uint32_t nsid;
 } NvmeDevice;
 
-bool_t init_nvme_device(NvmeDevice* nvme_device, const PciDeviceNode* pci_device);
+NvmeController create_nvme_controller(const PciDeviceNode* const pci_device);
+
+// Create  new nvme device and push it to the storage device list 
+bool_t init_nvme_devices_for_controller(StorageDevice* storage_device, const NvmeController* const nvme_controller);
 
 bool_t is_nvme(const uint8_t class_code, const uint8_t subclass);

@@ -73,10 +73,10 @@ static uint32_t read_bar(const uint8_t bus, const uint8_t dev, const uint8_t fun
     return NULL;
 }
 
-Status init_pci_devices(PciDevice* pci_device) {
+Status init_pci_device(PciDevice* pci_device) {
     if (pci_device == NULL) return KERNEL_INVALID_ARGS;
     
-    pci_device->device_list = NULL;
+    pci_device->head = NULL;
 
     PciDeviceNode* device_list = NULL;
 
@@ -90,32 +90,32 @@ Status init_pci_devices(PciDevice* pci_device) {
                 PciDeviceNode* current_node = (PciDeviceNode*)kmalloc(sizeof(PciDeviceNode));
                 current_node->next = NULL;
 
-                current_node->bus = bus;
-                current_node->dev = dev;
-                current_node->func = func;
-                current_node->pci_header.vendor_id = vendor_id;
-                current_node->pci_header.device_id = pci_config_readw(bus, dev, func, 2);
-                current_node->pci_header.prog_if = pci_config_readb(bus, dev, func, 0x9);
-                current_node->pci_header.subclass = pci_config_readb(bus, dev, func, 0xA);
-                current_node->pci_header.class_code = (pci_config_readw(bus, dev, func, 0xB) >> 8);  // for no reason readbyte on 0xB we always get 0xFF
-                current_node->pci_header.bar0 = read_bar(bus, dev, func, PCI_BAR0_OFFSET);
-                current_node->pci_header.bar1 = read_bar(bus, dev, func, PCI_BAR1_OFFSET);
-                current_node->pci_header.bar2 = read_bar(bus, dev, func, PCI_BAR2_OFFSET);
-                current_node->pci_header.bar3 = read_bar(bus, dev, func, PCI_BAR3_OFFSET);
-                current_node->pci_header.bar4 = read_bar(bus, dev, func, PCI_BAR4_OFFSET);
-                current_node->pci_header.bar5 = read_bar(bus, dev, func, PCI_BAR5_OFFSET);
+                current_node->pci_info.bus = bus;
+                current_node->pci_info.dev = dev;
+                current_node->pci_info.func = func;
+                current_node->pci_info.pci_header.vendor_id = vendor_id;
+                current_node->pci_info.pci_header.device_id = pci_config_readw(bus, dev, func, 2);
+                current_node->pci_info.pci_header.prog_if = pci_config_readb(bus, dev, func, 0x9);
+                current_node->pci_info.pci_header.subclass = pci_config_readb(bus, dev, func, 0xA);
+                current_node->pci_info.pci_header.class_code = (pci_config_readw(bus, dev, func, 0xB) >> 8);  // for no reason readbyte on 0xB we always get 0xFF
+                current_node->pci_info.pci_header.bar0 = read_bar(bus, dev, func, PCI_BAR0_OFFSET);
+                current_node->pci_info.pci_header.bar1 = read_bar(bus, dev, func, PCI_BAR1_OFFSET);
+                current_node->pci_info.pci_header.bar2 = read_bar(bus, dev, func, PCI_BAR2_OFFSET);
+                current_node->pci_info.pci_header.bar3 = read_bar(bus, dev, func, PCI_BAR3_OFFSET);
+                current_node->pci_info.pci_header.bar4 = read_bar(bus, dev, func, PCI_BAR4_OFFSET);
+                current_node->pci_info.pci_header.bar5 = read_bar(bus, dev, func, PCI_BAR5_OFFSET);
 
                 // kernel_msg("PCI bus: %u: dev: %u: func: %u: vendor id: %x: class: %x: subclass: %x\n",
                 //     (uint32_t)bus,
                 //     (uint32_t)dev,
                 //     (uint32_t)func,
                 //     (uint64_t)vendor_id,
-                //     (uint64_t)current_node->pci_header.class_code,
-                //     (uint64_t)current_node->pci_header.subclass);
+                //     (uint64_t)current_node->pci_info.pci_header.class_code,
+                //     (uint64_t)current_node->pci_info.pci_header.subclass);
                 
-                if (pci_device->device_list == NULL) {
+                if (pci_device->head == NULL) {
                     device_list = current_node;
-                    pci_device->device_list = device_list;
+                    pci_device->head = device_list;
                 } else {
                     device_list->next = current_node;
                     device_list = device_list->next;
@@ -130,8 +130,11 @@ Status init_pci_devices(PciDevice* pci_device) {
 bool_t add_new_pci_device(const PciDeviceNode* new_pci_device) {
     if (new_pci_device == NULL) return FALSE;
     
-    PciDevice* pci_device = (PciDevice*)dev_pool.data[DEV_PCI_ID];
-    PciDeviceNode* device_list = pci_device->device_list;
+    PciDevice* pci_device = NULL;
+
+    if  (!(pci_device = dev_find(NULL, &is_pci_device))) return FALSE;
+
+    PciDeviceNode* device_list = pci_device->head;
 
     while (device_list->next != NULL) {
         device_list = device_list->next;
@@ -146,11 +149,11 @@ bool_t add_new_pci_device(const PciDeviceNode* new_pci_device) {
 void remove_pci_device(PciDevice* pci_device, const size_t index) {
     if (index < 0) return;
 
-    PciDeviceNode* current = pci_device->device_list;
+    PciDeviceNode* current = pci_device->head;
     PciDeviceNode* previous = NULL;
 
     if (index == 0) {
-        pci_device->device_list = current->next;
+        pci_device->head = current->next;
 
         kfree(current);
 
@@ -166,12 +169,17 @@ void remove_pci_device(PciDevice* pci_device, const size_t index) {
     }
 
     if (i < index) {
-        kernel_msg("Node with index %u not found\n", index);
+        kernel_msg("Node with index was %u not found\n", index);
         return;
     }
 
     if (current == NULL) return;
 
     previous->next = current->next;
+    
     kfree(current);
+}
+
+bool_t is_pci_device(Device* device) {
+    return device->type == DEV_PCI_BUS;
 }

@@ -14,10 +14,42 @@
 #define PCI_BAR4_OFFSET 0x20
 #define PCI_BAR5_OFFSET 0x24
 
-#define PCI_CLASS_CODE_STORAGE_CONTROLLER 0x1
-#define PCI_SUBCLASS_SATA_CONTROLLER 0X6
-#define PCI_SUBCLASS_NVME_CONTROLLER 0x8
-#define PCI_PROGIF_AHCI 0X1
+#define PCI_PROGIF_AHCI 0x1
+
+typedef enum PciClassCode {
+    UNDEFINED = 0,
+    STORAGE_CONTROLLER,
+    NETWORK_CONTROLLER,
+    DISPLAY_CONTROLLER,
+    MULTIMEDIA_CONTROLLER,
+    MEMORY_CONTROLLER,
+    BRIDGE,
+    COMMUNICATION_CONTROLLER,
+    SYSTEM_PERIPHERAL,
+    INPUT_DEVICE_CONTROLLER,
+    DOCKING_STATION,
+    PROCESSOR,
+    SERIAL_BUS_CONTROLLER,
+    WIRELESS_CONTROLLER,
+    INTELLIGENT_CONTROLLER,
+    SATELLITE_CONTROLLER,
+    ENCRYPTION_CONTROLLER,
+    SIGNAL_PROCESSING_CONTROLLER,
+    PROCESSING_ACCELERATOR
+} PciClassCode;
+
+typedef enum StorageControllerSubclass {
+    SCIS_BUS_CONTROLLER = 0,
+    IDE_CONTROLLER,
+    FLOPPY_DISK_CONTROLLER,
+    IPI_BUS_CONTROLLER,
+    RAID_CONTROLLER,
+    ATA_CONTROLLER,
+    SATA_CONTROLLER,
+    SERIAL_ATTACHED_SCSI_CONTROLLER,
+    NVME_CONTROLLER,
+    OTHER = 0x80
+} StorageControllerSubclass;
 
 typedef struct PciConfigurationSpace {
     uint16_t vendor_id;
@@ -52,11 +84,15 @@ typedef struct PciConfigurationSpace {
     uint8_t max_latency;
 } ATTR_PACKED PciConfigurationSpace;
 
-typedef struct PciDeviceNode {
+typedef struct PciInfo {
     uint8_t bus;
     uint8_t dev;
     uint8_t func;
     PciConfigurationSpace pci_header;
+} PciInfo;
+
+typedef struct PciDeviceNode {
+    PciInfo pci_info;
     struct PciDeviceNode* next;
 } PciDeviceNode;
 
@@ -65,8 +101,12 @@ typedef struct PciInterface {
 
 typedef struct PciDevice {
     DEVICE_STRUCT_IMPL(Pci);
-    PciDeviceNode* device_list;
+    PciDeviceNode* head;
 } PciDevice;
+
+#define PCI_DEVICE_STRUCT_IMPL          \
+    PciInfo pci_info;                   \
+    PciInterface pci_interface
 
 uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
 uint16_t pci_config_readw(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
@@ -74,6 +114,8 @@ uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t fu
 
 void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset, const uint32_t value);
 
-Status init_pci_devices(PciDevice* pci_device);
+Status init_pci_device(PciDevice* pci_device);
 bool_t add_new_pci_device(const PciDeviceNode* new_pci_device);
 void remove_pci_device(PciDevice* pci_device, const size_t index);
+
+bool_t is_pci_device(Device* device);

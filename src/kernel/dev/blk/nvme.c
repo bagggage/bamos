@@ -27,8 +27,8 @@
 #define NVME_CTRL_VERSION_MAJOR(version) (version >> 16)
 #define NVME_CTRL_VERSION_MINOR(version) (((version) >> 8) & 0xFF)
 
-#define LBA_SIZE(nvme_device, i) (1 << \
-                (nvme_device->namespace_info[i]->lba_format_supports[nvme_device->namespace_info[i]->lba_format_size & 0x7].lba_data_size))
+#define LBA_SIZE(nvme_device) (1 << \
+                (nvme_device->namespace_info->lba_format_supports[nvme_device->namespace_info->lba_format_size & 0x7].lba_data_size))
 
 typedef struct NvmeCtrlInfo {
     uint16_t vendor_id;
@@ -54,14 +54,14 @@ typedef enum NvmeIOCommands {
     NVME_IO_READ = 2
 } NvmeIOCommands;
 
-static void send_nvme_admin_command(NvmeDevice* nvme_device, const NvmeSubmissionQueueEntry* admin_cmd) {
-    if (nvme_device == NULL || admin_cmd == NULL) return;
+static void send_nvme_admin_command(NvmeController* nvme_controller, const NvmeSubmissionQueueEntry* admin_cmd) {
+    if (nvme_controller == NULL || admin_cmd == NULL) return;
 
     static uint8_t admin_tail =  0;
     //kernel_msg("admin tail %u\n", admin_tail);
 
-    memcpy(admin_cmd, nvme_device->controller.asq + admin_tail, sizeof(*admin_cmd));
-    memset(&nvme_device->controller.acq[admin_tail], sizeof(nvme_device->controller.acq[admin_tail]), 0);
+    memcpy(admin_cmd, nvme_controller->asq + admin_tail, sizeof(*admin_cmd));
+    memset(&nvme_controller->acq[admin_tail], sizeof(nvme_controller->acq[admin_tail]), 0);
 
     //kernel_msg("//--------------------------------------------------//\n");
     // kernel_msg("status %x phase %x stat bit %x addr %x \n",nvme_device->controller.bar0->csts, 
@@ -74,9 +74,9 @@ static void send_nvme_admin_command(NvmeDevice* nvme_device, const NvmeSubmissio
 
     if (admin_tail == NVME_SUB_QUEUE_SIZE) return;
 
-    nvme_device->controller.bar0->asq_admin_tail_doorbell = admin_tail;
+    nvme_controller->bar0->asq_admin_tail_doorbell = admin_tail;
     
-    while (nvme_device->controller.acq[old_admin_tail_doorbell].command_raw == 0);
+    while (nvme_controller->acq[old_admin_tail_doorbell].command_raw == 0);
     
     // kernel_msg("status %x phase %x stat bit %x addr %x \n",nvme_device->controller.bar0->csts, 
     //                                             nvme_device->controller.acq[old_admin_tail_doorbell].phase,
@@ -84,13 +84,12 @@ static void send_nvme_admin_command(NvmeDevice* nvme_device, const NvmeSubmissio
     //                                             nvme_device->controller.acq[old_admin_tail_doorbell]);
     // kernel_msg("//--------------------------------------------------//\n");
 
-    nvme_device->controller.acq[old_admin_tail_doorbell].command_raw = 0;
+    nvme_controller->acq[old_admin_tail_doorbell].command_raw = 0;
 }
 
-static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t sector_offset, const size_t nsid,
-                                const uint64_t opcode, const uint64_t total_bytes, void* buffer) {
+static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t sector_offset,
+                                 const uint64_t opcode, const uint64_t total_bytes, void* buffer) {
     if (nvme_device == NULL || buffer == NULL) return;
-    if (nsid <= 0 || nsid > nvme_device->namespace_count) return;
 
     NvmeSubmissionQueueEntry cmd;
     memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
@@ -99,11 +98,11 @@ static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t s
 
     cmd.command.command_id = ++command_id_counter;
     cmd.command.opcode = opcode;
-    cmd.nsid = nsid;
+    cmd.nsid = nvme_device->nsid;
     cmd.prp1 = get_phys_address((uint64_t)buffer);
 
     void* prp2 = NULL;
-    if (total_bytes >= (nvme_device->page_size / nvme_device->namespace_info[nsid - 1]->sector_size)) {
+    if (total_bytes >= (nvme_device->controller.page_size / nvme_device->namespace_info->sector_size)) {
         prp2 = (void*)kcalloc(PAGE_BYTE_SIZE);
         cmd.prp2 = get_phys_address((uint64_t)prp2);
     }  else {
@@ -138,9 +137,8 @@ static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t s
     kfree((void*)prp2);
 }
 
-static void* nvme_read(const NvmeDevice* nvme_device, const size_t nsid, 
-                const uint64_t bytes_offset, uint64_t total_bytes) {
-    size_t sector_size = nvme_device->namespace_info[nsid - 1]->sector_size;
+static void* nvme_read(const NvmeDevice* nvme_device, const uint64_t bytes_offset, uint64_t total_bytes) {
+    size_t sector_size = nvme_device->namespace_info->sector_size;
     
     total_bytes = ((total_bytes + sector_size - 1) / sector_size) * sector_size; // round up
 
@@ -151,60 +149,64 @@ static void* nvme_read(const NvmeDevice* nvme_device, const size_t nsid,
 
     void* buffer = (void*)kcalloc(total_bytes);
 
-    send_nvme_io_command(nvme_device, bytes_offset / sector_size, nsid, 
-                        NVME_IO_READ, total_bytes / sector_size, buffer);
+    send_nvme_io_command(nvme_device, bytes_offset / sector_size, 
+                         NVME_IO_READ, total_bytes / sector_size, buffer);
     
     return buffer;
 }
 
-bool_t init_nvme_device(NvmeDevice* nvme_device, const PciDeviceNode* pci_device) {
-    if (nvme_device == NULL || pci_device == NULL) return FALSE;
+NvmeController create_nvme_controller(const PciDeviceNode* const pci_device) {
+    if (pci_device == NULL) return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
+
+    NvmeController nvme_controller;
+
+    nvme_controller.bar0 = (NvmeBar0*)pci_device->pci_info.pci_header.bar0;
 
     // Enable interrupts, bus-mastering DMA, and memory space access
-    uint32_t command = pci_config_readl(pci_device->bus, pci_device->dev, pci_device->func, 0x04);
+    uint32_t command = pci_config_readl(pci_device->pci_info.bus, pci_device->pci_info.dev, 
+                                        pci_device->pci_info.func, 0x04);
     command &= ~(1 << 10);
     command |= (1 << 1) | (1 << 2);
 
-    pci_config_writel(pci_device->bus, pci_device->dev, pci_device->func, 0x04, command);
+    pci_config_writel(pci_device->pci_info.bus, pci_device->pci_info.dev, 
+                      pci_device->pci_info.func, 0x04, command);
 
-    nvme_device->controller.bar0 = (NvmeBar0*)pci_device->pci_header.bar0;
+    const uint32_t default_controller_state = nvme_controller.bar0->cc;
 
-    const uint32_t default_controller_state = nvme_device->controller.bar0->cc;
+    nvme_controller.acq = (NvmeComplQueueEntry*)kmalloc(QUEUE_SIZE);
+    nvme_controller.asq = (NvmeSubmissionQueueEntry*)kmalloc(QUEUE_SIZE);
 
-    nvme_device->controller.acq = (NvmeComplQueueEntry*)kmalloc(QUEUE_SIZE);
-    nvme_device->controller.asq = (NvmeSubmissionQueueEntry*)kmalloc(QUEUE_SIZE);
+    nvme_controller.bar0->cc &= ~NVME_CTRL_ENABLE;
 
-    nvme_device->controller.bar0->cc &= ~NVME_CTRL_ENABLE;
-
-    kernel_msg("Waiting for nvme device ready...\n");
-    while ((nvme_device->controller.bar0->csts & NVME_CTRL_ENABLE)){
-        if (nvme_device->controller.bar0->csts & NVME_CTRL_ERROR){
+    kernel_msg("Waiting for nvme controller ready...\n");
+    while ((nvme_controller.bar0->csts & NVME_CTRL_ENABLE)){
+        if (nvme_controller.bar0->csts & NVME_CTRL_ERROR){
             kernel_error("Nvme csts.cfs set\n");
-            return FALSE;
+            return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
         }
     }
-    kernel_msg("Nvme device ready\n");
+    kernel_msg("Nvme controller ready\n");
 
-    nvme_device->controller.bar0->aqa = QUEUE_ATR_64_MASK;
-    nvme_device->controller.bar0->acq = get_phys_address((uint64_t)nvme_device->controller.acq);
-    nvme_device->controller.bar0->asq = get_phys_address((uint64_t)nvme_device->controller.asq);
+    nvme_controller.bar0->aqa = QUEUE_ATR_64_MASK;
+    nvme_controller.bar0->acq = get_phys_address((uint64_t)nvme_controller.acq);
+    nvme_controller.bar0->asq = get_phys_address((uint64_t)nvme_controller.asq);
     
-    nvme_device->page_size = NVME_CTRL_PAGE_SIZE(nvme_device->controller.bar0->cc);
-    nvme_device->controller.bar0->intms = NVME_MASK_ALL_INTERRUPTS;
-    nvme_device->controller.bar0->cc = default_controller_state;
+    nvme_controller.page_size = NVME_CTRL_PAGE_SIZE(nvme_controller.bar0->cc);
+    nvme_controller.bar0->intms = NVME_MASK_ALL_INTERRUPTS;
+    nvme_controller.bar0->cc = default_controller_state;
 
-    kernel_msg("Nvme page size %u\n", nvme_device->page_size);
-    kernel_msg("Controller verion %u.%u\n", NVME_CTRL_VERSION_MAJOR(nvme_device->controller.bar0->version),
-                                            NVME_CTRL_VERSION_MINOR(nvme_device->controller.bar0->version));            
+    kernel_msg("Nvme page size %u\n", nvme_controller.page_size);
+    kernel_msg("Controller verion %u.%u\n", NVME_CTRL_VERSION_MAJOR(nvme_controller.bar0->version),
+                                            NVME_CTRL_VERSION_MINOR(nvme_controller.bar0->version));            
 
-    kernel_msg("Waiting for nvme device ready...\n");
-    while (!(nvme_device->controller.bar0->csts & NVME_CTRL_ENABLE)){
-        if (nvme_device->controller.bar0->csts & NVME_CTRL_ERROR){
+    kernel_msg("Waiting for nvme controller ready...\n");
+    while (!(nvme_controller.bar0->csts & NVME_CTRL_ENABLE)){
+        if (nvme_controller.bar0->csts & NVME_CTRL_ERROR){
             kernel_error("Nvme csts.cfs set\n");
-            return FALSE;
+            return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
         }
     }
-    kernel_msg("Nvme device ready\n");
+    kernel_msg("Nvme controller ready\n");
 
     NvmeSubmissionQueueEntry cmd;
     memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
@@ -212,25 +214,25 @@ bool_t init_nvme_device(NvmeDevice* nvme_device, const PciDeviceNode* pci_device
     cmd.command.opcode = NVME_ADMIN_CREATE_COMPLETION_QUEUE;
     cmd.command.command_id = 1;
     
-    nvme_device->controller.iocq = (NvmeComplQueueEntry*)kmalloc(QUEUE_SIZE);
+    nvme_controller.iocq = (NvmeComplQueueEntry*)kmalloc(QUEUE_SIZE);
 
-    cmd.prp1 = get_phys_address((uint64_t)nvme_device->controller.iocq);
+    cmd.prp1 = get_phys_address((uint64_t)nvme_controller.iocq);
     cmd.command_dword[0] = 0x003f0001; // queue id 1, 64 entries
     cmd.command_dword[1] = 1;
 
-    send_nvme_admin_command(nvme_device, &cmd);
+    send_nvme_admin_command(&nvme_controller, &cmd);
 
     memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
     cmd.command.opcode = NVME_ADMIN_CREATE_SUBMISSION_QUEUE;
     cmd.command.command_id = 1;
     
-    nvme_device->controller.iosq = (NvmeSubmissionQueueEntry*)kmalloc(QUEUE_SIZE);
+    nvme_controller.iosq = (NvmeSubmissionQueueEntry*)kmalloc(QUEUE_SIZE);
 
-    cmd.prp1 = get_phys_address((uint64_t)nvme_device->controller.iosq);
+    cmd.prp1 = get_phys_address((uint64_t)nvme_controller.iosq);
     cmd.command_dword[0] = 0x003f0001; // queue id 1, 64 entries
     cmd.command_dword[1] = 0x00010001; // CQID 1 (31:16), pc enabled (0)
 
-    send_nvme_admin_command(nvme_device, &cmd);
+    send_nvme_admin_command(&nvme_controller, &cmd);
 
     memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
     
@@ -242,7 +244,7 @@ bool_t init_nvme_device(NvmeDevice* nvme_device, const PciDeviceNode* pci_device
 
     cmd.prp1 = get_phys_address((uint64_t)ctrl_info);
 
-    send_nvme_admin_command(nvme_device, &cmd);
+    send_nvme_admin_command(&nvme_controller, &cmd);
 
     kernel_msg("Vendor: %x\n", (uint64_t)ctrl_info->vendor_id);
     kernel_msg("Sub vendor: %x\n", (uint64_t)ctrl_info->sub_vendor_id);
@@ -250,53 +252,61 @@ bool_t init_nvme_device(NvmeDevice* nvme_device, const PciDeviceNode* pci_device
     kernel_msg("Serial: %s\n", ctrl_info->serial);
 
     kfree((void*)ctrl_info);
+    
+    return nvme_controller;
+}
 
+bool_t init_nvme_devices_for_controller(StorageDevice* storage_device, const NvmeController* const nvme_controller) {
+    if (nvme_controller == NULL) return FALSE;
+
+    NvmeSubmissionQueueEntry cmd;
     memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
-
+    
     cmd.command.opcode = NVME_ADMIN_IDENTIFY;
     cmd.command.command_id = 1; 
-    cmd.command_dword[0] = NVME_IDENTIFY_NAMESPACE;
+    cmd.command_dword[0] = NVME_IDENTIFY_NAMESPACE;     
     
-    nvme_device->controller.namespace_list = (uint32_t*)kcalloc(PAGE_BYTE_SIZE);
+    uint32_t* namespace_vector = (uint32_t*)kcalloc(PAGE_BYTE_SIZE);
 
-    cmd.prp1 = get_phys_address((uint64_t)nvme_device->controller.namespace_list);
+    cmd.prp1 = get_phys_address((uint64_t)namespace_vector);
 
-    send_nvme_admin_command(nvme_device, &cmd);
+    send_nvme_admin_command(nvme_controller, &cmd);
 
-    nvme_device->namespace_count = 0;
-    for (size_t i = 0; nvme_device->controller.namespace_list[i] != NULL; ++i) {
-        kernel_msg("Namespace : %x\n", nvme_device->controller.namespace_list[i]);
-
-        nvme_device->namespace_count++;
+    for (size_t i = 0; namespace_vector[i] != NULL; ++i) {
+        kernel_msg("Namespace : %x\n", namespace_vector[i]);
 
         memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
-        // identify namespace
+        
         cmd.command.opcode = NVME_ADMIN_IDENTIFY;
         cmd.command.command_id = 1; 
-        cmd.nsid = nvme_device->controller.namespace_list[i];
+        cmd.nsid = namespace_vector[i];
 
-        if (i == 0){
-            nvme_device->namespace_info = (NvmeNamespaceInfo**)kcalloc(sizeof(NvmeNamespaceInfo*));
-        }
+        NvmeDevice* nvme_device = (NvmeDevice*)kmalloc(sizeof(NvmeDevice));
 
-        nvme_device->namespace_info[i] = (NvmeNamespaceInfo*)kcalloc(sizeof(NvmeNamespaceInfo));
+        nvme_device->controller = *nvme_controller;
+        nvme_device->namespace_info = (NvmeNamespaceInfo*)kmalloc(sizeof(NvmeNamespaceInfo));
+        nvme_device->nsid = namespace_vector[i];
+    
+        cmd.prp1 = get_phys_address((uint64_t)nvme_device->namespace_info);
 
-        cmd.prp1 = get_phys_address((uint64_t)nvme_device->namespace_info[i]);
+        send_nvme_admin_command(nvme_controller, &cmd);
 
-        send_nvme_admin_command(nvme_device, &cmd);
+        nvme_device->namespace_info->sector_size = LBA_SIZE(nvme_device);
+        kernel_msg("Namespace No. %u LBA size: %u\n", i + 1, nvme_device->namespace_info->sector_size);
 
-        nvme_device->namespace_info[i]->sector_size = LBA_SIZE(nvme_device, i);
-        kernel_msg("Namespace No. %u LBA size: %u\n", i + 1, nvme_device->namespace_info[i]->sector_size);
+        nvme_device->storage_interface.read = &nvme_read;
+
+        add_storage_device(storage_device, nvme_device, STORAGE_DEV_NVME);
     }
 
-    nvme_device->interface.nvme_read = &nvme_read;
+    kfree((void*)namespace_vector);
 
     return TRUE;
 }
 
 bool_t is_nvme(const uint8_t class_code, const uint8_t subclass) {
-    if (class_code == PCI_CLASS_CODE_STORAGE_CONTROLLER &&
-        subclass == PCI_SUBCLASS_NVME_CONTROLLER) {
+    if (class_code == STORAGE_CONTROLLER &&
+        subclass == NVME_CONTROLLER) {
             return TRUE;
         }
 
