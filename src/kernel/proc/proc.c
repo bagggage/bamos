@@ -44,7 +44,7 @@ Process* proc_new() {
     if (proc_oma == NULL) {
         proc_oma = oma_new(sizeof(Process));
 
-        if (proc_oma == NULL) retrun NULL;
+        if (proc_oma == NULL) return NULL;
     }
 
     Process* process = (Process*)oma_alloc(proc_oma);
