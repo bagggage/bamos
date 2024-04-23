@@ -85,28 +85,16 @@ typedef struct PciConfigurationSpace {
 } ATTR_PACKED PciConfigurationSpace;
 
 typedef struct PciInfo {
+    LIST_STRUCT_IMPL(PciInfo);
     uint8_t bus;
     uint8_t dev;
     uint8_t func;
     PciConfigurationSpace pci_header;
 } PciInfo;
 
-typedef struct PciDeviceNode {
-    PciInfo pci_info;
-    struct PciDeviceNode* next;
-} PciDeviceNode;
-
-typedef struct PciInterface {
-} PciInterface;
-
-typedef struct PciDevice {
-    DEVICE_STRUCT_IMPL(Pci);
-    PciDeviceNode* head;
-} PciDevice;
-
-#define PCI_DEVICE_STRUCT_IMPL          \
-    PciInfo pci_info;                   \
-    PciInterface pci_interface
+typedef struct PciBus {
+    BUS_STRCUT_IMPL;
+} PciBus;
 
 uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
 uint16_t pci_config_readw(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
@@ -114,8 +102,6 @@ uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t fu
 
 void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset, const uint32_t value);
 
-Status init_pci_device(PciDevice* pci_device);
-bool_t add_new_pci_device(const PciDeviceNode* new_pci_device);
-void remove_pci_device(PciDevice* pci_device, const size_t index);
+Status init_pci_device(PciBus* pci_device);
 
 bool_t is_pci_device(Device* device);

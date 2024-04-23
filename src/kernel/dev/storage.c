@@ -9,55 +9,42 @@
 
 #include "dev/stds/pci.h"
 
-Status add_storage_device(StorageDevice* storage_device, const void* const new_device, const StorageDevType type) {
-    if (storage_device == NULL) return KERNEL_INVALID_ARGS;
-
-    if (storage_device->head == NULL) {
-        storage_device->head = (StorageNode*)kmalloc(sizeof(StorageNode));
-
-        storage_device->head->device = new_device;
-        storage_device->head->type = type;
-        storage_device->head->next = NULL;
-
-        return KERNEL_OK;
-    }
-
-    StorageNode* current_node = storage_device->head;
-
-    while (current_node->next != NULL) {
-        current_node = current_node->next;
-    }
-    
-    current_node->next->device = new_device;
-    current_node->next->type = type;
-    current_node->next->next = NULL;
-    
-    return KERNEL_OK;
-}
-
 bool_t is_storage_device(const Device* const device) {
     return device->type == DEV_STORAGE;
 }
 
-Status init_storage_device(StorageDevice* storage_device) {
-    PciDevice* pci_device_list = (PciDevice*)dev_find(NULL, &is_pci_device);
+Status init_storage_devices() {
+    PciBus* pci_device_list = (PciBus*)dev_find(NULL, &is_pci_device);
+
+    ListHead head = pci_device_list->nodes;
 
     if (pci_device_list == NULL) return KERNEL_ERROR;
     
-    while (pci_device_list->head != NULL) {
-        if (is_nvme(pci_device_list->head->pci_info.pci_header.class_code, 
-                    pci_device_list->head->pci_info.pci_header.subclass)) {
+    bool_t is_storage_device_found = FALSE;
+
+    while (head.next != NULL) {
+        PciInfo* pci_device = (PciInfo*)head.next;
+            
+        if (is_nvme(pci_device->pci_header.class_code, pci_device->pci_header.subclass)) {
             kernel_msg("Nvme device detected\n");
 
-            NvmeController nvme_controller = create_nvme_controller(pci_device_list->head);
+            is_storage_device_found = TRUE;
+
+            NvmeController nvme_controller = create_nvme_controller(head.next);
 
             if (nvme_controller.acq == NULL || nvme_controller.asq == NULL) return KERNEL_ERROR;
             
-            if (init_nvme_devices_for_controller(storage_device, &nvme_controller) == FALSE) return KERNEL_ERROR;            
+            if (init_nvme_devices_for_controller(&nvme_controller) == FALSE) return KERNEL_ERROR;            
         }
         
-        pci_device_list->head = pci_device_list->head->next;
+        head.next = head.next->next;
     }
+
+    if (!is_storage_device_found) {
+        kernel_error("No storage device was found\n");
+        
+        return KERNEL_ERROR;  
+    } 
 
     return KERNEL_OK;
 }

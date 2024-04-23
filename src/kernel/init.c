@@ -105,22 +105,21 @@ static Status init_timer() {
 }
 
 Status init_pci() {
-    PciDevice* pci_device = (PciDevice*)dev_push(DEV_PCI_BUS, sizeof(PciDevice));
+    PciBus* pci_bus = (PciBus*)dev_push(DEV_PCI_BUS, sizeof(PciBus));
 
-    if (pci_device == NULL) return KERNEL_ERROR;
+    if (pci_bus == NULL) return KERNEL_ERROR;
 
-    if (init_pci_device(pci_device) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_pci_device(pci_bus) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }
 
 Status init_storage() {
-    StorageDevice* storage_device = (StorageDevice*)dev_push(DEV_STORAGE, sizeof(StorageDevice));
+    if (init_storage_devices() != KERNEL_OK) return KERNEL_ERROR;
+    
+    //StorageDevice* Device = dev_find(NULL, &is_storage_device);
 
-    if (storage_device == NULL) return KERNEL_ERROR;
-
-    if (init_storage_device(storage_device) != KERNEL_OK) return KERNEL_ERROR;
-
+    //find_gpt_table(Device);
     return KERNEL_OK;
 }
 
