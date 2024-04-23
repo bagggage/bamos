@@ -37,6 +37,9 @@ typedef struct Task {
     Thread thread;
 } Task;
 
+Process* proc_new();
+void proc_delete(Process* process);
+
 int _sys_clone();
-int _sys_fork();
-int _sys_execve();
+pid_t _sys_fork();
+int _sys_execve(const char* filename, char* const argv[], char* const envp[]);

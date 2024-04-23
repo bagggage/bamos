@@ -182,6 +182,32 @@ void vm_heap_release(VMHeap* heap, const uint64_t virt_address, const uint32_t p
     vm_heap_insert_free_block(heap, virt_address, pages_count);
 }
 
+VMHeap vm_heap_copy(const VMHeap* src_heap) {
+    VMHeap result;
+
+    result.free_list = (ListHead) { NULL, NULL };
+    result.virt_base = src_heap->virt_base;
+    result.virt_top = src_heap->virt_top;
+
+    const MemoryBlockNode* node = (const MemoryBlockNode*)src_heap->free_list.next;
+    MemoryBlockNode* prev = NULL;
+
+    while (node != NULL) {
+        MemoryBlockNode* new_node = (MemoryBlockNode*)oma_alloc(free_list_oma);
+
+        new_node->block = node->block;
+        new_node->next = NULL;
+        new_node->prev = prev;
+
+        if (result.free_list.next == NULL) result.free_list.next = (ListHead*)new_node;
+        if (prev != NULL) prev->next = new_node;
+    }
+
+    result.free_list.prev = prev;
+
+    return result;
+}
+
 void log_heap(const VMHeap* heap) {
     kernel_msg("Heap: %x --- %x\n", heap->virt_base, heap->virt_top);
     kernel_msg("Heap free list: ");

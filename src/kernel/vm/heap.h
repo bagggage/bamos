@@ -34,4 +34,6 @@ Release virtual addresses range of heap previously reserved by 'vm_heap_reserve'
 */
 void vm_heap_release(VMHeap* heap, const uint64_t virt_address, const uint32_t pages_count);
 
+VMHeap vm_heap_copy(const VMHeap* src_heap);
+
 void log_heap(const VMHeap* heap);
