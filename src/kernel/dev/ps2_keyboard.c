@@ -277,7 +277,7 @@ Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
         }
 
         if (result != ACK) {
-            error_str = "PS/2 Keyboard uninitialized successfull";
+            error_str = "PS/2 Keyboard uninitialized successful";
             return result == RESEND ? KERNEL_ERROR : KERNEL_PANIC;
         }
     }
