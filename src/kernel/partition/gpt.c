@@ -40,17 +40,25 @@ Status find_gpt_table(const StorageDevice* const storage_device) {
         for (size_t j = 0; j < storage_device->lba_size / sizeof(PartitionEntry); ++j) {
             PartitionEntry* partition_entry = (PartitionEntry*)&buffer[j * sizeof(PartitionEntry)];
 
-            uint128_t type_unknown = 0;
-            if (!memcmp(partition_entry->guid_type, &type_unknown, sizeof(partition_entry->guid_type))) continue;
+            uint128_t type_unused = 0;
+            if (!memcmp(partition_entry->guid_type, &type_unused, sizeof(partition_entry->guid_type))) continue;
 
             for (size_t k = 0; k < sizeof(partition_entry->partition_name); k++) {
                 raw_putc(partition_entry->partition_name[k]);
             }
             raw_putc('\n');
-            kernel_msg("Partition start: %u\n", partition_entry->lba_start);
+            kernel_msg("Partition start: %u, Partition LBA: %u\n", 
+                    partition_entry->lba_start,
+                    partition_entry->lba_start / storage_device->lba_size);
 
-            // char* superblock = storage_device->interface.read(storage_device, partition_entry->lba_start, sizeof(extfs_superblock) + 1024);
-            // extfs_superblock* block = superblock + 1024; 
+            // char* superblock = storage_device->interface.read(storage_device, (partition_entry->lba_start * 512) + 1024, sizeof(ExtSuperblock));
+            // ExtSuperblock* ext = superblock;
+            // kernel_msg("Magic %x\n",ext->magic);
+            // for (size_t k = 0; k < 2048; k++) {
+            //     raw_putc(superblock[k]);
+            // }
+            // raw_putc('\n');
+            // ExtSuperblock* block = superblock + 1024; 
             // kernel_msg("magic: %x\n", block->magic);
         }
 
