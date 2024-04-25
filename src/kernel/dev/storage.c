@@ -30,14 +30,14 @@ Status init_storage_devices() {
 
             is_storage_device_found = TRUE;
 
-            NvmeController nvme_controller = create_nvme_controller(head.next);
+            NvmeController nvme_controller = create_nvme_controller(pci_device);
 
             if (nvme_controller.acq == NULL || nvme_controller.asq == NULL) return KERNEL_ERROR;
             
             if (init_nvme_devices_for_controller(&nvme_controller) == FALSE) return KERNEL_ERROR;            
         }
         
-        head.next = head.next->next;
+        pci_device = pci_device->next;
     }
 
     if (!is_storage_device_found) {

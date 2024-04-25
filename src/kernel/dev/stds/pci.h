@@ -48,7 +48,7 @@ typedef enum StorageControllerSubclass {
     SATA_CONTROLLER,
     SERIAL_ATTACHED_SCSI_CONTROLLER,
     NVME_CONTROLLER,
-    STORAGE_OTHER = 0x80
+    OTHER_SUBCLASS = 0x80
 } StorageControllerSubclass;
 
 typedef struct PciConfigurationSpace {
