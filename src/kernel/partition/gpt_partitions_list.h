@@ -15,6 +15,6 @@ typedef struct GptPartitionList {
     ListHead nodes;
 } GptPartitionList;
 
-bool_t gpt_partition_list_push(GptPartitionNode* partition_node);
+bool_t gpt_push(GptPartitionNode* partition_node);
 
-GptPartitionNode* gpt_partition_list_get_first_node();
+GptPartitionNode* gpt_get_first_node();

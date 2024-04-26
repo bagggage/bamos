@@ -63,7 +63,7 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
             new_node->next = NULL;
             new_node->prev = NULL;
 
-            gpt_partition_list_push(new_node);
+            gpt_push(new_node);
         }
 
         lba_offset += storage_device->lba_size;
