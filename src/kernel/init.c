@@ -22,6 +22,8 @@
 #include "dev/stds/pci.h"
 #include "dev/storage.h"
 
+#include "fs/vfs/vfs.h"
+
 #include "intr/apic.h"
 #include "intr/intr.h"
 #include "intr/ioapic.h"
@@ -117,9 +119,6 @@ Status init_pci() {
 Status init_storage() {
     if (init_storage_devices() != KERNEL_OK) return KERNEL_ERROR;
     
-    //StorageDevice* Device = dev_find(NULL, &is_storage_device);
-
-    //find_gpt_table(Device);
     return KERNEL_OK;
 }
 
@@ -184,7 +183,9 @@ Status init_kernel() {
     if (init_pci()          != KERNEL_OK) return KERNEL_ERROR;
     if (init_storage()      != KERNEL_OK) return KERNEL_ERROR;
 
-    if (init_user_space() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_user_space()   != KERNEL_OK) return KERNEL_ERROR;
+
+    if (init_vfs()           != KERNEL_OK) return KERNEL_ERROR;
     
     return KERNEL_OK;
 }
