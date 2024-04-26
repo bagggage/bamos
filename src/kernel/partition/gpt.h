@@ -30,4 +30,4 @@ typedef struct PartitionEntry {
     uint8_t partition_name[72];
 } ATTR_PACKED PartitionEntry;
 
-Status find_gpt_table(const StorageDevice* const storage_device);
+Status find_gpt_tables();
