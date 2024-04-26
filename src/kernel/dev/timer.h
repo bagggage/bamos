@@ -4,9 +4,9 @@
 #include "device.h"
 
 // Time convertion constants
-#define PS_TO_NS (1.0e-3)
-#define PS_TO_MS (1.0e-9)
-#define NS_TO_MS (1.0e-6)
+#define PS_TO_NS ((double)1.0e-3)
+#define PS_TO_MS ((double)1.0e-9)
+#define NS_TO_MS ((double)1.0e-6)
 
 typedef struct TimerDevice TimerDevice;
 

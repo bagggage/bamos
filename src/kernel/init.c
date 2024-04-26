@@ -109,7 +109,7 @@ Status init_pci() {
 
     if (pci_bus == NULL) return KERNEL_ERROR;
 
-    if (init_pci_device(pci_bus) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_pci_bus(pci_bus) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }
