@@ -25,7 +25,9 @@ static int strcmp(const char* s1, const char* s2) {
 }
 
 static Status find_gpt_table_on_storage_device(const StorageDevice* const storage_device) {
-    const GptHeader* gpt_header = storage_device->interface.read(storage_device, GPT_HEADER_OFFSET, sizeof(GptHeader));
+    GptHeader* gpt_header = (GptHeader*)kmalloc(sizeof(GptHeader));
+
+    storage_device->interface.read(storage_device, GPT_HEADER_OFFSET, sizeof(GptHeader), gpt_header);
 
     if (!strcmp(gpt_header->magic, GPT_MAGIC)) return KERNEL_ERROR;
 
@@ -40,7 +42,9 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
 
         //kernel_msg("Offset %u, LBA No.%u\n", lba_offset, lba_offset / storage_device->lba_size);
 
-        const char* buffer = storage_device->interface.read(storage_device, lba_offset, total_bytes);
+        char* buffer = (char*)kmalloc(total_bytes);
+
+        storage_device->interface.read(storage_device, lba_offset, total_bytes, buffer);
 
         for (size_t j = 0; j < storage_device->lba_size / sizeof(PartitionEntry); ++j) {
             const PartitionEntry* partition_entry = (PartitionEntry*)&buffer[j * sizeof(PartitionEntry)];
@@ -63,7 +67,7 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
             new_node->next = NULL;
             new_node->prev = NULL;
 
-            gpt_partition_list_push(new_node);
+            gpt_push(new_node);
         }
 
         lba_offset += storage_device->lba_size;

@@ -138,22 +138,21 @@ static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t s
     kfree((void*)prp2);
 }
 
-static void* nvme_read(const NvmeDevice* nvme_device, const uint64_t bytes_offset, uint64_t total_bytes) {
+static void nvme_read(const NvmeDevice* const nvme_device, const uint64_t bytes_offset,
+                    uint64_t total_bytes, void* const buffer) {
+    if (buffer == NULL) return;
+
     const size_t sector_size = nvme_device->lba_size;
 
     total_bytes = ((total_bytes + sector_size - 1) / sector_size) * sector_size; // round up
 
     if (total_bytes > PAGE_BYTE_SIZE) {
-        kernel_warn("buffer size is more than %u", PAGE_BYTE_SIZE);
-        return NULL;
+        kernel_warn("Buffer size is more than %u", PAGE_BYTE_SIZE);
+        return;
     }
-
-    void* buffer = (void*)kcalloc(total_bytes);
 
     send_nvme_io_command(nvme_device, bytes_offset / sector_size, 
                          NVME_IO_READ, total_bytes / sector_size, buffer);
-
-    return buffer;
 }
 
 NvmeController create_nvme_controller(const PciDevice* const pci_device) {
