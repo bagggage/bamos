@@ -575,7 +575,9 @@ static Status _vm_map_phys_to_virt(uint64_t phys_address,
 
     static const uint64_t level_size_table[3] = { GB_SIZE, (2 * MB_SIZE), PAGE_BYTE_SIZE };
 
-    if ((flags & VMMAP_USE_LARGE_PAGES) != 0 && (phys_address % (PAGE_BYTE_SIZE * 512)) != 0) {
+    if ((flags & VMMAP_USE_LARGE_PAGES) != 0 &&
+        (phys_address % (PAGE_BYTE_SIZE * 512) != 0 ||
+        (phys_address & 0x1FF000 != virt_address & 0x1FF000))) {
         flags ^= VMMAP_USE_LARGE_PAGES;
     }
 
@@ -591,7 +593,7 @@ static Status _vm_map_phys_to_virt(uint64_t phys_address,
     }
 
     // Debug
-    //kernel_msg("1GB: %u, 2MB: %u; 4KB: %u\n", pages_by_size_count[0], pages_by_size_count[1], pages_by_size_count[2]);
+    //kernel_msg("(%x -> %x) 1GB: %u, 2MB: %u; 4KB: %u\n", phys_address, virt_address, pages_by_size_count[0], pages_by_size_count[1], pages_by_size_count[2]);
 
     uint32_t offset_shift = 39;
 
@@ -631,12 +633,15 @@ static Status _vm_map_phys_to_virt(uint64_t phys_address,
         if (is_need_to_map_on_this_level) {
             //kernel_msg("Need to map[%u][%u] -> %x\n", i, ((uint64_t)pxe & 0xFFF) / 8, phys_address);
             // Check if need to free allocated page tables
-            if (i < 3 && pxe->present == 1 && pxe->size != 1) vm_free_page_table((PageXEntry*)((uint64_t)pxe->page_ppn * PAGE_BYTE_SIZE));
+            if (i < 3 && pxe->present == 1 && pxe->size != 1) {
+                vm_free_page_table((PageXEntry*)((uint64_t)pxe->page_ppn * PAGE_BYTE_SIZE));
+            }
 
             --i;
 
             vm_config_page_table_entry(pxe, (uint64_t)phys_address, flags);
-            if (pxe->size == 1) kassert((pxe->page_ppn & 0x1FF) == 0);
+
+            kassert(pxe->size == 0 || (pxe->page_ppn & 0x1FF) == 0);
 
             phys_address += level_size_table[i];
             virt_address += level_size_table[i];
