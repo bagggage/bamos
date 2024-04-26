@@ -22,7 +22,7 @@
 #include "dev/stds/pci.h"
 #include "dev/storage.h"
 
-#include "fs/vfs/vfs.h"
+#include "fs/vfs.h"
 
 #include "intr/apic.h"
 #include "intr/intr.h"
@@ -185,7 +185,7 @@ Status init_kernel() {
 
     if (init_user_space()   != KERNEL_OK) return KERNEL_ERROR;
 
-    if (init_vfs()           != KERNEL_OK) return KERNEL_ERROR;
+    if (init_vfs()          != KERNEL_OK) return KERNEL_ERROR;
     
     return KERNEL_OK;
 }

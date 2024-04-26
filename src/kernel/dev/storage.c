@@ -15,16 +15,14 @@ bool_t is_storage_device(const Device* const device) {
 
 Status init_storage_devices() {
     PciBus* pci_device_list = (PciBus*)dev_find(NULL, &is_pci_bus);
-
-    ListHead head = pci_device_list->nodes;
-
-    if (pci_device_list == NULL) return KERNEL_ERROR;
     
     bool_t is_storage_device_found = FALSE;
 
-    while (head.next != NULL) {
-        PciDevice* pci_device = (PciDevice*)head.next;
-            
+    PciDevice* pci_device = (PciDevice*)pci_device_list->nodes.next;
+
+    if (pci_device == NULL) return KERNEL_ERROR;
+
+    while (pci_device != NULL) {
         if (is_nvme(pci_device->config.class_code, pci_device->config.subclass)) {
             kernel_msg("Nvme device detected\n");
 
