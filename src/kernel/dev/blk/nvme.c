@@ -107,7 +107,8 @@ static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t s
     if (total_bytes >= (nvme_device->controller.page_size / nvme_device->lba_size)) {
         prp2 = (void*)kcalloc(PAGE_BYTE_SIZE);
         cmd.prp2 = get_phys_address((uint64_t)prp2);
-    }  else {
+    } 
+    else {
         cmd.prp2 = 0;
     }
 
