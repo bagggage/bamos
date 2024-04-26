@@ -88,7 +88,7 @@ void dev_remove(Device* dev) {
 }
 
 Device* dev_find(Device* begin, DevPredicat_t predicat) {
-    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin);
+    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin->next);
 
     while (curr_dev != NULL && predicat(curr_dev) == FALSE) {
         curr_dev = curr_dev->next;
