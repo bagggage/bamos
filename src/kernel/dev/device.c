@@ -88,7 +88,7 @@ void dev_remove(Device* dev) {
 }
 
 Device* dev_find(Device* begin, DevPredicat_t predicat) {
-    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin);
+    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin->next);
 
     while (curr_dev != NULL && predicat(curr_dev) == FALSE) {
         curr_dev = curr_dev->next;
@@ -97,12 +97,8 @@ Device* dev_find(Device* begin, DevPredicat_t predicat) {
     return curr_dev;
 }
 
-Device* dev_find_first(DevPredicat_t predicat) {
-    return dev_find((Device*)dev_pool.nodes.next, predicat);
-}
-
 Device* dev_find_by_type(Device* begin, const DeviceType type) {
-    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin);
+    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin->next);
 
     while (curr_dev != NULL && curr_dev->type != type) {
         curr_dev = curr_dev->next;

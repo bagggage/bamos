@@ -70,5 +70,4 @@ void dev_remove(Device* dev);
 typedef bool_t (*DevPredicat_t)(Device* dev);
 
 Device* dev_find(Device* begin, DevPredicat_t predicat);
-Device* dev_find_first(DevPredicat_t predicat);
 Device* dev_find_by_type(Device* begin, const DeviceType type);
