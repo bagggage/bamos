@@ -109,7 +109,7 @@ typedef struct NvmeController {
     NvmeSubmissionQueueEntry* iosq;
     NvmeComplQueueEntry* iocq;
     uint64_t page_size;
-    PciInfo* pci_device;
+    PciDevice* pci_device;
 } NvmeController;
 
 typedef struct NvmeDevice {
@@ -119,7 +119,7 @@ typedef struct NvmeDevice {
     uint32_t nsid;
 } NvmeDevice;
 
-NvmeController create_nvme_controller(const PciInfo* const pci_device);
+NvmeController create_nvme_controller(const PciDevice* const pci_device);
 
 // Create  new nvme device and push it to the storage device list 
 bool_t init_nvme_devices_for_controller(const NvmeController* const nvme_controller);

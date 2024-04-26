@@ -100,3 +100,13 @@ Device* dev_find(Device* begin, DevPredicat_t predicat) {
 Device* dev_find_first(DevPredicat_t predicat) {
     return dev_find((Device*)dev_pool.nodes.next, predicat);
 }
+
+Device* dev_find_by_type(Device* begin, const DeviceType type) {
+    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin);
+
+    while (curr_dev != NULL && curr_dev->type != type) {
+        curr_dev = curr_dev->next;
+    }
+
+    return curr_dev;
+}

@@ -138,8 +138,8 @@ static void send_nvme_io_command(const NvmeDevice* nvme_device, const uint64_t s
 }
 
 static void* nvme_read(const NvmeDevice* nvme_device, const uint64_t bytes_offset, uint64_t total_bytes) {
-    size_t sector_size = nvme_device->lba_size;
-    
+    const size_t sector_size = nvme_device->lba_size;
+
     total_bytes = ((total_bytes + sector_size - 1) / sector_size) * sector_size; // round up
 
     if (total_bytes > PAGE_BYTE_SIZE) {
@@ -151,17 +151,17 @@ static void* nvme_read(const NvmeDevice* nvme_device, const uint64_t bytes_offse
 
     send_nvme_io_command(nvme_device, bytes_offset / sector_size, 
                          NVME_IO_READ, total_bytes / sector_size, buffer);
-    
+
     return buffer;
 }
 
-NvmeController create_nvme_controller(const PciInfo* const pci_device) {
+NvmeController create_nvme_controller(const PciDevice* const pci_device) {
     if (pci_device == NULL) return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
 
     NvmeController nvme_controller;
 
     nvme_controller.pci_device = pci_device;
-    nvme_controller.bar0 = (NvmeBar0*)pci_device->pci_header.bar0;
+    nvme_controller.bar0 = (NvmeBar0*)pci_device->config.bar0;
 
     // Enable interrupts, bus-mastering DMA, and memory space access
     uint32_t command = pci_config_readl(pci_device->bus, pci_device->dev, pci_device->func, 0x04);
@@ -303,10 +303,10 @@ bool_t init_nvme_devices_for_controller(const NvmeController* const nvme_control
 }
 
 bool_t is_nvme(const uint8_t class_code, const uint8_t subclass) {
-    if (class_code == STORAGE_CONTROLLER &&
+    if (class_code == PCI_STORAGE_CONTROLLER &&
         subclass == NVME_CONTROLLER) {
-            return TRUE;
-        }
+        return TRUE;
+    }
 
     return FALSE;
 }

@@ -17,25 +17,25 @@
 #define PCI_PROGIF_AHCI 0x1
 
 typedef enum PciClassCode {
-    UNDEFINED = 0,
-    STORAGE_CONTROLLER,
-    NETWORK_CONTROLLER,
-    DISPLAY_CONTROLLER,
-    MULTIMEDIA_CONTROLLER,
-    MEMORY_CONTROLLER,
-    BRIDGE,
-    COMMUNICATION_CONTROLLER,
-    SYSTEM_PERIPHERAL,
-    INPUT_DEVICE_CONTROLLER,
-    DOCKING_STATION,
-    PROCESSOR,
-    SERIAL_BUS_CONTROLLER,
-    WIRELESS_CONTROLLER,
-    INTELLIGENT_CONTROLLER,
-    SATELLITE_CONTROLLER,
-    ENCRYPTION_CONTROLLER,
-    SIGNAL_PROCESSING_CONTROLLER,
-    PROCESSING_ACCELERATOR
+    PCI_UNDEFINED = 0,
+    PCI_STORAGE_CONTROLLER,
+    PCI_NETWORK_CONTROLLER,
+    PCI_DISPLAY_CONTROLLER,
+    PCI_MULTIMEDIA_CONTROLLER,
+    PCI_MEMORY_CONTROLLER,
+    PCI_BRIDGE,
+    PCI_COMMUNICATION_CONTROLLER,
+    PCI_SYSTEM_PERIPHERAL,
+    PCI_INPUT_DEVICE_CONTROLLER,
+    PCI_DOCKING_STATION,
+    PCI_PROCESSOR,
+    PCI_SERIAL_BUS_CONTROLLER,
+    PCI_WIRELESS_CONTROLLER,
+    PCI_INTELLIGENT_CONTROLLER,
+    PCI_SATELLITE_CONTROLLER,
+    PCI_ENCRYPTION_CONTROLLER,
+    PCI_SIGNAL_PROCESSING_CONTROLLER,
+    PCI_PROCESSING_ACCELERATOR
 } PciClassCode;
 
 typedef enum StorageControllerSubclass {
@@ -48,7 +48,7 @@ typedef enum StorageControllerSubclass {
     SATA_CONTROLLER,
     SERIAL_ATTACHED_SCSI_CONTROLLER,
     NVME_CONTROLLER,
-    OTHER = 0x80
+    STORAGE_OTHER = 0x80
 } StorageControllerSubclass;
 
 typedef struct PciConfigurationSpace {
@@ -84,13 +84,15 @@ typedef struct PciConfigurationSpace {
     uint8_t max_latency;
 } ATTR_PACKED PciConfigurationSpace;
 
-typedef struct PciInfo {
-    LIST_STRUCT_IMPL(PciInfo);
+typedef struct PciDevice {
+    LIST_STRUCT_IMPL(PciDevice);
+
     uint8_t bus;
     uint8_t dev;
     uint8_t func;
-    PciConfigurationSpace pci_header;
-} PciInfo;
+
+    PciConfigurationSpace config;
+} PciDevice;
 
 typedef struct PciBus {
     BUS_STRCUT_IMPL;
@@ -102,6 +104,6 @@ uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t fu
 
 void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset, const uint32_t value);
 
-Status init_pci_device(PciBus* pci_device);
+Status init_pci_bus(PciBus* pci_bus);
 
-bool_t is_pci_device(Device* device);
+bool_t is_pci_bus(Device* device);

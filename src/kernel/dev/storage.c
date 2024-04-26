@@ -14,7 +14,7 @@ bool_t is_storage_device(const Device* const device) {
 }
 
 Status init_storage_devices() {
-    PciBus* pci_device_list = (PciBus*)dev_find(NULL, &is_pci_device);
+    PciBus* pci_device_list = (PciBus*)dev_find(NULL, &is_pci_bus);
 
     ListHead head = pci_device_list->nodes;
 
@@ -23,9 +23,9 @@ Status init_storage_devices() {
     bool_t is_storage_device_found = FALSE;
 
     while (head.next != NULL) {
-        PciInfo* pci_device = (PciInfo*)head.next;
+        PciDevice* pci_device = (PciDevice*)head.next;
             
-        if (is_nvme(pci_device->pci_header.class_code, pci_device->pci_header.subclass)) {
+        if (is_nvme(pci_device->config.class_code, pci_device->config.subclass)) {
             kernel_msg("Nvme device detected\n");
 
             is_storage_device_found = TRUE;

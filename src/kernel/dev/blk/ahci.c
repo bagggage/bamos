@@ -8,11 +8,13 @@
 #define	SATA_SIG_SEMB	0xC33C0101	// Enclosure management bridge
 #define	SATA_SIG_PM	    0x96690101	// Port multiplier
  
-#define AHCI_DEV_NULL   0
-#define AHCI_DEV_SATA   1
-#define AHCI_DEV_SEMB   2
-#define AHCI_DEV_PM     3
-#define AHCI_DEV_SATAPI 4
+typedef enum AHCIDeviceType {
+    AHCI_DEV_NULL = 0,
+    AHCI_DEV_SATA,
+    AHCI_DEV_SEMB,
+    AHCI_DEV_PM,
+    AHCI_DEV_SATAPI
+} AHCIDeviceType;
  
 #define HBA_PORT_IPM_ACTIVE     1
 #define HBA_PORT_DET_PRESENT    3
@@ -21,28 +23,26 @@
 
 HBAMemory* hba_memory = NULL;
 
-
 bool_t is_ahci(const uint8_t class_code, const uint8_t prog_if, const uint8_t subclass) {
-    if (class_code == STORAGE_CONTROLLER &&
+    if (class_code == PCI_STORAGE_CONTROLLER &&
         prog_if == PCI_PROGIF_AHCI &&
         subclass == SATA_CONTROLLER) {
         return TRUE;
     }
-
     
     return FALSE;
 }
 
 static uint8_t check_device_type(const HBAPort* port) {
-    uint32_t sata_status = port->sata_status;
+    const uint32_t sata_status = port->sata_status;
 
-    uint8_t ipm = (sata_status >> 8) & 0x0F;
-    uint8_t det = sata_status & 0x0F;
+    const uint8_t ipm = (sata_status >> 8) & 0x0F;
+    const uint8_t det = sata_status & 0x0F;
 
-    if (det != HBA_PORT_DET_PRESENT)	// Check drive status
+    // Check drive status
+    if (det != HBA_PORT_DET_PRESENT || ipm != HBA_PORT_IPM_ACTIVE) {
         return AHCI_DEV_NULL;
-    if (ipm != HBA_PORT_IPM_ACTIVE)
-        return AHCI_DEV_NULL;
+    }
 
     switch (port->signature) {
         case SATA_SIG_ATAPI:
@@ -53,7 +53,7 @@ static uint8_t check_device_type(const HBAPort* port) {
             return AHCI_DEV_PM;
         default:
             return AHCI_DEV_SATA;
-        }
+    }
 }
 
 void detect_ahci_devices_type() {
