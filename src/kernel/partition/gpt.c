@@ -36,14 +36,12 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
     kernel_msg("GPT partitions count: %u\n", gpt_header->partition_count);
     kernel_msg("Partitions size: %u\n", gpt_header->partition_entry_size);
     
-    size_t lba_offset = (gpt_header->lba_partition_entry * GPT_HEADER_OFFSET);
+    size_t lba_offset = gpt_header->lba_partition_entry * GPT_HEADER_OFFSET;
+
+    const size_t total_bytes = storage_device->lba_size;
+    char* buffer = (char*)kmalloc(total_bytes);
+
     for (size_t i = 0; i < GPT_TOTAL_LBA_COUNT; ++i) {
-        const size_t total_bytes = storage_device->lba_size;
-
-        //kernel_msg("Offset %u, LBA No.%u\n", lba_offset, lba_offset / storage_device->lba_size);
-
-        char* buffer = (char*)kmalloc(total_bytes);
-
         storage_device->interface.read(storage_device, lba_offset, total_bytes, buffer);
 
         for (size_t j = 0; j < storage_device->lba_size / sizeof(PartitionEntry); ++j) {
@@ -72,6 +70,9 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
 
         lba_offset += storage_device->lba_size;
     }
+
+    kfree(buffer);
+    kfree(gpt_header);
 
     return KERNEL_OK;
 }

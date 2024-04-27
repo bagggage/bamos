@@ -28,7 +28,9 @@ Status init_vfs() {
             sizeof(BlockGroupDescriptorTable),
             bgd_table);
 
-            kernel_msg("Address %x, Dir in group %u\n",bgd_table->address_of_block_bitmap, bgd_table->directories_in_group_count);
+            kernel_msg("Address %x, Dir in group %u\n", bgd_table->address_of_block_bitmap, bgd_table->directories_in_group_count);
+            
+            kfree(bgd_table);
         }
 
         partition_node = partition_node->next;
