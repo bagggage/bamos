@@ -1,4 +1,4 @@
-#include "gpt_partitions_list.h"
+#include "gpt_list.h"
 
 GptPartitionList gpt_list = {
     .nodes.next = NULL,

@@ -7,7 +7,7 @@
 
 #include "fs/ext2/ext2.h"
 
-#include "partition/gpt_partitions_list.h"
+#include "partition/gpt_list.h"
 
 #define GPT_HEADER_OFFSET 512
 

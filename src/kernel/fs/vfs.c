@@ -6,7 +6,7 @@
 #include "fs/ext2/ext2.h"
 
 #include "partition/gpt.h"
-#include "partition/gpt_partitions_list.h"
+#include "partition/gpt_list.h"
 
 Status init_vfs() {
     if (find_gpt_tables() != KERNEL_OK) return KERNEL_ERROR;
