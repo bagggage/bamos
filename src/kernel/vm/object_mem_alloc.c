@@ -54,7 +54,7 @@ ObjectMemoryAllocator* oma_new(const uint32_t object_size) {
 
     // Round to 2MB pages
     if (pages_count >= MB_SIZE / PAGE_BYTE_SIZE) {
-        pages_count = div_with_roundup(pages_count, PAGES_PER_2MB);
+        pages_count = div_with_roundup(pages_count, PAGES_PER_2MB) * PAGES_PER_2MB;
     }
 
     *new_oma = _oma_init(pages_count, object_size);
@@ -170,8 +170,6 @@ void* oma_alloc(ObjectMemoryAllocator* oma) {
     for (uint32_t i = 0; i < div_with_roundup(oma->bucket_capacity, BYTE_SIZE); ++i) {
         if (suitable_bucket->bitmap[i] == 0xFF) continue;
 
-        uint8_t bitmask = 1;
-
         for (uint8_t j = 0; j < BYTE_SIZE; ++j) {
             const uint32_t bit_idx = (i * BYTE_SIZE) + j;
 
@@ -183,8 +181,6 @@ void* oma_alloc(ObjectMemoryAllocator* oma) {
 
                 return (void*)(suitable_bucket->page_frame.virt_address + ((uint64_t)bit_idx * oma->object_size));
             }
-
-            bitmask <<= 1;
         }
     }
 
