@@ -576,7 +576,7 @@ static Status _vm_map_phys_to_virt(uint64_t phys_address,
     static const uint64_t level_size_table[3] = { GB_SIZE, (2 * MB_SIZE), PAGE_BYTE_SIZE };
 
     if ((flags & VMMAP_USE_LARGE_PAGES) != 0 &&
-        (phys_address % (PAGE_BYTE_SIZE * 512) != 0 ||
+        (phys_address % (PAGE_BYTE_SIZE * 512U) != 0 || (virt_address % (PAGE_BYTE_SIZE * 512U)) ||
         (phys_address & 0x1FF000 != virt_address & 0x1FF000))) {
         flags ^= VMMAP_USE_LARGE_PAGES;
     }
