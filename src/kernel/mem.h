@@ -44,6 +44,10 @@ void memcpy(const void* src, void* dst, size_t size);
 void memset(void* dst, size_t size, uint8_t value);
 int memcmp(const void* lhs, const void *rhs, size_t size);
 
+int strcmp(const char* s1, const char* s2);
+int strlen(const char *str);
+char* strtok(char* s, char* delm);
+
 // Page X table entry
 typedef struct VMPxE {
     uint64_t entry : 62;    // Physical base of the entry
