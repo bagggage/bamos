@@ -119,9 +119,10 @@ typedef struct NvmeDevice {
     uint32_t nsid;
 } NvmeDevice;
 
+bool_t is_nvme(const uint8_t class_code, const uint8_t subclass);
+
 NvmeController create_nvme_controller(const PciDevice* const pci_device);
 
-// Create  new nvme device and push it to the storage device list 
+// Create new nvme device and push it to the storage device list 
 bool_t init_nvme_devices_for_controller(const NvmeController* const nvme_controller);
 
-bool_t is_nvme(const uint8_t class_code, const uint8_t subclass);
