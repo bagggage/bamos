@@ -7,14 +7,14 @@
 #define PCI_CONFIG_ADDRESS_PORT 0xCF8
 #define PCI_CONFIG_DATA_PORT 0xCFC
 
-#define PCI_BAR0_OFFSET 0x10
-#define PCI_BAR1_OFFSET 0x14
-#define PCI_BAR2_OFFSET 0x18
-#define PCI_BAR3_OFFSET 0x1C
-#define PCI_BAR4_OFFSET 0x20
-#define PCI_BAR5_OFFSET 0x24
-
-#define PCI_PROGIF_AHCI 0x1
+typedef enum PciBarOffset {
+    PCI_BAR0_OFFSET = 0x10,
+    PCI_BAR1_OFFSET = 0x14,
+    PCI_BAR2_OFFSET = 0x18,
+    PCI_BAR3_OFFSET = 0x1C,
+    PCI_BAR4_OFFSET = 0x20,
+    PCI_BAR5_OFFSET = 0x24
+} PciBarOffset;
 
 typedef enum PciClassCode {
     PCI_UNDEFINED = 0,
@@ -104,6 +104,6 @@ uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t fu
 
 void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset, const uint32_t value);
 
-Status init_pci_bus(PciBus* pci_bus);
+Status init_pci_bus(PciBus* const pci_bus);
 
-bool_t is_pci_bus(Device* device);
+bool_t is_pci_bus(const Device* const device);

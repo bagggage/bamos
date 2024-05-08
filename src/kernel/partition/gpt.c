@@ -15,50 +15,54 @@
 
 #define GPT_MAGIC "EFI MAGIC"
 
-static int strcmp(const char* s1, const char* s2) {
-    while (*s1 && (*s1 == *s2)) {
-        s1++;
-        s2++;
-    }
-
-    return *(const unsigned char*)s1 - *(const unsigned char*)s2;
-}
-
 static Status find_gpt_table_on_storage_device(const StorageDevice* const storage_device) {
     GptHeader* gpt_header = (GptHeader*)kmalloc(sizeof(GptHeader));
+
+    if (gpt_header == NULL) return KERNEL_ERROR;
 
     storage_device->interface.read(storage_device, GPT_HEADER_OFFSET, sizeof(GptHeader), gpt_header);
 
     if (!strcmp(gpt_header->magic, GPT_MAGIC)) return KERNEL_ERROR;
 
     kernel_msg("GPT entry found\n");
-    kernel_msg("GUID: %u\n", gpt_header->guid);
     kernel_msg("GPT partitions count: %u\n", gpt_header->partition_count);
     kernel_msg("Partitions size: %u\n", gpt_header->partition_entry_size);
     
-    size_t lba_offset = gpt_header->lba_partition_entry * GPT_HEADER_OFFSET;
-
+    size_t lba_offset_in_bytes = gpt_header->lba_partition_entry * GPT_HEADER_OFFSET;
     const size_t total_bytes = storage_device->lba_size;
-    char* buffer = (char*)kmalloc(total_bytes);
+
+    uint8_t* buffer = (char*)kmalloc(total_bytes);
+
+    if (buffer == NULL) {
+        kfree(gpt_header);
+        return KERNEL_ERROR;
+    }
 
     for (size_t i = 0; i < GPT_TOTAL_LBA_COUNT; ++i) {
-        storage_device->interface.read(storage_device, lba_offset, total_bytes, buffer);
+        storage_device->interface.read(storage_device, lba_offset_in_bytes, total_bytes, buffer);
 
         for (size_t j = 0; j < storage_device->lba_size / sizeof(PartitionEntry); ++j) {
-            const PartitionEntry* partition_entry = (PartitionEntry*)&buffer[j * sizeof(PartitionEntry)];
+            PartitionEntry* partition_entry = (PartitionEntry*)kmalloc(sizeof(PartitionEntry));
 
+            if (partition_entry == NULL) {
+                kfree(gpt_header);
+                kfree(buffer);
+                return KERNEL_ERROR;
+            }
+
+            memcpy(buffer + j * sizeof(PartitionEntry), partition_entry, sizeof(PartitionEntry));
+        
             const uint128_t type_unused = 0;
             if (!memcmp(partition_entry->guid_type, &type_unused, sizeof(partition_entry->guid_type))) continue;
 
-            for (size_t k = 0; k < sizeof(partition_entry->partition_name); ++k) {
-                raw_putc(partition_entry->partition_name[k]);
-            }
-            raw_putc('\n');
-            kernel_msg("Partition start: %u, Partition LBA: %u\n", 
-                    partition_entry->lba_start,
-                    partition_entry->lba_start / storage_device->lba_size);
-
             GptPartitionNode* new_node = (GptPartitionNode*)kmalloc(sizeof(GptPartitionNode));
+
+            if (new_node == NULL) {
+                kfree(gpt_header);
+                kfree(buffer);
+                kfree(partition_entry);
+                return KERNEL_ERROR;
+            }
 
             new_node->partition_entry = *partition_entry;
             new_node->storage_device = storage_device;
@@ -68,7 +72,7 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
             gpt_push(new_node);
         }
 
-        lba_offset += storage_device->lba_size;
+        lba_offset_in_bytes += storage_device->lba_size;
     }
 
     kfree(buffer);
@@ -84,5 +88,5 @@ Status find_gpt_tables() {
         find_gpt_table_on_storage_device(storage_device);
     }
 
-    return (storage_device == NULL) ? KERNEL_OK : KERNEL_ERROR;
+    return KERNEL_OK;
 }

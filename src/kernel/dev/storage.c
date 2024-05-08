@@ -15,7 +15,9 @@ bool_t is_storage_device(const Device* const device) {
 
 Status init_storage_devices() {
     PciBus* pci_device_list = (PciBus*)dev_find(NULL, &is_pci_bus);
-    
+
+    if (pci_device_list == NULL) return KERNEL_ERROR;
+     
     bool_t is_storage_device_found = FALSE;
 
     PciDevice* pci_device = (PciDevice*)pci_device_list->nodes.next;
