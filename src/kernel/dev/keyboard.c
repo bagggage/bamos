@@ -1,5 +1,9 @@
 #include "keyboard.h"
 
+bool_t is_keyboard_device(const Device* const device) {
+    return device->type == DEV_KEYBOARD;
+}
+
 uint8_t keyboard_scan_code_to_kernel_scan_code() {
     // TODO: convert keyboard scan code to kernel scan code
     return 0;
