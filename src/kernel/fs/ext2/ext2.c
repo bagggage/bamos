@@ -333,10 +333,14 @@ Status ext2_init(const StorageDevice* const storage_device, const uint64_t parti
 
     VfsDentry* root_dentry = ext2_create_dentry(EXT2_ROOT_INODE_INDEX, "/", NULL, VFS_TYPE_DIRECTORY);
 
-    if (vfs_mount("/", root_dentry) != KERNEL_OK)  return KERNEL_ERROR;
+    if (vfs_mount("/", root_dentry) != KERNEL_OK) {     
+        kfree(buffer);
+        kfree(superblock); 
+        return KERNEL_ERROR;
+    }
 
     kfree(buffer);
-    kfree(superblock);
+    kfree(superblock); 
 
     return KERNEL_OK;
 }
