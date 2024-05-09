@@ -89,32 +89,38 @@ static inline IDTR64 cpu_get_idtr() {
     return idtr_64;
 }
 
-static inline IDTR64 cpu_set_idtr(IDTR64 idtr_64) {
+static inline void cpu_set_idtr(IDTR64 idtr_64) {
     asm volatile("lidt %0"::"memory"(idtr_64));
 }
 
 static inline uint64_t cpu_get_msr(uint32_t msr) {
-    uint64_t value = 0;
+    uint32_t value_l = 0;
+    uint32_t value_h = 0;
 
-    asm volatile("rdmsr":"=a"(*(uint32_t*)&value),"=d"(*(((uint32_t*)&value) + 1)):"c"(msr));
+    asm volatile("rdmsr":"=a"(value_l),"=d"(value_h):"c"(msr));
 
-    return value;
+    return value_l | ((uint64_t)value_h << 32);
 }
 
 static inline void cpu_set_msr(uint32_t msr, uint64_t value) {
-    asm volatile("wrmsr"::"a"(*(uint32_t*)&value), "d"(*(((uint32_t*)&value) + 1)), "c"(msr));
+    const void* value_ptr = (void*)&value;
+
+    asm volatile("wrmsr"::"a"(*(uint32_t*)value_ptr), "d"(*(((uint32_t*)value_ptr) + 1)), "c"(msr));
 }
 
 // Get extended feature enable register
 static inline EFER cpu_get_efer() {
     uint64_t efer = cpu_get_msr(MSR_EFER);
+    const void* efer_ptr = (void*)&efer;
 
-    return *(EFER*)(void*)&efer;
+    return *(EFER*)efer_ptr;
 }
 
 // Set extended feature enable register
 static inline void cpu_set_efer(EFER efer) {
-    cpu_set_msr(MSR_EFER, *(uint64_t*)(void*)&efer);
+    const void* efer_ptr = (void*)&efer;
+
+    cpu_set_msr(MSR_EFER, *(uint32_t*)efer_ptr);
 }
 
 static inline uint64_t cpu_get_cs() {

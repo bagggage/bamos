@@ -37,18 +37,18 @@ static void vm_heap_remove_free_block(VMHeap* heap, MemoryBlockNode* node, const
         node->block.pages_count -= pages_count;
     }
     else if (heap->free_list.next == heap->free_list.prev) {
-        kassert(heap->free_list.next == node);
+        kassert(heap->free_list.next == (void*)node);
         oma_free((void*)node, free_list_oma);
 
         heap->free_list.next = NULL;
         heap->free_list.prev = NULL;
     }
     else {
-        if (heap->free_list.next == node) {
+        if (heap->free_list.next == (void*)node) {
             heap->free_list.next = (ListHead*)(void*)node->next;
             node->next->prev = NULL;
         }
-        else if (heap->free_list.prev == node) {
+        else if (heap->free_list.prev == (void*)node) {
             heap->free_list.prev = (ListHead*)(void*)node->prev;
             node->prev->next = NULL;
         }
@@ -64,7 +64,7 @@ static void vm_heap_remove_free_block(VMHeap* heap, MemoryBlockNode* node, const
 static bool_t vm_heap_insert_free_block(VMHeap* heap, const uint64_t virt_address, const uint32_t pages_count) {
     const uint64_t block_top = virt_address + ((uint64_t)pages_count * PAGE_BYTE_SIZE);
 
-    MemoryBlockNode* temp_node = heap->free_list.next;
+    MemoryBlockNode* temp_node = (void*)heap->free_list.next;
 
     while (temp_node != NULL) {
         const uint64_t temp_block_top =
@@ -86,6 +86,8 @@ static bool_t vm_heap_insert_free_block(VMHeap* heap, const uint64_t virt_addres
     if (temp_node == NULL) {
         MemoryBlockNode* new_node = (MemoryBlockNode*)oma_alloc(free_list_oma);
 
+        if (new_node == NULL) return FALSE;
+
         new_node->block.address = virt_address;
         new_node->block.pages_count = pages_count;
         new_node->next = NULL;
@@ -103,7 +105,7 @@ static bool_t vm_heap_insert_free_block(VMHeap* heap, const uint64_t virt_addres
     }
     else {
         MemoryBlockNode* target_node = temp_node;
-        temp_node = heap->free_list.next;
+        temp_node = (void*)heap->free_list.next;
 
         const uint64_t target_top = target_node->block.address + ((uint64_t)target_node->block.pages_count * PAGE_BYTE_SIZE);
 
@@ -133,6 +135,8 @@ static bool_t vm_heap_insert_free_block(VMHeap* heap, const uint64_t virt_addres
             temp_node = temp_node->next;
         }
     }
+
+    return TRUE;
 }
 
 uint64_t vm_heap_reserve(VMHeap* heap, const uint32_t pages_count) {
@@ -199,11 +203,11 @@ VMHeap vm_heap_copy(const VMHeap* src_heap) {
         new_node->next = NULL;
         new_node->prev = prev;
 
-        if (result.free_list.next == NULL) result.free_list.next = (ListHead*)new_node;
+        if (result.free_list.next == NULL) result.free_list.next = (void*)new_node;
         if (prev != NULL) prev->next = new_node;
     }
 
-    result.free_list.prev = prev;
+    result.free_list.prev = (void*)prev;
 
     return result;
 }

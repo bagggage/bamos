@@ -70,7 +70,7 @@ static Status split_logical_cores() {
     g_proc_local.idx = cpu_idx;
     g_proc_local.ioapic_idx = cpu_idx;
     g_proc_local.current_task = NULL;
-    g_proc_local.kernel_stack = UINT64_MAX - ((uint64_t)initstack * (cpu_idx + 1)) + 1;
+    g_proc_local.kernel_stack = (uint64_t*)(UINT64_MAX - ((uint64_t)initstack * (cpu_idx + 1)) + 1);
     g_proc_local.user_stack = NULL;
     g_proc_local.kernel_page_table = NULL;
 
@@ -130,7 +130,7 @@ Status init_user_space() {
 
     cpu_set_efer(efer);
     cpu_set_msr(MSR_STAR, 0x0);
-    cpu_set_msr(MSR_LSTAR, &_syscall_handler);
+    cpu_set_msr(MSR_LSTAR, (uint64_t)&_syscall_handler);
     cpu_set_msr(MSR_CSTAR, 0x0);
     cpu_set_msr(MSR_SWAPGS_BASE, 0x0);
 

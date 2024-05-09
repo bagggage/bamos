@@ -30,7 +30,7 @@ static uint8_t divider_value_table[] = {
 };
 
 static ATTR_INTRRUPT void intr_lapic_timer_handler(InterruptFrame64* frame) {
-    kernel_msg("RBP: %x\n", cpu_get_rbp());
+    kernel_msg("Counter: %u\n", lapic_read(LAPIC_CURR_COUNTER_REG));
     lapic_write(LAPIC_EOI_REG, 1);
 }
 

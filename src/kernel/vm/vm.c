@@ -577,7 +577,7 @@ static Status _vm_map_phys_to_virt(uint64_t phys_address,
 
     if ((flags & VMMAP_USE_LARGE_PAGES) != 0 &&
         (phys_address % (PAGE_BYTE_SIZE * 512) != 0 ||
-        (phys_address & 0x1FF000 != virt_address & 0x1FF000))) {
+        ((phys_address & 0x1FF000) != (virt_address & 0x1FF000)))) {
         flags ^= VMMAP_USE_LARGE_PAGES;
     }
 
@@ -717,7 +717,7 @@ void vm_unmap(const uint64_t virt_address, PageMapLevel4Entry* pml4, const uint3
                     (get_virt_addres_px_idx(virt_address, level - 2) == 0) : 
                     (TRUE));
 
-                if (level == 2 && is_page_table_covered && pages_to_unmap_count >= pxe_pages_count) {
+                if (level == 2 && is_page_table_covered && (uint32_t)pages_to_unmap_count >= pxe_pages_count) {
                     vm_free_page_table((PageXEntry*)((uint64_t)pxe[i].page_ppn * PAGE_BYTE_SIZE));
 
                     *(uint64_t*)(pxe + i) = 0;
@@ -763,7 +763,7 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
 static uint32_t get_max_near_rank_of(const uint32_t number) {
     uint32_t rank = BPA_MAX_BLOCK_RANK - 1; 
 
-    while (number < (1 << rank)) {
+    while (number < (1u << rank)) {
         rank--;
     }
 
@@ -832,11 +832,11 @@ static void frame_free_phys_pages(VMPageFrame* frame) {
 }
 
 uint64_t vm_find_free_virt_address(const PageMapLevel4Entry* pml4 ,const uint32_t pages_count) {
-    PageXEntry* pxe = pml4;
+    const PageXEntry* pxe = pml4;
     uint64_t virt_address = 0;
     uint32_t temp_pages_count = 0;
 
-    PageXEntry* pxe_stack[4] = { NULL, NULL, NULL, pml4 };
+    const PageXEntry* pxe_stack[4] = { NULL, NULL, NULL, pml4 };
 
     for (uint32_t level = 4; level > 0;) {
     table_entries_pass:
@@ -1019,7 +1019,7 @@ void vm_configure_cpu_page_table() {
     independent_proc_local->idx = cpu_idx;
     independent_proc_local->ioapic_idx = cpu_idx;
     independent_proc_local->current_task = NULL;
-    independent_proc_local->kernel_stack = UINT64_MAX - ((uint64_t)initstack * (cpu_idx + 1));
+    independent_proc_local->kernel_stack = (uint64_t*)(UINT64_MAX - ((uint64_t)initstack * (cpu_idx + 1)));
     independent_proc_local->user_stack = NULL;
     independent_proc_local->kernel_page_table = pml4;
 
