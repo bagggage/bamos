@@ -18,25 +18,6 @@ typedef struct NvmeBar0 {
     uint32_t aqa;               // Admin Queue Attributes
     uint64_t asq;               // Admin Submission Queue Base Address
     uint64_t acq;               // Admin Completion Queue Base Address
-    // uint32_t cmbloc;            // Controller Memory Buffer Location
-    // uint32_t cmbsz;             // Controller Memory Buffer Size
-    // uint32_t bpinfo;            // Boot Partition Information
-    // uint32_t bprsel;            // Boot Partition Read Select
-    // uint64_t bpmbloc;           // Boot Partition Memory Buffer Location
-    // uint64_t cmbmsc;            // Controller Memory Buffer Memory Space Control
-    // uint32_t cmbsts;            // Controller Memory Buffer Status
-    // uint32_t cmbebs;            // Controller Memory Buffer Elasticity Buffer Size
-    // uint32_t cmbswtp;           // Controller Memory Buffer Sustained Write Throughput
-    // uint32_t nssd;              // NVM Subsystem Shutdown
-    // uint32_t crto;              // Controller Ready Timeouts
-    // uint32_t reserved2[5];      // Reserved
-    // uint32_t pmrcap;            // Persistent Memory Capabilities
-    // uint32_t pmrctl;            // Persistent Memory Region Control
-    // uint32_t pmrsts;            // Persistent Memory Region Status
-    // uint32_t pmrebs;            // Persistent Memory Region Elasticity Buffer Size
-    // uint32_t pmrswtp;           // Persistent Memory Region Sustained Write Throughput
-    // uint32_t pmrcmscl;          // Persistent Memory Region Controller Memory Space Control Lower
-    // uint32_t pmrcmscu;          // Persistent Memory Region Controller Memory Space Control Upper
     uint8_t reserved1[0xFC8];
     uint32_t asq_admin_tail_doorbell;
     uint32_t acq_admin_head_doorbell;
@@ -114,14 +95,16 @@ typedef struct NvmeController {
 
 typedef struct NvmeDevice {
     STORAGE_DEVICE_STRUCT_IMPL;
+    
     NvmeController controller;
     NvmeNamespaceInfo* namespace_info;
     uint32_t nsid;
 } NvmeDevice;
 
+bool_t is_nvme(const uint8_t class_code, const uint8_t subclass);
+
 NvmeController create_nvme_controller(const PciDevice* const pci_device);
 
-// Create  new nvme device and push it to the storage device list 
+// Create new nvme device and push it to the storage device list 
 bool_t init_nvme_devices_for_controller(const NvmeController* const nvme_controller);
 
-bool_t is_nvme(const uint8_t class_code, const uint8_t subclass);

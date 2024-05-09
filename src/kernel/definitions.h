@@ -26,7 +26,7 @@ typedef __uint128_t uint128_t;
 // Result of the operation
 typedef enum Status {
     KERNEL_OK = 0,
-    KERNEL_COUGHT,
+    KERNEL_COUGH,
     KERNEL_INVALID_ARGS,
     KERNEL_ERROR,
     KERNEL_PANIC,

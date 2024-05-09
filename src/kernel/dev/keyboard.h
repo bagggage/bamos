@@ -235,6 +235,8 @@ typedef struct KeyboardDevice {
    DEVICE_STRUCT_IMPL(Keyboard);
 } KeyboardDevice;
 
+bool_t is_keyboard_device(const Device* const device);
+
 uint8_t keyboard_scan_code_to_kernel_scan_code();
 
 unsigned char scan_code_to_ascii(KernelScancode scan_code);

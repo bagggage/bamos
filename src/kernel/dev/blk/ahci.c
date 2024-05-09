@@ -8,6 +8,13 @@
 #define	SATA_SIG_SEMB	0xC33C0101	// Enclosure management bridge
 #define	SATA_SIG_PM	    0x96690101	// Port multiplier
  
+#define PCI_PROGIF_AHCI 0x1
+
+#define HBA_PORT_IPM_ACTIVE     1
+#define HBA_PORT_DET_PRESENT    3
+
+#define MAX_IMPLEMENTED_PORTS   32
+
 typedef enum AHCIDeviceType {
     AHCI_DEV_NULL = 0,
     AHCI_DEV_SATA,
@@ -15,11 +22,6 @@ typedef enum AHCIDeviceType {
     AHCI_DEV_PM,
     AHCI_DEV_SATAPI
 } AHCIDeviceType;
- 
-#define HBA_PORT_IPM_ACTIVE     1
-#define HBA_PORT_DET_PRESENT    3
-
-#define MAX_IMPLEMENTED_PORTS   32
 
 HBAMemory* hba_memory = NULL;
 
@@ -33,7 +35,7 @@ bool_t is_ahci(const uint8_t class_code, const uint8_t prog_if, const uint8_t su
     return FALSE;
 }
 
-static uint8_t check_device_type(const HBAPort* port) {
+static uint8_t check_device_type(const HBAPort* const port) {
     const uint32_t sata_status = port->sata_status;
 
     const uint8_t ipm = (sata_status >> 8) & 0x0F;
@@ -81,7 +83,6 @@ void detect_ahci_devices_type() {
                 break;
             }
             default: {
-				//kernel_msg("No drive found at port %d\n", i);
                 break;
             }
             }

@@ -83,7 +83,7 @@ static Status init_kernel_uma() {
 
     for (uint32_t rank = UMA_MIN_RANK; rank <= UMA_MAX_RANK; ++rank) {
         const uint32_t obj_rank_size = 1 << rank;
-
+    
         ObjectMemoryAllocator* new_oma = oma_new(obj_rank_size);
 
         if (new_oma == NULL) {
@@ -213,7 +213,7 @@ Status init_memory() {
 
 #ifdef KDEBUG
     kernel_warn("VM memmap: %x\n", (uint64_t)vm_memory_map.entries);
-    log_memory_map(&vm_memory_map);
+    //log_memory_map(&vm_memory_map);
 #endif
 
     if (init_buddy_page_allocator(&vm_memory_map) != KERNEL_OK) return KERNEL_ERROR;
@@ -454,4 +454,47 @@ int memcmp(const void* lhs, const void *rhs, size_t size) {
     for (; size && *l == *r; size--, l++, r++);
 
     return (size != 0 ? (*l - *r) : 0);
+}
+
+int strcmp(const char* s1, const char* s2) {
+    while (*s1 && (*s1 == *s2)) {
+        s1++;
+        s2++;
+    }
+
+    return *(const unsigned char*)s1 - *(const unsigned char*)s2;
+}
+
+int strlen(const char *str) {
+        const char *s;
+
+        for (s = str; *s; ++s)
+                ;
+        return (s - str);
+}
+
+char* strtok(char* s, char* delm) {
+    static int currIndex = 0;
+    if(!s || !delm || s[currIndex] == '\0')
+    return NULL;
+    char *W = (char *)kmalloc(strlen(s) + 1);
+    int i = currIndex, k = 0, j = 0;
+
+    while (s[i] != '\0'){
+        j = 0;
+        while (delm[j] != '\0'){
+            if (s[i] != delm[j])
+                W[k] = s[i];
+            else goto It;
+            j++;
+        }
+
+        i++;
+        k++;
+    }
+It:
+    W[i] = 0;
+    currIndex = i+1;
+    //Iterator = ++ptr;
+    return W;
 }
