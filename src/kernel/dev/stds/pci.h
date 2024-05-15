@@ -64,8 +64,8 @@ typedef struct PciConfigurationSpace {
     uint8_t latency_timer;
     uint8_t header_type;
     uint8_t bist;
-    uint32_t bar0;
-    uint32_t bar1;
+    uint64_t bar0;
+    uint64_t bar1;
     uint32_t bar2;
     uint32_t bar3;
     uint32_t bar4;

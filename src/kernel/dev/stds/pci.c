@@ -7,6 +7,7 @@
 #include "cpu/io.h"
 
 #define PCI_INVALID_VENDOR_ID 0xFFFF
+#define PCI_BAR_STEP_OFFSET 0x4
 
 uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset) {
     const uint32_t address = (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC) | 0x80000000;
@@ -53,7 +54,7 @@ static uint32_t pci_read_bar(const uint8_t bus, const uint8_t dev, const uint8_t
         if ((bar_type & 2) == 0) return (bar & 0xFFFFFFF0); // Clear flags
 
         //bar is in 64bit memory space
-        return (bar & 0xFFFFFFFFFFFFFFF0); // Clear flags
+        return ((bar & 0xFFFFFFF0) + ((uint64_t)pci_config_readl(bus, dev, func, offset + 0x4) << 32));
     }
     else {  // bar is in i/o space 
         return (bar & 0xFFFFFFFC); // Clear flags
