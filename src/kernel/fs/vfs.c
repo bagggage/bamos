@@ -38,7 +38,7 @@ Status init_vfs() {
 static Status vfs_mount_helper(const char* const mountpoint, 
                                const VfsDentry* const dentry, 
                                const VfsDentry* parent) {
-    if (dentry == NULL || parent == NULL) return KERNEL_ERROR;
+    if (dentry == NULL || parent == NULL) return KERNEL_INVALID_ARGS;
     
     char* dir_name = strtok(mountpoint, "/");
 
