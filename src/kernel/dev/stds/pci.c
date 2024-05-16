@@ -42,7 +42,7 @@ void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func,
     outl(PCI_CONFIG_DATA_PORT, value);
 }
 
-static uint32_t pci_read_bar(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset) {
+static uint64_t pci_read_bar(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset) {
     const uint32_t bar = pci_config_readl(bus, dev, func, offset);
 
     if (bar == 0) return bar;
