@@ -373,7 +373,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const uint32_t 
         return TRUE;
     }
     
-    doubly_indirect_block_index = singly_indirect_block_index - indirect_blocks_max_count * indirect_blocks_max_count;
+    doubly_indirect_block_index = singly_indirect_block_index - pow(indirect_blocks_max_count, 2);
     if (doubly_indirect_block_index < 0) {
         doubly_indirect_block_index = singly_indirect_block_index / indirect_blocks_max_count;
         triply_indirect_block_index = singly_indirect_block_index - doubly_indirect_block_index * indirect_blocks_max_count;
@@ -405,8 +405,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const uint32_t 
         return TRUE;
     }
 
-    triply_indirect_block_index = doubly_indirect_block_index - 
-                                  indirect_blocks_max_count * indirect_blocks_max_count * indirect_blocks_max_count;
+    triply_indirect_block_index = doubly_indirect_block_index - pow(indirect_blocks_max_count, 3);
     if (triply_indirect_block_index <= 0) {
         // idk how to call this helper(1,2,3), so let it be helper)
         // For more info https://ext4.wiki.kernel.org/index.php/Ext4_Disk_Layout (Direct/Indirect Block Addressing)
@@ -797,7 +796,6 @@ static VfsDentry* ext2_create_dentry(const uint32_t inode_index, const char* con
     new_dentry->inode->type = type;
     new_dentry->parent = parent;
     new_dentry->childs_count = 0;
-    new_dentry->is_in_use = FALSE;
     
     size_t dentry_name_len = strlen(dentry_name);
 
@@ -1164,7 +1162,7 @@ static void ext2_unlink(const VfsDentry* const dentry_to_unlink, const char* con
 
     ext2_remove_dir_entry(dentry_to_unlink->parent->inode->index, name);
 
-    
+    //TODO
 }
 
 bool_t is_ext2(const StorageDevice* const storage_device, const uint64_t partition_lba_start) {
