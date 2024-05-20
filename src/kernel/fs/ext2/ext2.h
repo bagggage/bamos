@@ -12,45 +12,49 @@
 
 #define EXT2_ROOT_INODE_INDEX 2
 
+#define EXT2_DIRECT_BLOCKS 12
+
+#define EXT2_MAX_INODE_NAME 255
+
 typedef enum FileSystemState {
-    FILE_SYSTEM_CLEAN = 1,
-    FILE_SYSTEM_HAS_ERROR
+    EXT2_FILE_SYSTEM_CLEAN = 1,
+    EXT2_FILE_SYSTEM_HAS_ERROR
 } FileSystemState;
 
 typedef enum ErrorHandlingMethods {
-    IGNORE_THE_ERROR = 1,
-    REMOUNT_AS_READONLY,
+    EXT2_IGNORE_THE_ERROR = 1,
+    EXT2_REMOUNT_AS_READONLY,
     EXT2_CRITICAL_ERROR
 } ErrorHandlingMethods;
 
 typedef enum CreatorOperatingSystemId {
-    LINUX = 0,
-    GNU_HURD,
-    MASIX,
-    FREE_BSD,
-    OTHER_OS,
+    EXT2_OS_LINUX = 0,
+    EXT2_OS_GNU_HURD,
+    EXT2_OS_MASIX,
+    EXT2_OS_FREE_BSD,
+    EXT2_OTHER_OS,
 } CreatorOperatingSystemId;
 
 typedef enum OptionalFlags {
-    PREALLOCATE_SOME_BLOCKS = 1,
-    AFS_SERVER_INODE_EXIST = 2,
-    FS_HAS_A_JOURNAL = 4,
-    INODES_HAS_EXTENDED_ATTR = 8,
-    FS_CAN_RESIZE_ITSELF = 16,
-    DIRECTORIES_USE_HASH_INDEX = 32
+    EXT2_PREALLOCATE_SOME_BLOCKS = 1,
+    EXT2_AFS_SERVER_INODE_EXIST = 2,
+    EXT2_FS_HAS_A_JOURNAL = 4,
+    EXT2_INODES_HAS_EXTENDED_ATTR = 8,
+    EXT2_FS_CAN_RESIZE_ITSELF = 16,
+    EXT2_DIRECTORIES_USE_HASH_INDEX = 32
 } OptionalFlags;
 
 typedef enum RequiredFlags {
-    COMPRESSION_IS_USED = 1,
-    DIRECTORY_ENTRY_CONTAIN_A_TYPE_FIELD = 2,
-    FS_NEEDS_TO_REPLAY_JOURNAL = 4,
-    FS_USE_JOURNAL_DEVICE = 8
+    EXT2_COMPRESSION_IS_USED = 1,
+    EXT2_DIRECTORY_ENTRY_CONTAIN_A_TYPE_FIELD = 2,
+    EXT2_FS_NEEDS_TO_REPLAY_JOURNAL = 4,
+    EXT2_FS_USE_JOURNAL_DEVICE = 8
 } RequiredFlags;
 
 typedef enum ReadonlyFlags {
-    SPARSE_SUPERBLOCK_AND_GROUP_DT = 1,
-    BIT64_FILE_SIZE = 2,
-    DIRECTORY_CONTENT_STORES_IN_BIN_TREE = 4
+    EXT2_SPARSE_SUPERBLOCK_AND_GROUP_DT = 1,
+    EXT2_BIT64_FILE_SIZE = 2,
+    EXT2_DIRECTORY_CONTENT_STORES_IN_BIN_TREE = 4
 } ReadonlyFlags;
 
 // Total size of the superblock 1024
@@ -103,8 +107,8 @@ typedef struct Ext2Superblock {
 } ATTR_PACKED Ext2Superblock;
 
 typedef struct BlockGroupDescriptorTable {
-    uint32_t address_of_block_bitmap;
-    uint32_t address_of_inode_bitmap;
+    uint32_t block_bitmap_block_index;
+    uint32_t inode_bitmap_block_index;
     uint32_t starting_block_of_inode_table;
     uint16_t unallocated_blocks_count;
     uint16_t unallocated_inode_count;
@@ -113,7 +117,7 @@ typedef struct BlockGroupDescriptorTable {
     uint32_t reserved[3];
 } ATTR_PACKED BlockGroupDescriptorTable;
 
-typedef enum InodeType {
+typedef enum Ext2InodeType {
     EXT2_INODE_FIFO = 0x1000,
     EXT2_INODE_CHARACTER_DEVICE = 0x2000,
     EXT2_INODE_DIRECTORY = 0x4000,
@@ -121,36 +125,36 @@ typedef enum InodeType {
     EXT2_INODE_REGULAR_FILE = 0x8000,
     EXT2_INODE_SYMBOLIC_LINK = 0xA000,
     EXT2_INODE_UNIX_SOCKET = 0xC000
-} InodeType;
+} Ext2InodeType;
 
-typedef enum InodePermission {
-    OTHER_EXECUTE_PERMISSION = 0x001,
-    OTHER_WRITE_PERMISSION = 0x002,
-    OTHER_READ_PERMISSION = 0x004,
-    GROUP_EXECUTE_PERMISSION = 0x008,
-    GROUP_WRITE_PERMISSION = 0x010,
-    GROUP_READ_PERMISSION = 0x020,
-    USER_EXECUTE_PERMISSION = 0x040,
-    USER_WRITE_PERMISSION = 0x080,
-    USER_READ_PERMISSION = 0x100,
-    PERMISSION_STICKY_BIT = 0x200,
-    PERMISSION_SET_GROUP_ID = 0x400,
-    PERMISSION_SET_USER_ID = 0x800
-} InodePermission;
+typedef enum Ext2InodePermission {
+    EXT2_OTHER_EXECUTE_PERMISSION = 0x001,
+    EXT2_OTHER_WRITE_PERMISSION = 0x002,
+    EXT2_OTHER_READ_PERMISSION = 0x004,
+    EXT2_GROUP_EXECUTE_PERMISSION = 0x008,
+    EXT2_GROUP_WRITE_PERMISSION = 0x010,
+    EXT2_GROUP_READ_PERMISSION = 0x020,
+    EXT2_USER_EXECUTE_PERMISSION = 0x040,
+    EXT2_USER_WRITE_PERMISSION = 0x080,
+    EXT2_USER_READ_PERMISSION = 0x100,
+    EXT2_PERMISSION_STICKY_BIT = 0x200,
+    EXT2_PERMISSION_SET_GROUP_ID = 0x400,
+    EXT2_PERMISSION_SET_USER_ID = 0x800
+} Ext2InodePermission;
 
-typedef enum InodeFlags {
-    INODE_FLAG_SECURE_DELETION = 0x00000001,
-    INODE_FLAG_KEEP_COPY = 0x00000002,
-    INODE_FLAG_FILE_COMPRESSION = 0x00000004,
-    INODE_FLAG_SYNC_UPDATES = 0x00000008,
-    INODE_FLAG_IMMUTABLE = 0x00000010,
-    INODE_FLAG_APPEND_ONLY = 0x00000020,
-    INODE_FLAG_EXCLUDE_FROM_DUMP = 0x00000040,
-    INODE_FLAG_NO_LAST_ACCESS_UPDATE = 0x00000080,
-    INODE_FLAG_HASH_INDEXED_DIR = 0x00010000,
-    INODE_FLAG_AFS_DIR = 0x00020000,
-    INODE_FLAG_JOURNAL_FILE = 0x00040000
-} InodeFlags;
+typedef enum Ext2InodeFlags {
+    EXT2_INODE_FLAG_SECURE_DELETION = 0x00000001,
+    EXT2_INODE_FLAG_KEEP_COPY = 0x00000002,
+    EXT2_INODE_FLAG_FILE_COMPRESSION = 0x00000004,
+    EXT2_INODE_FLAG_SYNC_UPDATES = 0x00000008,
+    EXT2_INODE_FLAG_IMMUTABLE = 0x00000010,
+    EXT2_INODE_FLAG_APPEND_ONLY = 0x00000020,
+    EXT2_INODE_FLAG_EXCLUDE_FROM_DUMP = 0x00000040,
+    EXT2_INODE_FLAG_NO_LAST_ACCESS_UPDATE = 0x00000080,
+    EXT2_INODE_FLAG_HASH_INDEXED_DIR = 0x00010000,
+    EXT2_INODE_FLAG_AFS_DIR = 0x00020000,
+    EXT2_INODE_FLAG_JOURNAL_FILE = 0x00040000
+} Ext2InodeFlags;
 
 typedef struct Ext2Inode {
     uint16_t type_and_permission;
@@ -165,10 +169,7 @@ typedef struct Ext2Inode {
     uint32_t disk_sects_count;
     uint32_t flags;
     uint32_t os_specific1;
-    uint32_t i_block[12];
-    uint32_t singly_indirect_block_ptr;     // Points to a block that is a list of block pointers to data
-    uint32_t doubly_indirect_block_ptr;     // Points to a block that is a list of block pointers to Singly Indirect Blocks
-    uint32_t triply_indirect_block_ptr;     // Points to a block that is a list of block pointers to Doubly Indirect Blocks
+    uint32_t i_block[EXT2_DIRECT_BLOCKS + 3];
     uint32_t gen_num;
     uint32_t extended_attr;                 // In Ext2 version 0, this field is reserved
     uint32_t size_in_bytes_higher32;        // In Ext2 version 0, this field is reserved
@@ -177,14 +178,14 @@ typedef struct Ext2Inode {
 } ATTR_PACKED Ext2Inode;
 
 typedef enum DirInodeTypes {
-    DIR_TYPE_UNKNOWN = 0,
-    DIR_TYPE_FILE,
-    DIR_TYPE_DIRECTORY,
-    DIR_TYPE_CHARACTER_DEVICE,
-    DIR_TYPE_BLOCK_DEVICE,
-    DIR_TYPE_FIFO,
-    DIR_TYPE_SOCKET,
-    DIR_TYPE_SYMBOLIC_LINK
+    EXT2_DIR_TYPE_UNKNOWN = 0,
+    EXT2_DIR_TYPE_FILE,
+    EXT2_DIR_TYPE_DIRECTORY,
+    EXT2_DIR_TYPE_CHARACTER_DEVICE,
+    EXT2_DIR_TYPE_BLOCK_DEVICE,
+    EXT2_DIR_TYPE_FIFO,
+    EXT2_DIR_TYPE_SOCKET,
+    EXT2_DIR_TYPE_SYMBOLIC_LINK
 } DirInodeTypes;
 
 typedef struct Ext2DirInode {
@@ -192,7 +193,7 @@ typedef struct Ext2DirInode {
    	uint16_t total_size;		
    	uint8_t	name_len;	
    	uint8_t	file_type;
-   	char name[255];
+   	char name[EXT2_MAX_INODE_NAME];
 } ATTR_PACKED Ext2DirInode; 
 
 typedef struct Ext2Fs {
@@ -205,9 +206,10 @@ typedef struct Ext2Fs {
     uint32_t inode_struct_size;
     uint32_t bgds_count_in_block;
     uint32_t bgd_blocks_count;
+    uint32_t bgt_start_block;
     BlockGroupDescriptorTable** bgds;
 } Ext2Fs;
 
 bool_t is_ext2(const StorageDevice* const storage_device, const uint64_t partition_lba_start);
 
-Status ext2_init(const StorageDevice* const storage_device, const uint64_t partition_lba_start);
+Status ext2_init(const StorageDevice* const storage_device, const uint64_t partition_lba_start, const uint64_t partition_lba_end);
