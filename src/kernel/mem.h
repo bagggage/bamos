@@ -18,8 +18,9 @@ Status init_memory();
 // Kernel space memory allocation
 void* kmalloc(const size_t size);
 void* kcalloc(const size_t size);
+void* krealloc(void* memory_block, const size_t size);
 // Kernel space memory free
-void kfree(void* allocated_mem);
+void kfree(void* memory_block);
 
 void log_memory_page_tables(PageMapLevel4Entry* pml4);
 void log_boot_memory_map(const MMapEnt* memory_map, const size_t entries_count);

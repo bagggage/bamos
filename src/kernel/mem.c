@@ -57,6 +57,32 @@ void* kcalloc(const size_t size) {
     return memory_block;
 }
 
+void* krealloc(void* memory_block, const size_t size) {
+    if (memory_block == NULL) return memory_block;
+
+    spin_lock(&uma.lock);
+
+    uint32_t i = 0;
+
+    for (i = 0; i < UMA_RANKS_COUNT; ++i) {
+        if (_oma_is_containing_mem_block(memory_block, uma.oma_pool[i]) == FALSE) continue;
+        break;
+    }
+
+    spin_release(&uma.lock);
+
+    if (uma.oma_pool[i]->object_size >= size) return memory_block;
+
+    void* new_block = kmalloc(size);
+
+    if (new_block == NULL) return NULL;
+
+    memcpy(memory_block, new_block, uma.oma_pool[i]->object_size);
+    kfree(memory_block);
+    
+    return new_block;
+}
+
 void kfree(void* memory_block) {
     if (memory_block == NULL) return;
 
