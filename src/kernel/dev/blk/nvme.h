@@ -46,7 +46,7 @@ typedef struct NvmeSubmissionQueueEntry {
 typedef struct NvmeComplQueueEntry {
     uint32_t command_specific;
     uint32_t reserved;
-    uint16_t sq_idx;
+    uint16_t sq_index;
     uint16_t sq_id;
     volatile union {
         struct {

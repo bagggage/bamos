@@ -174,6 +174,15 @@ NvmeController create_nvme_controller(const PciDevice* const pci_device) {
     nvme_controller.pci_device = pci_device;
     nvme_controller.bar0 = (NvmeBar0*)pci_device->config.bar0;
 
+    if (get_phys_address(nvme_controller.bar0) != pci_device->config.bar0) {
+        vm_map_phys_to_virt(
+            pci_device->config.bar0,
+            pci_device->config.bar0,
+            PAGES_PER_2MB,
+            VMMAP_CACHE_DISABLED | VMMAP_GLOBAL | VMMAP_WRITE
+        );
+   }
+
     // Enable interrupts, bus-mastering DMA, and memory space access
     uint32_t command = pci_config_readl(pci_device->bus, pci_device->dev, pci_device->func, 0x04);
     command &= ~(1 << 10);

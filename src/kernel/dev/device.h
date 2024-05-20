@@ -67,7 +67,7 @@ Remove device from 'dev_pool', all pointers to that device becomes invalid.
 */
 void dev_remove(Device* dev);
 
-typedef bool_t (*DevPredicat_t)(Device* dev);
+typedef bool_t (*DevPredicat_t)(const Device* const dev);
 
 Device* dev_find(Device* begin, DevPredicat_t predicat);
 Device* dev_find_by_type(Device* begin, const DeviceType type);

@@ -60,7 +60,7 @@ static uint64_t pci_read_bar(const uint8_t bus, const uint8_t dev, const uint8_t
         return (bar & 0xFFFFFFFC); // Clear flags
     } 
 
-    return NULL;
+    return 0;
 }
 
 Status init_pci_bus(PciBus* const pci_bus) {

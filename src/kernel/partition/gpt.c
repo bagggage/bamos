@@ -16,6 +16,8 @@
 #define GPT_MAGIC "EFI MAGIC"
 
 static Status find_gpt_table_on_storage_device(const StorageDevice* const storage_device) {
+    if (storage_device == NULL) return;
+    
     GptHeader* gpt_header = (GptHeader*)kmalloc(sizeof(GptHeader));
 
     if (gpt_header == NULL) return KERNEL_ERROR;
