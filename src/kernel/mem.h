@@ -42,7 +42,7 @@ int memcmp(const void* lhs, const void *rhs, size_t size);
 
 int strcmp(const char* s1, const char* s2);
 int strlen(const char *str);
-char* strtok(char* s, char* delm);
+char* strtok(char *s, const char *delim);
 
 // Page X table entry
 typedef struct VMPxE {
