@@ -13,7 +13,7 @@
 
 #define GPT_TOTAL_LBA_COUNT 32
 
-#define GPT_MAGIC "EFI MAGIC"
+#define GPT_MAGIC "EFI PART"
 
 static Status find_gpt_table_on_storage_device(const StorageDevice* const storage_device) {
     if (storage_device == NULL) return;
@@ -24,7 +24,9 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
 
     storage_device->interface.read(storage_device, GPT_HEADER_OFFSET, sizeof(GptHeader), gpt_header);
 
-    if (!strcmp(gpt_header->magic, GPT_MAGIC)) return KERNEL_ERROR;
+    if (memcmp(gpt_header->magic, GPT_MAGIC, sizeof(gpt_header->magic)) != 0) {
+        return KERNEL_ERROR;
+    }
 
     kernel_msg("GPT entry found\n");
     kernel_msg("GPT partitions count: %u\n", gpt_header->partition_count);
@@ -33,7 +35,7 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
     size_t lba_offset_in_bytes = gpt_header->lba_partition_entry * GPT_HEADER_OFFSET;
     const size_t total_bytes = storage_device->lba_size;
 
-    uint8_t* buffer = (char*)kmalloc(total_bytes);
+    uint8_t* buffer = (uint8_t*)kmalloc(total_bytes);
 
     if (buffer == NULL) {
         kfree(gpt_header);
@@ -52,7 +54,7 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
                 return KERNEL_ERROR;
             }
 
-            memcpy(buffer + j * sizeof(PartitionEntry), partition_entry, sizeof(PartitionEntry));
+            memcpy(buffer + (j * sizeof(PartitionEntry)), partition_entry, sizeof(PartitionEntry));
         
             const uint128_t type_unused = 0;
             if (!memcmp(partition_entry->guid_type, &type_unused, sizeof(partition_entry->guid_type))) continue;
@@ -85,10 +87,11 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
 
 Status find_gpt_tables() {
     StorageDevice* storage_device = NULL;
+    Status result = KERNEL_ERROR;
 
     while ((storage_device = (StorageDevice*)dev_find(storage_device, &is_storage_device)) != NULL) {
-        find_gpt_table_on_storage_device(storage_device);
+        if (find_gpt_table_on_storage_device(storage_device) == KERNEL_OK) result = KERNEL_OK;
     }
 
-    return KERNEL_OK;
+    return result;
 }
