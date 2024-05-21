@@ -12,20 +12,28 @@ static VfsDentry* root_dentry = NULL;
 static VfsDentry* home_dentry = NULL;
 
 Status init_vfs() {
-    if (find_gpt_tables() != KERNEL_OK) return KERNEL_ERROR;
+    if (find_gpt_tables() != KERNEL_OK) {
+        error_str = "Not found any GPT table";
+        return KERNEL_ERROR;
+    }
 
     GptPartitionNode* partition_node = gpt_get_first_node();
-    
-    if (partition_node == NULL) return KERNEL_ERROR;
-    
+
+    if (partition_node == NULL) {
+        error_str = "There is no any partition detected on disk";
+        return KERNEL_ERROR;
+    }
+
     while (partition_node != NULL) {
         if (is_ext2(partition_node->storage_device, partition_node->partition_entry.lba_start)) {
             kernel_msg("EXT2 superblock found\n");
 
-            if (ext2_init(partition_node->storage_device,
-                partition_node->partition_entry.lba_start,
-                partition_node->partition_entry.lba_end
+            if (ext2_init(
+                    partition_node->storage_device,
+                    partition_node->partition_entry.lba_start,
+                    partition_node->partition_entry.lba_end
                 ) != KERNEL_OK) {
+                error_str = "Ext2 fs initialization failed";
                 return KERNEL_ERROR;
             }
         }
@@ -58,11 +66,11 @@ VfsInode* create_vfs_inode_by_type(const VfsInodeTypes type) {
         vfs_inode = (VfsInodeFile*)kmalloc(sizeof(VfsInodeFile));   // for now just malloc for the biggest size
 
         if (vfs_inode == NULL) return NULL;
-        
+
         break;
     }
     }
-        
+
     return vfs_inode;
 }
 
@@ -70,7 +78,7 @@ static Status vfs_mount_helper(const char* const mountpoint,
                                const VfsDentry* const dentry, 
                                const VfsDentry* parent) {
     if (dentry == NULL || parent == NULL) return KERNEL_ERROR;
-    
+
     char* dir_name = strtok(mountpoint, "/");
 
     kernel_msg("dir name %s\n", dir_name);
@@ -88,7 +96,7 @@ static Status vfs_mount_helper(const char* const mountpoint,
     }
 
     // TODO: create a node on disk
-    
+
     kfree(dir_name);
 
     vfs_mount_helper(mountpoint + strlen(dir_name) + 1, dentry, parent);
@@ -101,9 +109,8 @@ Status vfs_mount(const char* const mountpoint, const VfsDentry* const dentry) {
 
     if (mountpoint[0] == '/' && strlen(mountpoint) == 1) {
         if (root_dentry != NULL) {
-            kernel_warn("Mountpoint / already mounted\n");
-            
-            return KERNEL_COUGH;
+            kernel_warn("Mountpoint '/' already mounted\n");
+            return KERNEL_ERROR;
         }
 
         root_dentry = dentry;
@@ -112,7 +119,7 @@ Status vfs_mount(const char* const mountpoint, const VfsDentry* const dentry) {
     }
 
     // add + 1 to remove '/' (e.g /home -> home)
-    return vfs_mount_helper(mountpoint + 1, dentry, root_dentry);
+    return vfs_mount_helper(mountpoint[0] == '/' ? mountpoint + 1 : mountpoint, dentry, root_dentry);
 }
 
 VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dentry_name) {
