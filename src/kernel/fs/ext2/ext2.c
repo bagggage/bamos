@@ -1174,12 +1174,13 @@ bool_t is_ext2(const StorageDevice* const storage_device, const uint64_t partiti
 
     ext2_read_superblock(storage_device, partition_lba_start, superblock);
 
-    const uint16_t magic = superblock->magic;
-    const uint16_t bgt_struct_size = superblock->bgt_struct_size;
+    bool_t result = 
+        superblock->magic == EXT2_SUPERBLOCK_MAGIC &&
+        (superblock->version_major < 1 || superblock->bgt_struct_size != 64);
 
     kfree(superblock);
 
-    return (magic == EXT2_SUPERBLOCK_MAGIC && bgt_struct_size != 64) ? TRUE : FALSE;
+    return result;
 }
 
 Status ext2_init(const StorageDevice* const storage_device,
@@ -1191,7 +1192,7 @@ Status ext2_init(const StorageDevice* const storage_device,
     Ext2Superblock* superblock = (Ext2Superblock*)kmalloc(sizeof(Ext2Superblock));
 
     if (superblock == NULL) return KERNEL_ERROR;
-    
+
     ext2_read_superblock(storage_device, partition_lba_start, superblock);
 
     ext2_fs.common.base_disk_start_offset = (partition_lba_start * storage_device->lba_size);
@@ -1201,6 +1202,11 @@ Status ext2_init(const StorageDevice* const storage_device,
     ext2_fs.inode_struct_size = (superblock->version_major >= 1) ? superblock->inode_struct_size : 128;
     ext2_fs.blocks_per_group = superblock->blocks_per_group;
     ext2_fs.total_groups = superblock->blocks_count / ext2_fs.blocks_per_group;
+
+    if (ext2_fs.total_groups == 0 && superblock->blocks_count > 0) {
+        ext2_fs.total_groups = 1;
+    }
+
     ext2_fs.common.storage_device = storage_device;
     ext2_fs.bgds_count_in_block = ext2_fs.block_size / 2 * sizeof(BlockGroupDescriptorTable);
     ext2_fs.bgd_blocks_count = (ext2_fs.total_groups / ext2_fs.bgds_count_in_block);
