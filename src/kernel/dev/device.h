@@ -51,9 +51,10 @@ typedef struct DevicePool {
     Device common; \
     dev_name ## Interface interface
 
-#define BUS_STRCUT_IMPL \
+#define BUS_STRUCT_IMPL \
     Device common;  \
-    ListHead nodes
+    ListHead nodes; \
+    uint64_t size
     
 /*
 Create and push new device structure into 'dev_pool'. Device structure initialized with valid id
