@@ -65,9 +65,10 @@ static uint64_t pci_read_bar(const uint8_t bus, const uint8_t dev, const uint8_t
 
 Status init_pci_bus(PciBus* const pci_bus) {
     if (pci_bus == NULL) return KERNEL_INVALID_ARGS;
-    
+
     pci_bus->nodes.next = NULL;
     pci_bus->nodes.prev = NULL;
+    pci_bus->size = 0;
 
     for (uint8_t bus = 0; bus < 4; ++bus) {
         for (uint8_t dev = 0; dev < 32; ++dev) {
@@ -106,6 +107,8 @@ Status init_pci_bus(PciBus* const pci_bus) {
                     pci_bus->nodes.prev->next = (void*)current_dev;
                     pci_bus->nodes.prev = (void*)current_dev;
                 }
+
+                pci_bus->size++;
             }
         }
     }

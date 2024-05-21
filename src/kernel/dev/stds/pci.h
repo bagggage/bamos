@@ -95,7 +95,7 @@ typedef struct PciDevice {
 } PciDevice;
 
 typedef struct PciBus {
-    BUS_STRCUT_IMPL;
+    BUS_STRUCT_IMPL;
 } PciBus;
 
 uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
