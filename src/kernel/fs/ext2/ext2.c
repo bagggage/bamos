@@ -719,7 +719,7 @@ static void ext2_fill_dentry(VfsDentry* const dentry) {
 
     size_t index = 0;
     for (; index < dir_count; ++index) {
-        dentry->childs[index] = (VfsDentry*)kmalloc(sizeof(VfsDentry));
+        dentry->childs[index] = vfs_new_dentry();
 
         if (dentry->childs[index] == NULL) {
             ext2_free_all_dir_entries(all_dirs);
@@ -729,10 +729,10 @@ static void ext2_fill_dentry(VfsDentry* const dentry) {
         memcpy(all_dirs[index]->name, dentry->childs[index]->name, all_dirs[index]->name_len);
         dentry->childs[index]->name[all_dirs[index]->name_len] = '\0';
         
-        dentry->childs[index]->inode = create_vfs_inode_by_type(all_dirs[index]->file_type);
+        dentry->childs[index]->inode = vfs_new_inode_by_type(all_dirs[index]->file_type);
 
         if (dentry->childs[index]->inode == NULL) {
-            kfree(dentry->childs[index]);
+            vfs_delete_dentry(dentry->childs[index]);
             ext2_free_all_dir_entries(all_dirs);
 
             // end of the child array
@@ -781,14 +781,14 @@ static VfsDentry* ext2_create_dentry(const uint32_t inode_index, const char* con
     if (dentry_name == NULL) return NULL;
     if (inode_index <= 0) return NULL;
 
-    VfsDentry* new_dentry = (VfsDentry*)kmalloc(sizeof(VfsDentry));
+    VfsDentry* new_dentry = (VfsDentry*)vfs_new_dentry();
 
     if (new_dentry == NULL) return NULL;
 
-    new_dentry->inode = create_vfs_inode_by_type(type);
+    new_dentry->inode = vfs_new_inode_by_type(type);
 
     if (new_dentry->inode == NULL) {
-        kfree(new_dentry);
+        vfs_delete_dentry(new_dentry);
         return NULL;
     }
 
