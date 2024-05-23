@@ -1,7 +1,8 @@
 #include "init.h"
 #include "logger.h"
 
-#include "vm/vm.h"
+#include "fs/vfs.h"
+#include "mem.h"
 
 // Entry point called from bootloader
 void _start() {
@@ -16,7 +17,7 @@ void _start() {
         _kernel_break();
     }
 
-    kernel_msg("Kernel initialized successfuly\n");
+    kernel_warn("Kernel initialized successfuly\n");
 
     _kernel_break();
 }
