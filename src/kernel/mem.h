@@ -27,6 +27,7 @@ void log_boot_memory_map(const MMapEnt* memory_map, const size_t entries_count);
 
 // Check if virtual address is mapped (but also can be not presented)
 bool_t is_virt_addr_mapped(const uint64_t address);
+bool_t is_virt_addr_mapped_userspace(const PageMapLevel4Entry* pml4, const uint64_t address);
 bool_t is_virt_addr_range_mapped(const uint64_t address, const uint32_t pages_count);
 
 /*

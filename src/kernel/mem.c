@@ -426,6 +426,16 @@ VMPxE get_pxe_of_virt_addr(const uint64_t address) {
     return _get_pxe_of_virt_addr(cpu_get_current_pml4(), address);
 }
 
+bool_t is_virt_addr_mapped_userspace(const PageMapLevel4Entry* pml4, const uint64_t address) {
+    if (is_virt_address_valid(address) == FALSE ||
+        address < USER_SPACE_ADDR_BEGIN ||
+        address >= KERNEL_HEAP_VIRT_ADDRESS) {
+        return FALSE;
+    }
+
+    return _get_pxe_of_virt_addr(pml4, address).entry != 0;
+}
+
 bool_t is_virt_addr_mapped(const uint64_t address) {
     return get_pxe_of_virt_addr(address).entry != 0;
 }
