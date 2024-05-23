@@ -51,7 +51,7 @@ FILE* fopen(const char* restrict filename, const char* restrict mode) {
 
     if (file == NULL) return NULL;
 
-    file->_fileno = syscall(2, filename, oflags);
+    file->_fileno = syscall(SYS_OPEN, filename, oflags);
 
     if (file->_fileno < 0) {
         free(file);
@@ -64,7 +64,7 @@ FILE* fopen(const char* restrict filename, const char* restrict mode) {
 int fclose(FILE* restrict stream) {
     if (stream == NULL) return EOF;
 
-    if (syscall(3, stream->_fileno) != 0) return EOF;
+    if (syscall(SYS_CLOSE, stream->_fileno) != 0) return EOF;
 
     stream->_fileno = -1;
 
@@ -74,7 +74,7 @@ int fclose(FILE* restrict stream) {
 }
 
 size_t fread(void* restrict buffer, size_t size, size_t count, FILE* restrict stream) {
-    long result = syscall(0, stream->_fileno, buffer, size * count);
+    long result = syscall(SYS_READ, stream->_fileno, buffer, size * count);
 
     return (result < 0) ? 0 : result;
 }

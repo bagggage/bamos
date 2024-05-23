@@ -15,6 +15,8 @@
 #define SYS_VFORK   58
 #define SYS_EXECVE  59
 
+#ifndef KERNEL
+
 __attribute__((naked)) static long syscall(long number, ...) {
     asm volatile(
         "mov %%rdi,%%rax \n"
@@ -32,3 +34,5 @@ __attribute__((naked)) static long syscall(long number, ...) {
         "%rax","%rcx","%r10","%r11"
     );
 }
+
+#endif

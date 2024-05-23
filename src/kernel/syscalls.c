@@ -8,6 +8,9 @@
 #include "fs/vfs.h"
 
 #include "libc/errno.h"
+#include "libc/stdio.h"
+#include "libc/sys/mman.h"
+#include "libc/sys/syscall.h"
 
 #include "proc/local.h"
 #include "proc/proc.h"
@@ -15,22 +18,6 @@
 typedef int (*SysCall_t)();
 
 SysCall_t syscall_table[256] = { NULL };
-
-typedef enum SysCallsIdx {
-    SYS_READ = 0,
-    SYS_WRITE,
-    SYS_OPEN,
-    SYS_CLOSE,
-    SYS_STAT,
-
-    SYS_MMAP = 8,
-    SYS_MUNMAP = 10,
-
-    SYS_CLONE = 0x38,
-    SYS_FORK,
-    SYS_VFORK,
-    SYS_EXECVE,
-} SysCallsIdx;
 
 void __syscall_handler_asm() {
     asm volatile (
@@ -68,38 +55,6 @@ void __syscall_handler_asm() {
         "i" (offsetof(ProcessorLocal, kernel_stack))
     );
 }
-
-typedef enum SysOpenFlags {
-    O_RDONLY    = 00,
-    O_WRONLY    = 01,
-    O_RDWR      = 02,
-    O_ACCMODE   = 03,
-    O_CREAT     = 0100,
-    O_EXCL      = 0200,
-    O_NOCTTY    = 0400,
-    O_TRUNC     = 01000,
-    O_APPEND    = 02000,
-    O_NONBLOCK  = 04000,
-    O_DSYNC     = 010000,
-    O_DIRECT    = 040000,
-    O_LARGEFILE = 0100000,
-    O_DIRECTORY = 0200000,
-    O_NONFOLLOW = 0400000,
-    O_NOATIME   = 01000000,
-    O_CLOEXEC   = 02000000
-} SysOpenFlags;
-
-typedef enum MMapFlags {
-    PROT_NONE = 0,
-    PROT_EXEC = 01,
-    PROT_READ = 02,
-    PROT_WRITE = 04,
-
-    MAP_FIXED = 0,
-    MAP_SHARED = 01,
-    MAP_PRIVATE = 02,
-    MAP_ANONYMOUS = 04
-} MMapFlags;
 
 long _sys_read(unsigned int fd, char* buffer, size_t count) {
     
@@ -195,6 +150,8 @@ void init_syscalls() {
     syscall_table[SYS_CLOSE]    = &_sys_close;
 
     syscall_table[SYS_MMAP]     = &_sys_mmap;
+
+    syscall_table[SYS_MUNMAP]   = &_sys_munmap;
 
     syscall_table[SYS_CLONE]    = &_sys_clone;
     syscall_table[SYS_FORK]     = &_sys_fork;

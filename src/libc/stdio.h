@@ -1,8 +1,6 @@
 #pragma once
 
-#include <stdarg.h>
-
-#define EOF
+#define EOF (-1)
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -25,6 +23,10 @@
 #define O_NONFOLLOW 0400000
 #define O_NOATIME   01000000
 #define O_CLOEXEC   02000000
+
+#ifndef KERNEL
+
+#include <stdarg.h>
 
 typedef unsigned long long size_t;
 
@@ -69,3 +71,5 @@ int fclose(FILE* restrict stream);
 int fseek(FILE* restrict stream, long offset, int whence);
 
 void setbuf(FILE* restrict stream, char* restrict buffer);
+
+#endif
