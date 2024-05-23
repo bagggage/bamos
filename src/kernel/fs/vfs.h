@@ -104,9 +104,9 @@ typedef enum VfsOpenFlags {
 
 Status init_vfs();
 
-Status vfs_mount(const char* const mountpoint, const VfsDentry* const dentry);
+Status vfs_mount(const char* const mountpoint, VfsDentry* const mnt_dentry);
 
-VfsInode* create_vfs_inode_by_type(VfsInodeTypes type);
+VfsInode* vfs_new_inode_by_type(VfsInodeTypes type);
 
 VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dir_name);
 
@@ -115,3 +115,5 @@ void vfs_write(const VfsDentry* const dentry, const uint32_t offset, const uint3
 void vfs_read(const VfsDentry* const dentry, const uint32_t offset, const uint32_t total_bytes, void* const buffer);
 void vfs_close(VfsDentry* const dentry);
 
+VfsDentry* vfs_new_dentry();
+void vfs_delete_dentry(VfsDentry* dentry);
