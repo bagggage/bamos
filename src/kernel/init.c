@@ -198,7 +198,7 @@ Status init_io_devices() {
     if (display == NULL || keyboard == NULL) return KERNEL_ERROR;
 
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
-    //if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }
