@@ -917,7 +917,6 @@ VMPageFrame vm_alloc_pages(const uint32_t pages_count, VMHeap* heap, PageMapLeve
             uint64_t phys_address = bpa_allocate_pages(rank);
 
             if (phys_address == INVALID_ADDRESS) {
-                frame_free_phys_pages(&frame);
                 return frame;
             }
             else if (frame_push_phys_page(&frame, phys_address) == FALSE) {
@@ -951,6 +950,11 @@ VMPageFrame vm_alloc_pages(const uint32_t pages_count, VMHeap* heap, PageMapLeve
 
 void vm_free_pages(VMPageFrame* frame, VMHeap* heap, PageMapLevel4Entry* pml4) {
     kassert(frame != NULL);
+
+    if (frame->count == 0) {
+        kassert(frame->phys_pages.next == NULL && frame->phys_pages.prev == NULL);
+        return;
+    }
 
     vm_unmap(frame->virt_address, pml4, frame->count);
     vm_heap_release(heap, frame->virt_address, frame->count);
