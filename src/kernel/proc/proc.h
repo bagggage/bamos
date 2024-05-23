@@ -2,6 +2,7 @@
 
 #include "definitions.h"
 #include "thread.h"
+#include "file.h"
 
 #include "cpu/spinlock.h"
 
@@ -25,9 +26,21 @@ typedef struct ProcessAddressSpace {
     PageMapLevel4Entry* page_table;
 } ProcessAddressSpace;
 
+typedef struct VMPageFrameNode {
+    LIST_STRUCT_IMPL(VMPageFrameNode);
+    VMPageFrame frame;
+} VMPageFrameNode;
+
 typedef struct Process {
     pid_t pid;
+
     ProcessAddressSpace addr_space;
+    ListHead vm_pages;
+    Spinlock vm_lock;
+
+    FileDescriptor** files;
+    uint32_t files_capacity;
+    Spinlock files_lock;
 } Process;
 
 typedef struct Task {
@@ -39,6 +52,10 @@ typedef struct Task {
 
 Process* proc_new();
 void proc_delete(Process* process);
+
+VMPageFrameNode* proc_push_vm_page(Process* const process);
+void proc_dealloc_vm_page(Process* const process, VMPageFrameNode* const page_frame);
+void proc_dealloc_vm_pages(Process* const process);
 
 int _sys_clone();
 pid_t _sys_fork();
