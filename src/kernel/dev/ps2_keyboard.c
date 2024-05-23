@@ -270,7 +270,6 @@ Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
     if ((result = inb(PS2_DATA_PORT)) != ACK) {
         for (size_t i = 0; i < 10; ++i) {
             outb(PS2_DATA_PORT, SET_DEFAULT_PARAMETERS);
-
             wait();
 
             if ((result = inb(PS2_DATA_PORT)) == ACK) goto init_interface; 
@@ -290,7 +289,7 @@ init_interface:
 
 uint8_t ps2_get_scan_code() {
     PS2ScanCode scancode = PS2_SCAN_CODE_NONE;
-    
+
     if (inb(PS2_STATUS_PORT) & 1) scancode = inb(PS2_DATA_PORT);
 
     return scancode == PS2_SCAN_CODE_NONE ? SCAN_CODE_NONE : scancode;
