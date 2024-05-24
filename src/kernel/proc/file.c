@@ -61,8 +61,8 @@ static inline long fd_push(Process* const process, const FileDescriptor* const d
     return result;
 }
 
-long fd_open(Process* const process, const char* const filename, VfsOpenFlags flags) {
-    VfsDentry* dentry = vfs_open(filename, flags);
+long fd_open(Process* const process, const char* const filename, int flags) {
+    VfsDentry* dentry = vfs_open(filename, 0);
 
     if (dentry == NULL) return -2;
 
@@ -71,10 +71,9 @@ long fd_open(Process* const process, const char* const filename, VfsOpenFlags fl
     // Check if already opened
     for (uint32_t i = 0; i < process->files_capacity; ++i) {
         if (process->files[i] != NULL &&
-            process->files[i]->dentry == dentry &&
-            process->files[i]->mode == flags) {
+            process->files[i]->dentry == dentry) {
             spin_release(&process->files_lock);
-            return i;
+            return -3;
         }
     }
 

@@ -57,15 +57,59 @@ void __syscall_handler_asm() {
 }
 
 long _sys_read(unsigned int fd, char* buffer, size_t count) {
-    
+    if (count == 0) return -EINVAL;
+    if (is_virt_addr_mapped_userspace(
+            g_proc_local.current_task->process->addr_space.page_table,
+            (uint64_t)buffer
+        ) == FALSE) {
+        return -EFAULT;
+    }
+
+    if (fd >= g_proc_local.current_task->process->files_capacity) {
+        return -EBADF;
+    }
+
+    FileDescriptor* file = g_proc_local.current_task->process->files[fd];
+
+    if (file == NULL || (file->mode & O_WRONLY) != 0) return -EBADF;
+
+    const uint32_t readed = vfs_read(file->dentry, file->cursor_offset, count, (void*)buffer);
+
+    file->cursor_offset += readed;
+
+    return readed;
 }
 
 long _sys_write(unsigned int fd, const char* buffer, size_t count) {
-    
+    if (count == 0) return -EINVAL;
+    if (is_virt_addr_mapped_userspace(
+            g_proc_local.current_task->process->addr_space.page_table,
+            (uint64_t)buffer
+        ) == FALSE) {
+        return -EFAULT;
+    }
+
+    if (fd >= g_proc_local.current_task->process->files_capacity) {
+        return -EBADF;
+    }
+
+    FileDescriptor* file = g_proc_local.current_task->process->files[fd];
+
+    if (file == NULL ||
+        (file->mode & O_WRONLY || file->mode & O_RDWR) == 0) {
+        return -EBADF;
+    }
+
+    const uint32_t writen = vfs_write(file->dentry, file->cursor_offset, count, buffer);
+
+    file->cursor_offset += writen;
+
+    return writen;
 }
 
 long _sys_open(const char* filename, int flags) {
-    if (is_virt_addr_mapped_userspace(
+    if (((flags & O_WRONLY) && (flags & O_RDWR)) ||
+        is_virt_addr_mapped_userspace(
             g_proc_local.current_task->process->addr_space.page_table,
             (const uint64_t)filename
         ) == FALSE) {
@@ -75,7 +119,7 @@ long _sys_open(const char* filename, int flags) {
     long result = fd_open(
         g_proc_local.current_task->process,
         filename,
-        ((flags & O_WRONLY) || (flags & O_RDWR)) ? VFS_WRITE : VFS_READ
+        flags
     );
 
     if (result < 0) return (result == -2) ? -ENOENT : -ENOMEM;

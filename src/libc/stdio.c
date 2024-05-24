@@ -3,6 +3,7 @@
 #include "sys/syscall.h"
 
 #include "stdlib.h"
+#include "errno.h"
 
 FILE* stderr;
 
@@ -55,6 +56,7 @@ FILE* fopen(const char* restrict filename, const char* restrict mode) {
 
     if (file->_fileno < 0) {
         free(file);
+        errno = -file->_fileno;
         return NULL;
     }
 
@@ -64,7 +66,12 @@ FILE* fopen(const char* restrict filename, const char* restrict mode) {
 int fclose(FILE* restrict stream) {
     if (stream == NULL) return EOF;
 
-    if (syscall(SYS_CLOSE, stream->_fileno) != 0) return EOF;
+    long result = syscall(SYS_CLOSE, stream->_fileno);
+
+    if (result < 0) {
+        errno = -result;
+        return EOF;
+    }
 
     stream->_fileno = -1;
 
@@ -76,11 +83,23 @@ int fclose(FILE* restrict stream) {
 size_t fread(void* restrict buffer, size_t size, size_t count, FILE* restrict stream) {
     long result = syscall(SYS_READ, stream->_fileno, buffer, size * count);
 
-    return (result < 0) ? 0 : result;
+    if (result < 0) {
+        errno = -result;
+        return 0;
+    }
+
+    return ((size_t)result / size);
 }
 
 size_t fwrite(const void* restrict buffer, size_t size, size_t count, FILE* restrict stream) {
+    long result = syscall(SYS_WRITE, stream->_fileno, buffer, size * count);
 
+    if (result < 0) {
+        errno = -result;
+        return 0;
+    }
+
+    return ((size_t)result / size);
 }
 
 int fseek(FILE* restrict stream, long offset, int whence) {

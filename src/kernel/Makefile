@@ -14,7 +14,7 @@ MKDIR:=mkdir -p
 BUILD_KER:=${BUILD_DIR}/kernel
 SRC_KER:=${SRC_DIR}/kernel
 
-CC_INCLUDE:=-I${BOOTBOOT} -I${SRC_KER} -I${UEFI_DIR}/include
+CC_INCLUDE:=-I${BOOTBOOT} -I${SRC_KER} -I${SRC_DIR} -I${UEFI_DIR}/include
 
 SRCS:=$(shell find ${SRC_KER} -name '*.c')
 OBJS:=$(patsubst ${SRC_KER}/%.c, ${BUILD_KER}/%.o, ${SRCS})
