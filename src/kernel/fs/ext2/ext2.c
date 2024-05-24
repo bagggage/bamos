@@ -643,7 +643,7 @@ static Ext2DirInode** ext2_get_all_dir_entries(Ext2Inode* const inode) {
         return NULL;
     }
 
-    Ext2DirInode** all_dir_entries = (Ext2DirInode**)kmalloc(dir_count * sizeof(Ext2DirInode*));
+    Ext2DirInode** all_dir_entries = (Ext2DirInode**)kmalloc((dir_count + 1) * sizeof(Ext2DirInode*));
 
     if (all_dir_entries == NULL) {
         kfree(temp_dir_inode);
@@ -710,7 +710,7 @@ static void ext2_fill_dentry(VfsDentry* const dentry) {
     
     if (dir_count == 0) return;
 
-    dentry->childs = (VfsDentry**)kmalloc(dir_count * sizeof(VfsDentry*));
+    dentry->childs = (VfsDentry**)kmalloc((dir_count + 1) * sizeof(VfsDentry*));
 
     if (dentry->childs == NULL) {
         ext2_free_all_dir_entries(all_dirs);
@@ -757,7 +757,7 @@ static void ext2_fill_dentry(VfsDentry* const dentry) {
 
     // end of the child array
     dentry->childs[index] = NULL;
-    
+
     ext2_free_all_dir_entries(all_dirs);
 }
 
