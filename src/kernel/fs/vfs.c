@@ -186,7 +186,12 @@ Status vfs_mount(const char* const mountpoint, VfsDentry* const mnt_dentry) {
 
 VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dentry_name) {
     if (dentry == NULL) return NULL;
-    if (dentry->childs == NULL) return NULL;
+
+    if (dentry->childs == NULL &&
+        dentry->inode->type == VFS_TYPE_DIRECTORY &&
+        dentry->interface.fill_dentry != NULL) {
+        dentry->interface.fill_dentry(dentry);
+    }
 
     VfsDentry* child = NULL;
 
@@ -210,12 +215,10 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
     char* current_token = strtok(temp_filename, "/");
     char* next_token = strtok(NULL, "/");
 
-    kernel_msg("dir: %s\n", current_token);
-
     VfsDentry* dentry = root_dentry;
 
     while (next_token != NULL) {
-        kernel_msg("dir: %s\n", next_token);
+        kernel_msg("dir: %s\n", current_token);
 
         if (dentry->inode->type != VFS_TYPE_DIRECTORY) {
             kfree(temp_filename);
@@ -234,6 +237,8 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
         current_token = next_token;
         next_token = strtok(NULL, "/");
     }
+
+    kernel_msg("file: %s\n", current_token);
 
     dentry = vfs_lookup(dentry, current_token);
 
