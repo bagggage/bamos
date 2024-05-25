@@ -250,21 +250,29 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
 uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset, 
                  const uint32_t total_bytes, void* const buffer) {
     if (dentry == NULL || buffer == NULL) return;
-    if (offset < 0 || offset >= total_bytes) return;
-    if (total_bytes == 0 || total_bytes > VFS_MAX_BUFFER_SIZE) return;
+    if (offset < 0) return;
+    if (total_bytes <= 0) return;
     if (dentry->inode->type != VFS_TYPE_FILE) return;
 
     VfsInodeFile* vfs_file = (VfsInodeFile*)dentry->inode;
 
-    vfs_file->interface.read(vfs_file, offset, total_bytes, buffer);
+    uint32_t counts_to_read = (total_bytes / VFS_MAX_BUFFER_SIZE) + 1;
+    const uint32_t buffer_size = (total_bytes >= VFS_MAX_BUFFER_SIZE) ? VFS_MAX_BUFFER_SIZE : total_bytes;
 
-    return total_bytes;
+    while (counts_to_read > 0) {
+        uint32_t start_offset = 0;
+
+        vfs_file->interface.read(vfs_file, offset + start_offset, buffer_size, buffer + start_offset);
+
+        start_offset += VFS_MAX_BUFFER_SIZE;
+
+        counts_to_read--;
+    }
 }
 
 uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset, 
                  const uint32_t total_bytes, void* const buffer) {
     if (dentry == NULL || buffer == NULL) return;
-    if (offset >= total_bytes) return;
     if (total_bytes == 0 || total_bytes > VFS_MAX_BUFFER_SIZE) return;
     if (dentry->inode->type != VFS_TYPE_FILE) return;
 
