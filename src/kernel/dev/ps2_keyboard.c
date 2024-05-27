@@ -6,6 +6,7 @@
 #include "cpu/io.h"
 
 #include "dev/keyboard.h"
+#include "dev/timer.h"
 
 // for more info see PS/2 commands
 typedef enum Commands {
@@ -254,10 +255,17 @@ typedef enum PS2ScanCode {
     PS2_SCAN_CODE_NONE = 0xFA
 } PS2ScanCode;
 
-static void wait() {
-    for (size_t i = 0; i < 0xFF000000; ++i) {
-        asm volatile("");
-    }
+static void wait(uint64_t delay_ms) {
+    TimerDevice* timer = dev_find_by_type(NULL, DEV_TIMER);
+
+    if (timer == NULL) return;
+
+    uint64_t begin_time_ms = (timer->interface.get_clock_counter(timer) * timer->min_clock_time) * PS_TO_MS;
+    uint64_t curr_time_ms = begin_time_ms;
+
+    do {
+        curr_time_ms = (timer->interface.get_clock_counter(timer) * timer->min_clock_time) * PS_TO_MS;
+    } while ((curr_time_ms - begin_time_ms) < delay_ms);  
 }
 
 Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
@@ -268,20 +276,15 @@ Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
     uint8_t result;
 
     if ((result = inb(PS2_DATA_PORT)) != ACK) {
-        for (size_t i = 0; i < 10; ++i) {
-            outb(PS2_DATA_PORT, SET_DEFAULT_PARAMETERS);
-            wait();
+        outb(PS2_DATA_PORT, SET_DEFAULT_PARAMETERS);
+        wait(1000);
 
-            if ((result = inb(PS2_DATA_PORT)) == ACK) goto init_interface; 
-        }
-
-        if (result != ACK) {
-            error_str = "PS/2 Keyboard uninitialized successful";
-            return result == RESEND ? KERNEL_ERROR : KERNEL_PANIC;
+        if ((result = inb(PS2_DATA_PORT)) != ACK) {
+            error_str = "Device is not responding";
+            return KERNEL_ERROR;
         }
     }
 
-init_interface:
     keyboard_device->interface.get_scan_code = &ps2_get_scan_code;
 
     return KERNEL_OK;
