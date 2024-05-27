@@ -70,7 +70,9 @@ static MMapEnt find_first_suitable_mmap_block(MMapEnt* begin_entry, const size_t
 static inline bool_t is_virt_addr_valid(const uint64_t virt_address) {
     const VirtualAddress* virtual_addr = (const VirtualAddress*)&virt_address;
 
-    return (virtual_addr->sign_extended == 0 || virtual_addr->sign_extended == 0xFFFF);
+    if ((virtual_addr->p4_index & 0x100) != 0) return (virtual_addr->sign_extended == 0xFFFF) ? TRUE : FALSE;
+
+    return (virtual_addr->sign_extended == 0) ? TRUE : FALSE;
 }
 
 static inline bool_t is_page_table_entry_valid(const PageXEntry* pte) {
@@ -493,7 +495,12 @@ void vm_free_page_table(PageXEntry* page_table) {
 }
 
 static inline bool_t vm_is_pxe_valid(const PageXEntry* pxe) {
-    return pxe->present && (pxe->size == 1 || pxe->page_ppn != 0 || pxe->writeable == 1);
+    return pxe->present &&
+        (
+            pxe->size == 1 ||
+            pxe->page_ppn != 0 ||
+            pxe->writeable == 1
+        );
 }
 
 PageXEntry* vm_get_page_x_entry(const uint64_t virt_address, unsigned int level) {
@@ -577,7 +584,7 @@ Status _vm_map_phys_to_virt(uint64_t phys_address,
         flags ^= VMMAP_USE_LARGE_PAGES;
     }
 
-    uint32_t pages_by_size_count[4] = { 0, 0, pages_count, 0 };
+    uint32_t pages_by_size_count[5] = { 0, 0, pages_count, 0, 0 };
 
     if ((flags & VMMAP_USE_LARGE_PAGES) != 0) {
         pages_by_size_count[0] = (pages_count * PAGE_BYTE_SIZE) / GB_SIZE; // 1GB
@@ -602,6 +609,8 @@ Status _vm_map_phys_to_virt(uint64_t phys_address,
             (pages_by_size_count[0] != 0 || *(uint64_t*)(pages_by_size_count + 1) != 0) :
             (*(uint64_t*)(pages_by_size_count + i) != 0)
         );
+
+        if (is_need_to_map_on_this_level == FALSE && has_pages_to_allocate == FALSE && i == 3) break;
 
         if ((pxe->size == 1 || vm_is_pxe_valid(pxe) == FALSE) &&
             is_need_to_map_on_this_level == FALSE &&
