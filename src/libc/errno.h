@@ -150,3 +150,9 @@
 #define ERFKILL		132	/* Operation not possible due to RF-kill */
 
 #define EHWPOISON	133	/* Memory page has hardware error */
+
+#ifndef KERNEL
+
+extern unsigned int errno;
+
+#endif

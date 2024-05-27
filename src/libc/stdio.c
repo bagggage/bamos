@@ -16,7 +16,7 @@ int vfprintf(FILE* restrict stream, const char* restrict fmt, va_list args) {
 }
 
 int vsprintf(const char* buffer, const char* fmt, va_list args) {
-
+    
 }
 
 static inline int make_oflags(const char* restrict mode) {

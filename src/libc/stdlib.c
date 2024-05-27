@@ -1,5 +1,9 @@
 #include "stdlib.h"
 
+#include "sys/mman.h"
+
+unsigned int errno = 0;
+
 int abs(int x) {
 
 }
@@ -13,18 +17,6 @@ int atexit(void (*function)(void)) {
 }
 
 int atoi(const char* restrict string) {
-
-}
-
-void* malloc(size_t size) {
-    
-}
-
-void* calloc(size_t size, size_t count) {
-
-}
-
-void free(void* restrict memory_block) {
 
 }
 
