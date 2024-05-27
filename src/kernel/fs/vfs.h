@@ -36,15 +36,16 @@ typedef enum VfsInodePermission {
 } VfsInodePermission;
 
 typedef struct VfsInode {
-    VfsInodeTypes type;  
-    uint32_t index;              
-    uint32_t mode;   
-    uint32_t hard_link_count;            
-    uint32_t uid;              
-    uint32_t gid;               
-    uint32_t access_time;            
-    uint32_t modify_time;            
-    uint32_t change_time;         
+    VfsInodeTypes type;
+    uint32_t index;
+    uint32_t mode;
+    uint32_t hard_link_count;
+    uint32_t uid;
+    uint32_t gid;
+    uint32_t access_time;
+    uint32_t modify_time;
+    uint32_t change_time;
+    uint64_t file_size;
 } VfsInode;
 
 typedef struct VfsDentry VfsDentry;
@@ -91,6 +92,7 @@ typedef struct VfsDentry {
 typedef struct Vfs {
     size_t base_disk_start_offset;
     size_t base_disk_end_offset;
+    uint32_t block_size;
     StorageDevice* storage_device;
 } Vfs;
 

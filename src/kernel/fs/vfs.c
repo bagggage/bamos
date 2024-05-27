@@ -180,7 +180,6 @@ Status vfs_mount(const char* const mountpoint, VfsDentry* const mnt_dentry) {
         return KERNEL_OK;
     }
 
-    // add + 1 to remove '/' (e.g /home -> home)
     return vfs_mount_helper(mountpoint, mnt_dentry);
 }
 
@@ -218,15 +217,11 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
     VfsDentry* dentry = root_dentry;
 
     while (next_token != NULL) {
-        kernel_msg("dir: %s\n", current_token);
+        //kernel_msg("dir: %s\n", current_token);
 
         if (dentry->inode->type != VFS_TYPE_DIRECTORY) {
             kfree(temp_filename);
             return NULL;
-        }
-
-        if (dentry->childs == NULL) {
-            dentry->interface.fill_dentry(dentry);
         }
 
         if ((dentry = vfs_lookup(dentry, current_token)) == NULL) {
@@ -238,7 +233,7 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
         next_token = strtok(NULL, "/");
     }
 
-    kernel_msg("file: %s\n", current_token);
+    //kernel_msg("file: %s\n", current_token);
 
     dentry = vfs_lookup(dentry, current_token);
 
@@ -250,24 +245,24 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
 uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset, 
                  const uint32_t total_bytes, void* const buffer) {
     if (dentry == NULL || buffer == NULL) return;
-    if (offset < 0) return;
-    if (total_bytes <= 0) return;
+    if (total_bytes == 0) return;
     if (dentry->inode->type != VFS_TYPE_FILE) return;
 
     VfsInodeFile* vfs_file = (VfsInodeFile*)dentry->inode;
 
-    uint32_t counts_to_read = (total_bytes / VFS_MAX_BUFFER_SIZE) + 1;
     const uint32_t buffer_size = (total_bytes >= VFS_MAX_BUFFER_SIZE) ? VFS_MAX_BUFFER_SIZE : total_bytes;
 
-    while (counts_to_read > 0) {
-        uint32_t start_offset = 0;
+    uint32_t counts_to_read = (total_bytes / VFS_MAX_BUFFER_SIZE) + 1;
+    uint32_t start_offset = 0;
 
+    while (counts_to_read > 0) {
         vfs_file->interface.read(vfs_file, offset + start_offset, buffer_size, buffer + start_offset);
 
         start_offset += VFS_MAX_BUFFER_SIZE;
-
         counts_to_read--;
     }
+
+    return total_bytes;
 }
 
 uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset, 
