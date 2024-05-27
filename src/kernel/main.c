@@ -1,6 +1,8 @@
 #include "init.h"
 #include "logger.h"
 
+#include "proc/task_scheduler.h"
+
 // Entry point called from bootloader
 void _start() {
     Status status = init_kernel();
@@ -15,6 +17,13 @@ void _start() {
     }
 
     kernel_warn("Kernel initialized successfuly\n");
+
+    if (load_init_proc() == FALSE) {
+        kernel_error("Can't load 'init' process: %s\n", error_str);
+        _kernel_break();
+    }
+
+    tsk_start_scheduler();
 
     _kernel_break();
 }

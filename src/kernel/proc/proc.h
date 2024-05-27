@@ -10,12 +10,18 @@
 
 #include "utils/list.h"
 
+#define PROC_STACK_VIRT_ADDRESS (KERNEL_HEAP_VIRT_ADDRESS - (GB_SIZE * 512ULL))
+
 typedef uint32_t pid_t;
 
+typedef struct VMMemoryBlockNode {
+    LIST_STRUCT_IMPL(VMMemoryBlockNode);
+    VMMemoryBlock block;
+} VMMemoryBlockNode;
+
 typedef struct ProcessAddressSpace {
-    VMMemoryBlock code;
-    VMMemoryBlock data;
-    VMMemoryBlock stack;
+    ListHead segments;
+    uint64_t stack_base; // Top address of the start of the stack
 
     VMMemoryBlock environment;
 
@@ -50,8 +56,13 @@ typedef struct Task {
     Thread thread;
 } Task;
 
+bool_t load_init_proc();
+
 Process* proc_new();
 void proc_delete(Process* process);
+
+VMMemoryBlockNode* proc_push_segment(Process* const process);
+void proc_clear_segments(Process* const process);
 
 VMPageFrameNode* proc_push_vm_page(Process* const process);
 void proc_dealloc_vm_page(Process* const process, VMPageFrameNode* const page_frame);

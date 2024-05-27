@@ -2,8 +2,9 @@
 
 #include <stddef.h>
 
-#include "mem.h"
+#include "logger.h"
 #include "math.h"
+#include "mem.h"
 
 #include "fs/vfs.h"
 
@@ -19,13 +20,11 @@ typedef int (*SysCall_t)();
 
 SysCall_t syscall_table[256] = { NULL };
 
-void __syscall_handler_asm() {
+__attribute__((naked)) void _syscall_handler() {
     asm volatile (
-        "_syscall_handler:\n"
-        ".global _syscall_handler \n"
         "cmp $256,%%rax \n"                     // Check syscall idx
-        "jge _invalid_syscall \n"
-        "lea syscall_table(,%%rax,8),%%rax \n"  // Get pointer to handler
+        "jae _invalid_syscall \n"
+        "movq syscall_table(,%%rax,8),%%rax \n"  // Get pointer to handler
         "test %%rax,%%rax \n"                   // Check if syscall handler exists
         "jz _invalid_syscall \n"
         "pushq %%rbp \n"                        // Save rbp

@@ -12,9 +12,15 @@ The scheduling algorithm will be changed in future.
 
 typedef struct TaskScheduler {
     ListHead task_queue;
-    ListHead sleep_queue;
 } TaskScheduler;
 
 Status init_task_scheduler();
 
-bool_t tsk_switch_to(Task* task);
+Task* tsk_new();
+void tsk_delete(Task* const task);
+
+void tsk_awake(Task* const task);
+
+void tsk_start_scheduler();
+
+bool_t tsk_switch_to(Task* const task);
