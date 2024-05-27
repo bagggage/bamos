@@ -155,6 +155,8 @@ bool_t _oma_is_containing_mem_block(const void* memory_block, const ObjectMemory
 }
 
 void* oma_alloc(ObjectMemoryAllocator* oma) {
+    kassert(oma != NULL);
+
     MemoryBucket* suitable_bucket = (MemoryBucket*)(void*)oma->bucket_list.next;
 
     while (suitable_bucket != NULL && suitable_bucket->allocated_count == oma->bucket_capacity) {
@@ -191,6 +193,8 @@ void* oma_alloc(ObjectMemoryAllocator* oma) {
 }
 
 void oma_free(void* memory_block, ObjectMemoryAllocator* oma) {
+    kassert(memory_block != NULL && oma != NULL);
+
     MemoryBucket* suitable_bucket = (MemoryBucket*)(void*)oma->bucket_list.next;
 
     while (suitable_bucket != NULL) {

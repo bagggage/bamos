@@ -1,7 +1,10 @@
 #pragma once
 
 #include "definitions.h"
+
 #include "dev/display.h"
+
+#include "proc/local.h"
 
 #include <stdarg.h>
 
@@ -25,7 +28,7 @@ Can be used only after display device initialization.
 #define COLOR_LYELLOW   255,    235,    75
 #define COLOR_ORANGE    255,    165,    0
 
-extern const char* error_str;
+#define error_str (g_proc_local.kernel_error_str)
 
 typedef enum LogType {
     LOG_MSG,
@@ -45,6 +48,8 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr);
 
 uint16_t kernel_logger_get_rows();
 uint16_t kernel_logger_get_cols();
+
+void kernel_logger_clear();
 
 void kernel_logger_set_color(uint8_t r, uint8_t g, uint8_t b);
 Color kernel_logger_get_color();

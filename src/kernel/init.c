@@ -6,6 +6,7 @@
 #include "assert.h"
 #include "logger.h"
 #include "mem.h"
+#include "string.h"
 #include "syscalls.h"
 
 #include "cpu/feature.h"
@@ -163,7 +164,9 @@ Status init_user_space() {
         access_byte->read_write = 1;
     }
 
-    return KERNEL_OK;
+    init_syscalls();
+
+    return init_task_scheduler();
 }
 
 Status init_kernel() {
@@ -175,17 +178,25 @@ Status init_kernel() {
     if (init_acpi()         != KERNEL_OK) return KERNEL_ERROR;
     if (init_apic()         != KERNEL_OK) return KERNEL_ERROR;
     if (init_ioapic()       != KERNEL_OK) return KERNEL_ERROR;
-    if (init_io_devices()   != KERNEL_OK) return KERNEL_ERROR;
     if (init_timer()        != KERNEL_OK) return KERNEL_ERROR;
+    if (init_io_devices()   != KERNEL_OK) return KERNEL_ERROR;
 
     spin_release(&cpus_init_lock);
 
     if (init_pci()          != KERNEL_OK) return KERNEL_ERROR;
-    if (init_storage()      != KERNEL_OK) return KERNEL_ERROR;
+    if (init_storage()      != KERNEL_OK) {
+        kernel_error("Storage devices initialization failed: %s\n", error_str);
+    }
 
     if (init_user_space()   != KERNEL_OK) return KERNEL_ERROR;
 
-    if (init_vfs()          != KERNEL_OK) return KERNEL_ERROR;
+    if (init_vfs()          != KERNEL_OK) {
+        char* str_buffer = (char*)kmalloc(sizeof(char[256]));
+        sprintf(str_buffer, "VFS: %s", error_str);
+        error_str = str_buffer;
+
+        return KERNEL_ERROR;
+    }
     
     return KERNEL_OK;
 }
@@ -198,7 +209,9 @@ Status init_io_devices() {
     if (display == NULL || keyboard == NULL) return KERNEL_ERROR;
 
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
-    if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ps2_keyboard(keyboard) != KERNEL_OK) {
+        kernel_warn("PS/2 Keyboard initialization failed: %s\n", error_str);
+    }
 
     return KERNEL_OK;
 }

@@ -22,8 +22,10 @@ typedef struct ProcessorLocal {
     Task* current_task;
     PageMapLevel4Entry* kernel_page_table;
 
+    const char* kernel_error_str;
+
     // Filling to page size
-    uint8_t __page_size_filler[PAGE_BYTE_SIZE - 40];
+    uint8_t __page_size_filler[PAGE_BYTE_SIZE - 48];
 } ProcessorLocal;
 
 extern ProcessorLocal g_proc_local;

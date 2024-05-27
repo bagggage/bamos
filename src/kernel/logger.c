@@ -17,8 +17,6 @@ extern uint32_t fb[];
 
 #define BOOTBOOT_FB_BPP 4
 
-const char* error_str = NULL;
-
 typedef struct Logger {
     Framebuffer* fb;
     RawFont font;
@@ -148,10 +146,25 @@ static inline void fast_memcpy(const uint64_t* src, uint64_t* dst, const size_t 
     }
 }
 
+void kernel_logger_clear() {
+    spin_lock(&logger.lock);
+
+    logger.col = 0;
+    logger.row = 0;
+
+    const size_t fb_size = ((uint64_t)logger.fb->height * logger.fb->scanline) / sizeof(uint64_t);
+
+    for (uint64_t i = 0; i < fb_size; ++i) {
+        ((uint64_t*)logger.fb->base)[i] = 0;
+    }
+
+    spin_release(&logger.lock);
+}
+
 // Scrolls raw terminal up
 static inline void scroll_logger_fb(uint8_t rows_offset) {
-    size_t rows_byte_offset = (uint64_t)rows_offset * logger.fb->scanline * logger.font.height;
-    size_t fb_size = (uint64_t)logger.fb->height * logger.fb->scanline;
+    const size_t rows_byte_offset = (uint64_t)rows_offset * logger.fb->scanline * logger.font.height;
+    const size_t fb_size = (uint64_t)logger.fb->height * logger.fb->scanline;
 
     fast_memcpy((uint64_t*)(logger.fb->base + rows_byte_offset), (uint64_t*)logger.fb->base, fb_size - rows_byte_offset);
     memset(logger.fb->base + (fb_size - rows_byte_offset), rows_byte_offset, 0x0);
