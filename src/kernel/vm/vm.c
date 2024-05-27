@@ -33,10 +33,6 @@ static uint64_t vm_kernel_virt_to_phys_offset = 0;
 extern uint64_t initstack[];
 extern uint8_t fb[];
 
-static Status _vm_map_phys_to_virt(uint64_t phys_address,
-    uint64_t virt_address, PageMapLevel4Entry* pml4,
-    const size_t pages_count, VMMapFlags flags);
-
 static inline const MMapEnt* find_free_mem_map_entry(MMapEnt* mem_map, const size_t entries_count, const size_t required_size) {
     const MMapEnt* most_suitable_entry = NULL;
 
@@ -565,7 +561,7 @@ static void vm_remap_large_page(PageXEntry* pxe, PageXEntry* child_pxe, VMMapFla
     }
 }
 
-static Status _vm_map_phys_to_virt(uint64_t phys_address,
+Status _vm_map_phys_to_virt(uint64_t phys_address,
     uint64_t virt_address, PageMapLevel4Entry* pml4,
     const size_t pages_count, VMMapFlags flags) {
     kassert(phys_address <= MAX_PHYS_ADDRESS);

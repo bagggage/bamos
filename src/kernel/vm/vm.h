@@ -14,11 +14,11 @@ Virtual memory.
 */
 
 #define DMA_VIRT_ADDRESS 0x0
-#define DMA_SIZE (GB_SIZE * 16ULL) 
+#define DMA_SIZE (GB_SIZE * 48ULL) 
 #define KERNEL_HEAP_VIRT_ADDRESS 0xFFFFFE0000000000
 #define KERNEL_STACK_SIZE (KB_SIZE * 4)
 
-#define USER_SPACE_ADDR_BEGIN (GB_SIZE * 32ULL)
+#define USER_SPACE_ADDR_BEGIN (DMA_VIRT_ADDRESS + DMA_SIZE)
 
 #define PAGE_TABLE_SIZE PAGE_BYTE_SIZE
 
@@ -114,6 +114,11 @@ Map physical pages to virtual in required count.
 Physicall and virtual address must be page aligned, if not - undefined behaviour.
 Returns 'KERNEL_OK' in case of success. Otherwise returns 'KERNEL_ERROR' and does't apply any changes.
 */
+Status _vm_map_phys_to_virt(
+    uint64_t phys_address, uint64_t virt_address,
+    PageMapLevel4Entry* pml4, const size_t pages_count,
+    VMMapFlags flags
+);
 Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const size_t pages_count, VMMapFlags flags);
 
 void vm_unmap(const uint64_t virt_address, PageMapLevel4Entry* pml4, const uint32_t pages_count);
@@ -124,6 +129,8 @@ The size of the pool is defined as 'PAGE_TABLE_POOL_TABLES_COUNT'.
 Returns virtual address in case of success. Otherwise returns nullptr.
 */
 PageXEntry* vm_alloc_page_table();
+void vm_free_page_table(PageXEntry* page_table);
+
 PageXEntry* vm_get_page_x_entry(const uint64_t virt_address, unsigned int level);
 PageXEntry* _get_page_x_entry(PageMapLevel4Entry* pml4, const uint64_t virt_address, unsigned int level);
 

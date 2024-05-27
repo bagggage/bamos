@@ -41,10 +41,9 @@ Status init_storage_devices() {
     }
 
     if (!is_storage_device_found) {
-        kernel_error("No storage device was found\n");
-        
+        error_str = "No supportable storage device was found";
         return KERNEL_ERROR;  
-    } 
+    }
 
     return KERNEL_OK;
 }
