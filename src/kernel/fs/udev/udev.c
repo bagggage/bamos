@@ -43,28 +43,27 @@ void udev_read_pci(const VfsInodeFile* const inode, const uint32_t offset, const
     );
 }
 
+static inline bool_t is_ascii(const char c) {
+    return ((c >= ' ' && c <= '~' || (c == '\n' || c == '\b')) ? TRUE : FALSE);
+}
+
 void udev_read_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
-    if (inode->inode.index != 0 || offset != 0 || total_bytes == 0) return;
+    if (inode->inode.index != 0 || total_bytes == 0) return;
 
     KeyboardDevice* device = (KeyboardDevice*)dev_find_by_type(NULL, DEV_KEYBOARD);
 
     for (uint32_t i = 0; i < total_bytes; ++i) {
         KernelScancode scancode;
 
-        while ((scancode = device->interface.get_scan_code()) == SCAN_CODE_NONE);
+        while ((scancode = device->interface.get_scan_code()) == SCAN_CODE_NONE ||
+            is_ascii(scan_code_to_ascii(scancode)) == FALSE);
 
         buffer[i] = scan_code_to_ascii(scancode);
     }
 }
 
-static inline bool_t is_ascii(const char c) {
-    return ((c >= ' ' && c <= '~') ? 1 : 0);
-}
-
 void udev_write_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
-    kernel_msg("Writing to tty...\n");
-
-    if (inode->inode.index != 0 || offset != 0 || total_bytes == 0) return;
+    if (inode->inode.index != 0 || total_bytes == 0) return;
 
     for (uint32_t i = 0; i < total_bytes; ++i) {
         const char c = buffer[i];
@@ -91,7 +90,6 @@ static VfsDentry* make_tty(const uint16_t idx) {
     ((VfsInodeFile*)result->inode)->interface.write = &udev_write_tty;
 
     sprintf(result->name, "tty%u", idx);
-    kernel_msg("udev fs: tty: %s\n", result->name);
 
     result->childs = NULL;
     result->childs_count = 0;
@@ -165,7 +163,6 @@ static bool_t make_pci_entries() {
         ((VfsInodeFile*)dentry->inode)->interface.write = NULL;
 
         sprintf(dentry->name, "pci-%u:%u.%u", device->bus, device->dev, device->func);
-        kernel_msg("udev fs: pci entry: %s\n", dentry->name);
 
         dentry->interface.fill_dentry = NULL;
         dentry->childs = NULL;
@@ -182,7 +179,7 @@ Status udev_init() {
     VfsDentry* tty_dentry = make_tty(0);
 
     if (tty_dentry == NULL) {
-        error_str = "udev fs: Failed to make 'tty0' entry";
+        error_str = "Udev fs: Failed to make 'tty0' entry";
         return KERNEL_ERROR;
     }
 
@@ -196,13 +193,11 @@ Status udev_init() {
             root_dentry.childs = 0;
         }
 
-        sprintf(error_str, "udev fs: Failed to make entries for pci devices: %s", error_str);
+        sprintf(error_str, "Udev fs: Failed to make entries for pci devices: %s", error_str);
         return KERNEL_ERROR;
     }
 
     root_dentry.childs[0] = tty_dentry;
 
-    vfs_mount("/dev", &root_dentry);
-
-    return KERNEL_OK;
+    return vfs_mount("/dev", &root_dentry);
 }
