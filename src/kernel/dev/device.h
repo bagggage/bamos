@@ -24,6 +24,7 @@ typedef enum DeviceType {
     DEV_MOUSE,
     DEV_STORAGE,
     DEV_TIMER,
+    DEV_CLOCK,
     DEV_USB_BUS,
     DEV_PCI_BUS
 } DeviceType;

@@ -37,3 +37,11 @@ static inline uint32_t log2upper(uint32_t number) {
 }
 
 uint64_t pow(const uint64_t value, uint64_t power);
+
+uint32_t inline bcd_to_decimal(const uint32_t bcd) {
+    return ((bcd / 16 * 10) + (bcd % 16));
+}
+
+uint32_t inline decimal_to_bcd(const uint32_t decimal) {
+    return ((decimal / 10 * 16) + (decimal % 10));
+}
