@@ -37,13 +37,10 @@ typedef enum VfsInodePermission {
 
 typedef struct VfsInode {
     VfsInodeTypes type;
+    VfsInodePermission mode;
     uint32_t index;
-    uint32_t mode;
     uint32_t hard_link_count;
-    uint32_t uid;
-    uint32_t gid;
     uint32_t access_time;
-    uint32_t modify_time;
     uint32_t change_time;
     uint64_t file_size;
 } VfsInode;
@@ -74,10 +71,22 @@ typedef struct VfsInodeDir {
     InodeDirInterface interface;
 } VfsInodeDir;
 
-DEV_FUNC(Vfs, VfsDentry*, fill_dentry, VfsDentry* const dentry);
+DEV_FUNC(Vfs, void, fill_dentry, VfsDentry* const dentry);
+DEV_FUNC(Vfs, void, mkfile, VfsDentry* const parent, 
+                            const char* const file_name,
+                            const VfsInodePermission permission);
+DEV_FUNC(Vfs, void, mkdir, VfsDentry* const parent, 
+                            const char* const dir_name,
+                            const VfsInodePermission permission);
+DEV_FUNC(Vfs, void, chmod, const VfsDentry* const dentry, const VfsInodePermission permission);
+DEV_FUNC(Vfs, void, unlink, const VfsDentry* const dentry_to_unlink, const char* const name);
 
 typedef struct DentryInterface {
     Vfs_fill_dentry_t fill_dentry;
+    Vfs_mkfile_t mkfile;
+    Vfs_mkdir_t mkdir;
+    Vfs_chmod_t chmod;
+    Vfs_unlink_t unlink;
 } DentryInterface;
 
 typedef struct VfsDentry {    

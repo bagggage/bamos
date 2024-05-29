@@ -117,5 +117,7 @@ Status init_pci_bus(PciBus* const pci_bus) {
 }
 
 bool_t is_pci_bus(const Device* const device) {
+    if (device == NULL) return FALSE;
+    
     return device->type == DEV_PCI_BUS;
 }

@@ -1,5 +1,7 @@
 #include "clock.h"
 
+#include "assert.h"
+
 typedef enum TotalSeconds {
     SECONDS_PER_NON_LEAP_YEAR = 31536000,
     SECONDS_PER_LEAP_YEAR = 31622400,
@@ -20,9 +22,8 @@ static bool_t is_leap_year(uint16_t year) {
     return (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
 }
 
-// return -1 on error
-int32_t get_posix_time(const ClockDevice* const clock_device) {
-    if (clock_device == NULL) return -1;
+uint32_t get_current_posix_time(const ClockDevice* const clock_device) {
+    kassert(clock_device != NULL);
 
     clock_device->interface.get_current_time(clock_device);
 

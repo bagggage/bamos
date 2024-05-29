@@ -69,6 +69,10 @@ VfsInode* vfs_new_inode_by_type(const VfsInodeTypes type) {
 
         break;
     }
+    case VFS_TYPE_BLOCK_DEVICE:
+    case VFS_TYPE_CHARACTER_DEVICE:
+    case VFS_TYPE_SOCKET:
+    case VFS_TYPE_FIFO:
     case VFS_TYPE_FILE: {
         vfs_inode = (VfsInodeFile*)kmalloc(sizeof(VfsInodeFile));
 
@@ -76,11 +80,14 @@ VfsInode* vfs_new_inode_by_type(const VfsInodeTypes type) {
 
         break;
     }
-    default: {
-        vfs_inode = (VfsInodeFile*)kmalloc(sizeof(VfsInodeFile));   // for now just malloc for the biggest size
+    case VFS_TYPE_SYMBOLIC_LINK: {
+        vfs_inode = (VfsInodeFile*)kmalloc(sizeof(VfsInodeFile));
 
         if (vfs_inode == NULL) return NULL;
 
+        break;
+    }
+    default: {
         break;
     }
     }
@@ -217,8 +224,6 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
     VfsDentry* dentry = root_dentry;
 
     while (next_token != NULL) {
-        //kernel_msg("dir: %s\n", current_token);
-
         if (dentry->inode->type != VFS_TYPE_DIRECTORY) {
             kfree(temp_filename);
             return NULL;
@@ -232,8 +237,6 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
         current_token = next_token;
         next_token = strtok(NULL, "/");
     }
-
-    //kernel_msg("file: %s\n", current_token);
 
     dentry = vfs_lookup(dentry, current_token);
 
@@ -274,6 +277,18 @@ uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset,
     VfsInodeFile* vfs_file = (VfsInodeFile*)dentry->inode;
 
     vfs_file->interface.write(vfs_file, offset, total_bytes, buffer);
+
+    const uint32_t buffer_size = (total_bytes >= VFS_MAX_BUFFER_SIZE) ? VFS_MAX_BUFFER_SIZE : total_bytes;
+
+    uint32_t counts_to_write = (total_bytes / VFS_MAX_BUFFER_SIZE) + 1;
+    uint32_t start_offset = 0;
+
+    while (counts_to_write > 0) {
+        vfs_file->interface.write(vfs_file, offset + start_offset, buffer_size, buffer + start_offset);
+
+        start_offset += VFS_MAX_BUFFER_SIZE;
+        counts_to_write--;
+    }
 
     return total_bytes;
 }

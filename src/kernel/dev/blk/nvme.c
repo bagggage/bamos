@@ -55,7 +55,7 @@ typedef enum NvmeIOCommands {
 
 static void send_nvme_admin_command(NvmeController* const nvme_controller, 
                                     const NvmeSubmissionQueueEntry* const admin_cmd) {
-    if (nvme_controller == NULL || admin_cmd == NULL) return;
+    kassert(nvme_controller != NULL || admin_cmd != NULL);
 
     static uint8_t admin_tail =  0;
     static uint8_t admin_head = 0;
@@ -79,7 +79,7 @@ static void send_nvme_admin_command(NvmeController* const nvme_controller,
 
 static void send_nvme_io_command(NvmeDevice* const nvme_device, const uint64_t sector_offset,
                                  const uint64_t opcode, const uint64_t total_bytes, void* const buffer) {
-    if (nvme_device == NULL || buffer == NULL) return;
+    kassert(nvme_device != NULL || buffer != NULL);
 
     NvmeSubmissionQueueEntry cmd;
     memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
@@ -132,7 +132,7 @@ static void send_nvme_io_command(NvmeDevice* const nvme_device, const uint64_t s
 
 static void nvme_read(const NvmeDevice* const nvme_device, const uint64_t bytes_offset,
                       uint64_t total_bytes, void* const buffer) {
-    if (nvme_device == NULL || buffer == NULL) return;
+    kassert(nvme_device != NULL || buffer != NULL);
 
     const size_t sector_size = nvme_device->lba_size;
 
@@ -149,7 +149,7 @@ static void nvme_read(const NvmeDevice* const nvme_device, const uint64_t bytes_
 
 static void nvme_write(const NvmeDevice* const nvme_device, const uint64_t bytes_offset,
                        uint64_t total_bytes, void* const buffer) {
-    if (nvme_device == NULL || buffer == NULL) return;
+    kassert(nvme_device != NULL || buffer != NULL);
 
     const size_t sector_size = nvme_device->lba_size;
 
