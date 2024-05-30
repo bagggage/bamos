@@ -16,13 +16,13 @@
 #define GPT_MAGIC "EFI PART"
 
 static Status find_gpt_table_on_storage_device(const StorageDevice* const storage_device) {
-    if (storage_device == NULL) return;
+    if (storage_device == NULL) return KERNEL_INVALID_ARGS;
     
     GptHeader* gpt_header = (GptHeader*)kmalloc(sizeof(GptHeader));
 
     if (gpt_header == NULL) return KERNEL_ERROR;
 
-    storage_device->interface.read(storage_device, GPT_HEADER_OFFSET, sizeof(GptHeader), gpt_header);
+    storage_device->interface.read((StorageDevice*)storage_device, GPT_HEADER_OFFSET, sizeof(GptHeader), gpt_header);
 
     if (memcmp(gpt_header->magic, GPT_MAGIC, sizeof(gpt_header->magic)) != 0) {
         return KERNEL_ERROR;
@@ -43,7 +43,7 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
     }
 
     for (size_t i = 0; i < GPT_TOTAL_LBA_COUNT; ++i) {
-        storage_device->interface.read(storage_device, lba_offset_in_bytes, total_bytes, buffer);
+        storage_device->interface.read((StorageDevice*)storage_device, lba_offset_in_bytes, total_bytes, buffer);
 
         for (size_t j = 0; j < storage_device->lba_size / sizeof(PartitionEntry); ++j) {
             PartitionEntry* partition_entry = (PartitionEntry*)kmalloc(sizeof(PartitionEntry));
@@ -69,7 +69,7 @@ static Status find_gpt_table_on_storage_device(const StorageDevice* const storag
             }
 
             new_node->partition_entry = *partition_entry;
-            new_node->storage_device = storage_device;
+            new_node->storage_device = (StorageDevice*)storage_device;
             new_node->next = NULL;
             new_node->prev = NULL;
 
@@ -89,7 +89,7 @@ Status find_gpt_tables() {
     StorageDevice* storage_device = NULL;
     Status result = KERNEL_ERROR;
 
-    while ((storage_device = (StorageDevice*)dev_find(storage_device, &is_storage_device)) != NULL) {
+    while ((storage_device = (StorageDevice*)dev_find((Device*)storage_device, &is_storage_device)) != NULL) {
         if (find_gpt_table_on_storage_device(storage_device) == KERNEL_OK) result = KERNEL_OK;
     }
 

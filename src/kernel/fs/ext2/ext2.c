@@ -7,6 +7,8 @@
 
 #include "dev/clock.h"
 
+#include "utils/string_utils.h"
+
 static Ext2Fs ext2_fs;
 
 static uint8_t* global_buffer = NULL;
@@ -24,10 +26,10 @@ static void ext2_read_superblock(const StorageDevice* const storage_device,
                                  const Ext2Superblock* const superblock) {                               
     kassert(storage_device != NULL || superblock != NULL);
 
-    storage_device->interface.read(storage_device, 
+    storage_device->interface.read((StorageDevice*)storage_device, 
     (partition_lba_start * storage_device->lba_size) + EXT2_SUPERBLOCK_OFFSET, 
     sizeof(Ext2Superblock), 
-    superblock);
+    (void*)superblock);
 }
 
 static void ext2_read_block(const uint64_t block_index, void* const buffer) {
@@ -42,7 +44,7 @@ static void ext2_read_block(const uint64_t block_index, void* const buffer) {
     }
 
     ext2_fs.common.storage_device->interface.read(
-        ext2_fs.common.storage_device,
+        (StorageDevice*)ext2_fs.common.storage_device,
         disk_offset,
         ext2_fs.block_size,
         buffer
@@ -61,7 +63,7 @@ static void ext2_write_block(const uint64_t block_index, void* const buffer) {
     }
 
     ext2_fs.common.storage_device->interface.write(
-    ext2_fs.common.storage_device,
+    (StorageDevice*)ext2_fs.common.storage_device,
     disk_offset,
     ext2_fs.block_size,
     buffer);
@@ -104,7 +106,6 @@ static void ext2_write_inode(const int32_t inode_index, Ext2Inode* const inode) 
 // returns -1 on fail
 static int32_t ext2_get_inode_block_index(const Ext2Inode* const inode, uint32_t inode_block_index) {
     if (inode == NULL) return -1;
-    if (inode_block_index < 0) return -1;
 
     uint32_t indirect_block_max_count = ext2_fs.block_size / 4;
 
@@ -369,7 +370,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
 
     singly_indirect_block_index = direct_block_index - indirect_blocks_max_count;
     if (singly_indirect_block_index < 0) {
-        if (inode->i_block[EXT2_DIRECT_BLOCKS] == NULL) {
+        if (inode->i_block[EXT2_DIRECT_BLOCKS] == 0) {
             if (!ext2_allocate_indirect_block(inode, inode_index, &inode->i_block[EXT2_DIRECT_BLOCKS])) {
                 kfree(buffer);
                 return FALSE;
@@ -391,7 +392,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
         doubly_indirect_block_index = singly_indirect_block_index / indirect_blocks_max_count;
         triply_indirect_block_index = singly_indirect_block_index - doubly_indirect_block_index * indirect_blocks_max_count;
 
-        if (inode->i_block[EXT2_DIRECT_BLOCKS + 1] == NULL) {
+        if (inode->i_block[EXT2_DIRECT_BLOCKS + 1] == 0) {
             if (!ext2_allocate_indirect_block(inode, inode_index, &inode->i_block[EXT2_DIRECT_BLOCKS + 1])) {
                 kfree(buffer);
                 return FALSE;
@@ -400,7 +401,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
 
         ext2_read_block(inode->i_block[EXT2_DIRECT_BLOCKS + 1], buffer);
 
-        if (buffer[doubly_indirect_block_index] == NULL) {
+        if (buffer[doubly_indirect_block_index] == 0) {
             if (!ext2_allocate_indirect_block(inode, inode_index, &buffer[doubly_indirect_block_index])) {
                 kfree(buffer);
                 return FALSE;
@@ -431,7 +432,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
                                   helper1 * indirect_blocks_max_count * indirect_blocks_max_count - 
                                   helper2 * indirect_blocks_max_count);
         
-        if (inode->i_block[EXT2_DIRECT_BLOCKS + 2] == NULL) {
+        if (inode->i_block[EXT2_DIRECT_BLOCKS + 2] == 0) {
             if (!ext2_allocate_indirect_block(inode, inode_index, &inode->i_block[EXT2_DIRECT_BLOCKS + 2])) {
                 kfree(buffer);
                 return FALSE;
@@ -440,7 +441,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
 
         ext2_read_block(inode->i_block[EXT2_DIRECT_BLOCKS + 2], buffer);
 
-        if (buffer[helper1] == NULL) {
+        if (buffer[helper1] == 0) {
             if (!ext2_allocate_indirect_block(inode, inode_index, &buffer[helper1])) {
                 kfree(buffer);
                 return FALSE;
@@ -451,7 +452,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
 
         ext2_read_block(buffer[helper1], buffer);
 
-        if (buffer[helper2] == NULL) {
+        if (buffer[helper2] == 0) {
             if (!ext2_allocate_indirect_block(inode, inode_index, &buffer[helper2])) {
                 kfree(buffer);
                 return FALSE;
@@ -483,7 +484,7 @@ static bool_t ext2_allocate_inode_block(Ext2Inode* const inode,
     if (inode_index <= 0) return FALSE;
     if (inode_block_index < 0) return FALSE;
     
-    uint32_t block_index = ext2_find_unallocated_block_index();
+    int32_t block_index = ext2_find_unallocated_block_index();
 
     if (block_index == -1) return FALSE;
 
@@ -523,7 +524,7 @@ static void ext2_write_inode_block(const Ext2Inode* const inode,
     
     ext2_write_block(inode_block, buffer);
 
-    return TRUE;
+    return;
 }
 
 static void ext2_read_inode_data(const VfsInodeFile* const vfs_inode, uint32_t offset,
@@ -569,22 +570,6 @@ static void ext2_read_inode_data(const VfsInodeFile* const vfs_inode, uint32_t o
 
         current_offset += in_block_size;
     }
-}
-
-static inline bool_t is_ascii(const char c) {
-    return ((c >= ' ' && c <= '~' || (c == '\n' || c == '\b')) ? TRUE : FALSE);
-}
-
-static bool_t is_buffer_binary(const char* const buffer) {
-    if (buffer == NULL) return FALSE;
-
-    const uint32_t buffer_len = strlen(buffer);
-
-    for (uint32_t i = 0; i < buffer_len; ++i) {
-        if (!is_ascii(buffer[i])) return TRUE;
-    }
-
-    return FALSE;
 }
 
 static void ext2_write_inode_data(const VfsInodeFile* const vfs_inode, uint32_t offset,
@@ -726,7 +711,7 @@ static Ext2DirInode** ext2_get_all_dir_entries(Ext2Inode* const inode) {
     return all_dir_entries;
 }
 
-static void ext2_fill_vfs_inode_interface_by_type(VfsDentry* const dentry, const VfsInodeTypes type) {
+static void ext2_fill_vfs_inode_interface_by_type(VfsDentry* const dentry) {
     if (dentry == NULL) return;
 
     switch (dentry->inode->type) {
@@ -776,7 +761,7 @@ static void ext2_fill_vfs_inode(VfsInode* const inode, const VfsInodeTypes type,
     inode->hard_link_count = global_ext2_inode->hard_links_count;
     inode->mode = global_ext2_inode->type_and_permission & 0x00000FFF;
 
-    if (type != EXT2_DIR_TYPE_DIRECTORY) {
+    if (type != (VfsInodeTypes)EXT2_DIR_TYPE_DIRECTORY) {
         inode->file_size = (
             global_ext2_inode->size_in_bytes_lower32 +
             ((uint64_t)global_ext2_inode->size_in_bytes_higher32 << 32)
@@ -896,7 +881,7 @@ static bool_t ext2_create_dir_entry(const VfsDentry* const parent, const char* c
     return TRUE;
 }
 
-static void ext2_remove_dir_entry(const uint32_t parent_dir_inode_index, char* const entry_to_remove_name) {
+static void ext2_remove_dir_entry(const uint32_t parent_dir_inode_index, const char* const entry_to_remove_name) {
     kassert(entry_to_remove_name != NULL);
     kassert((strcmp(entry_to_remove_name, ".")) || (strcmp(entry_to_remove_name, "..")));
 
@@ -975,7 +960,7 @@ static void ext2_remove_dir_entry(const uint32_t parent_dir_inode_index, char* c
 }
 
 static bool_t ext2_is_valid_inode_name(const char* const inode_name) {
-    if (inode_name == NULL) return;
+    if (inode_name == NULL) return FALSE;
 
     for (uint32_t i = 0; inode_name[i] != '\0'; ++i) {
         if (inode_name[i] == '/') return FALSE;
@@ -1125,7 +1110,7 @@ static void ext2_unlink(const VfsDentry* const dentry_to_unlink, const char* con
             uint32_t blocks_to_free_count = (global_ext2_inode->size_in_bytes_lower32 / ext2_fs.block_size) + 1;
 
             while (blocks_to_free_count > 0) {
-                const uint32_t block_to_free = ext2_get_inode_block_index(global_ext2_inode, blocks_to_free_count - 1);
+                const int32_t block_to_free = ext2_get_inode_block_index(global_ext2_inode, blocks_to_free_count - 1);
 
                 if (block_to_free == -1) break;
 
@@ -1144,7 +1129,8 @@ static void ext2_unlink(const VfsDentry* const dentry_to_unlink, const char* con
     }
 
     while (parent->childs[i] != NULL) {
-        parent->childs[i] = parent->childs[++i];
+        parent->childs[i] = parent->childs[i + 1];
+        ++i;
     }
 
     parent->childs = krealloc(parent->childs, --parent->childs_count);
@@ -1205,7 +1191,7 @@ static void ext2_fill_dentry(VfsDentry* const dentry) {
 
         dentry->childs_count++;
 
-        ext2_fill_vfs_inode_interface_by_type(dentry->childs[index], dentry->childs[index]->inode->type);
+        ext2_fill_vfs_inode_interface_by_type(dentry->childs[index]);
 
         dentry->childs[index]->interface.fill_dentry = &ext2_fill_dentry;
         dentry->childs[index]->interface.mkdir = &ext2_mkdir;
@@ -1238,7 +1224,7 @@ static VfsDentry* ext2_create_dentry(const uint32_t inode_index, const char* con
 
     ext2_fill_vfs_inode(new_dentry->inode, type, inode_index);
 
-    new_dentry->parent = parent;
+    new_dentry->parent = (VfsDentry*)parent;
     new_dentry->childs_count = 0;
     
     size_t dentry_name_len = strlen(dentry_name);
@@ -1248,7 +1234,7 @@ static VfsDentry* ext2_create_dentry(const uint32_t inode_index, const char* con
 
     ext2_fill_dentry(new_dentry);   
 
-    ext2_fill_vfs_inode_interface_by_type(new_dentry, new_dentry->inode->type);
+    ext2_fill_vfs_inode_interface_by_type(new_dentry);
 
     new_dentry->interface.fill_dentry = &ext2_fill_dentry;
     new_dentry->interface.mkdir = &ext2_mkdir;
@@ -1301,7 +1287,7 @@ Status ext2_init(const StorageDevice* const storage_device,
         ext2_fs.total_groups = 1;
     }
 
-    ext2_fs.common.storage_device = storage_device;
+    ext2_fs.common.storage_device = (StorageDevice*)storage_device;
     ext2_fs.bgds_count_in_block = ext2_fs.block_size / 2 * sizeof(BlockGroupDescriptorTable);
     ext2_fs.bgd_blocks_count = (ext2_fs.total_groups / ext2_fs.bgds_count_in_block);
     ext2_fs.bgt_start_block = (ext2_fs.block_size == 1024) ? 2 : 1;
@@ -1355,7 +1341,7 @@ Status ext2_init(const StorageDevice* const storage_device,
         }
     }
 
-    clock_device = dev_find(NULL, &is_clock_device);
+    clock_device = (ClockDevice*)dev_find(NULL, &is_clock_device);
 
     if (clock_device == NULL) {    
         kfree(superblock);

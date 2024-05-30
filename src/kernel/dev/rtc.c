@@ -113,15 +113,21 @@ static void get_rtc_current_time(ClockDevice* const clock_device) {
     asm("sti");
 }
 
-static void set_rtc_current_time(DateAndTime* const date_and_time) {
+static void set_rtc_current_time(const DateAndTime* const date_and_time) {
     if (date_and_time == NULL) return;
     if (date_and_time->day == 0 || date_and_time->day > 31 ||
         date_and_time->hour > 24 || date_and_time->minute > 59 || 
         date_and_time->month == 0 || date_and_time->month > 12 ||
         date_and_time->second > 59) return;
 
+    uint32_t year_last_two_digits = 0;
 
-    //todo year
+    // because rtc stores last 2 digits of the year
+    if (date_and_time->year > 99) {
+        year_last_two_digits = date_and_time->year % 100;
+    } else {
+        year_last_two_digits = date_and_time->year;
+    }
 
     asm("cli");
 
@@ -139,13 +145,13 @@ static void set_rtc_current_time(DateAndTime* const date_and_time) {
         set_rtc_register(RTC_MINUTE_REGISTER, decimal_to_bcd(date_and_time->minute));
         set_rtc_register(RTC_DAY_REGISTER, decimal_to_bcd(date_and_time->day));
         set_rtc_register(RTC_MONTH_REGISTER, decimal_to_bcd(date_and_time->month));
-        set_rtc_register(RTC_YEAR_REGISTER, decimal_to_bcd(date_and_time->year - 2000));
+        set_rtc_register(RTC_YEAR_REGISTER, decimal_to_bcd(year_last_two_digits));
 
         // Convert 24 hour format to 12 if necessary
         if (!(registerB & 0x02) && date_and_time->hour > 12) {
-            date_and_time->hour -= 12;
+             uint32_t twelve_hour_format  = date_and_time->hour - 12;
 
-            set_rtc_register(RTC_HOUR_REGISTER, decimal_to_bcd(date_and_time->hour) | 0x80);
+            set_rtc_register(RTC_HOUR_REGISTER, decimal_to_bcd(twelve_hour_format ) | 0x80);
         } else {
             set_rtc_register(RTC_HOUR_REGISTER, decimal_to_bcd(date_and_time->hour));
         }

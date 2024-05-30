@@ -130,11 +130,11 @@ static void send_nvme_io_command(NvmeDevice* const nvme_device, const uint64_t s
     kfree((void*)prp2);
 }
 
-static void nvme_read(const NvmeDevice* const nvme_device, const uint64_t bytes_offset,
+static void nvme_read(StorageDevice* const storage_device, const uint64_t bytes_offset,
                       uint64_t total_bytes, void* const buffer) {
-    kassert(nvme_device != NULL || buffer != NULL);
+    kassert(storage_device != NULL || buffer != NULL);
 
-    const size_t sector_size = nvme_device->lba_size;
+    const size_t sector_size = storage_device->lba_size;
 
     total_bytes = ((total_bytes + sector_size - 1) / sector_size) * sector_size; // round up
 
@@ -143,17 +143,17 @@ static void nvme_read(const NvmeDevice* const nvme_device, const uint64_t bytes_
         return;
     }
 
-    send_nvme_io_command(nvme_device, bytes_offset / sector_size, 
+    send_nvme_io_command((NvmeDevice*)storage_device, bytes_offset / sector_size, 
                          NVME_IO_READ, total_bytes / sector_size, buffer);
 }
 
-static void nvme_write(const NvmeDevice* const nvme_device, const uint64_t bytes_offset,
+static void nvme_write(StorageDevice* const storage_device, const uint64_t bytes_offset,
                        uint64_t total_bytes, void* const buffer) {
-    kassert(nvme_device != NULL || buffer != NULL);
+    kassert(storage_device != NULL || buffer != NULL);
 
-    const size_t sector_size = nvme_device->lba_size;
+    const size_t sector_size = storage_device->lba_size;
 
-    send_nvme_io_command(nvme_device, bytes_offset / sector_size, 
+    send_nvme_io_command((NvmeDevice*)storage_device, bytes_offset / sector_size, 
                          NVME_IO_WRITE, total_bytes / sector_size, buffer);
 }
 
@@ -167,14 +167,22 @@ bool_t is_nvme(const uint8_t class_code, const uint8_t subclass) {
 }
 
 NvmeController create_nvme_controller(const PciDevice* const pci_device) {
-    if (pci_device == NULL) return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
+    if (pci_device == NULL) return (NvmeController) {
+    .acq = NULL,
+    .asq = NULL,
+    .bar0 = NULL,
+    .iocq = NULL,
+    .iosq = NULL,
+    .page_size = 0,
+    .pci_device = NULL
+    };
 
     NvmeController nvme_controller;
 
-    nvme_controller.pci_device = pci_device;
+    nvme_controller.pci_device = (PciDevice*)pci_device;
     nvme_controller.bar0 = (NvmeBar0*)pci_device->config.bar0;
 
-    if (get_phys_address(nvme_controller.bar0) != pci_device->config.bar0) {
+    if (get_phys_address((uint64_t)nvme_controller.bar0) != pci_device->config.bar0) {
         vm_map_phys_to_virt(
             pci_device->config.bar0,
             pci_device->config.bar0,
@@ -205,7 +213,15 @@ NvmeController create_nvme_controller(const PciDevice* const pci_device) {
             kfree(nvme_controller.acq);
             kfree(nvme_controller.asq);
 
-            return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
+            return (NvmeController) {
+                .acq = NULL,
+                .asq = NULL,
+                .bar0 = NULL,
+                .iocq = NULL,
+                .iosq = NULL,
+                .page_size = 0,
+                .pci_device = NULL
+            };
         }
     }
     kernel_msg("Nvme controller ready\n");
@@ -230,7 +246,15 @@ NvmeController create_nvme_controller(const PciDevice* const pci_device) {
             kfree(nvme_controller.acq);
             kfree(nvme_controller.asq);
 
-            return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
+            return (NvmeController) {
+                .acq = NULL,
+                .asq = NULL,
+                .bar0 = NULL,
+                .iocq = NULL,
+                .iosq = NULL,
+                .page_size = 0,
+                .pci_device = NULL
+            };
         }
     }
     kernel_msg("Nvme controller ready\n");
@@ -247,7 +271,15 @@ NvmeController create_nvme_controller(const PciDevice* const pci_device) {
         kfree(nvme_controller.acq);
         kfree(nvme_controller.asq);
 
-        return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
+        return (NvmeController) {
+            .acq = NULL,
+            .asq = NULL,
+            .bar0 = NULL,
+            .iocq = NULL,
+            .iosq = NULL,
+            .page_size = 0,
+            .pci_device = NULL
+        };
     }
 
     cmd.prp1 = get_phys_address((uint64_t)nvme_controller.iocq);
@@ -267,7 +299,15 @@ NvmeController create_nvme_controller(const PciDevice* const pci_device) {
         kfree(nvme_controller.asq);
         kfree(nvme_controller.iocq);
 
-        return (NvmeController){NULL, NULL, NULL, NULL, NULL, 0};
+        return (NvmeController) {
+            .acq = NULL,
+            .asq = NULL,
+            .bar0 = NULL,
+            .iocq = NULL,
+            .iosq = NULL,
+            .page_size = 0,
+            .pci_device = NULL
+        };
     }
 
     cmd.prp1 = get_phys_address((uint64_t)nvme_controller.iosq);
@@ -300,7 +340,7 @@ NvmeController create_nvme_controller(const PciDevice* const pci_device) {
     return nvme_controller;
 }
 
-bool_t init_nvme_devices_for_controller(const NvmeController* const nvme_controller) {
+bool_t init_nvme_devices_for_controller(NvmeController* const nvme_controller) {
     if (nvme_controller == NULL) return FALSE;
 
     NvmeSubmissionQueueEntry cmd;
@@ -318,7 +358,7 @@ bool_t init_nvme_devices_for_controller(const NvmeController* const nvme_control
 
     send_nvme_admin_command(nvme_controller, &cmd);
 
-    for (size_t i = 0; namespace_array[i] != NULL; ++i) {
+    for (size_t i = 0; namespace_array[i] != 0; ++i) {
         kernel_msg("Namespace : %x\n", namespace_array[i]);
 
         memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
@@ -327,7 +367,7 @@ bool_t init_nvme_devices_for_controller(const NvmeController* const nvme_control
         cmd.command.command_id = 1; 
         cmd.nsid = namespace_array[i];
 
-        NvmeDevice* nvme_device = dev_push(DEV_STORAGE, sizeof(NvmeDevice));
+        NvmeDevice* nvme_device = (NvmeDevice*)dev_push(DEV_STORAGE, sizeof(NvmeDevice));
 
         if (nvme_device == NULL) {
             kfree(namespace_array);

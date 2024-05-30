@@ -22,7 +22,7 @@ static bool_t is_leap_year(uint16_t year) {
     return (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
 }
 
-uint32_t get_current_posix_time(const ClockDevice* const clock_device) {
+uint32_t get_current_posix_time(ClockDevice* const clock_device) {
     kassert(clock_device != NULL);
 
     clock_device->interface.get_current_time(clock_device);

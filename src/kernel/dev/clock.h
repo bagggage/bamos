@@ -33,4 +33,4 @@ typedef struct ClockDevice {
 
 bool_t is_clock_device(const Device* const device);
 
-uint32_t get_current_posix_time(const ClockDevice* const clock_device);
+uint32_t get_current_posix_time(ClockDevice* const clock_device);

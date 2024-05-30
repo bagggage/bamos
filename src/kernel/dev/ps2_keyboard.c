@@ -256,7 +256,7 @@ typedef enum PS2ScanCode {
 } PS2ScanCode;
 
 static void wait(uint64_t delay_ms) {
-    TimerDevice* timer = dev_find_by_type(NULL, DEV_TIMER);
+    TimerDevice* timer = (TimerDevice*)dev_find_by_type(NULL, DEV_TIMER);
 
     if (timer == NULL) return;
 

@@ -121,7 +121,7 @@ VfsInode* vfs_new_inode_by_type(VfsInodeTypes type);
 
 VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dir_name);
 
-VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags);
+VfsDentry* vfs_open(const char* const filename);
 uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset, const uint32_t total_bytes, void* const buffer);
 uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset, const uint32_t total_bytes, void* const buffer);
 void vfs_close(VfsDentry* const dentry);
