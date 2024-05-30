@@ -8,6 +8,7 @@
 
 #include "fs/vfs.h"
 
+#include "libc/dirent.h"
 #include "libc/errno.h"
 #include "libc/stdio.h"
 #include "libc/sys/mman.h"
@@ -15,6 +16,8 @@
 
 #include "proc/local.h"
 #include "proc/proc.h"
+
+#define ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))
 
 typedef int (*SysCall_t)();
 
@@ -186,6 +189,50 @@ long _sys_munmap(void* address, size_t length) {
     return 0;
 }
 
+int _sys_getdents(unsigned int fd, struct linux_dirent* dirent, unsigned int count) {
+    if (is_virt_addr_mapped_userspace(
+            g_proc_local.current_task->process->addr_space.page_table,
+            (uint64_t)dirent
+        ) == FALSE) {
+        return -EFAULT;
+    }
+
+    if (count % sizeof(struct linux_dirent) != 0 || count == 0) {
+        return -EINVAL;
+    }
+
+    if (fd >= g_proc_local.current_task->process->files_capacity) {
+        return -EBADF;
+    }
+
+    FileDescriptor* file = g_proc_local.current_task->process->files[fd];
+
+    VfsDentry* dentry = file->dentry;
+
+    if (dentry->inode->type != VFS_TYPE_DIRECTORY) {
+        return -ENOTDIR;
+    }
+
+    int return_value = 0;
+    
+    long current_offset = 0;
+    for (uint32_t i = 0; i < count / sizeof(struct linux_dirent); ++i) {
+        (dirent + current_offset)->d_ino = dentry->childs[i]->inode->index;
+        (dirent + current_offset)->d_off = (strlen(dentry->name) % 4 == 0) ?
+                        8 + strlen(dentry->name) : // 8 means the size of all other fields in bytes
+                        8 + ((strlen(dentry->name) / 4) + 1) * 4;
+        (dirent + current_offset)->d_reclen = ALIGN(offsetof(struct linux_dirent, d_name) + 
+                                                    strlen((dirent + current_offset)->d_name) + 1, sizeof(long));
+        strcpy((dirent + current_offset)->d_name, dentry->name);
+
+        current_offset += dirent->d_off;
+
+        return_value += (dirent + current_offset)->d_reclen;
+    }
+
+    return return_value;
+}
+
 void init_syscalls() {
     syscall_table[SYS_READ]     = &_sys_read;
     syscall_table[SYS_WRITE]    = &_sys_write;
@@ -199,4 +246,6 @@ void init_syscalls() {
     syscall_table[SYS_CLONE]    = &_sys_clone;
     syscall_table[SYS_FORK]     = &_sys_fork;
     syscall_table[SYS_EXECVE]   = &_sys_execve;
+
+    syscall_table[SYS_GETDENTS]   = &_sys_getdents;
 }
