@@ -168,13 +168,13 @@ bool_t is_nvme(const uint8_t class_code, const uint8_t subclass) {
 
 NvmeController create_nvme_controller(const PciDevice* const pci_device) {
     if (pci_device == NULL) return (NvmeController) {
-    .acq = NULL,
-    .asq = NULL,
-    .bar0 = NULL,
-    .iocq = NULL,
-    .iosq = NULL,
-    .page_size = 0,
-    .pci_device = NULL
+        .acq = NULL,
+        .asq = NULL,
+        .bar0 = NULL,
+        .iocq = NULL,
+        .iosq = NULL,
+        .page_size = 0,
+        .pci_device = NULL
     };
 
     NvmeController nvme_controller;
