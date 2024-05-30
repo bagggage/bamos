@@ -653,7 +653,7 @@ static void ext2_free_all_dir_entries(Ext2DirInode** all_dir_entries) {
 }
 
 // on error returns -1
-static Ext2DirInode** ext2_get_all_dir_entries(Ext2Inode* const inode) {
+static Ext2DirInode** ext2_getdents(Ext2Inode* const inode) {
     if (inode == NULL) return (Ext2DirInode**)-1;
     if (!(inode->type_and_permission & EXT2_INODE_DIRECTORY)) return (Ext2DirInode**)-1;
 
@@ -795,7 +795,7 @@ static bool_t ext2_create_dir_entry(const VfsDentry* const parent, const char* c
 
     ext2_read_inode(parent->inode->index, global_ext2_inode);
 
-    Ext2DirInode** all_dir_entries = ext2_get_all_dir_entries(global_ext2_inode);
+    Ext2DirInode** all_dir_entries = ext2_getdents(global_ext2_inode);
 
     if (all_dir_entries == (Ext2DirInode**)-1) return FALSE;
 
@@ -887,7 +887,7 @@ static void ext2_remove_dir_entry(const uint32_t parent_dir_inode_index, const c
 
     ext2_read_inode(parent_dir_inode_index, global_ext2_inode);
 
-    Ext2DirInode** all_dir_entries = ext2_get_all_dir_entries(global_ext2_inode);
+    Ext2DirInode** all_dir_entries = ext2_getdents(global_ext2_inode);
 
     if (all_dir_entries == (Ext2DirInode**)-1) return;
 
@@ -1090,7 +1090,6 @@ static void ext2_chmod(const VfsDentry* const dentry, const VfsInodePermission p
 
 static void ext2_unlink(const VfsDentry* const dentry_to_unlink, const char* const name) {
     kassert(dentry_to_unlink != NULL || name != NULL);
-    kassert(dentry_to_unlink->inode->type != VFS_TYPE_DIRECTORY);
 
     ext2_read_inode(dentry_to_unlink->inode->index, global_ext2_inode);
 
@@ -1142,7 +1141,7 @@ static void ext2_fill_dentry(VfsDentry* const dentry) {
 
     ext2_read_inode(dentry->inode->index, global_ext2_inode);
 
-    Ext2DirInode** all_dirs = ext2_get_all_dir_entries(global_ext2_inode);
+    Ext2DirInode** all_dirs = ext2_getdents(global_ext2_inode);
 
     if (all_dirs == (Ext2DirInode**)-1) return;
 

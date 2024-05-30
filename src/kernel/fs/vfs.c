@@ -221,6 +221,10 @@ VfsDentry* vfs_open(const char* const filename) {
     char* current_token = strtok(temp_filename, "/");
     char* next_token = strtok(NULL, "/");
 
+    if (current_token == NULL) {
+        strcpy(current_token, "/");
+    }
+
     VfsDentry* dentry = root_dentry;
 
     while (next_token != NULL) {
