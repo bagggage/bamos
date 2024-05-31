@@ -42,6 +42,7 @@ void memset(void* dst, size_t size, uint8_t value);
 int memcmp(const void* lhs, const void *rhs, size_t size);
 
 int strcmp(const char* s1, const char* s2);
+int strcpy(char *dst, const char *src);
 int strlen(const char *str);
 char* strtok(char *s, const char *delim);
 

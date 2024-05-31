@@ -15,6 +15,7 @@
 
 #include "dev/acpi_timer.h"
 #include "dev/bootboot_display.h"
+#include "dev/rtc.h"
 #include "dev/hpet_timer.h"
 #include "dev/keyboard.h"
 #include "dev/lapic_timer.h"
@@ -107,6 +108,16 @@ static Status init_timer() {
     return KERNEL_OK;
 }
 
+Status init_clock() {
+    ClockDevice* rtc_clock = (ClockDevice*)dev_push(DEV_CLOCK, sizeof(ClockDevice));
+
+    if (rtc_clock == NULL) return KERNEL_ERROR;
+
+    if (init_rtc(rtc_clock) != KERNEL_OK) return KERNEL_ERROR;
+
+    return KERNEL_OK;
+}
+
 Status init_pci() {
     PciBus* pci_bus = (PciBus*)dev_push(DEV_PCI_BUS, sizeof(PciBus));
 
@@ -180,6 +191,8 @@ Status init_kernel() {
     if (init_ioapic()       != KERNEL_OK) return KERNEL_ERROR;
     if (init_timer()        != KERNEL_OK) return KERNEL_ERROR;
     if (init_io_devices()   != KERNEL_OK) return KERNEL_ERROR;
+    if (init_timer()        != KERNEL_OK) return KERNEL_ERROR;
+    if (init_clock()        != KERNEL_OK) return KERNEL_ERROR;
 
     spin_release(&cpus_init_lock);
 
@@ -209,9 +222,7 @@ Status init_io_devices() {
     if (display == NULL || keyboard == NULL) return KERNEL_ERROR;
 
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
-    if (init_ps2_keyboard(keyboard) != KERNEL_OK) {
-        kernel_warn("PS/2 Keyboard initialization failed: %s\n", error_str);
-    }
+    //if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }

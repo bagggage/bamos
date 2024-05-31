@@ -63,24 +63,31 @@ VfsInode* vfs_new_inode_by_type(const VfsInodeTypes type) {
 
     switch (type) {
     case VFS_TYPE_DIRECTORY: {
-        vfs_inode = (VfsInodeDir*)kmalloc(sizeof(VfsInodeDir));
+        vfs_inode = (VfsInode*)kmalloc(sizeof(VfsInodeDir));
 
         if (vfs_inode == NULL) return NULL;
 
         break;
     }
+    case VFS_TYPE_BLOCK_DEVICE:
+    case VFS_TYPE_CHARACTER_DEVICE:
+    case VFS_TYPE_SOCKET:
+    case VFS_TYPE_FIFO:
     case VFS_TYPE_FILE: {
-        vfs_inode = (VfsInodeFile*)kmalloc(sizeof(VfsInodeFile));
+        vfs_inode = (VfsInode*)kmalloc(sizeof(VfsInodeFile));
+
+        if (vfs_inode == NULL) return NULL;
+
+        break;
+    }
+    case VFS_TYPE_SYMBOLIC_LINK: {
+        vfs_inode = (VfsInode*)kmalloc(sizeof(VfsInodeFile));
 
         if (vfs_inode == NULL) return NULL;
 
         break;
     }
     default: {
-        vfs_inode = (VfsInodeFile*)kmalloc(sizeof(VfsInodeFile));   // for now just malloc for the biggest size
-
-        if (vfs_inode == NULL) return NULL;
-
         break;
     }
     }
@@ -97,7 +104,7 @@ static bool_t vfs_dentry_add_child(VfsDentry* const parent, const VfsDentry* con
 
     if (new_childs == NULL) return FALSE;
 
-    new_childs[parent->childs_count++] = child;
+    new_childs[parent->childs_count++] = (VfsDentry*)child;
     new_childs[parent->childs_count] = NULL;
 
     return TRUE;
@@ -189,7 +196,7 @@ VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dentry_na
     if (dentry->childs == NULL &&
         dentry->inode->type == VFS_TYPE_DIRECTORY &&
         dentry->interface.fill_dentry != NULL) {
-        dentry->interface.fill_dentry(dentry);
+        dentry->interface.fill_dentry((VfsDentry*)dentry);
     }
 
     VfsDentry* child = NULL;
@@ -205,7 +212,7 @@ VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dentry_na
     return child;
 }
 
-VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
+VfsDentry* vfs_open(const char* const filename) {
     if (filename == NULL) return NULL;
 
     char* const temp_filename = kcalloc(strlen(filename) + 1);
@@ -214,11 +221,13 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
     char* current_token = strtok(temp_filename, "/");
     char* next_token = strtok(NULL, "/");
 
+    if (current_token == NULL) {
+        strcpy(current_token, "/");
+    }
+
     VfsDentry* dentry = root_dentry;
 
     while (next_token != NULL) {
-        //kernel_msg("dir: %s\n", current_token);
-
         if (dentry->inode->type != VFS_TYPE_DIRECTORY) {
             kfree(temp_filename);
             return NULL;
@@ -233,8 +242,6 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
         next_token = strtok(NULL, "/");
     }
 
-    //kernel_msg("file: %s\n", current_token);
-
     dentry = vfs_lookup(dentry, current_token);
 
     kfree(temp_filename);
@@ -244,9 +251,9 @@ VfsDentry* vfs_open(const char* const filename, const VfsOpenFlags flags) {
 
 uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset, 
                  const uint32_t total_bytes, void* const buffer) {
-    if (dentry == NULL || buffer == NULL) return;
-    if (total_bytes == 0) return;
-    if (dentry->inode->type != VFS_TYPE_FILE) return;
+    if (dentry == NULL || buffer == NULL) return 0;
+    if (total_bytes == 0) return 0;
+    if (dentry->inode->type != VFS_TYPE_FILE) return 0;
 
     VfsInodeFile* vfs_file = (VfsInodeFile*)dentry->inode;
 
@@ -267,13 +274,25 @@ uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset,
 
 uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset, 
                  const uint32_t total_bytes, void* const buffer) {
-    if (dentry == NULL || buffer == NULL) return;
-    if (total_bytes == 0 || total_bytes > VFS_MAX_BUFFER_SIZE) return;
-    if (dentry->inode->type != VFS_TYPE_FILE) return;
+    if (dentry == NULL || buffer == NULL) return 0;
+    if (total_bytes == 0 || total_bytes > VFS_MAX_BUFFER_SIZE) return 0;
+    if (dentry->inode->type != VFS_TYPE_FILE) return 0;
 
     VfsInodeFile* vfs_file = (VfsInodeFile*)dentry->inode;
 
     vfs_file->interface.write(vfs_file, offset, total_bytes, buffer);
+
+    const uint32_t buffer_size = (total_bytes >= VFS_MAX_BUFFER_SIZE) ? VFS_MAX_BUFFER_SIZE : total_bytes;
+
+    uint32_t counts_to_write = (total_bytes / VFS_MAX_BUFFER_SIZE) + 1;
+    uint32_t start_offset = 0;
+
+    while (counts_to_write > 0) {
+        vfs_file->interface.write(vfs_file, offset + start_offset, buffer_size, buffer + start_offset);
+
+        start_offset += VFS_MAX_BUFFER_SIZE;
+        counts_to_write--;
+    }
 
     return total_bytes;
 }

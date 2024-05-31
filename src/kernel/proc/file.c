@@ -62,7 +62,7 @@ static inline long fd_push(Process* const process, const FileDescriptor* const d
 }
 
 long fd_open(Process* const process, const char* const filename, int flags) {
-    VfsDentry* dentry = vfs_open(filename, 0);
+    VfsDentry* dentry = vfs_open(filename);
 
     if (dentry == NULL) return -2;
 

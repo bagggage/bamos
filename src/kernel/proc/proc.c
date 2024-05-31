@@ -50,7 +50,7 @@ ProcessorLocal* _proc_get_local_data_by_idx(const uint32_t cpu_idx) {
 }
 
 bool_t load_init_proc() {
-    VfsDentry* file_dentry = vfs_open(INIT_PROC_FILENAME, 0);
+    VfsDentry* file_dentry = vfs_open(INIT_PROC_FILENAME);
 
     if (file_dentry == NULL) {
         error_str = "'init' process executable file at path " INIT_PROC_FILENAME " not found";

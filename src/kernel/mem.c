@@ -501,6 +501,13 @@ int strcmp(const char* s1, const char* s2) {
     return *(const unsigned char*)s1 - *(const unsigned char*)s2;
 }
 
+int strcpy(char *dst, const char *src) {
+    int i = 0;
+    while ((*dst++ = *src++) != 0)
+        i++;
+    return i;
+}
+
 int strlen(const char *str) {
         const char *s;
 

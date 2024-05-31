@@ -4,9 +4,9 @@
 
 typedef struct StorageDevice StorageDevice;
 
-DEV_FUNC(Storage, void, read, const StorageDevice* const storage_device, 
+DEV_FUNC(Storage, void, read, StorageDevice* const storage_device, 
         const uint64_t bytes_offset, uint64_t total_bytes, void* const buffer);
-DEV_FUNC(Storage, void, write, const StorageDevice* const storage_device, 
+DEV_FUNC(Storage, void, write, StorageDevice* const storage_device, 
         const uint64_t bytes_offset, uint64_t total_bytes, void* const buffer);
 
 typedef struct StorageInterface {
