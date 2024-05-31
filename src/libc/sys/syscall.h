@@ -15,6 +15,8 @@
 #define SYS_VFORK   58
 #define SYS_EXECVE  59
 
+#define SYS_GETDENTS 78
+
 #ifndef KERNEL
 
 __attribute__((naked)) static long syscall(long number, ...) {

@@ -175,6 +175,10 @@ Process* proc_new() {
             .next = NULL,
             .prev = NULL
         };
+
+        process->parent = NULL;
+        process->childs.next = NULL;
+        process->childs.prev = NULL;
     }
 
     return process;
@@ -241,6 +245,46 @@ void proc_clear_segments(Process* const process) {
     }
 
     process->addr_space.segments.prev = NULL;
+}
+
+ListHead proc_copy_segments(Process* const process) {
+    kassert(process != NULL);
+
+    if (process->addr_space.segments.next == NULL) {
+        return (ListHead) {
+            .next = NULL,
+            .prev = NULL
+        };
+    }
+
+    ListHead result;
+    VMMemoryBlockNode* curr_node = (VMMemoryBlockNode*)oma_alloc(seg_oma);
+
+    if (curr_node == NULL) {
+        return (ListHead) {
+            .next = (void*)INVALID_ADDRESS,
+            .prev = NULL
+        };
+    }
+
+    result.next = (void*)curr_node;
+    result.prev = (void*)curr_node;
+
+    const VMMemoryBlockNode* src_node = (const VMMemoryBlockNode*)process->addr_space.segments.next;
+
+    while (src_node != NULL) {
+        curr_node = (VMMemoryBlockNode*)oma_alloc(seg_oma);
+        
+        if (curr_node == NULL) {
+            return (ListHead) {
+                .next = (void*)INVALID_ADDRESS,
+                .prev = NULL
+            };
+        }
+        
+        curr_node->block = src_node->block;
+        src_node = src_node->next;
+    }
 }
 
 VMPageFrameNode* proc_push_vm_page(Process* const process) {
@@ -338,23 +382,8 @@ pid_t _sys_fork() {
 
     if (process == NULL) return -1;
 
-    process->vm_pages.next = NULL;
-    process->vm_pages.prev = NULL;
-    process->vm_lock = spinlock_init();
-
-    process->files = NULL;
-    process->files_capacity = 0;
-    process->files_lock = spinlock_init();
-
-    process->addr_space = g_proc_local.current_task->process->addr_space;
-    process->addr_space.page_table = vm_alloc_page_table();
-
-    if (process->addr_space.page_table == NULL) {
-        proc_delete(process);
-        return -1;
-    }
-
-    process->addr_space.heap = vm_heap_copy(&process->addr_space.heap);
+    process->addr_space.heap = vm_heap_copy(&g_proc_local.current_task->process->addr_space.heap);
+    process->addr_space.segments = proc_copy_segments(g_proc_local.current_task->process);
     
     vm_map_kernel(process->addr_space.page_table);
 
@@ -362,7 +391,7 @@ pid_t _sys_fork() {
 }
 
 int _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
-    
+
 
     return 0;
 }
