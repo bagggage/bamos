@@ -341,7 +341,7 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
 
             temp_rank--;
             temp_page_base += temp_pages_count;
-            temp_pages_count <<= 1;
+            temp_pages_count >>= 1;
         }
 
         spin_release(&bpa.lock);
