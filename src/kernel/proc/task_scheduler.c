@@ -20,10 +20,6 @@ extern BOOTBOOT bootboot;
 static TaskScheduler* schedulers = NULL;
 static ObjectMemoryAllocator* task_oma = NULL;
 
-static void lapic_timer_intr_handler() {
-    
-}
-
 Status init_task_scheduler() {
     schedulers = (TaskScheduler*)kcalloc(sizeof(TaskScheduler) * bootboot.numcores);
 
@@ -41,6 +37,10 @@ Status init_task_scheduler() {
         return KERNEL_ERROR;
     }
 
+    for (uint32_t i = 0; i < bootboot.numcores; ++i) {
+        schedulers[i].lock = spinlock_init();
+    }
+
     return KERNEL_OK;
 }
 
@@ -53,79 +53,189 @@ void tsk_delete(Task* const task) {
 }
 
 static inline void tsk_push(Task* const task) {
-    TaskScheduler* scheduler = &schedulers[g_proc_local.idx];
+    TaskScheduler* scheduler = NULL;
+    uint32_t cpu_idx = 0;
+
+    for (; cpu_idx < bootboot.numcores; ++cpu_idx) {
+        if (schedulers[cpu_idx].count == 0) {
+            scheduler = &schedulers[cpu_idx];
+            break;
+        }
+        else if (scheduler == NULL || schedulers[cpu_idx].count < scheduler->count) {
+            scheduler = &schedulers[cpu_idx];
+        }
+    }
+
+    spin_lock(&scheduler->lock);
 
     task->next = NULL;
+    task->prev = NULL;
 
     if (scheduler->task_queue.next == NULL) {
-        scheduler->task_queue.next = task;
+        scheduler->task_queue.next = (void*)task;
     }
     else {
-        task->prev = (Task*)scheduler->task_queue.prev;
-        scheduler->task_queue.prev->next = (ListHead*)task;
+        task->prev = (void*)scheduler->task_queue.prev;
+        scheduler->task_queue.prev->next = (void*)task;
     }
 
-    scheduler->task_queue.prev = (ListHead*)task;
+    scheduler->task_queue.prev = (void*)task;
+    scheduler->count++;
+
+    spin_release(&scheduler->lock);
 }
 
 void tsk_awake(Task* const task) {
     tsk_push(task);
 }
 
-void tsk_start_scheduler() {
-    TaskScheduler* scheduler = &schedulers[g_proc_local.idx];
+void tsk_extract(Task* const task) {
+    TaskScheduler* scheduler = &schedulers[proc_get_local()->idx];
 
-    kassert(scheduler->task_queue.next != NULL);
+    spin_lock(&scheduler->lock);
 
-    Task* task = scheduler->task_queue.next;
-
-    g_proc_local.current_task = task;
-
-    if (scheduler->task_queue.prev != scheduler->task_queue.next) {
-        scheduler->task_queue.next = (ListHead*)task->next;
-        task->next->prev = NULL;
-        task->next = NULL;
-
-        task->prev = (Task*)scheduler->task_queue.prev;
-        task->prev->next = task;
-        scheduler->task_queue.prev = (ListHead*)task;
+    if ((void*)task == (void*)scheduler->task_queue.next) {
+        if ((void*)task == (void*)scheduler->task_queue.prev) {
+            scheduler->task_queue.prev = NULL;
+            scheduler->task_queue.next = NULL;
+        }
+        else {
+            scheduler->task_queue.next = (void*)task->next;
+            task->next->prev = NULL;
+        }
+    }
+    else if ((void*)task == (void*)scheduler->task_queue.prev) {
+        scheduler->task_queue.prev = (void*)task->prev;
+        task->prev->next = NULL;
+    }
+    else {
+        task->next->prev = task->prev;
+        task->prev->next = task->next;
     }
 
-    if (cpu_get_current_pml4() != task->process->addr_space.page_table) {
-        cpu_set_pml4(task->process->addr_space.page_table);
-    }
+    scheduler->count--;
 
-    kernel_logger_clear();
+    spin_release(&scheduler->lock);
 
+    thread_dealloc_stack(&task->thread);
+
+    oma_free((void*)task, task_oma);
+}
+
+void tsk_launch(const Task* task) {
     asm volatile(
         "mov %[instr_ptr],%%rcx \n"
         "mov %[stack_ptr],%%rsp \n"
+        "mov %[base_ptr],%%rbp \n"
         "xor %%rax,%%rax \n"
         "xor %%rdi,%%rdi \n"
         "xor %%rsi,%%rsi \n"
         "xor %%rdx,%%rdx \n"
         "xor %%rbx,%%rbx \n"
-        "mov %%rsp,%%rbp \n"
         "sysretq"
         : 
         :
         [instr_ptr] "g" (task->thread.instruction_ptr),
-        [stack_ptr] "g" (task->thread.stack_ptr)
-        : "%rcx"
+        [stack_ptr] "g" (task->thread.stack_ptr),
+        [base_ptr] "g" (task->thread.base_ptr)
+        : "%rcx", "memory"
     );
 }
 
-bool_t tsk_switch_to(Task* const task) {
-    TaskScheduler* scheduler = &schedulers[g_proc_local.idx];
+void tsk_next() {
+    ProcessorLocal* proc_local = proc_get_local();
+    volatile TaskScheduler* scheduler = &schedulers[proc_local->idx];
 
-    if (scheduler->task_queue.prev != task && scheduler->task_queue.next == task) {
-        scheduler->task_queue.next = (ListHead*)task->next;
+    while (scheduler->count == 0);
+
+    spin_lock(&scheduler->lock);
+
+    Task* task = (void*)scheduler->task_queue.next;
+
+    proc_local->current_task = task;
+
+    if (scheduler->task_queue.prev != scheduler->task_queue.next) {
+        scheduler->task_queue.next = (void*)task->next;
         task->next->prev = NULL;
         task->next = NULL;
 
-        task->prev = (Task*)scheduler->task_queue.prev;
+        task->prev = (void*)scheduler->task_queue.prev;
         task->prev->next = task;
-        scheduler->task_queue.prev = (ListHead*)task;
+        scheduler->task_queue.prev = (void*)task;
+    }
+
+    spin_release(&scheduler->lock);
+
+    if (cpu_get_current_pml4() != task->process->addr_space.page_table) {
+        cpu_set_pml4(task->process->addr_space.page_table);
+    }
+
+    tsk_launch(task);
+}
+
+void tsk_start_scheduler() {
+    kassert(schedulers != NULL);
+
+    ProcessorLocal* proc_local = proc_get_local();
+    volatile TaskScheduler* scheduler = &schedulers[proc_local->idx];
+
+    kassert(proc_local->idx != 0 || scheduler->task_queue.next != NULL);
+
+    while (scheduler->count == 0);
+
+    spin_lock(&scheduler->lock);
+
+    Task* task = (void*)scheduler->task_queue.next;
+
+    proc_local->current_task = task;
+
+    if (scheduler->task_queue.prev != scheduler->task_queue.next) {
+        scheduler->task_queue.next = (void*)task->next;
+        task->next->prev = NULL;
+        task->next = NULL;
+
+        task->prev = (void*)scheduler->task_queue.prev;
+        task->prev->next = task;
+        scheduler->task_queue.prev = (void*)task;
+    }
+
+    spin_release(&scheduler->lock);
+
+    cpu_set_pml4(task->process->addr_space.page_table);
+
+    //kernel_msg("Starting scheduler %u: pml4: %x: ip: %x:[%x]:%x (%x): sp: %x\n",
+    //    proc_local->idx,
+    //    task->process->addr_space.page_table,
+    //    task->thread.instruction_ptr,
+    //    *(uint8_t*)task->thread.instruction_ptr,
+    //    get_phys_address(task->thread.instruction_ptr),
+    //    (uint64_t)((VMMemoryBlockNode*)task->process->addr_space.segments.next)->block.page_base * PAGE_BYTE_SIZE,
+    //    task->thread.stack_ptr
+    //);
+    //if (((uint64_t)task->thread.stack_ptr & 0xF0) != 0xF0) {
+    //    kernel_msg("sp[0]: %x, sp[1]: %x, sp[2]: %x\n",
+    //        task->thread.stack_ptr[0],
+    //        task->thread.stack_ptr[1],
+    //        task->thread.stack_ptr[2]
+    //    );
+    //}
+    if (proc_local->idx == 0) kernel_logger_clear();
+
+    tsk_launch(task);
+}
+
+void tsk_switch_to(Task* const task) {
+    ProcessorLocal* proc_local = proc_get_local();
+    TaskScheduler* scheduler = &schedulers[proc_local->idx];
+
+    if (scheduler->task_queue.prev != (void*)task && scheduler->task_queue.next == (void*)task) {
+        scheduler->task_queue.next = (void*)task->next;
+        task->next->prev = NULL;
+        task->next = NULL;
+
+        task->prev = (void*)scheduler->task_queue.prev;
+        task->prev->next = task;
+        scheduler->task_queue.prev = (void*)task;
     }
 
     if (cpu_get_current_pml4() != task->process->addr_space.page_table) {

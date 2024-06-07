@@ -30,6 +30,8 @@ static uint8_t divider_value_table[] = {
 };
 
 static ATTR_INTRRUPT void intr_lapic_timer_handler(InterruptFrame64* frame) {
+    UNUSED(frame);
+
     kernel_msg("Counter: %u\n", lapic_read(LAPIC_CURR_COUNTER_REG));
     lapic_write(LAPIC_EOI_REG, 1);
 }
@@ -38,7 +40,6 @@ static void lapic_timer_set_divider(const uint32_t value) {
     kassert(value <= 128);
 
     const uint8_t converted_value = divider_value_table[log2(value)];
-    const uint32_t dsr = lapic_read(LAPIC_DIVIDER_CONFIG_REG);
 
     lapic_write(LAPIC_DIVIDER_CONFIG_REG, ((converted_value & 0x3) | ((converted_value << 1) & 0x8)));
 }
@@ -68,14 +69,10 @@ void configure_lapic_timer() {
     lapic_write(LAPIC_LVT_TIMER_REG, *(uint32_t*)&lvt_timer);
 }
 
-static bool_t is_timer_dev(Device* dev) {
-    return dev->type == DEV_TIMER;
-}
-
 static uint64_t lapic_calc_min_clock_time() {
     TimerDevice* timer = NULL;
 
-    while ((timer = (TimerDevice*)dev_find(timer, &is_timer_dev)) != NULL) {
+    while ((timer = (TimerDevice*)dev_find_by_type((Device*)timer, DEV_TIMER)) != NULL) {
         if (timer->min_clock_time != 0 &&
             timer->interface.get_clock_counter != NULL)
             break;

@@ -114,10 +114,16 @@ __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame6
         dbg_symbol == NULL ? 0 : frame->rip - dbg_symbol->virt_address);
     log_trace(TRACE_INTERRUPT_DEPTH);
 #endif
-    kernel_warn("CPU: %u: Interrupt Frame:\ncr2: %x\ncr3: %x\nrip: %x:%x\nrsp: %x\nrflags: %b\ncs: %x\nss: %x\n",
+    kernel_warn(
+        "CPU: %u: Interrupt Frame:\n"
+        "cr2: %x\ncr3: %x\n"
+        "rax: %x; rdi: %x; rsi: %x; rcx: %x; rdx: %x; rbx: %x\n"
+        "rip: %x:%x\n"
+        "rsp: %x\nrflags: %b\ncs: %x\nss: %x\n",
         cpu_get_idx(),
         cpu_get_cr2(),
         cpu_get_cr3(),
+        cpu_get_rax(), cpu_get_rdi(), cpu_get_rsi(), cpu_get_rcx(), cpu_get_rdx(), cpu_get_rbx(),
         frame->rip, (uint64_t)frame->rip - (uint64_t)&kernel_elf_start,
         frame->rsp,
         frame->eflags,

@@ -208,7 +208,7 @@ NvmeController create_nvme_controller(const PciDevice* const pci_device) {
     kernel_msg("Waiting for nvme controller ready...\n");
     while ((nvme_controller.bar0->csts & NVME_CTRL_ENABLE)){
         if (nvme_controller.bar0->csts & NVME_CTRL_ERROR){
-            kernel_error("Nvme csts.cfs set\n");
+            kernel_error("Nvme csts.cfs is set\n");
 
             kfree(nvme_controller.acq);
             kfree(nvme_controller.asq);
@@ -235,13 +235,13 @@ NvmeController create_nvme_controller(const PciDevice* const pci_device) {
     nvme_controller.bar0->cc = default_controller_state;
 
     kernel_msg("Nvme page size %u\n", nvme_controller.page_size);
-    kernel_msg("Controller verion %u.%u\n", NVME_CTRL_VERSION_MAJOR(nvme_controller.bar0->version),
+    kernel_msg("Controller version %u.%u\n", NVME_CTRL_VERSION_MAJOR(nvme_controller.bar0->version),
                                             NVME_CTRL_VERSION_MINOR(nvme_controller.bar0->version));            
 
     kernel_msg("Waiting for nvme controller ready...\n");
-    while (!(nvme_controller.bar0->csts & NVME_CTRL_ENABLE)){
+    while (!(nvme_controller.bar0->csts & NVME_CTRL_ENABLE)) {
         if (nvme_controller.bar0->csts & NVME_CTRL_ERROR){
-            kernel_error("Nvme csts.cfs set\n");
+            kernel_error("Nvme csts.cfs is set\n");
 
             kfree(nvme_controller.acq);
             kfree(nvme_controller.asq);

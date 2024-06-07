@@ -64,16 +64,16 @@ void dev_remove(Device* dev) {
     kassert(dev != NULL);
 
     if (dev_pool.nodes.next == dev_pool.nodes.prev) {
-        kassert(dev == dev_pool.nodes.next);
+        kassert((void*)dev == (void*)dev_pool.nodes.next);
 
-        dev_pool.nodes.next == NULL;
-        dev_pool.nodes.prev == NULL;
+        dev_pool.nodes.next = NULL;
+        dev_pool.nodes.prev = NULL;
     }
-    else if (dev == dev_pool.nodes.next) {
+    else if ((void*)dev == (void*)dev_pool.nodes.next) {
         dev->next->prev = NULL;
         dev_pool.nodes.next = (void*)dev->next;
     }
-    else if (dev == dev_pool.nodes.prev) {
+    else if ((void*)dev == (void*)dev_pool.nodes.prev) {
         dev->prev->next = NULL;
         dev_pool.nodes.prev = (void*)dev->prev;
     }
@@ -88,7 +88,7 @@ void dev_remove(Device* dev) {
 }
 
 Device* dev_find(Device* begin, DevPredicat_t predicat) {
-    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin->next);
+    Device* curr_dev = (begin == NULL ? (void*)dev_pool.nodes.next : begin->next);
 
     while (curr_dev != NULL && predicat(curr_dev) == FALSE) {
         curr_dev = curr_dev->next;
@@ -98,7 +98,7 @@ Device* dev_find(Device* begin, DevPredicat_t predicat) {
 }
 
 Device* dev_find_by_type(Device* begin, const DeviceType type) {
-    Device* curr_dev = (begin == NULL ? dev_pool.nodes.next : begin->next);
+    Device* curr_dev = (begin == NULL ? (void*)dev_pool.nodes.next : begin->next);
 
     while (curr_dev != NULL && curr_dev->type != type) {
         curr_dev = curr_dev->next;

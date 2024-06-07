@@ -4,24 +4,28 @@
 #include "mem.h"
 
 #include "proc.h"
+#include "local.h"
+
+#include "libc/errno.h"
+#include "libc/stdio.h"
 
 static ObjectMemoryAllocator* fd_oma = NULL;
 
-static inline FileDescriptor* fd_new() {
+FileDescriptor* fd_new() {
     if (fd_oma == NULL) {
         fd_oma = oma_new(sizeof(FileDescriptor));
 
         if (fd_oma == NULL) return NULL;
     }
 
-    return oma_alloc(fd_oma);
+    return (FileDescriptor*)oma_alloc(fd_oma);
 }
 
-static inline FileDescriptor* fd_delete(FileDescriptor* const descriptor) {
+void fd_delete(FileDescriptor* const descriptor) {
     oma_free(descriptor, fd_oma);
 }
 
-static inline long fd_push(Process* const process, const FileDescriptor* const descriptor) {
+static inline long fd_push(Process* const process, FileDescriptor* const descriptor) {
     long result = -1;
 
     if (process->files == NULL) {
@@ -62,34 +66,44 @@ static inline long fd_push(Process* const process, const FileDescriptor* const d
 }
 
 long fd_open(Process* const process, const char* const filename, int flags) {
-    VfsDentry* dentry = vfs_open(filename);
+    VfsDentry* dentry = vfs_open(filename, process->work_dir);
 
-    if (dentry == NULL) return -2;
+    if (dentry == NULL) return -ENOENT;
+    if ((flags & O_DIRECTORY) != 0 && dentry->inode->type != VFS_TYPE_DIRECTORY) return -ENOTDIR;
+    if (dentry->inode->type == VFS_TYPE_DIRECTORY &&
+        (
+            (flags & O_WRONLY) != 0 ||
+            (flags & O_RDWR) != 0
+        )
+    ) {
+        return -EISDIR;
+    }
 
     spin_lock(&process->files_lock);
 
     // Check if already opened
-    for (uint32_t i = 0; i < process->files_capacity; ++i) {
-        if (process->files[i] != NULL &&
-            process->files[i]->dentry == dentry) {
-            spin_release(&process->files_lock);
-            return -3;
-        }
-    }
+    //for (uint32_t i = 0; i < process->files_capacity; ++i) {
+    //    if (process->files[i] != NULL &&
+    //        process->files[i]->dentry == dentry &&
+    //        process->files[i]->mode == flags) {
+    //        spin_release(&process->files_lock);
+    //        return -3;
+    //    }
+    //}
 
     FileDescriptor* descriptor = fd_new();
 
     if (descriptor == NULL) {
         spin_release(&process->files_lock);
-        return -1;
+        return -ENOMEM;
     }
 
-    uint32_t idx;
+    long idx = fd_push(process, descriptor);
 
-    if ((idx = fd_push(process, descriptor)) < 0) {
+    if (idx < 0) {
         spin_release(&process->files_lock);
         fd_delete(descriptor);
-        return idx;
+        return -ENOMEM;
     }
 
     descriptor->dentry = dentry;

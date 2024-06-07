@@ -12,6 +12,8 @@ The scheduling algorithm will be changed in future.
 
 typedef struct TaskScheduler {
     ListHead task_queue;
+    uint64_t count;
+    Spinlock lock;
 } TaskScheduler;
 
 Status init_task_scheduler();
@@ -20,7 +22,10 @@ Task* tsk_new();
 void tsk_delete(Task* const task);
 
 void tsk_awake(Task* const task);
+void tsk_extract(Task* const task);
+void tsk_launch(const Task* task);
+void tsk_next();
 
 void tsk_start_scheduler();
 
-bool_t tsk_switch_to(Task* const task);
+void tsk_switch_to(Task* const task);

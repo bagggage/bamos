@@ -24,15 +24,15 @@ typedef struct InterruptCommand {
 
 static MADT* apic_madt = NULL;
 
-static MADTEntry* get_madt_entry_at(const size_t idx) {
-    MADTEntry* entry = &apic_madt->entries;
-
-    for (size_t i = 0; i < idx; ++i) {
-        entry = (MADTEntry*)((uint64_t)entry + entry->length);
-    }
-
-    return entry;
-}
+//static MADTEntry* get_madt_entry_at(const size_t idx) {
+//    MADTEntry* entry = &apic_madt->entries;
+//
+//    for (size_t i = 0; i < idx; ++i) {
+//        entry = (MADTEntry*)((uint64_t)entry + entry->length);
+//    }
+//
+//    return entry;
+//}
 
 MADTEntry* madt_find_first_entry_of_type(const MADTEntryType type) {
     const uint64_t apic_madt_end = (uint64_t)apic_madt + apic_madt->header.length;
@@ -63,11 +63,11 @@ MADTEntry* madt_next_entry_of_type(MADTEntry* begin, const MADTEntryType type) {
 }
 
 uint32_t lapic_read(const uint32_t reg) {
-    return *(uint32_t*)(apic_madt->lapic_address + reg);
+    return *(uint32_t*)((uint64_t)apic_madt->lapic_address + reg);
 }
 
 void lapic_write(const uint32_t reg, const uint32_t value) {
-    *(uint32_t*)(apic_madt->lapic_address + reg) = value;
+    *(uint32_t*)((uint64_t)apic_madt->lapic_address + reg) = value;
 }
 
 uint32_t lapic_get_cpu_idx() {

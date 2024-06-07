@@ -19,9 +19,11 @@
 
 #define ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))
 
-typedef int (*SysCall_t)();
+void* syscall_table[256] = { NULL };
 
-SysCall_t syscall_table[256] = { NULL };
+__attribute__((naked)) void invalid_syscall_msg(uint64_t syscall_idx) {
+    kernel_warn("INVALID SYSCALL: %u\n", syscall_idx);
+}
 
 __attribute__((naked)) void _syscall_handler() {
     asm volatile (
@@ -33,8 +35,10 @@ __attribute__((naked)) void _syscall_handler() {
         "pushq %%rbp \n"                        // Save rbp
         "pushq %%rcx \n"                        // Save return address
         "pushq %%r11 \n"                        // Save rflags
-        "movq %%rsp,g_proc_local+%a0 \n"        // Save user stack
-        "movq g_proc_local+%a1,%%rsp \n"        // Switch to kernel stack
+        "movq %%gs:0,%%r11 \n"                  // Get processor local data pointer
+        "movq %%rsp,%a0(%%r11) \n"              // Save user stack
+        "movq %%rcx,%a2(%%r11) \n"              // Save instruction pointer
+        "movq %a1(%%r11),%%rsp \n"              // Switch to kernel stack
         "movq %%rsp,%%rbp \n"                   // Might be unnecessary?
         "movq %%r10,%%rcx \n"                   // r10 contains arg3 (Syscall ABI), mov it to rcx (System V call ABI)
         "call *%%rax \n"                        // Make call
@@ -44,34 +48,48 @@ __attribute__((naked)) void _syscall_handler() {
         "xor %%r8,%%r8 \n"
         "xor %%r9,%%r9 \n"
         "xor %%r10,%%r10 \n"
-        "movq g_proc_local+%a0,%%rsp \n"        // Restore user stack, return address, flags
+        "mov %%gs:0,%%r11 \n"
+        "movq %a0(%%r11),%%rsp \n"              // Restore user stack, return address, flags
         "popq %%r11 \n"
         "popq %%rcx \n"
         "popq %%rbp \n"
         "sysretq \n"                            // Return rax;
         "_invalid_syscall: \n"
+        "pushq %%rbp \n"                        // Save rbp
+        "pushq %%rcx \n"                        // Save return address
+        "pushq %%r11 \n"                        // Save rflags
+        "mov %%rax,%%rdi \n"
+        "call invalid_syscall_msg \n"
+        "popq %%r11 \n"                        // Save rflags
+        "popq %%rcx \n"                        // Save return address
+        "popq %%rbp \n"                        // Save rbp
         "movq $0xffffffffffffffff,%%rax \n"     // Return -1;
         "sysretq"
         ::
         "i" (offsetof(ProcessorLocal, user_stack)),
-        "i" (offsetof(ProcessorLocal, kernel_stack))
+        "i" (offsetof(ProcessorLocal, kernel_stack)),
+        "i" (offsetof(ProcessorLocal, instruction_ptr))
     );
 }
 
 long _sys_read(unsigned int fd, char* buffer, size_t count) {
+    ProcessorLocal* proc_local = proc_get_local();
+    //kernel_warn("SYS READ: CPU: %u\n", proc_local->idx);
+
     if (count == 0) return -EINVAL;
+
     if (is_virt_addr_mapped_userspace(
-            g_proc_local.current_task->process->addr_space.page_table,
+            proc_local->current_task->process->addr_space.page_table,
             (uint64_t)buffer
         ) == FALSE) {
         return -EFAULT;
     }
 
-    if (fd >= g_proc_local.current_task->process->files_capacity) {
+    if (fd >= proc_local->current_task->process->files_capacity) {
         return -EBADF;
     }
 
-    FileDescriptor* file = g_proc_local.current_task->process->files[fd];
+    FileDescriptor* file = proc_local->current_task->process->files[fd];
 
     if (file == NULL || (file->mode & O_WRONLY) != 0) return -EBADF;
 
@@ -83,19 +101,23 @@ long _sys_read(unsigned int fd, char* buffer, size_t count) {
 }
 
 long _sys_write(unsigned int fd, const char* buffer, size_t count) {
+    ProcessorLocal* proc_local = proc_get_local();
+    //kernel_warn("SYS WRITE: CPU: %u: fd: %u: buffer: %x - %u bytes\n", proc_local->idx, fd, buffer, count);
+
     if (count == 0) return -EINVAL;
+
     if (is_virt_addr_mapped_userspace(
-            g_proc_local.current_task->process->addr_space.page_table,
+            proc_local->current_task->process->addr_space.page_table,
             (uint64_t)buffer
         ) == FALSE) {
         return -EFAULT;
     }
 
-    if (fd >= g_proc_local.current_task->process->files_capacity) {
+    if (fd >= proc_local->current_task->process->files_capacity) {
         return -EBADF;
     }
 
-    FileDescriptor* file = g_proc_local.current_task->process->files[fd];
+    FileDescriptor* file = proc_local->current_task->process->files[fd];
 
     if (file == NULL ||
         (file->mode & O_WRONLY || file->mode & O_RDWR) == 0) {
@@ -110,30 +132,41 @@ long _sys_write(unsigned int fd, const char* buffer, size_t count) {
 }
 
 long _sys_open(const char* filename, int flags) {
+    ProcessorLocal* proc_local = proc_get_local();
+    //kernel_warn("SYS OPEN: CPU: %u: %x, %u\n", proc_local->idx, filename, flags);
+
     if (((flags & O_WRONLY) && (flags & O_RDWR)) ||
         is_virt_addr_mapped_userspace(
-            g_proc_local.current_task->process->addr_space.page_table,
+            proc_local->current_task->process->addr_space.page_table,
             (const uint64_t)filename
         ) == FALSE) {
         return -EINVAL;
     }
 
     long result = fd_open(
-        g_proc_local.current_task->process,
+        proc_local->current_task->process,
         filename,
         flags
     );
 
-    if (result < 0) return (result == -2) ? -ENOENT : -ENOMEM;
+    //kernel_warn("SYS OPEN: result: %u\n", result);
 
     return result;
 }
 
 long _sys_close(unsigned int fd) {
-    return (fd_close(g_proc_local.current_task->process, fd) ? 0 : -EBADF);
+    ProcessorLocal* proc_local = proc_get_local();
+
+    return (fd_close(proc_local->current_task->process, fd) ? 0 : -EBADF);
 }
 
 long _sys_mmap(void* address, size_t length, int protection, int flags, int fd, uint32_t offset) {
+    UNUSED(fd); UNUSED(offset);
+
+    ProcessorLocal* proc_local = proc_get_local();
+    //kernel_warn("SYS MMAP: CPU: %u: %x; %x; %u; %u; %u; %u\n", proc_local->idx,
+    //    address, length, protection, flags, fd, offset);
+
     if (address != NULL || length == 0 ||
         protection == PROT_NONE ||
         (protection & PROT_READ) == 0 ||
@@ -141,14 +174,14 @@ long _sys_mmap(void* address, size_t length, int protection, int flags, int fd, 
         return -EINVAL;
     }
 
-    VMPageFrameNode* frame_node = proc_push_vm_page(g_proc_local.current_task->process);
+    VMPageFrameNode* frame_node = proc_push_vm_page(proc_local->current_task->process);
 
     if (frame_node == NULL) return -ENOMEM;
 
     frame_node->frame = vm_alloc_pages(
         div_with_roundup(length, PAGE_BYTE_SIZE),
-        &g_proc_local.current_task->process->addr_space.heap,
-        g_proc_local.current_task->process->addr_space.page_table,
+        &proc_local->current_task->process->addr_space.heap,
+        proc_local->current_task->process->addr_space.page_table,
         (
             VMMAP_USER_ACCESS |
             ((protection & PROT_WRITE) ? VMMAP_WRITE : 0) |
@@ -157,7 +190,7 @@ long _sys_mmap(void* address, size_t length, int protection, int flags, int fd, 
     );
 
     if (frame_node->frame.count == 0) {
-        proc_dealloc_vm_page(g_proc_local.current_task->process, frame_node);
+        proc_dealloc_vm_page(proc_local->current_task->process, frame_node);
         return -ENOMEM;
     }
 
@@ -167,16 +200,18 @@ long _sys_mmap(void* address, size_t length, int protection, int flags, int fd, 
 long _sys_munmap(void* address, size_t length) {
     if (address == NULL || length == 0) return -EINVAL;
 
-    spin_lock(&g_proc_local.current_task->process->vm_lock);
+    ProcessorLocal* proc_local = proc_get_local();
 
-    VMPageFrameNode* frame_node = (VMPageFrameNode*)g_proc_local.current_task->process->vm_pages.next;
+    spin_lock(&proc_local->current_task->process->vm_lock);
+
+    VMPageFrameNode* frame_node = (VMPageFrameNode*)proc_local->current_task->process->vm_pages.next;
 
     while (frame_node != NULL &&
-        frame_node->frame.virt_address != address) {
+        frame_node->frame.virt_address != (uint64_t)address) {
         frame_node = frame_node->next;
     }
 
-    spin_release(&g_proc_local.current_task->process->vm_lock);
+    spin_release(&proc_local->current_task->process->vm_lock);
 
     if (frame_node == NULL) return -EINVAL;
     
@@ -184,14 +219,16 @@ long _sys_munmap(void* address, size_t length) {
 
     if (pages_count != frame_node->frame.count) return -EINVAL;
 
-    proc_dealloc_vm_page(g_proc_local.current_task->process, frame_node);
+    proc_dealloc_vm_page(proc_local->current_task->process, frame_node);
 
     return 0;
 }
 
-int _sys_getdents(unsigned int fd, struct linux_dirent* dirent, unsigned int count) {
+long _sys_getdents(unsigned int fd, struct linux_dirent* dirent, unsigned int count) {
+    ProcessorLocal* proc_local = proc_get_local();
+
     if (is_virt_addr_mapped_userspace(
-            g_proc_local.current_task->process->addr_space.page_table,
+            proc_local->current_task->process->addr_space.page_table,
             (uint64_t)dirent
         ) == FALSE) {
         return -EFAULT;
@@ -201,51 +238,136 @@ int _sys_getdents(unsigned int fd, struct linux_dirent* dirent, unsigned int cou
         return -EINVAL;
     }
 
-    if (fd >= g_proc_local.current_task->process->files_capacity) {
+    if (fd >= proc_local->current_task->process->files_capacity) {
         return -EBADF;
     }
 
-    FileDescriptor* file = g_proc_local.current_task->process->files[fd];
+    FileDescriptor* file = proc_local->current_task->process->files[fd];
+
+    if (file == NULL) return -EBADF;
 
     VfsDentry* dentry = file->dentry;
 
     if (dentry->inode->type != VFS_TYPE_DIRECTORY) {
         return -ENOTDIR;
     }
-
-    int return_value = 0;
-    
-    long current_offset = 0;
-    for (uint32_t i = 0; i < count / sizeof(struct linux_dirent); ++i) {
-        (dirent + current_offset)->d_ino = dentry->childs[i]->inode->index;
-        (dirent + current_offset)->d_off = (strlen(dentry->name) % 4 == 0) ?
-                        8 + strlen(dentry->name) : // 8 means the size of all other fields in bytes
-                        8 + ((strlen(dentry->name) / 4) + 1) * 4;
-        (dirent + current_offset)->d_reclen = ALIGN(offsetof(struct linux_dirent, d_name) + 
-                                                    strlen((dirent + current_offset)->d_name) + 1, sizeof(long));
-        strcpy((dirent + current_offset)->d_name, dentry->name);
-
-        current_offset += dirent->d_off;
-
-        return_value += (dirent + current_offset)->d_reclen;
+    if (dentry->childs == NULL && dentry->interface.fill_dentry != NULL) {
+        dentry->interface.fill_dentry(dentry);
     }
 
-    return return_value;
+    long result = 0;
+    long current_offset = 0;
+
+    uint8_t* buffer = (uint8_t*)dirent;
+
+    for (uint32_t i = 0; i < count / sizeof(struct linux_dirent) && dentry->childs[i] != NULL; ++i) {
+        DIR* entry = (DIR*)(buffer + current_offset);
+
+        const uint32_t name_len = strlen(dentry->name);
+
+        entry->d_ino = dentry->childs[i]->inode->index;
+        entry->d_reclen = ALIGN(
+            offsetof(struct linux_dirent, d_name) + name_len + 1,
+            sizeof(long)
+        );
+        entry->d_off = entry->d_reclen;
+        strcpy(entry->d_name, dentry->name);
+
+        current_offset += entry->d_off;
+        result += entry->d_reclen;
+    }
+
+    return result;
+}
+
+long _sys_getcwd(char* buffer, size_t length) {
+    if (length == 0) return -EINVAL;
+
+    ProcessorLocal* proc_local = proc_get_local();
+
+    if (is_virt_addr_mapped_userspace(
+            proc_local->current_task->process->addr_space.page_table,
+            (uint64_t)buffer
+        ) == FALSE) {
+        return -EFAULT;
+    }
+
+    if (proc_local->current_task->process->work_dir == NULL) {
+        buffer[0] = '/';
+        buffer[1] = '\0';
+    }
+    else {
+        vfs_get_path(proc_local->current_task->process->work_dir, buffer);
+    }
+
+    return (long)buffer;
+}
+
+long _sys_chdir(const char* path) {
+    ProcessorLocal* proc_local = proc_get_local();
+
+    if (is_virt_addr_mapped_userspace(
+            proc_local->current_task->process->addr_space.page_table,
+            (uint64_t)path
+        ) == FALSE) {
+        return -EFAULT;
+    }
+
+    VfsDentry* dentry = vfs_open(path, proc_local->current_task->process->work_dir);
+
+    if (dentry == NULL) return -ENOENT;
+    if (dentry->inode->type != VFS_TYPE_DIRECTORY) return -ENOTDIR;
+
+    proc_local->current_task->process->work_dir = dentry;
+
+    return 0;
+}
+
+long _sys_fchdir(unsigned int fd) {
+    ProcessorLocal* proc_local = proc_get_local();
+
+    if (fd >= proc_local->current_task->process->files_capacity) return -EBADF;
+
+    FileDescriptor* file = proc_local->current_task->process->files[fd];
+
+    if (file == NULL) return -EBADF;
+    if (file->dentry->inode->type != VFS_TYPE_DIRECTORY) return -ENOTDIR;
+
+    proc_local->current_task->process->work_dir = file->dentry;
+
+    return 0;
+}
+
+pid_t _sys_getpid() {
+    return proc_get_local()->current_task->process->pid;
+}
+
+pid_t _sys_getppid() {
+    return proc_get_local()->current_task->process->parent->pid;
 }
 
 void init_syscalls() {
-    syscall_table[SYS_READ]     = &_sys_read;
-    syscall_table[SYS_WRITE]    = &_sys_write;
-    syscall_table[SYS_OPEN]     = &_sys_open;
-    syscall_table[SYS_CLOSE]    = &_sys_close;
+    syscall_table[SYS_READ]     = (void*)&_sys_read;
+    syscall_table[SYS_WRITE]    = (void*)&_sys_write;
+    syscall_table[SYS_OPEN]     = (void*)&_sys_open;
+    syscall_table[SYS_CLOSE]    = (void*)&_sys_close;
 
-    syscall_table[SYS_MMAP]     = &_sys_mmap;
+    syscall_table[SYS_MMAP]     = (void*)&_sys_mmap;
 
-    syscall_table[SYS_MUNMAP]   = &_sys_munmap;
+    syscall_table[SYS_MUNMAP]   = (void*)&_sys_munmap;
 
-    syscall_table[SYS_CLONE]    = &_sys_clone;
-    syscall_table[SYS_FORK]     = &_sys_fork;
-    syscall_table[SYS_EXECVE]   = &_sys_execve;
+    syscall_table[SYS_GETPID]   = (void*)&_sys_getpid;
 
-    syscall_table[SYS_GETDENTS]   = &_sys_getdents;
+    syscall_table[SYS_CLONE]    = (void*)&_sys_clone;
+    syscall_table[SYS_FORK]     = (void*)&_sys_fork;
+    syscall_table[SYS_EXECVE]   = (void*)&_sys_execve;
+    syscall_table[SYS_EXIT]     = (void*)&_sys_exit;
+    syscall_table[SYS_WAIT4]    = (void*)&_sys_wait4;
+
+    syscall_table[SYS_GETDENTS] = (void*)&_sys_getdents;
+    syscall_table[SYS_GETCWD]   = (void*)&_sys_getcwd;
+    syscall_table[SYS_CHDIR]    = (void*)&_sys_chdir;
+    syscall_table[SYS_FCHDIR]   = (void*)&_sys_fchdir;
+
+    syscall_table[SYS_GETPPID]  = (void*)&_sys_getppid;
 }

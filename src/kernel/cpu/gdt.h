@@ -48,3 +48,42 @@ static inline GDTR64 cpu_get_current_gdtr() {
 
     return gdtr_64;
 }
+
+static inline void cpu_set_gdt(const SegmentDescriptor* gdt, const uint32_t size) {
+    GDTR64 gdtr_64;
+
+    gdtr_64.base = (uint64_t)gdt;
+    gdtr_64.size = size * sizeof(SegmentDescriptor);
+
+    asm volatile("lgdt %0"::"memory"(gdtr_64));
+}
+
+static inline void cpu_set_gs(const uint16_t segment_idx, const bool_t is_local, const uint8_t privilage_level) {
+    SegmentSelector gs;
+
+    gs.segment_idx = segment_idx;
+    gs.table_idx = is_local ? 1 : 0;
+    gs.rpl = privilage_level;
+
+    asm volatile("mov %0,%%gs"::"a"(gs));
+}
+
+static inline void cpu_set_cs(const uint16_t segment_idx, const bool_t is_local, const uint8_t privilage_level) {
+    SegmentSelector cs;
+
+    cs.segment_idx = segment_idx;
+    cs.table_idx = is_local ? 1 : 0;
+    cs.rpl = privilage_level;
+
+    asm volatile("mov %0,%%cs"::"a"(cs));
+}
+
+static inline void cpu_set_ds(const uint16_t segment_idx, const bool_t is_local, const uint8_t privilage_level) {
+    SegmentSelector ds;
+
+    ds.segment_idx = segment_idx;
+    ds.table_idx = is_local ? 1 : 0;
+    ds.rpl = privilage_level;
+
+    asm volatile("mov %0,%%ds"::"a"(ds));
+}

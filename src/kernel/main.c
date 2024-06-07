@@ -23,7 +23,7 @@ void _start() {
         _kernel_break();
     }
 
-    tsk_start_scheduler();
+    kernel_logger_set_color(COLOR_LGRAY);
 
-    _kernel_break();
+    tsk_start_scheduler();
 }

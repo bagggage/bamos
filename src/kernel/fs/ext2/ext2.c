@@ -431,7 +431,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
         const uint32_t helper3 = (doubly_indirect_block_index - 
                                   helper1 * indirect_blocks_max_count * indirect_blocks_max_count - 
                                   helper2 * indirect_blocks_max_count);
-        
+
         if (inode->i_block[EXT2_DIRECT_BLOCKS + 2] == 0) {
             if (!ext2_allocate_indirect_block(inode, inode_index, &inode->i_block[EXT2_DIRECT_BLOCKS + 2])) {
                 kfree(buffer);
@@ -573,7 +573,7 @@ static void ext2_read_inode_data(const VfsInodeFile* const vfs_inode, uint32_t o
 }
 
 static void ext2_write_inode_data(const VfsInodeFile* const vfs_inode, uint32_t offset,
-                                  const uint32_t total_bytes, char* const buffer) {
+                                  const uint32_t total_bytes, const char* buffer) {
     kassert(vfs_inode != NULL || buffer != NULL);
     kassert(!(total_bytes > ext2_fs.block_size));
     kassert(vfs_inode->inode.type != VFS_TYPE_DIRECTORY);    
@@ -632,7 +632,8 @@ static void ext2_write_inode_data(const VfsInodeFile* const vfs_inode, uint32_t 
 
             // if buffer for text file then last symbol is '\n' (LF)
             if (!is_buffer_binary(buffer)) {
-                buffer[buffer_len] = '\n';
+                global_buffer[buffer_len] = '\n';
+                left_border += 1;
             }
         }
                     
@@ -1138,6 +1139,21 @@ static void ext2_unlink(const VfsDentry* const dentry_to_unlink, const char* con
 static void ext2_fill_dentry(VfsDentry* const dentry) {
     kassert(dentry != NULL);
     if (dentry->inode->type != VFS_TYPE_DIRECTORY) return;
+
+    if (strcmp(dentry->name, "..") == 0) {
+        if (dentry->parent == NULL || dentry->parent->parent == NULL) return;
+
+        dentry->childs = dentry->parent->parent->childs;
+        dentry->childs_count = dentry->parent->parent->childs_count;
+
+        return;
+    }
+    else if (strcmp(dentry->name, ".") == 0) {
+        dentry->childs = dentry->parent->childs;
+        dentry->childs_count = dentry->parent->childs_count;
+
+        return;
+    }
 
     ext2_read_inode(dentry->inode->index, global_ext2_inode);
 

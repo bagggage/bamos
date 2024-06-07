@@ -152,14 +152,17 @@ typedef struct LVTInterruptReg {
     uint32_t reserved1          : 15;
 } ATTR_PACKED LVTInterruptReg;
 
-typedef struct LVTTimerReg {
-    uint32_t vector             : 8;
-    uint32_t reserved0          : 4;
-    uint32_t delivery_status    : 1;
-    uint32_t reserved1          : 3;
-    uint32_t mask               : 1;
-    uint32_t timer_mode         : 1;
-    uint32_t reserved2          : 14;
+typedef union LVTTimerReg {
+    struct {
+        uint32_t vector             : 8;
+        uint32_t reserved0          : 4;
+        uint32_t delivery_status    : 1;
+        uint32_t reserved1          : 3;
+        uint32_t mask               : 1;
+        uint32_t timer_mode         : 1;
+        uint32_t reserved2          : 14;
+    };
+    uint32_t value;
 } ATTR_PACKED LVTTimerReg;
 
 uint32_t lapic_read(const uint32_t reg);

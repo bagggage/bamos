@@ -51,13 +51,16 @@ typedef PageXEntry PageMapLevel4Entry;
 typedef PageXEntry PageDirPtrEntry;
 typedef PageXEntry PageDirEntry;
 
-typedef struct VirtualAddress {
-    uint64_t offset        : 12;
-    uint64_t p1_index      : 9;
-    uint64_t p2_index      : 9;
-    uint64_t p3_index      : 9;
-    uint64_t p4_index      : 9;
-    uint64_t sign_extended : 16; // All this bites must be euals to last major bit of 'p4_index' (0xFFFF or 0x0000)
+typedef union VirtualAddress {
+    struct {
+        uint64_t offset        : 12;
+        uint64_t p1_index      : 9;
+        uint64_t p2_index      : 9;
+        uint64_t p3_index      : 9;
+        uint64_t p4_index      : 9;
+        uint64_t sign_extended : 16; // All this bites must be euals to last major bit of 'p4_index' (0xFFFF or 0x0000)
+    };
+    uint64_t value;
 } ATTR_PACKED VirtualAddress;
 
 typedef struct CR3 {

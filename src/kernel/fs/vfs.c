@@ -17,6 +17,8 @@ static VfsDentry* home_dentry = NULL;
 static ObjectMemoryAllocator* dentry_oma = NULL;
 
 Status init_vfs() {
+    UNUSED(home_dentry);
+
     if (find_gpt_tables() != KERNEL_OK) {
         error_str = "Not found any GPT table";
         return KERNEL_ERROR;
@@ -97,18 +99,19 @@ VfsInode* vfs_new_inode_by_type(const VfsInodeTypes type) {
     return vfs_inode;
 }
 
-static bool_t vfs_dentry_add_child(VfsDentry* const parent, const VfsDentry* const child) {
-    kassert(parent != NULL && child != NULL);
-
-    VfsDentry** new_childs = (VfsDentry**)krealloc(parent->childs, (parent->childs_count + 2) * sizeof(VfsDentry*));
-
-    if (new_childs == NULL) return FALSE;
-
-    new_childs[parent->childs_count++] = (VfsDentry*)child;
-    new_childs[parent->childs_count] = NULL;
-
-    return TRUE;
-}
+// Currently unused
+//static bool_t vfs_dentry_add_child(VfsDentry* const parent, const VfsDentry* const child) {
+//    kassert(parent != NULL && child != NULL);
+//
+//    VfsDentry** new_childs = (VfsDentry**)krealloc(parent->childs, (parent->childs_count + 2) * sizeof(VfsDentry*));
+//
+//    if (new_childs == NULL) return FALSE;
+//
+//    new_childs[parent->childs_count++] = (VfsDentry*)child;
+//    new_childs[parent->childs_count] = NULL;
+//
+//    return TRUE;
+//}
 
 static void vfs_dentry_replace_child(VfsDentry* const parent, VfsDentry* const child, VfsDentry* const new) {
     for (uint32_t i = 0; i < parent->childs_count; ++i) {
@@ -193,6 +196,11 @@ Status vfs_mount(const char* const mountpoint, VfsDentry* const mnt_dentry) {
 VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dentry_name) {
     if (dentry == NULL) return NULL;
 
+    if (strcmp(dentry_name, ".") == 0) return dentry;
+    if (strcmp(dentry_name, "..") == 0) {
+        return dentry == root_dentry ? dentry : dentry->parent;
+    }
+
     if (dentry->childs == NULL &&
         dentry->inode->type == VFS_TYPE_DIRECTORY &&
         dentry->interface.fill_dentry != NULL) {
@@ -212,8 +220,19 @@ VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dentry_na
     return child;
 }
 
-VfsDentry* vfs_open(const char* const filename) {
+VfsDentry* vfs_open(const char* const filename, VfsDentry* const parent) {
     if (filename == NULL) return NULL;
+
+    VfsDentry* dentry = parent;
+
+    if (parent == NULL || filename[0] == '/' ||
+        (filename[0] == '~' && filename[1] == '/')) {
+        dentry = root_dentry;
+    }
+    if (filename[0] == '.' && (filename[1] == '\0' ||
+        (filename[1] == '/' && filename[2] == '\0'))) {
+        return dentry;
+    }
 
     char* const temp_filename = kcalloc(strlen(filename) + 1);
     memcpy(filename, temp_filename, strlen(filename) + 1);
@@ -221,11 +240,7 @@ VfsDentry* vfs_open(const char* const filename) {
     char* current_token = strtok(temp_filename, "/");
     char* next_token = strtok(NULL, "/");
 
-    if (current_token == NULL) {
-        strcpy(current_token, "/");
-    }
-
-    VfsDentry* dentry = root_dentry;
+    if (current_token == NULL) current_token = "/";
 
     while (next_token != NULL) {
         if (dentry->inode->type != VFS_TYPE_DIRECTORY) {
@@ -263,7 +278,7 @@ uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset,
     uint32_t start_offset = 0;
 
     while (counts_to_read > 0) {
-        vfs_file->interface.read(vfs_file, offset + start_offset, buffer_size, buffer + start_offset);
+        vfs_file->interface.read(vfs_file, offset + start_offset, buffer_size, (char*)buffer + start_offset);
 
         start_offset += VFS_MAX_BUFFER_SIZE;
         counts_to_read--;
@@ -273,14 +288,12 @@ uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset,
 }
 
 uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset, 
-                 const uint32_t total_bytes, void* const buffer) {
+                 const uint32_t total_bytes, const void* buffer) {
     if (dentry == NULL || buffer == NULL) return 0;
     if (total_bytes == 0 || total_bytes > VFS_MAX_BUFFER_SIZE) return 0;
     if (dentry->inode->type != VFS_TYPE_FILE) return 0;
 
     VfsInodeFile* vfs_file = (VfsInodeFile*)dentry->inode;
-
-    vfs_file->interface.write(vfs_file, offset, total_bytes, buffer);
 
     const uint32_t buffer_size = (total_bytes >= VFS_MAX_BUFFER_SIZE) ? VFS_MAX_BUFFER_SIZE : total_bytes;
 
@@ -288,7 +301,7 @@ uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset,
     uint32_t start_offset = 0;
 
     while (counts_to_write > 0) {
-        vfs_file->interface.write(vfs_file, offset + start_offset, buffer_size, buffer + start_offset);
+        vfs_file->interface.write(vfs_file, offset + start_offset, buffer_size, (const char*)buffer + start_offset);
 
         start_offset += VFS_MAX_BUFFER_SIZE;
         counts_to_write--;
@@ -297,12 +310,43 @@ uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset,
     return total_bytes;
 }
 
+static unsigned int _vfs_get_path(const VfsDentry* const dentry, char* const buffer) {
+    if (dentry->parent != NULL) {
+        unsigned int length = _vfs_get_path(dentry->parent, buffer);
+
+        if (buffer[length - 1] != '/') {
+            buffer[length] = '/';
+            buffer[length + 1] = '\0';
+        }
+        else {
+            length = 0;
+        }
+
+        return strcpy(buffer + length + 1, dentry->name) + length + 1;
+    }
+    else {
+        return strcpy(buffer, dentry->name);
+    }
+}
+
+bool_t vfs_get_path(const VfsDentry* const dentry, char* const buffer) {
+    kassert(dentry != NULL);
+
+    buffer[0] = '\0';
+
+    return (_vfs_get_path(dentry, buffer) > 0 ? TRUE : FALSE);
+}
+
 void vfs_close(VfsDentry* const dentry) {
     if (dentry == NULL) return;
 }
 
 VfsDentry* vfs_new_dentry() {
-    return (VfsDentry*)oma_alloc(dentry_oma);
+    VfsDentry* dentry = (VfsDentry*)oma_alloc(dentry_oma);
+
+    if (dentry != NULL) dentry->parent = NULL;
+
+    return dentry;
 }
 
 void vfs_delete_dentry(VfsDentry* dentry) {

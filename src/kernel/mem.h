@@ -35,7 +35,7 @@ Returns physical address that mapped to virtual.
 If virtual address is not mapped returns 'INVALID_ADDRESS'.
 */
 uint64_t get_phys_address(const uint64_t virt_addres);
-uint64_t _get_phys_address(PageMapLevel4Entry* pml4, const uint64_t virt_addres);
+uint64_t _get_phys_address(const PageMapLevel4Entry* pml4, const uint64_t virt_addres);
 
 void memcpy(const void* src, void* dst, size_t size);
 void memset(void* dst, size_t size, uint8_t value);

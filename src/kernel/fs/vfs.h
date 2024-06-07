@@ -51,7 +51,7 @@ typedef struct VfsInodeFile VfsInodeFile;
 DEV_FUNC(Vfs, void, read, const VfsInodeFile* const inode, const uint32_t offset,
                           const uint32_t total_bytes, char* const buffer);
 DEV_FUNC(Vfs, void, write, const VfsInodeFile* const inode, const uint32_t offset,
-                           const uint32_t total_bytes, char* const buffer);
+                           const uint32_t total_bytes, const char* buffer);
 
 typedef struct InodeFileInterface {
     Vfs_read_t read;
@@ -121,10 +121,12 @@ VfsInode* vfs_new_inode_by_type(VfsInodeTypes type);
 
 VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dir_name);
 
-VfsDentry* vfs_open(const char* const filename);
-uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset, const uint32_t total_bytes, void* const buffer);
+VfsDentry* vfs_open(const char* const filename, VfsDentry* const parent);
+uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset, const uint32_t total_bytes, const void* buffer);
 uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset, const uint32_t total_bytes, void* const buffer);
 void vfs_close(VfsDentry* const dentry);
+
+bool_t vfs_get_path(const VfsDentry* const dentry, char* const buffer);
 
 VfsDentry* vfs_new_dentry();
 void vfs_delete_dentry(VfsDentry* dentry);

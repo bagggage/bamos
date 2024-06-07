@@ -14,6 +14,8 @@
 #define MSR_APIC_BASE 0x1B
 #define MSR_APIC_BASE_BSP 0x100
 
+#define MSR_SYSENTER_CS 0x174
+
 typedef struct EFER {
     uint64_t syscall_ext                : 1;
     uint64_t reserved_1                 : 7;
@@ -161,4 +163,52 @@ static inline uint64_t cpu_get_gs() {
     asm volatile("mov %%gs,%0":"=a"(gs));
 
     return gs;
+}
+
+static inline uint64_t cpu_get_rax() {
+    uint64_t result;
+
+    asm volatile("mov %%rax,%0":"=g"(result));
+
+    return result;
+}
+
+static inline uint64_t cpu_get_rdi() {
+    uint64_t result;
+
+    asm volatile("mov %%rdi,%0":"=g"(result));
+
+    return result;
+}
+
+static inline uint64_t cpu_get_rsi() {
+    uint64_t result;
+
+    asm volatile("mov %%rsi,%0":"=g"(result));
+
+    return result;
+}
+
+static inline uint64_t cpu_get_rcx() {
+    uint64_t result;
+
+    asm volatile("mov %%rcx,%0":"=g"(result));
+
+    return result;
+}
+
+static inline uint64_t cpu_get_rdx() {
+    uint64_t result;
+
+    asm volatile("mov %%rdx,%0":"=g"(result));
+
+    return result;
+}
+
+static inline uint64_t cpu_get_rbx() {
+    uint64_t result;
+
+    asm volatile("mov %%rbx,%0":"=g"(result));
+
+    return result;
 }

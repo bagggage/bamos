@@ -44,32 +44,64 @@ void udev_read_pci(const VfsInodeFile* const inode, const uint32_t offset, const
 }
 
 static inline bool_t is_ascii(const char c) {
-    return ((c >= ' ' && c <= '~' || (c == '\n' || c == '\b')) ? TRUE : FALSE);
+    return ((c >= ' ' && c <= '~') || (c == '\n' || c == '\b')) ? TRUE : FALSE;
 }
 
 void udev_read_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
+    UNUSED(offset);
+
     if (inode->inode.index != 0 || total_bytes == 0) return;
 
     KeyboardDevice* device = (KeyboardDevice*)dev_find_by_type(NULL, DEV_KEYBOARD);
 
+    if (device == NULL) return;
+
     for (uint32_t i = 0; i < total_bytes; ++i) {
         KernelScancode scancode;
 
-        while ((scancode = device->interface.get_scan_code()) == SCAN_CODE_NONE ||
-            is_ascii(scan_code_to_ascii(scancode)) == FALSE);
+        while (
+            (scancode = device->interface.get_scan_code()) == SCAN_CODE_NONE ||
+            is_ascii(scan_code_to_ascii(scancode)) == FALSE
+        );
 
         buffer[i] = scan_code_to_ascii(scancode);
     }
 }
 
-void udev_write_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
+static uint32_t _tty_handle_csi(const char* buffer) {
+    switch (*(buffer + 2))
+    {
+    case 'H':
+        kernel_logger_set_cursor_pos(0, 0);
+        break;
+    case 'J':
+        kernel_logger_release();
+        kernel_logger_clear();
+        kernel_logger_lock();
+        break;
+    default:
+        break;
+    }
+
+    return 2;
+}
+
+void udev_write_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, const char* buffer) {
+    //kernel_msg("Writing %s\n", buffer);
+    UNUSED(offset);
+
     if (inode->inode.index != 0 || total_bytes == 0) return;
+
+    kernel_logger_lock();
 
     for (uint32_t i = 0; i < total_bytes; ++i) {
         const char c = buffer[i];
 
-        if (is_ascii(c)) raw_putc(buffer[i]);
+        if (buffer[i] == '\033' && buffer[i + 1] == '[') i += _tty_handle_csi(buffer + i);
+        else if (is_ascii(c)) raw_putc(buffer[i]);
     }
+
+    kernel_logger_release();
 }
 
 static VfsDentry* make_tty(const uint16_t idx) {
@@ -169,6 +201,8 @@ static bool_t make_pci_entries() {
         dentry->childs_count = 0;
         dentry->parent = &root_dentry;
 
+        root_dentry.childs[i] = dentry;
+
         device = device->next;
     }
 
@@ -193,7 +227,9 @@ Status udev_init() {
             root_dentry.childs = 0;
         }
 
-        sprintf(error_str, "Udev fs: Failed to make entries for pci devices: %s", error_str);
+        char* buffer = kmalloc(256);
+        sprintf(buffer, "Udev fs: Failed to make entries for pci devices: %s", error_str);
+        error_str = buffer;
         return KERNEL_ERROR;
     }
 

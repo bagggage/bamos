@@ -27,19 +27,22 @@
 #define VE_ISR 20
 #define CP_ISR 21
 
-typedef struct PageFaultErrorCode {
-    uint64_t present : 1;       // 0 - non-present page, 1 - page-level protection violation
-    uint64_t write : 1;         // 0 - read access, 1 - write access
-    uint64_t user : 1;          // 0 - superviros-mode, 1 - user-mode
-    uint64_t rsvd : 1;          // 1 - reserved bit set to 1 in pxe structure
-    uint64_t instr : 1;         // 1 - instruction fetch fault
-    uint64_t protection : 1;    // 1 - protection-key violation
-    uint64_t shadow_stack : 1;  // 1 - shadow-stack access
-    uint64_t hlat : 1;          // 1 - during HLAT paging
-    uint64_t reserved_0 : 7;
-    uint64_t sgx : 1;           // 1 - violation of SGX-specific access-controll requirements
-    uint64_t reserved_1 : 48;
-} PageFaultErrorCode;
+typedef union PageFaultErrorCode {
+    struct {
+        uint64_t present : 1;       // 0 - non-present page, 1 - page-level protection violation
+        uint64_t write : 1;         // 0 - read access, 1 - write access
+        uint64_t user : 1;          // 0 - superviros-mode, 1 - user-mode
+        uint64_t rsvd : 1;          // 1 - reserved bit set to 1 in pxe structure
+        uint64_t instr : 1;         // 1 - instruction fetch fault
+        uint64_t protection : 1;    // 1 - protection-key violation
+        uint64_t shadow_stack : 1;  // 1 - shadow-stack access
+        uint64_t hlat : 1;          // 1 - during HLAT paging
+        uint64_t reserved_0 : 7;
+        uint64_t sgx : 1;           // 1 - violation of SGX-specific access-controll requirements
+        uint64_t reserved_1 : 48;
+    };
+    uint64_t value;
+} ATTR_PACKED PageFaultErrorCode;
 
 // #DE [0] Divide error
 ATTR_INTRRUPT void intr_de_handler(InterruptFrame64* frame) {
@@ -113,10 +116,10 @@ ATTR_INTRRUPT void intr_gp_handler(InterruptFrame64* frame, uint64_t error_code)
 
 // #PF [14] Page fault exception
 ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code) {
-    PageFaultErrorCode pf_error = *(PageFaultErrorCode*)&error_code;
+    //PageFaultErrorCode pf_error = *(PageFaultErrorCode*)&error_code;
     uint64_t virt_address = cpu_get_cr2();
 
-    PageXEntry* pxe = (PageXEntry*)get_pxe_of_virt_addr(virt_address).entry;
+    PageXEntry* pxe = (PageXEntry*)((uint64_t)get_pxe_of_virt_addr(virt_address).entry);
 
 #ifdef KDEBUG
     kernel_error("#PF Page fault: E: %b CR2: %x\n", (uint32_t)error_code, virt_address);
@@ -139,12 +142,14 @@ ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code)
         if (pxe->ignored_1 != 0 || pxe->ignored_2 != 0 || pxe->reserved_1 != 0 || (pxe->size == 1 && (pxe->page_ppn & 0x1FF) != 0)) {
             kernel_error("Reserved bits is damaged\n");
         }
+        //log_memory_page_tables(cpu_get_current_pml4());
     }
 
     log_intr_frame(frame);
 #endif
 
-    if (pf_error.user == 0) _kernel_break();
+    _kernel_break();
+    //if (pf_error.user == 0) _kernel_break();
 }
 
 // #AC [17] Alignment check

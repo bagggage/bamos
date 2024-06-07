@@ -253,6 +253,9 @@ Status init_memory() {
     if (init_kernel_uma() != KERNEL_OK) return KERNEL_ERROR;
     if (init_proc_local() != TRUE) return KERNEL_ERROR;
 
+    _vm_map_proc_local(g_proc_local.kernel_page_table);
+    asm volatile("invlpg (%0)"::"r"(&g_proc_local):"memory");
+
     _is_mem_initialized = TRUE;
 
     return KERNEL_OK;
@@ -384,11 +387,11 @@ void log_memory_page_tables(PageMapLevel4Entry* pml4) {
     }
 }
 
-static inline bool_t is_page_table_entry_valid(PageXEntry* pte) {
-    return *(uint64_t*)pte != 0;
+static inline bool_t is_page_table_entry_valid(const PageXEntry* pte) {
+    return *(const uint64_t*)pte != 0;
 }
 
-VMPxE _get_pxe_of_virt_addr(PageMapLevel4Entry* pml4, const uint64_t address) {
+VMPxE _get_pxe_of_virt_addr(const PageMapLevel4Entry* pml4, const uint64_t address) {
     VMPxE result;
 
     result.entry = 0;
@@ -396,30 +399,30 @@ VMPxE _get_pxe_of_virt_addr(PageMapLevel4Entry* pml4, const uint64_t address) {
 
     if (is_virt_address_valid(address) == FALSE) return result;
 
-    VirtualAddress* virtual_addr = (VirtualAddress*)&address;
-    PageMapLevel4Entry* plm4e = pml4 + virtual_addr->p4_index;
+    const VirtualAddress* virtual_addr = (VirtualAddress*)&address;
+    const PageMapLevel4Entry* plm4e = pml4 + virtual_addr->p4_index;
 
     if (is_page_table_entry_valid(plm4e) == FALSE) return (VMPxE){ 0, 0 };
 
-    PageDirPtrEntry* pdpe = (PageDirPtrEntry*)((uint64_t)plm4e->page_ppn << 12) + virtual_addr->p3_index;
+    const PageDirPtrEntry* pdpe = (const PageDirPtrEntry*)((uint64_t)plm4e->page_ppn << 12) + virtual_addr->p3_index;
     result.entry = (uint64_t)pdpe;
     result.level++;
 
     if (is_page_table_entry_valid(pdpe) == FALSE) return (VMPxE){ 0, 0 };
     if (pdpe->size == 1) return result;
 
-    PageDirEntry* pde = (PageDirEntry*)((uint64_t)pdpe->page_ppn << 12) + virtual_addr->p2_index;
+    const PageDirEntry* pde = (const PageDirEntry*)((uint64_t)pdpe->page_ppn << 12) + virtual_addr->p2_index;
     result.entry = (uint64_t)pde;
     result.level++;
 
     if (is_page_table_entry_valid(pde) == FALSE) return (VMPxE){ 0, 0 };
     if (pde->size == 1) return result;
 
-    PageTableEntry* pte = (PageTableEntry*)((uint64_t)pde->page_ppn << 12) + virtual_addr->p1_index;
+    const PageTableEntry* pte = (const PageTableEntry*)((uint64_t)pde->page_ppn << 12) + virtual_addr->p1_index;
     result.entry = (uint64_t)pte;
     result.level++;
 
-    return (is_page_table_entry_valid((PageXEntry*)pte) == FALSE ? (VMPxE){ 0, 0 } : result);
+    return (is_page_table_entry_valid((const PageXEntry*)pte) == FALSE ? (VMPxE){ 0, 0 } : result);
 }
 
 VMPxE get_pxe_of_virt_addr(const uint64_t address) {
@@ -450,7 +453,7 @@ bool_t is_virt_addr_range_mapped(const uint64_t address, const uint32_t pages_co
     return TRUE;
 }
 
-uint64_t _get_phys_address(PageMapLevel4Entry* pml4, const uint64_t virt_addr) {
+uint64_t _get_phys_address(const PageMapLevel4Entry* pml4, const uint64_t virt_addr) {
     VMPxE pxe = _get_pxe_of_virt_addr(pml4, virt_addr);
 
     if (pxe.entry == 0) return INVALID_ADDRESS;
@@ -509,11 +512,11 @@ int strcpy(char *dst, const char *src) {
 }
 
 int strlen(const char *str) {
-        const char *s;
+    const char *s;
 
-        for (s = str; *s; ++s);
-        
-        return (s - str);
+    for (s = str; *s; ++s);
+
+    return (s - str);
 }
 
 static char* strtok_r(char *s, const char *delim, char **last) {

@@ -30,6 +30,7 @@ typedef union IRQRedirectionEntry {
         uint32_t low_half;
         uint32_t high_half;
     };
+    uint64_t value;
 } ATTR_PACKED IRQRedirectionEntry;
 
 extern uint64_t ioapic_base;
