@@ -32,6 +32,14 @@ typedef struct Logger {
 Logger logger = { NULL, {}, 0, 0, 0, 0, { 0xFF, 0xFF, 0xFF, 0xFF }, { 0 } };
 Framebuffer early_fb;
 
+void kernel_logger_lock() {
+    spin_lock(&logger.lock);
+}
+
+void kernel_logger_release() {
+    spin_release(&logger.lock);
+}
+
 void debug_point() {
     static uint32_t offset = 0;
 
@@ -300,7 +308,67 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
     raw_puts(cursor);
 }
 
+void raw_hexdump(const void* data, const size_t size) {
+    spin_lock(&logger.lock);
+
+	char ascii[17];
+	ascii[16] = '\0';
+
+	size_t i, j;
+
+	for (i = 0; i < size; ++i) {
+        uint8_t num = ((unsigned char*)data)[i];
+
+        if (num < 0x10) raw_putc('0');
+
+        raw_print_number(num, FALSE, 16);
+        raw_putc(' ');
+
+		if (((unsigned char*)data)[i] >= ' ' && ((unsigned char*)data)[i] <= '~') {
+			ascii[i % 16] = ((unsigned char*)data)[i];
+		}
+        else {
+		    ascii[i % 16] = '.';
+		}
+		if ((i+1) % 8 == 0 || i+1 == size) {
+			raw_putc(' ');
+
+			if ((i+1) % 16 == 0) {
+                raw_puts("| ");
+                raw_puts(ascii);
+                raw_puts(" \n");
+			}
+            else if (i+1 == size) {
+				ascii[(i+1) % 16] = '\0';
+
+				if ((i+1) % 16 <= 8) {
+					raw_putc(' ');
+				}
+
+				for (j = (i+1) % 16; j < 16; ++j) {
+					raw_puts("   ");
+				}
+
+				raw_puts("| ");
+                raw_puts(ascii);
+                raw_puts(" \n");
+			}
+		}
+	}
+
+    spin_release(&logger.lock);
+}
+
 void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
+    //if (log_type == LOG_ERROR && logger.lock.exclusion != 0) {
+    //    kernel_logger_set_color(COLOR_LRED);
+    //    raw_puts("\n[Failed log]: ");
+    //    raw_puts(fmt);
+    //    spin_release(&logger.lock);
+    //    return;
+    //    //_kernel_break();
+    //}
+
     spin_lock(&logger.lock);
 
     switch (log_type)

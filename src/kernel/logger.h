@@ -42,6 +42,9 @@ typedef struct Color {
 
 bool_t is_logger_initialized();
 
+void kernel_logger_lock();
+void kernel_logger_release();
+
 // Initialize logger framebuffer just only with GOP framebuffer, needed for early acces before display initialized
 Status init_kernel_logger_raw(const uint8_t* font_binary_ptr);
 Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr);
@@ -64,6 +67,7 @@ void raw_putc(char c);
 void raw_puts(const char* string);
 
 void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation);
+void raw_hexdump(const void* data, const size_t size);
 
 void kernel_raw_log(LogType log_type, const char* fmt, va_list args);
 
