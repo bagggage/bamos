@@ -124,7 +124,7 @@ __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame6
         cpu_get_cr2(),
         cpu_get_cr3(),
         cpu_get_rax(), cpu_get_rdi(), cpu_get_rsi(), cpu_get_rcx(), cpu_get_rdx(), cpu_get_rbx(),
-        frame->rip, (uint64_t)frame->rip - (uint64_t)&kernel_elf_start,
+        frame->rip, get_phys_address((uint64_t)frame->rip),
         frame->rsp,
         frame->eflags,
         frame->cs,
