@@ -17,3 +17,5 @@ void* calloc(size_t size, size_t count);
 void free(void* restrict memory_block);
 
 char* getenv(const char* restrict name);
+
+void exit(int status) __attribute__((noreturn));
