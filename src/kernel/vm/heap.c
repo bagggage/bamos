@@ -31,6 +31,18 @@ void vm_heap_construct(VMHeap* heap, const uint64_t virt_base) {
     heap->free_list.prev = NULL;
 }
 
+void vm_heap_destruct(VMHeap* heap) {
+    while (heap->free_list.next != NULL) {
+        MemoryBlockNode* block = (MemoryBlockNode*)heap->free_list.next;
+
+        heap->free_list.next = (void*)block->next;
+
+        oma_free((void*)block, free_list_oma);
+    }
+
+    heap->free_list.prev = NULL;
+}
+
 static void vm_heap_remove_free_block(VMHeap* heap, MemoryBlockNode* node, const uint32_t pages_count) {
     if (node->block.pages_count > pages_count) {
         node->block.address += ((uint64_t)pages_count * PAGE_BYTE_SIZE);
@@ -187,6 +199,8 @@ void vm_heap_release(VMHeap* heap, const uint64_t virt_address, const uint32_t p
 }
 
 VMHeap vm_heap_copy(const VMHeap* src_heap) {
+    kassert(FALSE && "Method is not implemented correctly!!!");
+
     VMHeap result;
 
     result.free_list = (ListHead) { NULL, NULL };
@@ -205,6 +219,8 @@ VMHeap vm_heap_copy(const VMHeap* src_heap) {
 
         if (result.free_list.next == NULL) result.free_list.next = (void*)new_node;
         if (prev != NULL) prev->next = new_node;
+
+        node = node->next;
     }
 
     result.free_list.prev = (void*)prev;

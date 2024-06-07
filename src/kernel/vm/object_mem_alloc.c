@@ -215,5 +215,5 @@ void oma_free(void* memory_block, ObjectMemoryAllocator* oma) {
     }
 
     // Given invalid 'memory_block'
-    kassert(FALSE);
+    kassert(FALSE && "Memory block is not controlled by this OMA");
 }
