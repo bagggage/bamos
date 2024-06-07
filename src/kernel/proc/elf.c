@@ -56,18 +56,18 @@ static inline bool_t is_prog_section_valid(const ElfProgramHeader* prog) {
 static bool_t elf_load_exec(const ELF* elf, Process* const process) {
     kassert(elf->type == ELF_TYPE_EXEC);
 
-    kernel_msg("Program header entries count: %u\n", elf->prog_header_entries_count);
+    //kernel_msg("Program header entries count: %u\n", elf->prog_header_entries_count);
 
     if (elf->prog_header_entries_count == 0) return FALSE;
 
     for (uint32_t i = 0; i < elf->prog_header_entries_count; ++i) {
         const ElfProgramHeader* prog = elf_get_prog_header(elf, i);
 
-        kernel_msg("Prog header type: %x\n", prog->type);
-        kernel_msg("Prog virt address: %x\n", prog->virt_address);
-        kernel_msg("Prog memory size: %x\n", prog->memory_size);
-        kernel_msg("Prog file size: %x\n", prog->file_size);
-        kernel_msg("Prog flags: %b\n", prog->flags);
+        //kernel_msg("Prog header type: %x\n", prog->type);
+        //kernel_msg("Prog virt address: %x\n", prog->virt_address);
+        //kernel_msg("Prog memory size: %x\n", prog->memory_size);
+        //kernel_msg("Prog file size: %x\n", prog->file_size);
+        //kernel_msg("Prog flags: %b\n", prog->flags);
 
         if (prog->type != ELF_PROG_TYPE_LOAD) continue;
 
@@ -88,7 +88,7 @@ static bool_t elf_load_exec(const ELF* elf, Process* const process) {
             log2upper(segment->block.pages_count)
         ) / PAGE_BYTE_SIZE;
 
-        if ((uint64_t)segment->block.page_base * PAGE_BYTE_SIZE == INVALID_ADDRESS) {
+        if (segment->block.page_base == 0) {
             proc_clear_segments(process);
             return FALSE;
         }
@@ -114,9 +114,9 @@ static bool_t elf_load_exec(const ELF* elf, Process* const process) {
             return FALSE;
         }
 
-        uint8_t* const segment_ptr = (const uint8_t*)elf + prog->offset;
+        const uint8_t* segment_ptr = (const uint8_t*)elf + prog->offset;
 
-        memcpy((void*)segment_ptr, (void*)segment->block.virt_address, prog->memory_size);
+        memcpy((const void*)segment_ptr, (void*)segment->block.virt_address, prog->memory_size);
 
         if (prog->memory_size > prog->file_size) {
             memset(
@@ -137,33 +137,9 @@ static bool_t elf_load_reloc(const ELF* elf) {
 }
 
 static bool_t elf_load_dyn(const ELF* elf) {
+    kassert(elf->type == ELF_TYPE_DYN);
+
     return FALSE;
-}
-
-void start_task(Task* task) {
-    g_proc_local.current_task = task;
-
-    kernel_msg("Entry point: %x\n", task->thread.instruction_ptr);
-    kernel_msg("Thread stack: %x\n", task->thread.stack);
-
-    asm volatile(
-        "push %%rsp \n"
-        "push %%rbp \n"
-        "mov %0, %%rcx \n"
-        "mov %1,%%rsp \n"
-        "mov %%rsp,%%rbp \n"
-        "xor %%rdi,%%rdi \n"
-        "xor %%rdx,%%rdx \n"
-        "xor %%rax,%%rax \n"
-        "sysretq \n"
-        "pop %%rbp \n"
-        "pop %%rsp"
-        :
-        : "g"(task->thread.instruction_ptr), "g"(task->thread.stack)
-        : "%rcx"
-    );
-
-    kfree((void*)task);
 }
 
 ELF* elf_load_file(VfsDentry* const file_dentry) {
@@ -184,6 +160,9 @@ ELF* elf_load_file(VfsDentry* const file_dentry) {
 }
 
 bool_t elf_load_prog(const ELF* elf, Process* const process) {
+    UNUSED(elf_load_reloc);
+    UNUSED(elf_load_dyn);
+
     if (elf->header_size != sizeof(ELF) || elf->ph_offset % 4 != 0 || elf->sh_offset % 4 != 0) return FALSE;
 
     bool_t result = FALSE;
