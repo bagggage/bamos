@@ -7,6 +7,7 @@
 #include "local.h"
 
 #include "libc/errno.h"
+#include "libc/fcntl.h"
 #include "libc/stdio.h"
 
 static ObjectMemoryAllocator* fd_oma = NULL;
