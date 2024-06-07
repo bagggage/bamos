@@ -15,6 +15,8 @@
     #undef FALSE
 #endif
 
+#define UNUSED(x) (void)(x)
+
 typedef uint8_t bool_t;
 typedef uint64_t size_t;
 typedef __int128_t int128_t;
