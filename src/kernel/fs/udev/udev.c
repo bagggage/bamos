@@ -118,6 +118,7 @@ static VfsDentry* make_tty(const uint16_t idx) {
 
     result->inode->index = idx;
     result->inode->hard_link_count = 1;
+    result->inode->file_size = 0;
     ((VfsInodeFile*)result->inode)->interface.read = &udev_read_tty;
     ((VfsInodeFile*)result->inode)->interface.write = &udev_write_tty;
 
@@ -189,6 +190,7 @@ static bool_t make_pci_entries() {
             return FALSE;
         }
 
+        dentry->inode->file_size = 0;
         dentry->inode->hard_link_count = 1;
         dentry->inode->index = i - begin_idx;
         ((VfsInodeFile*)dentry->inode)->interface.read = &udev_read_pci;

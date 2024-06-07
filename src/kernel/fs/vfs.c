@@ -240,7 +240,7 @@ VfsDentry* vfs_open(const char* const filename, VfsDentry* const parent) {
     char* current_token = strtok(temp_filename, "/");
     char* next_token = strtok(NULL, "/");
 
-    if (current_token == NULL) current_token = "/";
+    if (current_token == NULL) current_token = ".";
 
     while (next_token != NULL) {
         if (dentry->inode->type != VFS_TYPE_DIRECTORY) {
