@@ -147,6 +147,31 @@ static void vm_map_high_kernel(PageMapLevel4Entry* pml4) {
     }
 }
 
+void _vm_map_proc_local(PageMapLevel4Entry* pml4) {
+    const uint32_t cpu_idx = cpu_get_idx();
+
+    // Physical address pointer
+    ProcessorLocal* independent_proc_local = _proc_get_local_data_by_idx(cpu_idx);
+
+    kassert(((uint64_t)independent_proc_local % PAGE_BYTE_SIZE) == 0);
+
+    independent_proc_local->idx = cpu_idx;
+    independent_proc_local->ioapic_idx = cpu_idx;
+    independent_proc_local->current_task = NULL;
+    independent_proc_local->kernel_stack = (uint64_t*)(UINT64_MAX - ((uint64_t)initstack * cpu_idx) - 8 + 1);
+
+    //kernel_msg("CPU %u: Kernel stack: %x\n", independent_proc_local->idx, independent_proc_local->kernel_stack);
+
+    independent_proc_local->user_stack = NULL;
+    independent_proc_local->kernel_page_table = pml4;
+
+    _vm_map_phys_to_virt((uint64_t)independent_proc_local,
+        (uint64_t)&g_proc_local,
+        pml4,
+        1,
+        (VMMAP_WRITE | VMMAP_GLOBAL | VMMAP_WRITE_THROW));
+}
+
 static void vm_init_page_tables() {
     g_proc_local.kernel_page_table = vm_alloc_page_table();
 
@@ -445,7 +470,7 @@ Status init_vm_allocator() {
     // Allocate two pages
     vm_frame_oma_phys_page.phys_page_base = bpa_allocate_pages(2) / PAGE_BYTE_SIZE;
 
-    if (((uint64_t)vm_frame_oma_phys_page.phys_page_base * PAGE_BYTE_SIZE) == INVALID_ADDRESS) {
+    if (vm_frame_oma_phys_page.phys_page_base == 0) {
         error_str = "VM Frame oma can't be allocated";
         return KERNEL_ERROR;
     }
@@ -508,7 +533,7 @@ PageXEntry* vm_get_page_x_entry(const uint64_t virt_address, unsigned int level)
 
     PageXEntry* pxe =
         (PageXEntry*)get_phys_address((uint64_t)g_proc_local.kernel_page_table) +
-        (uint64_t)((const VirtualAddress*)(const void*)&virt_address)->p4_index;
+        (uint64_t)((const VirtualAddress*)&virt_address)->p4_index;
 
     uint8_t offset_shift = 30;
 
@@ -580,11 +605,11 @@ Status _vm_map_phys_to_virt(uint64_t phys_address,
 
     if ((flags & VMMAP_USE_LARGE_PAGES) != 0 &&
         (phys_address % (PAGE_BYTE_SIZE * 512U) != 0 || (virt_address % (PAGE_BYTE_SIZE * 512U)) ||
-        (phys_address & 0x1FF000 != virt_address & 0x1FF000))) {
+        ((phys_address & 0x1FF000) != (virt_address & 0x1FF000)))) {
         flags ^= VMMAP_USE_LARGE_PAGES;
     }
 
-    uint32_t pages_by_size_count[5] = { 0, 0, pages_count, 0, 0 };
+    uint32_t pages_by_size_count[] = { 0, 0, pages_count, 0, 0, 0 };
 
     if ((flags & VMMAP_USE_LARGE_PAGES) != 0) {
         pages_by_size_count[0] = (pages_count * PAGE_BYTE_SIZE) / GB_SIZE; // 1GB
@@ -607,7 +632,7 @@ Status _vm_map_phys_to_virt(uint64_t phys_address,
         const bool_t is_need_to_map_on_this_level = (i != 0 && pages_by_size_count[i - 1] > 0);
         const bool_t has_pages_to_allocate = (i == 0 ?
             (pages_by_size_count[0] != 0 || *(uint64_t*)(pages_by_size_count + 1) != 0) :
-            (*(uint64_t*)(pages_by_size_count + i) != 0)
+            (*(uint64_t*)(&pages_by_size_count[i]) != 0)
         );
 
         if (is_need_to_map_on_this_level == FALSE && has_pages_to_allocate == FALSE && i == 3) break;
@@ -1002,9 +1027,11 @@ void vm_setup_paging(PageMapLevel4Entry* pml4) {
 }
 
 void vm_map_kernel(PageMapLevel4Entry* pml4) {
-    pml4[0] = g_proc_local.kernel_page_table[0];
-    pml4[508] = g_proc_local.kernel_page_table[508];
-    pml4[511] = g_proc_local.kernel_page_table[511];
+    ProcessorLocal* proc_local = proc_get_local();
+
+    pml4[0] = proc_local->kernel_page_table[0];
+    pml4[508] = proc_local->kernel_page_table[508];
+    pml4[511] = proc_local->kernel_page_table[511];
 }
 
 void vm_configure_cpu_page_table() {
@@ -1018,30 +1045,6 @@ void vm_configure_cpu_page_table() {
     vm_setup_paging(pml4);
 
     // Configure processor local data
-    const uint32_t cpu_idx = cpu_get_idx();
-
-    // Physical address pointer
-    ProcessorLocal* independent_proc_local = _proc_get_local_data_by_idx(cpu_idx);
-
-    kassert(((uint64_t)independent_proc_local % PAGE_BYTE_SIZE) == 0);
-
-    independent_proc_local->idx = cpu_idx;
-    independent_proc_local->ioapic_idx = cpu_idx;
-    independent_proc_local->current_task = NULL;
-    independent_proc_local->kernel_stack = (uint64_t*)(UINT64_MAX - ((uint64_t)initstack * (cpu_idx + 1)));
-    independent_proc_local->user_stack = NULL;
-    independent_proc_local->kernel_page_table = pml4;
-
-    kassert(independent_proc_local->idx != g_proc_local.idx);
-
-    _vm_map_phys_to_virt((uint64_t)independent_proc_local,
-        (uint64_t)&g_proc_local,
-        pml4,
-        1,
-        (VMMAP_WRITE | VMMAP_GLOBAL | VMMAP_WRITE_THROW));
-
-    // Clear TBL cache for page containing 'g_proc_local'
+    _vm_map_proc_local(pml4);
     asm volatile("invlpg (%0)"::"r"(&g_proc_local):"memory");
-
-    kassert(independent_proc_local->idx == g_proc_local.idx);
 }

@@ -22,6 +22,7 @@
 #include "dev/ps2_keyboard.h"
 #include "dev/stds/acpi.h"
 #include "dev/stds/pci.h"
+#include "dev/stds/usb.h"
 #include "dev/storage.h"
 
 #include "fs/vfs.h"
@@ -42,6 +43,7 @@ extern uint64_t initstack[];
 extern const uint8_t _binary_font_psf_start;
 
 static Spinlock cpus_init_lock = { 1 };
+static Spinlock cpus_userspace_lock = { 1 };
 
 static void wait_for_cpu_init() {
     spin_lock(&cpus_init_lock);
@@ -49,13 +51,15 @@ static void wait_for_cpu_init() {
     vm_configure_cpu_page_table();
     cpu_set_idtr(intr_get_kernel_idtr());
     configure_lapic_timer();
-    init_user_space();
 
     spin_release(&cpus_init_lock);
+    spin_lock(&cpus_userspace_lock);
 
-    while (TRUE) {
-        tsk_exec();
-    }
+    init_user_space();
+
+    spin_release(&cpus_userspace_lock);
+
+    tsk_start_scheduler();
 
     kassert(FALSE);
 }
@@ -72,7 +76,7 @@ static Status split_logical_cores() {
     g_proc_local.idx = cpu_idx;
     g_proc_local.ioapic_idx = cpu_idx;
     g_proc_local.current_task = NULL;
-    g_proc_local.kernel_stack = (uint64_t*)(UINT64_MAX - ((uint64_t)initstack * (cpu_idx + 1)) + 1);
+    g_proc_local.kernel_stack = (uint64_t*)(UINT64_MAX - ((uint64_t)initstack * cpu_idx) - 8 + 1);
     g_proc_local.user_stack = NULL;
     g_proc_local.kernel_page_table = NULL;
 
@@ -135,24 +139,29 @@ Status init_storage() {
 }
 
 Status init_user_space() {
+    const uint32_t cpu_idx = g_proc_local.idx;
+    const uint64_t proc_local_ptr = (uint64_t)_proc_get_local_ptr(cpu_idx);
+
     EFER efer = cpu_get_efer();
 
     // Enable syscalls
     efer.syscall_ext = 1;
 
     cpu_set_efer(efer);
-    cpu_set_msr(MSR_STAR, 0x0);
+    cpu_set_msr(MSR_STAR, ((3ull << 3) << 32));
     cpu_set_msr(MSR_LSTAR, (uint64_t)&_syscall_handler);
     cpu_set_msr(MSR_CSTAR, 0x0);
-    cpu_set_msr(MSR_SWAPGS_BASE, 0x0);
+    cpu_set_msr(MSR_SWAPGS_BASE, proc_local_ptr);
 
-    if (lapic_get_cpu_idx() != 0) return KERNEL_OK;
+    asm volatile("swapgs");
+
+    if (cpu_idx != 0) return KERNEL_OK;
 
     SegmentDescriptor* gdt = (SegmentDescriptor*)cpu_get_current_gdtr().base;
 
     // Move kernel segments
-    gdt[3] = gdt[7];
-    gdt[4] = gdt[6];
+    gdt[3] = gdt[7]; // Code
+    gdt[4] = gdt[6]; // Data
 
     // Initialize user segments
     SegmentDescriptor* user_segs = gdt + 1;
@@ -175,9 +184,7 @@ Status init_user_space() {
         access_byte->read_write = 1;
     }
 
-    init_syscalls();
-
-    return init_task_scheduler();
+    return KERNEL_OK;
 }
 
 Status init_kernel() {
@@ -191,17 +198,24 @@ Status init_kernel() {
     if (init_ioapic()       != KERNEL_OK) return KERNEL_ERROR;
     if (init_timer()        != KERNEL_OK) return KERNEL_ERROR;
     if (init_io_devices()   != KERNEL_OK) return KERNEL_ERROR;
-    if (init_timer()        != KERNEL_OK) return KERNEL_ERROR;
     if (init_clock()        != KERNEL_OK) return KERNEL_ERROR;
 
     spin_release(&cpus_init_lock);
 
     if (init_pci()          != KERNEL_OK) return KERNEL_ERROR;
+    if (init_usb()          != KERNEL_OK) {
+        kernel_error("USB initialization failed: %s\n", error_str);
+    }
     if (init_storage()      != KERNEL_OK) {
         kernel_error("Storage devices initialization failed: %s\n", error_str);
     }
+ 
+    init_syscalls();
 
-    if (init_user_space()   != KERNEL_OK) return KERNEL_ERROR;
+    if (init_task_scheduler() != KERNEL_OK) return KERNEL_ERROR;
+    if (init_user_space()     != KERNEL_OK) return KERNEL_ERROR;
+
+    spin_release(&cpus_userspace_lock);
 
     if (init_vfs()          != KERNEL_OK) {
         char* str_buffer = (char*)kmalloc(sizeof(char[256]));
@@ -222,7 +236,9 @@ Status init_io_devices() {
     if (display == NULL || keyboard == NULL) return KERNEL_ERROR;
 
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
-    //if (init_ps2_keyboard(keyboard) != KERNEL_OK) return KERNEL_ERROR;
+    if (init_ps2_keyboard(keyboard) != KERNEL_OK) {
+        return KERNEL_ERROR;
+    }
 
     return KERNEL_OK;
 }

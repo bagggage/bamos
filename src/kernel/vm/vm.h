@@ -14,7 +14,7 @@ Virtual memory.
 */
 
 #define DMA_VIRT_ADDRESS 0x0
-#define DMA_SIZE (GB_SIZE * 48ULL) 
+#define DMA_SIZE (GB_SIZE * 512ULL)
 #define KERNEL_HEAP_VIRT_ADDRESS 0xFFFFFE0000000000
 #define KERNEL_STACK_SIZE (KB_SIZE * 4)
 
@@ -160,3 +160,4 @@ bool_t vm_test();
 void vm_setup_paging(PageMapLevel4Entry* pml4);
 void vm_map_kernel(PageMapLevel4Entry* pml4);
 void vm_configure_cpu_page_table();
+void _vm_map_proc_local(PageMapLevel4Entry* pml4);
