@@ -707,9 +707,9 @@ long _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
     else if (is_elf_valid_and_supported((ELF*)file_buffer)) {
         ELF* elf = (ELF*)file_buffer;
 
+        proc_dealloc_vm_pages(proc_local->current_task->process);
         proc_clear_segments(proc_local->current_task->process);
         proc_close_files(proc_local->current_task->process);
-        proc_dealloc_vm_pages(proc_local->current_task->process);
 
         if (elf_load_prog(elf, proc_local->current_task->process) == FALSE) {
             proc_delete(proc_local->current_task->process);
@@ -739,6 +739,12 @@ long _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
             ((uint64_t)proc_local->current_task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
         );
         proc_local->current_task->thread.base_ptr = proc_local->current_task->thread.stack_ptr;
+
+        //kernel_msg("phys: %x\n", get_phys_address(proc_local->current_task->thread.instruction_ptr));
+        //kernel_msg("real: %x\n", (uint64_t)((VMMemoryBlockNode*)proc_local->current_task->process->addr_space.segments.next)->block.page_base * PAGE_BYTE_SIZE);
+
+        //kernel_msg("Instr: %x\n", proc_local->current_task->thread.instruction_ptr);
+        //kernel_msg("Page table cpu: %x\n", g_proc_local.idx);
 
         tsk_launch(proc_local->current_task);
     }
