@@ -39,7 +39,6 @@ typedef struct ObjectMemoryAllocator {
     uint32_t bucket_capacity;
 } ObjectMemoryAllocator;
 
-static bool_t is_oma_pool_initialized = FALSE;
 static ObjectMemoryAllocator oma_pool;
 
 static inline uint64_t div_with_roundup(const uint64_t value, const uint64_t divider) {
@@ -199,7 +198,8 @@ static void init_uma() {
         const uint32_t obj_rank_size = 1 << rank;
         uint32_t bucket_pages_count = 1;
 
-        if (obj_rank_size > PAGE_BYTE_SIZE && obj_rank_size < MB_SIZE) {
+        if (obj_rank_size == PAGE_BYTE_SIZE) bucket_pages_count = 4;
+        else if (obj_rank_size > PAGE_BYTE_SIZE && obj_rank_size < MB_SIZE) {
             bucket_pages_count = ((obj_rank_size / PAGE_BYTE_SIZE) * 4) + 1;
         }
         else if (obj_rank_size >= MB_SIZE) {
