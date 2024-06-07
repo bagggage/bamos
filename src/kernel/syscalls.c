@@ -10,6 +10,7 @@
 
 #include "libc/dirent.h"
 #include "libc/errno.h"
+#include "libc/fcntl.h"
 #include "libc/stdio.h"
 #include "libc/sys/mman.h"
 #include "libc/sys/syscall.h"
@@ -133,7 +134,9 @@ long _sys_write(unsigned int fd, const char* buffer, size_t count) {
 
 long _sys_open(const char* filename, int flags) {
     ProcessorLocal* proc_local = proc_get_local();
-    //kernel_warn("SYS OPEN: CPU: %u: %x, %u\n", proc_local->idx, filename, flags);
+    //kernel_warn("SYS OPEN: CPU %x: %u: %x:%s, %u\n", proc_local, proc_local->idx, filename, filename, flags);
+
+    //if (filename[0] == '\0') raw_hexdump(filename, 16);
 
     if (((flags & O_WRONLY) && (flags & O_RDWR)) ||
         is_virt_addr_mapped_userspace(
@@ -149,7 +152,8 @@ long _sys_open(const char* filename, int flags) {
         flags
     );
 
-    //kernel_warn("SYS OPEN: result: %u\n", result);
+    //raw_hexdump((uint64_t)proc_local->instruction_ptr & (~0xFFull), 32);
+    //kernel_warn("SYS OPEN: result: %i: ret: %x\n", result, proc_local->instruction_ptr);
 
     return result;
 }
@@ -224,7 +228,7 @@ long _sys_munmap(void* address, size_t length) {
     return 0;
 }
 
-long _sys_getdents(unsigned int fd, struct linux_dirent* dirent, unsigned int count) {
+long _sys_getdents(unsigned int fd, struct dirent* dirent, unsigned int count) {
     ProcessorLocal* proc_local = proc_get_local();
 
     if (is_virt_addr_mapped_userspace(
@@ -234,7 +238,7 @@ long _sys_getdents(unsigned int fd, struct linux_dirent* dirent, unsigned int co
         return -EFAULT;
     }
 
-    if (count % sizeof(struct linux_dirent) != 0 || count == 0) {
+    if ((count / sizeof(struct dirent)) == 0 || count == 0) {
         return -EINVAL;
     }
 
@@ -255,26 +259,27 @@ long _sys_getdents(unsigned int fd, struct linux_dirent* dirent, unsigned int co
         dentry->interface.fill_dentry(dentry);
     }
 
-    long result = 0;
-    long current_offset = 0;
+    uint32_t result = 0;
+    uint32_t current_offset = 0;
 
     uint8_t* buffer = (uint8_t*)dirent;
 
-    for (uint32_t i = 0; i < count / sizeof(struct linux_dirent) && dentry->childs[i] != NULL; ++i) {
-        DIR* entry = (DIR*)(buffer + current_offset);
+    for (uint32_t i = file->cursor_offset; i < count / sizeof(struct dirent) && dentry->childs[i] != NULL; ++i) {
+        struct dirent* entry = (struct dirent*)(buffer + current_offset);
 
-        const uint32_t name_len = strlen(dentry->name);
+        const uint32_t name_len = strlen(dentry->childs[i]->name);
 
         entry->d_ino = dentry->childs[i]->inode->index;
         entry->d_reclen = ALIGN(
-            offsetof(struct linux_dirent, d_name) + name_len + 1,
+            offsetof(struct dirent, d_name) + name_len + 1,
             sizeof(long)
         );
         entry->d_off = entry->d_reclen;
-        strcpy(entry->d_name, dentry->name);
+        memcpy(dentry->childs[i]->name, entry->d_name, name_len);
 
         current_offset += entry->d_off;
         result += entry->d_reclen;
+        file->cursor_offset++;
     }
 
     return result;
