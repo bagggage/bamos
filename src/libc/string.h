@@ -1,17 +1,16 @@
 #pragma once
 
-#include <stdint.h>
+typedef unsigned long long size_t;
 
-typedef uint64_t size_t
+//memcpy();
 
-memcpy();
+//memset();
 
-memset();
+int strlen(const char* restrict string);
+int strcmp(const char* restrict lhs, const char* restrict rhs);
 
-strlen();
+//strcpy();
 
-strcpy();
+//strcat();
 
-strcat();
-
-strchr();
+//strchr();

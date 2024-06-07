@@ -268,11 +268,11 @@ void* malloc(size_t size) {
 }
 
 void* calloc(size_t size, size_t count) {
-    uint8_t* memory_block = (uint8_t*)malloc(size);
+    uint8_t* memory_block = (uint8_t*)malloc(size * count);
 
     if (memory_block == NULL) return memory_block;
 
-    for (uint32_t i = 0; i < size; ++i) {
+    for (uint32_t i = 0; i < (size * count); ++i) {
         memory_block[i] = 0;
     }
 
