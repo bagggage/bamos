@@ -10,6 +10,8 @@
 
 #define SYS_MUNMAP  11
 
+#define SYS_ACCESS  21
+
 #define SYS_GETPID  39
 
 #define SYS_CLONE   56

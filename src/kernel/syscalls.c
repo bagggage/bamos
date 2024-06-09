@@ -12,6 +12,7 @@
 #include "libc/errno.h"
 #include "libc/fcntl.h"
 #include "libc/stdio.h"
+#include "libc/unistd.h"
 #include "libc/sys/mman.h"
 #include "libc/sys/syscall.h"
 
@@ -43,12 +44,6 @@ __attribute__((naked)) void _syscall_handler() {
         "movq %%rsp,%%rbp \n"                   // Might be unnecessary?
         "movq %%r10,%%rcx \n"                   // r10 contains arg3 (Syscall ABI), mov it to rcx (System V call ABI)
         "call *%%rax \n"                        // Make call
-        "xor %%rdi,%%rdi \n"                    // Clear registers for safety
-        "xor %%rsi,%%rsi \n"
-        "xor %%rdx,%%rdx \n"
-        "xor %%r8,%%r8 \n"
-        "xor %%r9,%%r9 \n"
-        "xor %%r10,%%r10 \n"
         "mov %%gs:0,%%r11 \n"
         "movq %a0(%%r11),%%rsp \n"              // Restore user stack, return address, flags
         "popq %%r11 \n"
@@ -228,6 +223,25 @@ long _sys_munmap(void* address, size_t length) {
     return 0;
 }
 
+long _sys_access(const char* pathname, int mode) {
+    ProcessorLocal* proc_local = proc_get_local();
+
+    if (is_virt_addr_mapped_userspace(
+            proc_local->current_task->process->addr_space.page_table,
+            (const uint64_t)pathname
+        ) == FALSE) {
+        return -EFAULT;
+    }
+
+    const VfsDentry* dentry = vfs_open(pathname, proc_local->current_task->process->work_dir);
+
+    if (dentry == NULL) return -ENOENT;
+    if (mode == F_OK) return 0;
+    if (((int)dentry->inode->mode & mode) == mode) return 0;
+
+    return -EACCES;
+}
+
 long _sys_getdents(unsigned int fd, struct dirent* dirent, unsigned int count) {
     ProcessorLocal* proc_local = proc_get_local();
 
@@ -360,6 +374,8 @@ void init_syscalls() {
     syscall_table[SYS_MMAP]     = (void*)&_sys_mmap;
 
     syscall_table[SYS_MUNMAP]   = (void*)&_sys_munmap;
+
+    syscall_table[SYS_ACCESS]   = (void*)&_sys_access;
 
     syscall_table[SYS_GETPID]   = (void*)&_sys_getpid;
 
