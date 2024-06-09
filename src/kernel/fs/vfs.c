@@ -196,9 +196,9 @@ Status vfs_mount(const char* const mountpoint, VfsDentry* const mnt_dentry) {
 VfsDentry* vfs_lookup(const VfsDentry* const dentry, const char* const dentry_name) {
     if (dentry == NULL) return NULL;
 
-    if (strcmp(dentry_name, ".") == 0) return dentry;
+    if (strcmp(dentry_name, ".") == 0) return (VfsDentry*)dentry;
     if (strcmp(dentry_name, "..") == 0) {
-        return dentry == root_dentry ? dentry : dentry->parent;
+        return dentry == root_dentry ? (VfsDentry*)dentry : dentry->parent;
     }
 
     if (dentry->childs == NULL &&

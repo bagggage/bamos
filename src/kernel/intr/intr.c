@@ -114,21 +114,32 @@ __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame6
         dbg_symbol == NULL ? 0 : frame->rip - dbg_symbol->virt_address);
     log_trace(TRACE_INTERRUPT_DEPTH);
 #endif
+    register uint64_t r10 asm("r10");
+    register uint64_t r11 asm("r11");
+    register uint64_t r12 asm("r12");
+    register uint64_t r13 asm("r13");
+    register uint64_t r14 asm("r14");
+    register uint64_t r15 asm("r15");
+
     kernel_warn(
         "CPU: %u: Interrupt Frame:\n"
         "cr2: %x\ncr3: %x\n"
         "rax: %x; rdi: %x; rsi: %x; rcx: %x; rdx: %x; rbx: %x\n"
+        "r10: %x r11: %x; r12: %x; r13: %x; r14: %x; r15: %x\n"
         "rip: %x:%x\n"
         "rsp: %x\nrflags: %b\ncs: %x\nss: %x\n",
         cpu_get_idx(),
         cpu_get_cr2(),
         cpu_get_cr3(),
         cpu_get_rax(), cpu_get_rdi(), cpu_get_rsi(), cpu_get_rcx(), cpu_get_rdx(), cpu_get_rbx(),
+        r10, r11, r12, r13, r14, r15,
         frame->rip, get_phys_address((uint64_t)frame->rip),
         frame->rsp,
         frame->eflags,
         frame->cs,
         frame->ss);
+
+    raw_hexdump((void*)frame->rip, 16);
 }
 
 __attribute__((target("general-regs-only"))) void intr_excp_panic(InterruptFrame64* frame, uint32_t error_code) {

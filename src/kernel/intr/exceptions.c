@@ -148,8 +148,6 @@ ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code)
     log_intr_frame(frame);
 #endif
 
-    raw_hexdump(frame->rip, 16);
-
     _kernel_break();
     //if (pf_error.user == 0) _kernel_break();
 }

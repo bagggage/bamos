@@ -145,6 +145,8 @@ static bool_t elf_load_dyn(const ELF* elf) {
 ELF* elf_load_file(VfsDentry* const file_dentry) {
     kassert(file_dentry != NULL && file_dentry->inode != NULL);
 
+    if (file_dentry->inode->file_size < sizeof(ELF) + sizeof(ElfProgramHeader)) return FALSE;
+
     ELF* result = (ELF*)kmalloc(file_dentry->inode->file_size);
 
     if (result == NULL) return NULL;

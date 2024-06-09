@@ -931,8 +931,8 @@ static bool_t vm_map_page_frame(VMPageFrame* frame, PageMapLevel4Entry* pml4, VM
     return TRUE;
 }
 
-VMPageFrame vm_alloc_pages(const uint32_t pages_count, VMHeap* heap, PageMapLevel4Entry* pml4, VMMapFlags flags) {
-    kassert(heap != NULL && pml4 != NULL && pages_count > 0);
+VMPageFrame _vm_alloc_pages(const uint32_t pages_count, const uint64_t virt_address, PageMapLevel4Entry* pml4, VMMapFlags flags) {
+    kassert(virt_address != NULL && pml4 != NULL && pages_count > 0);
 
     uint32_t rank = BPA_MAX_BLOCK_RANK - 1;
     uint32_t rank_pages_count = 1 << rank;
@@ -967,13 +967,25 @@ VMPageFrame vm_alloc_pages(const uint32_t pages_count, VMHeap* heap, PageMapLeve
         }
     }
 
-    frame.virt_address = vm_heap_reserve(heap, pages_count);
+    frame.virt_address = virt_address;
 
     if (vm_map_page_frame(&frame, pml4, flags) == FALSE) {
         frame_free_phys_pages(&frame);
         frame.count = 0;
         return frame;
     }
+
+    return frame;
+}
+
+VMPageFrame vm_alloc_pages(const uint32_t pages_count, VMHeap* heap, PageMapLevel4Entry* pml4, VMMapFlags flags) {
+    kassert(heap != NULL && pml4 != NULL && pages_count > 0);
+
+    const uint64_t virt_address = vm_heap_reserve(heap, pages_count);
+
+    VMPageFrame frame = _vm_alloc_pages(pages_count, virt_address, pml4, flags);
+
+    if (frame.count == 0) vm_heap_release(heap, virt_address, pages_count);
 
     return frame;
 }

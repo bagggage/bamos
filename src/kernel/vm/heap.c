@@ -73,6 +73,29 @@ static void vm_heap_remove_free_block(VMHeap* heap, MemoryBlockNode* node, const
     }
 }
 
+static bool_t vm_heap_push_free_block(VMHeap* heap, const uint64_t virt_address, const uint32_t pages_count) {
+    MemoryBlockNode* new_node = (MemoryBlockNode*)oma_alloc(free_list_oma);
+
+    if (new_node == NULL) return FALSE;
+
+    new_node->block.address = virt_address;
+    new_node->block.pages_count = pages_count;
+    new_node->next = NULL;
+        
+    if (heap->free_list.next == NULL) {
+        heap->free_list.next = (void*)new_node;
+        new_node->prev = NULL;
+    }
+    else {
+        heap->free_list.prev->next = (void*)new_node;
+        new_node->prev = (void*)heap->free_list.prev;
+    }
+
+    heap->free_list.prev = (void*)new_node;
+
+    return TRUE;
+}
+
 static bool_t vm_heap_insert_free_block(VMHeap* heap, const uint64_t virt_address, const uint32_t pages_count) {
     const uint64_t block_top = virt_address + ((uint64_t)pages_count * PAGE_BYTE_SIZE);
 
@@ -96,24 +119,7 @@ static bool_t vm_heap_insert_free_block(VMHeap* heap, const uint64_t virt_addres
     }
 
     if (temp_node == NULL) {
-        MemoryBlockNode* new_node = (MemoryBlockNode*)oma_alloc(free_list_oma);
-
-        if (new_node == NULL) return FALSE;
-
-        new_node->block.address = virt_address;
-        new_node->block.pages_count = pages_count;
-        new_node->next = NULL;
-        
-        if (heap->free_list.next == NULL) {
-            heap->free_list.next = (ListHead*)(void*)new_node;
-            new_node->prev = NULL;
-        }
-        else {
-            heap->free_list.prev->next = (ListHead*)(void*)new_node;
-            new_node->prev = (MemoryBlockNode*)(void*)heap->free_list.prev;
-        }
-
-        heap->free_list.prev = (ListHead*)(void*)new_node;
+        return vm_heap_push_free_block(heap, virt_address, pages_count);
     }
     else {
         MemoryBlockNode* target_node = temp_node;
@@ -199,8 +205,6 @@ void vm_heap_release(VMHeap* heap, const uint64_t virt_address, const uint32_t p
 }
 
 VMHeap vm_heap_copy(const VMHeap* src_heap) {
-    kassert(FALSE && "Method is not implemented correctly!!!");
-
     VMHeap result;
 
     result.free_list = (ListHead) { NULL, NULL };
@@ -208,22 +212,14 @@ VMHeap vm_heap_copy(const VMHeap* src_heap) {
     result.virt_top = src_heap->virt_top;
 
     const MemoryBlockNode* node = (const MemoryBlockNode*)src_heap->free_list.next;
-    MemoryBlockNode* prev = NULL;
 
     while (node != NULL) {
-        MemoryBlockNode* new_node = (MemoryBlockNode*)oma_alloc(free_list_oma);
+        const bool_t res = vm_heap_push_free_block(&result, node->block.address, node->block.pages_count);
 
-        new_node->block = node->block;
-        new_node->next = NULL;
-        new_node->prev = prev;
-
-        if (result.free_list.next == NULL) result.free_list.next = (void*)new_node;
-        if (prev != NULL) prev->next = new_node;
+        kassert(res == TRUE && "Fix me!");
 
         node = node->next;
     }
-
-    result.free_list.prev = (void*)prev;
 
     return result;
 }

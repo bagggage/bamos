@@ -511,8 +511,8 @@ int strcpy(char *dst, const char *src) {
     return i;
 }
 
-int strlen(const char *str) {
-    const char *s;
+size_t strlen(const char* str) {
+    const char* s;
 
     for (s = str; *s; ++s);
 

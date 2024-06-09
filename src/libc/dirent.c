@@ -7,8 +7,6 @@
 
 #include "sys/syscall.h"
 
-static struct dirent _dirent;
-
 DIR* opendir(const char* path) {
     int fd;
     DIR* dir = (DIR*)calloc(sizeof(DIR), 1);
@@ -40,7 +38,7 @@ struct dirent* readdir(DIR* dir) {
 	struct dirent *dirent;
 	
 	if (dir->buf_pos >= dir->buf_end) {
-		int length = _syscall_arg3(SYS_GETDENTS, dir->fd, dir->buf, sizeof(dir->buf));
+		int length = _syscall_arg3(SYS_GETDENTS, dir->fd, (_arg_t)dir->buf, sizeof(dir->buf));
 
 		if (length <= 0) {
 			if (length < 0 && length != -ENOENT) errno = -length;

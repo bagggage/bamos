@@ -149,6 +149,7 @@ uint64_t vm_find_free_virt_address(const PageMapLevel4Entry* pml4, const uint32_
 Allocates linear block of virtual pages with requested options. 
 */
 VMPageFrame vm_alloc_pages(const uint32_t pages_count, VMHeap* heap, PageMapLevel4Entry* pml4, VMMapFlags flags);
+VMPageFrame _vm_alloc_pages(const uint32_t pages_count, const uint64_t virt_address, PageMapLevel4Entry* pml4, VMMapFlags flags);
 
 /*
 Frees virtual pages previously allocated with 'vm_alloc_pages'.
@@ -161,3 +162,11 @@ void vm_setup_paging(PageMapLevel4Entry* pml4);
 void vm_map_kernel(PageMapLevel4Entry* pml4);
 void vm_configure_cpu_page_table();
 void _vm_map_proc_local(PageMapLevel4Entry* pml4);
+
+static inline bool_t vm_is_mem_contains(const VMMemoryBlock* block, const uint64_t virt_address) {
+    return (
+        virt_address >= block->virt_address &&
+        virt_address < block->virt_address +
+        ((uint64_t)block->pages_count * PAGE_BYTE_SIZE)
+    );
+}

@@ -45,7 +45,7 @@ ProcessorLocal* _proc_get_local_data_by_idx(const uint32_t cpu_idx);
 static inline ProcessorLocal* proc_get_local() {
     ProcessorLocal* result;
 
-    asm volatile("mov %%gs:0,%0":"=g"(result));
+    asm volatile("movq %%gs:0,%0":"=r"(result));
 
     return result;
 }
