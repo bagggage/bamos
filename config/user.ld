@@ -1,10 +1,10 @@
 ENTRY(_start)
 STARTUP(crt0.o)
 
-. = 0x8000001000;
-
 SECTIONS
 {
+    . = 0x8000000000;
+
     .text : {
         *(.text .text.*)                       /* code */
         *(.rodata .rodata.*)                   /* data */

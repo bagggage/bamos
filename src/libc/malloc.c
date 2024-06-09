@@ -39,8 +39,6 @@ typedef struct ObjectMemoryAllocator {
     uint32_t bucket_capacity;
 } ObjectMemoryAllocator;
 
-static ObjectMemoryAllocator oma_pool;
-
 static inline uint64_t div_with_roundup(const uint64_t value, const uint64_t divider) {
     return (value / divider) + ((value % divider) == 0 ? 0 : 1);
 }
@@ -77,16 +75,6 @@ static ObjectMemoryAllocator _oma_init(const uint32_t bucket_pages_count, const 
     oma.bucket_capacity = capacity;
 
     return oma;
-}
-
-static void oma_clear(ObjectMemoryAllocator* const oma) {
-    while (oma->bucket_list.next != NULL) {
-        MemoryBucket* bucket = (MemoryBucket*)oma->bucket_list.next;
-
-        oma->bucket_list.next = bucket->next;
-
-        munmap(bucket->mem_block, oma->bucket_size);
-    }
 }
 
 static MemoryBucket* oma_push_bucket(uint8_t* const mem_block, ObjectMemoryAllocator* const oma) {
@@ -162,7 +150,7 @@ static void oma_free(void* const memory_block, ObjectMemoryAllocator* const oma)
     MemoryBucket* suitable_bucket = (MemoryBucket*)(void*)oma->bucket_list.next;
 
     while (suitable_bucket != NULL) {
-        if ((uint64_t)memory_block >= suitable_bucket->mem_block &&
+        if ((uint64_t)memory_block >= (uint64_t)suitable_bucket->mem_block &&
             (uint64_t)memory_block < (uint64_t)suitable_bucket->bitmap) {
             const uint64_t object_offset = (uint64_t)memory_block - (uint64_t)suitable_bucket->mem_block;
             const uint32_t bit_idx = object_offset / oma->object_size;
@@ -216,7 +204,7 @@ static bool_t _oma_is_containing_mem_block(const void* restrict memory_block, co
     const MemoryBucket* bucket = oma->bucket_list.next;
 
     while (bucket != NULL) {
-        if (bucket->mem_block <= (uint64_t)memory_block &&
+        if ((uint64_t)bucket->mem_block <= (uint64_t)memory_block &&
             (uint64_t)memory_block < (uint64_t)bucket->bitmap) {
             return TRUE;
         }

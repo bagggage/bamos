@@ -122,7 +122,12 @@ void tsk_extract(Task* const task) {
     oma_free((void*)task, task_oma);
 }
 
-void tsk_launch(const Task* task) {
+__attribute__((noreturn, naked)) void tsk_launch(const Task* task) {
+    register uint64_t r12 asm("%r12") = task->thread.exec_state.r12;
+    register uint64_t r13 asm("%r13") = task->thread.exec_state.r13;
+    register uint64_t r14 asm("%r14") = task->thread.exec_state.r14;
+    register uint64_t r15 asm("%r15") = task->thread.exec_state.r15;
+
     asm volatile(
         "mov %[instr_ptr],%%rcx \n"
         "mov %[stack_ptr],%%rsp \n"
@@ -137,7 +142,11 @@ void tsk_launch(const Task* task) {
         :
         [instr_ptr] "g" (task->thread.instruction_ptr),
         [stack_ptr] "g" (task->thread.stack_ptr),
-        [base_ptr] "g" (task->thread.base_ptr)
+        [base_ptr] "g" (task->thread.base_ptr),
+        "r"(r12),
+        "r"(r13),
+        "r"(r14),
+        "r"(r15)
         : "%rcx", "memory"
     );
 }
@@ -148,7 +157,7 @@ void tsk_next() {
 
     while (scheduler->count == 0);
 
-    spin_lock(&scheduler->lock);
+    spin_lock((Spinlock*)&scheduler->lock);
 
     Task* task = (void*)scheduler->task_queue.next;
 
@@ -164,7 +173,7 @@ void tsk_next() {
         scheduler->task_queue.prev = (void*)task;
     }
 
-    spin_release(&scheduler->lock);
+    spin_release((Spinlock*)&scheduler->lock);
 
     if (cpu_get_current_pml4() != task->process->addr_space.page_table) {
         cpu_set_pml4(task->process->addr_space.page_table);
@@ -183,7 +192,7 @@ void tsk_start_scheduler() {
 
     while (scheduler->count == 0);
 
-    spin_lock(&scheduler->lock);
+    spin_lock((Spinlock*)&scheduler->lock);
 
     Task* task = (void*)scheduler->task_queue.next;
 
@@ -199,7 +208,7 @@ void tsk_start_scheduler() {
         scheduler->task_queue.prev = (void*)task;
     }
 
-    spin_release(&scheduler->lock);
+    spin_release((Spinlock*)&scheduler->lock);
 
     cpu_set_pml4(task->process->addr_space.page_table);
 

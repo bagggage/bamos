@@ -9,9 +9,9 @@
 #include "sys/syscall.h"
 #include "sys/mman.h"
 
-FILE* stdout;
-FILE* stdin;
-FILE* stderr;
+FILE* stdout = NULL;
+FILE* stdin = NULL;
+FILE* stderr = NULL;
 
 static char* print_buffer = NULL;
 
