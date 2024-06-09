@@ -1,4 +1,4 @@
-CROSS_ENV:=-fPIC -fomit-frame-pointer -ffreestanding -fno-stack-protector -mno-red-zone -nostdlib
+CROSS_ENV:=-fpie -fomit-frame-pointer -ffreestanding -fno-stack-protector -mno-red-zone -nostdlib
 
 AS:=${TOOLCHAIN}/x86_64-elf-as
 AR:=${TOOLCHAIN}/x86_64-elf-ar

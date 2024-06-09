@@ -1,4 +1,4 @@
-CROSS_ENV:=-fpic -fomit-frame-pointer -ffreestanding -fno-stack-protector -mno-red-zone -nostdlib
+CROSS_ENV:=-fpie -fomit-frame-pointer -ffreestanding -fno-stack-protector -mno-red-zone -nostdlib
 
 AS:=${TOOLCHAIN}/x86_64-elf-as
 AR:=${TOOLCHAIN}/x86_64-elf-ar
@@ -31,7 +31,7 @@ ${OBJS}: ${SRCS}
 
 bin: ${OBJS}
 	@echo Linking: ${PROG_NAME}
-	@${CC} -T ${LINKLD} -o ${OUT} ${OBJS} -L${BUILD_DIR}/libc -l:libc.a -Wl,--no-relax
+	@${CC} -T ${LINKLD} -o ${OUT} ${OBJS} -L${BUILD_DIR}/libc -l:libc.a -pie
 	@cp ${OUT} ${SAVE_DIR} 
 	@${TOOLCHAIN}/x86_64-elf-strip --strip-all ${SAVE_DIR}/${PROG_NAME}
 
