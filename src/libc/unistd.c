@@ -2,6 +2,10 @@
 
 #include "sys/syscall.h"
 
+int access(const char* pathname, int mode) {
+    return _syscall_arg2(SYS_ACCESS, (_arg_t)pathname, mode);
+}
+
 pid_t fork() {
     return _syscall(SYS_FORK);
 }
@@ -15,7 +19,7 @@ size_t write(unsigned int fd, const char* buffer, size_t count) {
 }
 
 int execve (const char* path, char* const argv[], char* const envp[]) {
-    return _syscall_arg3(SYS_EXECVE, path, argv, envp);
+    return _syscall_arg3(SYS_EXECVE, (_arg_t)path, (_arg_t)argv, (_arg_t)envp);
 }
 
 int chdir(const char* path) {
@@ -27,7 +31,7 @@ int fchdir(unsigned int fd) {
 }
 
 char* getcwd(char* restrict buffer, size_t size) {
-    return _syscall_arg2(SYS_GETCWD, (_arg_t)buffer, size);
+    return (char*)_syscall_arg2(SYS_GETCWD, (_arg_t)buffer, size);
 }
 
 pid_t getpid() {

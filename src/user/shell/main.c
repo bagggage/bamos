@@ -9,7 +9,9 @@
 #include <unistd.h>
 
 #define NULL ((void*)0)
+#define UNUSED(x) (void)(x)
 
+static char** paths = NULL;
 static char current_dir[256] = { '\0' };
 
 char** parse_args(char* string, unsigned int* out_argc) {
@@ -79,6 +81,10 @@ void print_err(const char* str_cmd, unsigned int error) {
     fprintf(stderr, "%s: %s\n", str_cmd, error_str);
 }
 
+void too_many_args(const char* exec_name) {
+    fprintf(stderr, "%s: Too many arguments\n", exec_name);
+}
+
 void cd_impl(char** argv, unsigned int argc) {
     if (argc > 1) {
         if (argc == 2) {
@@ -89,7 +95,7 @@ void cd_impl(char** argv, unsigned int argc) {
             getcwd(current_dir, 256);
         }
         else {
-            fprintf(stderr, "%s: Too many arguments\n", argv[0]);
+            too_many_args(argv[0]);
         }
     }
 }
@@ -105,22 +111,75 @@ void echo_impl(char** argv, unsigned int argc) {
 
 void clear_impl(char** argv, unsigned int argc) {
     if (argc > 1) {
-        fprintf(stderr, "%s: Too many arguments", argv[0]);
-        return;
+        return too_many_args(argv[0]);
     }
 
     puts("\033[H\033[J");
 }
 
+void env_impl(char** argv, unsigned int argc) {
+    if (argc > 1) return too_many_args(argv[0]);
+
+    char** env = environ;
+
+    while (*env != NULL) {
+        printf("%s\n", *(env++));
+    }
+}
+
+int is_direct_path(const char* name) {
+    return name[0] != '\0' && (
+        name[0] == '/' ||
+        memcmp(name, "./", 2) == 0 ||
+        memcmp(name, "~/", 2) == 0 ||
+        memcmp(name, "../", 3) == 0
+    );
+}
+
+char* find_exec(char* name) {
+    int result = access(name, X_OK);
+
+    if (result == -ENOENT && is_direct_path(name) == 0) {
+        static char buffer[256] = { '\0' };
+
+        char** path_ptr = paths;
+
+        while (*path_ptr != NULL && result == -ENOENT) {
+            size_t len = strlen(*path_ptr);
+
+            memcpy(buffer, *path_ptr, len);
+            buffer[len] = '/';
+            memcpy(&buffer[len + 1], name, strlen(name) + 1);
+
+            result = access(buffer, X_OK);
+
+            if (result == 0) return buffer;
+
+            path_ptr++;
+        }
+    }
+    if (result < 0) {
+        print_err(name, -result);
+        return NULL;
+    }
+
+    return name;
+}
+
 void exec_impl(char** argv) {
+    char* exec_name = find_exec(argv[0]);
+
+    if (exec_name == NULL) return;
+
     pid_t pid = fork();
 
     if (pid == 0) {
-        int result = execve(argv[0], argv, NULL);
-
+        int result = execve(exec_name, argv, environ);
         print_err(argv[0], -result);
         exit(0);
     }
+
+    if (exec_name != argv[0]) free(exec_name);
 
     waitpid(-1, NULL, 0);
 }
@@ -137,6 +196,7 @@ void exec_cmd(char* str_cmd) {
 
     if (strcmp(argv[0], "cd") == 0) cd_impl(argv, argc);
     else if (strcmp(argv[0], "echo") == 0) echo_impl(argv, argc);
+    else if (strcmp(argv[0], "env") == 0) env_impl(argv, argc);
     else if (strcmp(argv[0], "clear") == 0) clear_impl(argv, argc);
     else if (strcmp(argv[0], "exit") == 0) exit(0);
     else exec_impl(argv);
@@ -144,7 +204,62 @@ void exec_cmd(char* str_cmd) {
     free(argv);
 }
 
+char** divide_paths(char* const paths) {
+    char** result = NULL;
+    unsigned int count = 0;
+    char* cursor = paths;
+
+    while (*cursor != '\0') {
+        count++;
+
+        do {
+            cursor++;
+        } while (*cursor != '\0' && *cursor != ';'); 
+
+        if (*cursor == ';') {
+            *cursor = '\0';
+            cursor++;
+        }
+    }
+
+    result = (char**)calloc(sizeof(char*), count + 1);
+
+    if (result == NULL) return NULL;
+
+    result[count] = NULL;
+    cursor = paths;
+
+    for (unsigned int i = 0; i < count; ++i) {
+        result[i] = cursor;
+        while (*(cursor++) != '\0');
+    }
+
+    return result;
+}
+
+void parse_paths() {
+    char* var = getenv("PATH");
+
+    if (var == NULL) return;
+
+    const size_t length = strlen(var);
+    if (length == 0) return;
+
+    char* paths_buffer = (char*)malloc(length + 1);
+    if (paths_buffer == NULL) return;
+
+    for (unsigned int i = 0; i < length + 1; ++i) {
+        paths_buffer[i] = var[i];
+    }
+
+    paths = divide_paths(paths_buffer);
+
+    if (paths == NULL) free(paths_buffer);
+}
+
 int main() {
+    parse_paths();
+
     current_dir[0] = '/';
 
     char c;

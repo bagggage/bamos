@@ -5,6 +5,8 @@
 
 typedef unsigned long long size_t;
 
+extern char** environ;
+
 int abs(int x);
 
 void abort();

@@ -4,28 +4,15 @@
 
 #define NULL ((void*)0)
 
-int main() {
-    //write(stdout->_fileno, "LS!\n", 4);
-
-    const char** argv = NULL; int argc = 0;
-    const char* path;
-
-    if (argc < 2) {
-        static char buffer[256] = { '\0' };
-        path = getcwd(buffer, sizeof(buffer));
-    }
-    else {
-        //path = argv[1];
-    }
-
-    //printf("Before open dir: %s\n", path);
-
-    DIR* dir = opendir(path);
+void list_dir(const char* pathname, const char* print_dir_fmt) {
+    DIR* dir = opendir(pathname);
 
     if (dir == NULL) {
-        fprintf(stderr, "ls: '%s': No such file or directory\n", path);
-        return -1;
+        fprintf(stderr, "ls: cannot access '%s': No such file or directory\n", pathname);
+        return;
     }
+
+    if (print_dir_fmt != NULL) printf(print_dir_fmt, pathname);
 
     struct dirent* dirent = readdir(dir);
 
@@ -36,7 +23,27 @@ int main() {
         printf("%s ", dirent->d_name);
     }
 
+    closedir(dir);
     putchar('\n');
+}
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        static char buffer[256] = { '\0' };
+        getcwd(buffer, sizeof(buffer));
+
+        list_dir(buffer, NULL);
+    }
+    else if (argc == 2) {
+        list_dir(argv[1], NULL);
+    }
+    else {
+        for (int i = 1; i < argc; ++i) {
+            if (i > 1) putchar('\n');
+
+            list_dir(argv[i], "%s:\n");
+        }
+    }
 
     return 0;
 }

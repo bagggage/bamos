@@ -86,8 +86,10 @@ VMPageFrameNode* proc_push_vm_page(Process* const process);
 void proc_dealloc_vm_page(Process* const process, VMPageFrameNode* const page_frame);
 void proc_dealloc_vm_pages(Process* const process);
 
+char** proc_put_args_strings(uint64_t** const stack, char** strings, const uint32_t count);
+
 long _sys_clone();
 pid_t _sys_fork();
-long _sys_execve(const char* filename, char* const argv[], char* const envp[]);
+long _sys_execve(const char* filename, char** argv, char** envp);
 long _sys_wait4(pid_t pid, int* stat_loc, int options);
 long _sys_exit(int error_code);

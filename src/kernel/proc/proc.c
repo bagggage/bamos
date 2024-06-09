@@ -14,11 +14,15 @@
 
 #include "fs/vfs.h"
 
+#include "vm/object_mem_alloc.h"
 #include "vm/buddy_page_alloc.h"
+
+#include "utils/string_utils.h"
 
 #include "libc/errno.h"
 
 #define INIT_PROC_FILENAME "/usr/bin/init"
+#define ENVIRONS_FILENAME  "/etc/environment"
 
 extern BOOTBOOT bootboot;
 
@@ -83,11 +87,138 @@ void proc_release_id(pid_t id) {
     spin_release(&pid_lock);
 }
 
+static void log_process(const Process* process) {
+    kernel_warn("Process: %x\n", process);
+
+    if (process == NULL) return;
+
+    kernel_msg("Pid: %u\n", process->pid);
+    kernel_msg("Parent (%u): %x\n", process->parent->pid, process->parent);
+
+    Process* child = (void*)process->childs.next;
+
+    while (child != NULL) {
+        kernel_msg("   child (%u): %x\n", child->pid, child);
+        child = child->next;
+    }
+
+    char buffer[256] = { '\0' };
+
+    if (process->work_dir != NULL) vfs_get_path(process->work_dir, buffer);
+    else buffer[0] = '~';
+
+    kernel_msg("Work dir (%x): %s\n", process->work_dir, buffer);
+    kernel_msg("Page table: %x\n", process->addr_space.page_table);
+    kernel_msg("Segments:\n");
+
+    VMMemoryBlockNode* segment = (void*)process->addr_space.segments.next;
+
+    while (segment != NULL) {
+        kernel_msg("   seg(%x): %x : %x, %u KB\n", 
+            segment,
+            segment->block.virt_address,
+            (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
+            segment->block.pages_count * (PAGE_BYTE_SIZE / KB_SIZE)
+        );
+
+        segment = segment->next;
+    }
+
+    log_heap(&process->addr_space.heap);
+
+    kernel_msg("VM Pages:\n");
+
+    VMPageFrameNode* page = (void*)process->vm_pages.next;
+
+    while (page != NULL) {
+        kernel_msg("  page: %x : ", page->frame.virt_address);
+
+        VMPageList* phys_page = (void*)page->frame.phys_pages.next;
+
+        while (phys_page != NULL) {
+            raw_print_number((uint64_t)phys_page->phys_page_base * PAGE_BYTE_SIZE, FALSE, 16);
+            raw_putc(' ');
+
+            phys_page = phys_page->next;
+        }
+
+        raw_print_number((uint32_t)page->frame.count * (PAGE_BYTE_SIZE / KB_SIZE), FALSE, 16);
+        raw_puts(" KB\n");
+
+        page = page->next;
+    }
+}
+
+static uint32_t count_strings(const char** strings) {
+    uint32_t result = 0;
+
+    while (*(strings++) != NULL) result++;
+
+    return result;
+}
+
+static char** load_environs(uint32_t* const count) {
+    VfsDentry* dentry = vfs_open(ENVIRONS_FILENAME, NULL);
+
+    if (dentry == NULL || dentry->inode->type != VFS_TYPE_FILE) return NULL;
+    if (dentry->inode->file_size < 3) return NULL;
+
+    char* buffer = (char*)kmalloc(dentry->inode->file_size + 1);
+
+    if (buffer == NULL) return NULL;
+    if (vfs_read(dentry, 0, dentry->inode->file_size, (void*)buffer) != dentry->inode->file_size) {
+        kfree(buffer);
+        return NULL;
+    }
+
+    *count = 0;
+    char** envp = (char**)kmalloc(sizeof(char*));
+
+    for (uint32_t i = 0; i < dentry->inode->file_size - 1; ++i) {
+        char* var = &buffer[i];
+        bool_t is_valid = buffer[i] != '\0' && buffer[i] != '\n';
+
+        while(buffer[i] != '\0' && buffer[i] != '\n') {
+            if (isspace(buffer[i])) is_valid = FALSE;
+            i++;
+        }
+
+        if (is_valid) {
+            (*count)++;
+
+            char** new_envp = krealloc(envp, (*count + 1) * sizeof(char*));
+
+            if (new_envp == NULL) {
+                kfree(buffer);
+                kfree(envp);
+
+                *count = 0;
+                return NULL;
+            }
+    
+            envp = new_envp;
+            envp[*count - 1] = var;
+        }
+
+        if (buffer[i] == '\0') break;
+
+        buffer[i] = '\0';
+    }
+
+    envp[*count] = NULL;
+
+    return envp;
+}
+
 bool_t load_init_proc() {
     VfsDentry* file_dentry = vfs_open(INIT_PROC_FILENAME, NULL);
 
     if (file_dentry == NULL) {
         error_str = "'init' process executable file at path " INIT_PROC_FILENAME " not found";
+        return FALSE;
+    }
+    if (file_dentry->inode->type != VFS_TYPE_FILE) {
+        error_str = INIT_PROC_FILENAME " is not an executable file";
         return FALSE;
     }
 
@@ -112,7 +243,7 @@ bool_t load_init_proc() {
     if (elf == NULL) {
         proc_delete(process);
         tsk_delete(task);
-        error_str = "Failed to load elf file " INIT_PROC_FILENAME;
+        error_str = "Failed to load file: " INIT_PROC_FILENAME;
         return FALSE;
     }
 
@@ -120,7 +251,7 @@ bool_t load_init_proc() {
         proc_delete(process);
         tsk_delete(task);
         kfree(elf);
-        error_str = "Incorrect elf file format " INIT_PROC_FILENAME;
+        error_str = INIT_PROC_FILENAME ": Incorrect elf file format";
         return FALSE;
     }
 
@@ -160,8 +291,23 @@ bool_t load_init_proc() {
 
     task->thread.stack_ptr = (uint64_t*)(
         task->thread.stack.virt_address +
-        ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
+        ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE)
     );
+
+    uint32_t env_count = 0;
+    char** environs = load_environs(&env_count);
+    char** env_ptr = proc_put_args_strings(&task->thread.stack_ptr, environs, env_count);
+
+    if (environs) {
+        kfree(environs[0]);
+        kfree(environs);
+    }
+
+    task->thread.stack_ptr -= 3;
+    task->thread.stack_ptr[0] = 0; // argc
+    task->thread.stack_ptr[1] = 0; // argv
+    task->thread.stack_ptr[2] = (uint64_t)env_ptr;
+
     task->thread.base_ptr = task->thread.stack_ptr;
 
     task->process = process;
@@ -269,7 +415,7 @@ void proc_clear_segments(Process* const process) {
     kassert(process != NULL);
 
     while (process->addr_space.segments.next != NULL) {
-        VMMemoryBlockNode* node = (VMMemoryBlockNode*)process->addr_space.segments.next;
+        VMMemoryBlockNode* node = (void*)process->addr_space.segments.next;
         process->addr_space.segments.next = process->addr_space.segments.next->next;
 
         if (node->block.pages_count > 0) {
@@ -427,7 +573,19 @@ VMPageFrameNode* proc_push_vm_page(Process* const process) {
     return node;
 }
 
+static void proc_copy_vm_page_data(const VMPageFrameNode* src_frame, VMPageFrameNode* dst_frame, const PageMapLevel4Entry* dst_pml4) {
+    for (uint32_t i = 0; i < src_frame->frame.count; ++i) {
+        const uint64_t offset = (uint64_t)i * PAGE_BYTE_SIZE;
+        const uint64_t dst_address = _get_phys_address(dst_pml4, dst_frame->frame.virt_address + offset);
+
+        kassert(dst_address != INVALID_ADDRESS);
+        memcpy((const void*)(src_frame->frame.virt_address + offset), (void*)dst_address, PAGE_BYTE_SIZE);
+    }
+}
+
 bool_t proc_copy_vm_pages(Process* const src_proc, Process* const dst_proc) {
+    dst_proc->addr_space.heap = vm_heap_copy(&src_proc->addr_space.heap);
+
     if (src_proc->vm_pages.next == NULL) return TRUE;
 
     spin_lock(&src_proc->vm_lock);
@@ -443,9 +601,9 @@ bool_t proc_copy_vm_pages(Process* const src_proc, Process* const dst_proc) {
             return FALSE;
         }
 
-        dst_frame->frame = vm_alloc_pages(
+        dst_frame->frame = _vm_alloc_pages(
             src_frame->frame.count,
-            &dst_proc->addr_space.heap,
+            src_frame->frame.virt_address,
             dst_proc->addr_space.page_table,
             src_frame->frame.flags
         );
@@ -461,11 +619,7 @@ bool_t proc_copy_vm_pages(Process* const src_proc, Process* const dst_proc) {
         //    ((VMPageList*)dst_frame->frame.phys_pages.next)->phys_page_base * PAGE_BYTE_SIZE
         //);
 
-        memcpy(
-            (void*)src_frame->frame.virt_address,
-            (void*)((uint64_t)((VMPageList*)dst_frame->frame.phys_pages.next)->phys_page_base * PAGE_BYTE_SIZE),
-            dst_frame->frame.count * PAGE_BYTE_SIZE
-        );
+        proc_copy_vm_page_data(src_frame, dst_frame, dst_proc->addr_space.page_table);
 
         src_frame = src_frame->next;
 
@@ -590,11 +744,80 @@ void proc_detach_childs(Process* const parent) {
     }
 }
 
+static char** copy_strings(const char** strings, const uint32_t count) {
+    uint32_t length = 0;
+
+    for (uint32_t i = 0; i < count; ++i) {
+        length += strlen(strings[i]) + 1;
+    }
+
+    char** result = (char**)kmalloc((count + 1) * sizeof(char*) + length);
+
+    if (result == NULL) return NULL;
+
+    char* buffer = (char*)result + ((count + 1) * sizeof(char*));
+
+    for (uint32_t i = 0; i < count; ++i) {
+        size_t len = strlen(strings[i]);
+
+        result[i] = buffer;
+
+        memcpy(strings[i], buffer, len + 1);
+
+        buffer += len + 1;
+    }
+
+    result[count] = NULL;
+
+    return result;
+}
+
+char** proc_put_args_strings(uint64_t** const stack, char** strings, const uint32_t count) {
+    uint64_t* cursor = *stack;
+
+    cursor -= count + 1;
+    char** result = (char**)cursor;
+
+    for (uint32_t i = 0; i < count; ++i) {
+        const char* arg = strings[i];
+        const size_t length = strlen(arg) + 1;
+
+        cursor = (uint64_t*)((uint8_t*)cursor - length);
+        memcpy((const void*)arg, (void*)cursor, length);
+
+        result[i] = (char*)cursor;
+    }
+
+    *stack = (uint64_t*)((uint64_t)cursor & (~0xFull));
+
+    result[count] = NULL;
+
+    return result;
+}
+
+static inline ExecutionState _save_exec_state() {
+    register uint64_t r12 asm ("%r12");
+    register uint64_t r13 asm ("%r13");
+    register uint64_t r14 asm ("%r14");
+    register uint64_t r15 asm ("%r15");
+
+    ExecutionState thread_exec_state;
+
+    thread_exec_state.r12 = r12;
+    thread_exec_state.r13 = r13;
+    thread_exec_state.r14 = r14;
+    thread_exec_state.r15 = r15;
+
+    return thread_exec_state;
+}
+
 long _sys_clone() {
     return 0;
 }
 
 pid_t _sys_fork() {
+    const ExecutionState src_exec_state = _save_exec_state();
+
     ProcessorLocal* proc_local = proc_get_local();
     //kernel_warn("SYS FORK: CPU: %u\n", proc_local->idx);
 
@@ -611,7 +834,7 @@ pid_t _sys_fork() {
 
     task->process = process;
 
-    vm_heap_construct(&process->addr_space.heap, g_proc_local.current_task->process->addr_space.heap.virt_base);
+    //vm_heap_construct(&process->addr_space.heap, g_proc_local.current_task->process->addr_space.heap.virt_base);
     vm_map_kernel(process->addr_space.page_table);
 
     if (thread_copy_stack(&proc_local->current_task->thread, &task->thread, process) == FALSE) {
@@ -649,26 +872,28 @@ pid_t _sys_fork() {
     task->thread.instruction_ptr = (uint64_t)proc_local->instruction_ptr;
     task->thread.stack_ptr = (uint64_t*)((uint64_t)proc_local->user_stack + sizeof(UserStack));
     task->thread.base_ptr = (uint64_t*)proc_local->user_stack->base_pointer;
+    task->thread.exec_state = src_exec_state;
 
     proc_add_child(proc_local->current_task->process, process);
 
     tsk_awake(task);
 
-    return 1;
+    return process->pid;
 }
 
-long _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
+long _sys_execve(const char* filename, char** argv, char** envp) {
     ProcessorLocal* proc_local = proc_get_local();
+    Task* const task = proc_local->current_task;
 
     if (is_virt_addr_mapped_userspace(
-            proc_local->current_task->process->addr_space.page_table,
+            task->process->addr_space.page_table,
             (uint64_t)filename
         ) == FALSE) {
         return -EFAULT;
     }
     if (argv != NULL) {
         if (is_virt_addr_mapped_userspace(
-                proc_local->current_task->process->addr_space.page_table,
+                task->process->addr_space.page_table,
                 (uint64_t)argv
             ) == FALSE) {
             return -EFAULT;
@@ -676,14 +901,14 @@ long _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
     }
     if (envp != NULL) {
         if (is_virt_addr_mapped_userspace(
-                proc_local->current_task->process->addr_space.page_table,
+                task->process->addr_space.page_table,
                 (uint64_t)envp
             ) == FALSE) {
             return -EFAULT;
         }
     }
 
-    VfsDentry* file_dentry = vfs_open(filename, proc_local->current_task->process->work_dir);
+    VfsDentry* file_dentry = vfs_open(filename, task->process->work_dir);
 
     if (file_dentry == NULL) return -ENOENT;
     if (file_dentry->inode->file_size < 3) return -ENOEXEC;
@@ -707,26 +932,33 @@ long _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
     else if (is_elf_valid_and_supported((ELF*)file_buffer)) {
         ELF* elf = (ELF*)file_buffer;
 
-        proc_dealloc_vm_pages(proc_local->current_task->process);
-        proc_clear_segments(proc_local->current_task->process);
-        proc_close_files(proc_local->current_task->process);
+        proc_clear_segments(task->process);
+        proc_close_files(task->process);
 
-        if (elf_load_prog(elf, proc_local->current_task->process) == FALSE) {
-            proc_delete(proc_local->current_task->process);
-            tsk_extract(proc_local->current_task);
+        if (elf_load_prog(elf, task->process) == FALSE) {
+            proc_delete(task->process);
+            tsk_extract(task);
             kernel_error("Failed to load process from ELF file\n");
             _kernel_break();
         }
-
-        proc_local->current_task->thread.instruction_ptr = elf->entry;
+        
+        task->thread.instruction_ptr = elf->entry;
 
         kfree(file_buffer);
 
+        const uint64_t argc_val = (argv == NULL ? 0 : count_strings(argv));
+        const uint64_t envc_val = (envp == NULL ? 0 : count_strings(envp));
+
+        if (argv) argv = copy_strings(argv, argc_val);
+        if (envp) envp = copy_strings(envp, envc_val);
+
+        proc_dealloc_vm_pages(proc_local->current_task->process);
+
         const VMMemoryBlockNode* top_segment =
-            (VMMemoryBlockNode*)proc_local->current_task->process->addr_space.segments.prev;
+            (VMMemoryBlockNode*)task->process->addr_space.segments.prev;
 
         vm_heap_construct(
-            &proc_local->current_task->process->addr_space.heap,
+            &task->process->addr_space.heap,
             (
                 top_segment->block.virt_address +
                 ((uint64_t)top_segment->block.pages_count * PAGE_BYTE_SIZE) +
@@ -734,11 +966,23 @@ long _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
             )
         );
 
-        proc_local->current_task->thread.stack_ptr = (uint64_t*)(
-            proc_local->current_task->thread.stack.virt_address +
-            ((uint64_t)proc_local->current_task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
+        task->thread.stack_ptr = (uint64_t*)(task->thread.stack.virt_address +
+            ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
         );
-        proc_local->current_task->thread.base_ptr = proc_local->current_task->thread.stack_ptr;
+
+        char** argv_ptr = proc_put_args_strings(&task->thread.stack_ptr, argv, argc_val);
+        char** env_ptr = proc_put_args_strings(&task->thread.stack_ptr, envp, envc_val);
+
+        if (argv) kfree(argv);
+        if (envp) kfree(envp);
+
+        task->thread.stack_ptr -= 3;
+        task->thread.stack_ptr[0] = (uint64_t)argc_val;
+        task->thread.stack_ptr[1] = (uint64_t)argv_ptr;
+        task->thread.stack_ptr[2] = (uint64_t)env_ptr;
+
+        task->thread.base_ptr = task->thread.stack_ptr;
+        task->thread.exec_state = (ExecutionState){ 0, 0, 0, 0 };
 
         //kernel_msg("phys: %x\n", get_phys_address(proc_local->current_task->thread.instruction_ptr));
         //kernel_msg("real: %x\n", (uint64_t)((VMMemoryBlockNode*)proc_local->current_task->process->addr_space.segments.next)->block.page_base * PAGE_BYTE_SIZE);
@@ -746,7 +990,7 @@ long _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
         //kernel_msg("Instr: %x\n", proc_local->current_task->thread.instruction_ptr);
         //kernel_msg("Page table cpu: %x\n", g_proc_local.idx);
 
-        tsk_launch(proc_local->current_task);
+        tsk_launch(task);
     }
     else {
         kfree(file_buffer);
@@ -757,6 +1001,8 @@ long _sys_execve(const char* filename, char* const argv[], char* const envp[]) {
 }
 
 long _sys_wait4(pid_t pid, int* stat_loc, int options) {
+    UNUSED(options);
+
     ProcessorLocal* proc_local = proc_get_local();
 
     if (stat_loc != NULL &&
@@ -778,7 +1024,7 @@ long _sys_wait4(pid_t pid, int* stat_loc, int options) {
             if (stat_loc != NULL) *stat_loc = child->result_value;
 
             proc_detach_child(proc_local->current_task->process, child);
-            proc_delete(child);
+            proc_delete((Process*)child);
 
             return pid;
         }
@@ -792,10 +1038,10 @@ long _sys_exit(int error_code) {
 
     proc_local->current_task->process->result_value = error_code;
 
-    proc_dealloc_vm_pages(proc_local->current_task->process);
     proc_clear_segments(proc_local->current_task->process);
     proc_close_files(proc_local->current_task->process);
     proc_detach_childs(proc_local->current_task->process);
+    proc_dealloc_vm_pages(proc_local->current_task->process);
 
     tsk_extract(proc_local->current_task);
 
@@ -805,4 +1051,6 @@ long _sys_exit(int error_code) {
     proc_local->current_task->process->addr_space.page_table = NULL;
 
     tsk_next();
+
+    return 0;
 }
