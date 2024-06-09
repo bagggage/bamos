@@ -14,12 +14,21 @@ typedef enum ThreadState {
     THREAD_TERMINATED
 } ThreadState;
 
+typedef struct ExecutionState {
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
+} ExecutionState;
+
 typedef struct Thread {
     VMMemoryBlock stack;
 
     uint64_t instruction_ptr;
     uint64_t* stack_ptr;
     uint64_t* base_ptr;
+
+    ExecutionState exec_state;
 
     uint8_t state;
 } Thread;
