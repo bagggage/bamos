@@ -3,7 +3,7 @@ STARTUP(crt0.o)
 
 SECTIONS
 {
-    . = 0x8000000000;
+    . = 0x8000001000;
 
     .text : {
         *(.text .text.*)                       /* code */
