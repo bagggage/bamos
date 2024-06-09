@@ -13,8 +13,8 @@ Buddy page allocator.
 
 #define BPA_MAX_BLOCK_RANK 11
 
-typedef struct BuddyPageAllocator {
-    ListHead free_list[BPA_MAX_BLOCK_RANK];
+typedef struct FreeArea {
+    ListHead free_list;
 
     /*
     Contains state of buddies in each bit:
@@ -22,6 +22,10 @@ typedef struct BuddyPageAllocator {
     1 - states are different (one allocated, other free);
     */
     uint8_t* bitmap;
+} FreeArea;
+
+typedef struct BuddyPageAllocator {
+    FreeArea free_area[BPA_MAX_BLOCK_RANK];
     Spinlock lock;
 } BuddyPageAllocator;
 
@@ -42,4 +46,4 @@ Otherwise the behavior is undefined.
 */
 void bpa_free_pages(const uint64_t page_address, const uint32_t rank);
 
-void bpa_log_free_lists();
+void bpa_log_free_lists(const ListHead* list);

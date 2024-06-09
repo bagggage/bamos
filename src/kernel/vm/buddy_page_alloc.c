@@ -16,23 +16,36 @@ static uint64_t get_total_mem_size(const VMMemoryMap* memory_map) {
     return (uint64_t)memory_map->total_pages_count * PAGE_BYTE_SIZE;
 }
 
-static bool_t free_list_push_first(ListHead* free_list, const uint32_t first_page_number) {
+static uint64_t get_max_phys_addr(const VMMemoryMap* memory_map) {
+    uint32_t max_page = 0;
+
+    for (uint32_t i = 0; i < memory_map->count; ++i) {
+        const VMMemoryMapEntry* entry = memory_map->entries + i;
+        const uint32_t curr_page = (entry->compact_phys_address + entry->pages_count) - 1; 
+
+        if (curr_page > max_page) max_page = curr_page;
+    }
+
+    return (uint64_t)max_page * PAGE_BYTE_SIZE;
+}
+
+static bool_t free_list_push_first(ListHead* free_list, const uint32_t page_base_number) {
     VMPageList* new_node = (VMPageList*)oma_alloc(&free_list_oma);
 
     if (new_node == NULL) return FALSE;
 
-    new_node->phys_page_base = first_page_number;
-    new_node->next = (VMPageList*)free_list->next;
+    new_node->phys_page_base = page_base_number;
+    new_node->next = (void*)free_list->next;
     new_node->prev = NULL;
 
     if (free_list->next == NULL) {
         // If list is empty
-        free_list->next = (ListHead*)new_node;
-        free_list->prev = free_list->next;
+        free_list->next = (void*)new_node;
+        free_list->prev = (void*)new_node;
     }
     else {
-        free_list->next->prev = (ListHead*)new_node;
-        free_list->next = (ListHead*)new_node;
+        free_list->next->prev = (void*)new_node;
+        free_list->next = (void*)new_node;
     }
 
     return TRUE;
@@ -41,7 +54,7 @@ static bool_t free_list_push_first(ListHead* free_list, const uint32_t first_pag
 static void free_list_remove_first(ListHead* free_list) {
     kassert(free_list != NULL && free_list->next != NULL);
 
-    VMPageList* temp_entry = (VMPageList*)free_list->next;
+    VMPageList* temp_entry = (void*)free_list->next;
 
     if (free_list->next == free_list->prev) {
         // Only one entry
@@ -103,101 +116,97 @@ static void free_list_find_and_remove(ListHead* free_list, const uint32_t page_b
 }
 
 static inline void bpa_clear_page_bit(const uint32_t page_base, const uint32_t rank) {
-    const uint32_t bit_idx = page_base >> (rank + 1);
+    const uint32_t bit_idx = page_base >> (1 + rank);
 
-    bpa.bitmap[bit_idx / 8] &= ~(1 << (bit_idx % 8));
+    bpa.free_area[rank].bitmap[bit_idx / 8] &= ~(1 << (bit_idx % 8));
 }
 
 static inline void bpa_set_page_bit(const uint32_t page_base, const uint32_t rank) {
-    const uint32_t bit_idx = page_base >> (rank + 1);
+    const uint32_t bit_idx = page_base >> (1 + rank);
 
-    bpa.bitmap[bit_idx / 8] |= (1 << (bit_idx % 8));
+    bpa.free_area[rank].bitmap[bit_idx / 8] |= (1 << (bit_idx % 8));
 }
 
 static inline void bpa_inverse_page_bit(const uint32_t page_base, const uint32_t rank) {
-    const uint32_t bit_idx = page_base >> (rank + 1);
+    const uint32_t bit_idx = page_base >> (1 + rank);
 
-    bpa.bitmap[bit_idx / 8] ^= (1 << (bit_idx % 8));
+    bpa.free_area[rank].bitmap[bit_idx / 8] ^= (1 << (bit_idx % 8));
 }
 
 static inline uint8_t bpa_get_page_bit(const uint32_t page_base, const uint32_t rank) {
-    const uint32_t bit_idx = page_base >> (rank + 1);
+    const uint32_t bit_idx = page_base >> (1 + rank);
 
-    return bpa.bitmap[bit_idx / 8] & (1 << (bit_idx % 8));
+    return bpa.free_area[rank].bitmap[bit_idx / 8] & (1 << (bit_idx % 8));
 }
 
-static bool_t bpa_push_mem_block_recurcive(uint32_t first_page_number, uint32_t pages_count, const uint32_t rank) {
-    kassert(pages_count > 0 && rank < BPA_MAX_BLOCK_RANK);
+static inline bool_t bpa_push_free_mem_block(const uint32_t page_base_number, const uint32_t pages_count) {
+    uint32_t temp_page_base = page_base_number;
+    uint32_t temp_page_count = pages_count;
 
-    const uint32_t rank_pages_count = 1 << rank;
+    while (temp_page_count != 0) {
+        uint32_t temp_rank = log2(temp_page_count);
 
-    if (rank_pages_count > pages_count) return bpa_push_mem_block_recurcive(first_page_number, pages_count, rank - 1);
+        if (temp_rank >= BPA_MAX_BLOCK_RANK) temp_rank = BPA_MAX_BLOCK_RANK - 1;
 
-    const uint32_t modulo = pages_count % rank_pages_count;
+        uint32_t rank_page_count = (1 << temp_rank);
 
-    while (pages_count > modulo) {
-        if (free_list_push_first(&bpa.free_list[rank], first_page_number) != TRUE) return FALSE;
+        while (temp_page_base % rank_page_count != 0) {
+            temp_rank--;
+            rank_page_count >>= 1;
+        }
 
-        bpa_set_page_bit(first_page_number, rank);
+        if (free_list_push_first(&bpa.free_area[temp_rank].free_list, temp_page_base) != TRUE) return FALSE;
 
-        first_page_number += rank_pages_count;
-        pages_count -= rank_pages_count;
+        temp_page_base += rank_page_count;
+        temp_page_count -= rank_page_count;
     }
-
-    if (modulo != 0) {
-        return bpa_push_mem_block_recurcive(first_page_number, modulo, rank - 1);
-    }
-
+    
     return TRUE;
 }
 
-static inline bool_t bpa_push_free_mem_block(const uint32_t first_page_number, const uint32_t pages_count) {
-    uint16_t rank = BPA_MAX_BLOCK_RANK - 1;
-    uint32_t rank_pages_count = 1 << rank;
+void bpa_log_free_lists(const ListHead* list) {
+    const VMPageList* temp_entry = (void*)list->next;
 
-    while (rank > 0 && rank_pages_count > pages_count) {
-        rank--;
-        rank_pages_count >>= 1;
+    kernel_msg("Free list: %x: ", list);
+
+    while (temp_entry != NULL) {
+        Color temp_color = kernel_logger_get_color();
+        kernel_logger_set_color(COLOR_LYELLOW);
+        raw_print_number((uint64_t)temp_entry->phys_page_base * PAGE_BYTE_SIZE, FALSE, 16);
+        kernel_logger_set_color_struct(temp_color);
+        raw_puts(" -> ");
+
+        temp_entry = temp_entry->next;
     }
 
-    return bpa_push_mem_block_recurcive(first_page_number, pages_count, rank);
+    raw_putc('\n');
 }
 
-void bpa_log_free_lists() {
-    for (int i = 0; i < BPA_MAX_BLOCK_RANK; ++i) {
-        VMPageList* temp_entry = (VMPageList*)(void*)bpa.free_list[i].next;
+static bool_t init_bpa_free_lists(const VMMemoryMap* memory_map, uint8_t* const bitmap_pool, const uint32_t pool_size) {
+    uint8_t* bitmap = bitmap_pool;
+    uint32_t curr_offset = pool_size;
 
-        kernel_msg("Free list[%i]: ", i);
-
-        while (temp_entry != NULL) {
-            Color temp_color = kernel_logger_get_color();
-            kernel_logger_set_color(COLOR_LYELLOW);
-            raw_print_number((uint64_t)temp_entry->phys_page_base * PAGE_BYTE_SIZE, FALSE, 16);
-            kernel_logger_set_color_struct(temp_color);
-            raw_puts(" -> ");
-
-            temp_entry = temp_entry->next;
-        }
-
-        raw_putc('\n');
-    }
-}
-
-static bool_t init_bpa_free_lists(const VMMemoryMap* memory_map) {
     for (uint32_t i = 0; i < BPA_MAX_BLOCK_RANK; ++i) {
-        bpa.free_list[i].next = NULL;
-        bpa.free_list[i].prev = NULL;
+        bpa.free_area[i].free_list.next = NULL;
+        bpa.free_area[i].free_list.prev = NULL;
+        bpa.free_area[i].bitmap = bitmap;
+
+        if (curr_offset > 1) curr_offset >>= 1;
+
+        bitmap += curr_offset;
     }
 
     for (uint32_t i = 0; i < memory_map->count; ++i) {
         if (memory_map->entries[i].type == VMMEM_TYPE_FREE) {
-            const VMMemoryMapEntry* entry = &memory_map->entries[i];
+            const VMMemoryMapEntry* entry = memory_map->entries + i;
 
             if (bpa_push_free_mem_block(entry->compact_phys_address, entry->pages_count) != TRUE) {
                 return FALSE;
             }
         }
     }
+
+    memset(bitmap_pool, pool_size, 0xFF);
 
     return TRUE;
 }
@@ -211,16 +220,18 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
 
     // Search for free memory pool for free list bma
     const uint64_t total_mem_size = get_total_mem_size(memory_map);
+    const uint64_t max_phys_address = get_max_phys_addr(memory_map);
 
 #ifdef KDEBUG
-    kernel_warn("Total memory size: %u KB; %u MB; %u GB\n",
+    kernel_warn("Total memory size: %u KB; %u MB; %u GB Max phys address: %x\n",
         div_with_roundup(total_mem_size, KB_SIZE),
         div_with_roundup(total_mem_size, MB_SIZE),
-        total_mem_size / GB_SIZE);
+        total_mem_size / GB_SIZE,
+        max_phys_address);
 #endif
     const uint64_t requited_nodes_count = ((total_mem_size / MB_SIZE) * NODES_PER_MB_COVERAGE);
     const uint64_t required_oma_mem_pool_size = requited_nodes_count * sizeof(VMPageList) / 4;
-    const uint64_t required_bitmap_pool_size = div_with_roundup(requited_nodes_count, 8);
+    const uint64_t required_bitmap_pool_size = div_with_roundup(max_phys_address / PAGE_BYTE_SIZE, BYTE_SIZE * 2) * 2;
     const uint64_t required_mem_pool_pages_count =
         div_with_roundup(required_oma_mem_pool_size, PAGE_BYTE_SIZE) +
         div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE);
@@ -238,8 +249,8 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
     kernel_warn("BPA: Memory block allocated: %x\n", (uint64_t)bpa_memory_block->compact_phys_address * PAGE_BYTE_SIZE);
 
     oma_phys_page.phys_page_base = bpa_memory_block->compact_phys_address;
-    oma_page_frame.phys_pages.next = (ListHead*)(void*)&oma_phys_page;
-    oma_page_frame.phys_pages.prev = (ListHead*)(void*)&oma_phys_page;
+    oma_page_frame.phys_pages.next = (void*)&oma_phys_page;
+    oma_page_frame.phys_pages.prev = (void*)&oma_phys_page;
     oma_page_frame.count = bpa_memory_block->pages_count - div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE);
     oma_page_frame.virt_address = vm_heap_reserve(vm_get_kernel_heap(), bpa_memory_block->pages_count);
     oma_page_frame.flags = (VMMAP_FORCE | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES);
@@ -262,8 +273,10 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
         return KERNEL_ERROR;
     }
 
-    bpa.bitmap = (uint8_t*)(oma_page_frame.virt_address +
-        (div_with_roundup(required_oma_mem_pool_size, PAGE_BYTE_SIZE) * PAGE_BYTE_SIZE));
+    const uint8_t* bitmap_pool = (uint8_t*)(
+        oma_page_frame.virt_address +
+        (div_with_roundup(required_oma_mem_pool_size, PAGE_BYTE_SIZE) * PAGE_BYTE_SIZE)
+    );
 
 #ifdef KDEBUG
     kernel_warn("BPA: Memory pool: %x (%x)\n",
@@ -273,10 +286,14 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
     kernel_warn("BPA: Free list capacity: %u (was requested: %u)\n",
         free_list_oma.bucket_capacity,
         required_oma_mem_pool_size / sizeof(VMPageList));
-    kernel_warn("BPA: Bitmap: %x\n", (uint64_t)bpa.bitmap);
+    kernel_warn("BPA: Bitmap: %x\n", (uint64_t)bitmap_pool);
 #endif
 
-    if (init_bpa_free_lists(memory_map) == FALSE) {
+    if (init_bpa_free_lists(
+            memory_map, bitmap_pool,
+            div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE)
+        ) == FALSE
+    ) {
         error_str = "BPA: Failed to fill free lists according to memory map";
         return KERNEL_ERROR;
     }
@@ -292,15 +309,14 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
     uint64_t result = INVALID_ADDRESS;
 
     // Get first entry
-    VMPageList* free_entry = (VMPageList*)(void*)bpa.free_list[rank].next;
+    VMPageList* free_entry = (void*)bpa.free_area[rank].free_list.next;
 
     if (free_entry == NULL) {
         uint8_t temp_rank = rank + 1;
 
-        while (temp_rank < BPA_MAX_BLOCK_RANK)
-        {
-            if (bpa.free_list[temp_rank].next != NULL) {
-                free_entry = (VMPageList*)(void*)bpa.free_list[temp_rank].next;
+        while (temp_rank < BPA_MAX_BLOCK_RANK) {
+            if (bpa.free_area[temp_rank].free_list.next != NULL) {
+                free_entry = (void*)bpa.free_area[temp_rank].free_list.next;
                 break;
             }
 
@@ -317,14 +333,14 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
 
         // Divide first large entry
         {
-            if (free_list_push_first(&bpa.free_list[temp_rank - 1], free_entry->phys_page_base) != TRUE) {
+            if (free_list_push_first(&bpa.free_area[temp_rank - 1].free_list, free_entry->phys_page_base) != TRUE) {
                 spin_release(&bpa.lock);
                 return result;
             }
 
             bpa_set_page_bit(free_entry->phys_page_base, temp_rank - 1);
             bpa_inverse_page_bit(free_entry->phys_page_base, temp_rank);
-            free_list_remove_first(&bpa.free_list[temp_rank]);
+            free_list_remove_first(&bpa.free_area[temp_rank].free_list);
 
             temp_rank--;
             temp_pages_count >>= 1;
@@ -332,7 +348,7 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
 
         // Divide large entry on smaller
         while (temp_rank > rank) {
-            if (free_list_push_first(&bpa.free_list[temp_rank - 1], temp_page_base) != TRUE) {
+            if (free_list_push_first(&bpa.free_area[temp_rank - 1].free_list, temp_page_base) != TRUE) {
                 spin_release(&bpa.lock);
                 return result;
             }
@@ -346,14 +362,24 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
 
         spin_release(&bpa.lock);
 
-        return (uint64_t)temp_page_base * PAGE_BYTE_SIZE;
+        result = (uint64_t)temp_page_base * PAGE_BYTE_SIZE;
+
+        // DEBUG
+        //raw_puts("alloc: "); raw_print_number(result, 0, 16); raw_puts(" ("); raw_print_number(rank,0,10); raw_puts(")\n");
+        //raw_print_number(bpa_get_page_bit(temp_page_base, rank), FALSE, 2); raw_putc('\n');
+
+        return result;
     }
     
     result = (uint64_t)free_entry->phys_page_base * PAGE_BYTE_SIZE;
 
     bpa_inverse_page_bit(free_entry->phys_page_base, rank);
-    free_list_remove_first(&bpa.free_list[rank]);
+    free_list_remove_first(&bpa.free_area[rank].free_list);
     spin_release(&bpa.lock);
+
+    // DEBUG
+    //raw_puts("alloc: "); raw_print_number(result, 0, 16); raw_puts(" ("); raw_print_number(rank,0,10); raw_puts(") ");
+    //raw_print_number(bpa_get_page_bit(free_entry->phys_page_base, rank), FALSE, 2); raw_putc('\n');
 
     return result;
 }
@@ -363,18 +389,22 @@ void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
 
     uint32_t page_base = (uint32_t)(phys_page_address / PAGE_BYTE_SIZE);
 
+    // DEBUG
+    //raw_puts("free: "); raw_print_number(phys_page_address, 0, 16); raw_puts(" ("); raw_print_number(rank,0,10); raw_puts(") ");
+    //raw_print_number(bpa_get_page_bit(page_base, rank), FALSE, 2); raw_putc('\n');
+
     spin_lock(&bpa.lock);
 
     // Check if buddy is used
     if (bpa_get_page_bit(page_base, rank) == 0 || rank == (BPA_MAX_BLOCK_RANK - 1)) {
-        if (free_list_push_first(&bpa.free_list[rank], page_base) != TRUE) {
+        if (free_list_push_first(&bpa.free_area[rank].free_list, page_base) != TRUE) {
             // KERNEL PANIC
             kernel_error("BPA: Failed to insert new entry while freeing pages: %x\n", phys_page_address);
             spin_release(&bpa.lock);
             return;
         }
 
-        bpa_inverse_page_bit(page_base, rank);
+        bpa_set_page_bit(page_base, rank);
         spin_release(&bpa.lock);
 
         return;
@@ -397,13 +427,16 @@ void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
             combine_page_base = buddy_page_base;
         }
 
-        free_list_find_and_remove(&bpa.free_list[temp_rank], buddy_page_base);
+        // DEBUG
+        //raw_print_number(bpa_get_page_bit(page_base, temp_rank), FALSE, 2); raw_putc('\n');
+        bpa_clear_page_bit(buddy_page_base, temp_rank);
+        free_list_find_and_remove(&bpa.free_area[temp_rank].free_list, buddy_page_base);
 
         page_base = combine_page_base;
         temp_rank++;
     }
 
-    if (free_list_push_first(&bpa.free_list[temp_rank], page_base) != TRUE) {
+    if (free_list_push_first(&bpa.free_area[temp_rank].free_list, page_base) != TRUE) {
         // KERNEL PANIC
         kernel_error("BPA: Failed to insert new entry while freeing pages: %x\n", phys_page_address);
         spin_release(&bpa.lock);
@@ -412,4 +445,7 @@ void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
 
     bpa_set_page_bit(page_base, temp_rank);
     spin_release(&bpa.lock);
+
+    // DEBUG
+    //raw_print_number(bpa_get_page_bit(page_base, rank), FALSE, 2); raw_putc('\n');
 }
