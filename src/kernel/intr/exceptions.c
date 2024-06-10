@@ -51,6 +51,27 @@ ATTR_INTRRUPT void intr_de_handler(InterruptFrame64* frame) {
     _kernel_break();
 }
 
+// #DB [1] Debug exception
+ATTR_INTRRUPT void intr_db_handler(InterruptFrame64* frame) {
+    kernel_error("#DB Debug exception\n");
+    log_intr_frame(frame);
+    _kernel_break();
+}
+
+// #NMI [2] NMI
+ATTR_INTRRUPT void intr_nmi_handler(InterruptFrame64* frame) {
+    kernel_error("#NMI Non-maskable interrupt\n");
+    log_intr_frame(frame);
+    _kernel_break();
+}
+
+// #BP [3] Breakpoint exception
+ATTR_INTRRUPT void intr_bp_handler(InterruptFrame64* frame) {
+    kernel_error("#BP Breakpoint exception\n");
+    log_intr_frame(frame);
+    _kernel_break();
+}
+
 // #OF [4] Overflow
 ATTR_INTRRUPT void intr_of_handler(InterruptFrame64* frame) {
     kernel_error("#OF Overflow\n");
@@ -168,6 +189,9 @@ ATTR_INTRRUPT void intr_mc_handler(InterruptFrame64* frame) {
 
 Status init_intr_exceptions() {
     intr_set_idt_descriptor(DE_ISR, (void*)&intr_de_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_descriptor(DB_ISR, (void*)&intr_db_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_descriptor(NMI_ISR, (void*)&intr_nmi_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_descriptor(BP_ISR, (void*)&intr_bp_handler, TRAP_GATE_FLAGS);
     intr_set_idt_descriptor(OF_ISR, (void*)&intr_of_handler, TRAP_GATE_FLAGS);
     intr_set_idt_descriptor(BR_ISR, (void*)&intr_br_handler, TRAP_GATE_FLAGS);
     intr_set_idt_descriptor(UD_ISR, (void*)&intr_ud_handler, TRAP_GATE_FLAGS);
