@@ -291,7 +291,7 @@ bool_t load_init_proc() {
 
     task->thread.stack_ptr = (uint64_t*)(
         task->thread.stack.virt_address +
-        ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE)
+        ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
     );
 
     uint32_t env_count = 0;
@@ -930,10 +930,15 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
         kassert(FALSE && "Not implemented");
     }
     else if (is_elf_valid_and_supported((ELF*)file_buffer)) {
+        const uint64_t argc_val = (argv == NULL ? 0 : count_strings(argv));
+        const uint64_t envc_val = (envp == NULL ? 0 : count_strings(envp));
+
+        if (argv) argv = copy_strings(argv, argc_val);
+        if (envp) envp = copy_strings(envp, envc_val);
+
         ELF* elf = (ELF*)file_buffer;
 
         proc_clear_segments(task->process);
-        proc_close_files(task->process);
 
         if (elf_load_prog(elf, task->process) == FALSE) {
             proc_delete(task->process);
@@ -946,13 +951,8 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
 
         kfree(file_buffer);
 
-        const uint64_t argc_val = (argv == NULL ? 0 : count_strings(argv));
-        const uint64_t envc_val = (envp == NULL ? 0 : count_strings(envp));
-
-        if (argv) argv = copy_strings(argv, argc_val);
-        if (envp) envp = copy_strings(envp, envc_val);
-
-        proc_dealloc_vm_pages(proc_local->current_task->process);
+        proc_close_files(task->process);
+        proc_dealloc_vm_pages(task->process);
 
         const VMMemoryBlockNode* top_segment =
             (VMMemoryBlockNode*)task->process->addr_space.segments.prev;
