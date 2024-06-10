@@ -164,6 +164,20 @@ static inline bool_t bpa_push_free_mem_block(const uint32_t page_base_number, co
     return TRUE;
 }
 
+bool_t bpa_test_free_lists() {
+    for (uint32_t i = 0; i < BPA_MAX_BLOCK_RANK - 1; ++i) {
+        const VMPageList* entry = (void*)bpa.free_area[i].free_list.next;
+
+        while (entry != NULL) {
+            kassert(bpa_get_page_bit(entry->phys_page_base, i) != 0);
+
+            entry = entry->next;
+        }
+    }
+
+    return TRUE;
+}
+
 void bpa_log_free_lists(const ListHead* list) {
     const VMPageList* temp_entry = (void*)list->next;
 
@@ -208,6 +222,10 @@ static bool_t init_bpa_free_lists(const VMMemoryMap* memory_map, uint8_t* const 
 
     memset(bitmap_pool, pool_size, 0xFF);
 
+#ifdef KDEBUG
+    kassert(bpa_test_free_lists() == TRUE);
+#endif
+
     return TRUE;
 }
 
@@ -223,7 +241,7 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
     const uint64_t max_phys_address = get_max_phys_addr(memory_map);
 
 #ifdef KDEBUG
-    kernel_warn("Total memory size: %u KB; %u MB; %u GB Max phys address: %x\n",
+    kernel_warn("Total memory size: %u KB; %u MB; %u GB: Max phys address: %x\n",
         div_with_roundup(total_mem_size, KB_SIZE),
         div_with_roundup(total_mem_size, MB_SIZE),
         total_mem_size / GB_SIZE,
@@ -291,7 +309,7 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
 
     if (init_bpa_free_lists(
             memory_map, bitmap_pool,
-            div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE)
+            div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE) * PAGE_BYTE_SIZE
         ) == FALSE
     ) {
         error_str = "BPA: Failed to fill free lists according to memory map";
@@ -329,44 +347,68 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
         }
 
         uint32_t temp_pages_count = (1 << (temp_rank - 1));
-        uint32_t temp_page_base = free_entry->phys_page_base + temp_pages_count;
+        uint32_t temp_page_base = free_entry->phys_page_base;
 
-        // Divide first large entry
-        {
-            if (free_list_push_first(&bpa.free_area[temp_rank - 1].free_list, free_entry->phys_page_base) != TRUE) {
-                spin_release(&bpa.lock);
-                return result;
-            }
+        free_list_remove_first(&bpa.free_area[temp_rank].free_list);
+        bpa_clear_page_bit(temp_page_base, temp_rank);
 
-            bpa_set_page_bit(free_entry->phys_page_base, temp_rank - 1);
-            bpa_inverse_page_bit(free_entry->phys_page_base, temp_rank);
-            free_list_remove_first(&bpa.free_area[temp_rank].free_list);
-
-            temp_rank--;
-            temp_pages_count >>= 1;
+        if (free_list_push_first(&bpa.free_area[temp_rank - 1].free_list, temp_page_base) != TRUE) {
+            spin_release(&bpa.lock);
+            return result;
         }
+        bpa_set_page_bit(temp_page_base, temp_rank - 1);
 
-        // Divide large entry on smaller
+        temp_rank--;
+        temp_page_base += temp_pages_count;
+
         while (temp_rank > rank) {
-            if (free_list_push_first(&bpa.free_area[temp_rank - 1].free_list, temp_page_base) != TRUE) {
+            temp_rank--;
+            temp_pages_count >>= 1;
+
+            if (free_list_push_first(&bpa.free_area[temp_rank].free_list, temp_page_base) != TRUE) {
                 spin_release(&bpa.lock);
                 return result;
             }
+            bpa_set_page_bit(temp_page_base, temp_rank);
 
-            bpa_set_page_bit(temp_page_base, temp_rank - 1);
-
-            temp_rank--;
             temp_page_base += temp_pages_count;
-            temp_pages_count >>= 1;
         }
+
+//        uint32_t temp_pages_count = (1 << (temp_rank - 1));
+//        uint32_t temp_page_base = free_entry->phys_page_base + temp_pages_count;
+//
+//        // Divide first large entry
+//        {
+//            if (free_list_push_first(&bpa.free_area[temp_rank - 1].free_list, free_entry->phys_page_base) != TRUE) {
+//                spin_release(&bpa.lock);
+//                return result;
+//            }
+//
+//            bpa_set_page_bit(free_entry->phys_page_base, temp_rank - 1);
+//            bpa_inverse_page_bit(free_entry->phys_page_base, temp_rank);
+//            free_list_remove_first(&bpa.free_area[temp_rank].free_list);
+//
+//            temp_rank--;
+//            temp_pages_count >>= 1;
+//        }
+//
+//        // Divide large entry on smaller
+//        while (temp_rank > rank) {
+//            if (free_list_push_first(&bpa.free_area[temp_rank - 1].free_list, temp_page_base) != TRUE) {
+//                spin_release(&bpa.lock);
+//                return result;
+//            }
+//
+//            bpa_set_page_bit(temp_page_base, temp_rank - 1);
+//
+//            temp_rank--;
+//            temp_page_base += temp_pages_count;
+//            temp_pages_count >>= 1;
+//        }
 
         spin_release(&bpa.lock);
 
         result = (uint64_t)temp_page_base * PAGE_BYTE_SIZE;
-
-        // DEBUG
-        //raw_puts("alloc: "); raw_print_number(result, 0, 16); raw_puts(" ("); raw_print_number(rank,0,10); raw_puts(")\n");
-        //raw_print_number(bpa_get_page_bit(temp_page_base, rank), FALSE, 2); raw_putc('\n');
 
         return result;
     }
@@ -377,10 +419,6 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
     free_list_remove_first(&bpa.free_area[rank].free_list);
     spin_release(&bpa.lock);
 
-    // DEBUG
-    //raw_puts("alloc: "); raw_print_number(result, 0, 16); raw_puts(" ("); raw_print_number(rank,0,10); raw_puts(") ");
-    //raw_print_number(bpa_get_page_bit(free_entry->phys_page_base, rank), FALSE, 2); raw_putc('\n');
-
     return result;
 }
 
@@ -388,10 +426,6 @@ void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
     kassert((phys_page_address & 0xFFF) == 0 && rank < BPA_MAX_BLOCK_RANK);
 
     uint32_t page_base = (uint32_t)(phys_page_address / PAGE_BYTE_SIZE);
-
-    // DEBUG
-    //raw_puts("free: "); raw_print_number(phys_page_address, 0, 16); raw_puts(" ("); raw_print_number(rank,0,10); raw_puts(") ");
-    //raw_print_number(bpa_get_page_bit(page_base, rank), FALSE, 2); raw_putc('\n');
 
     spin_lock(&bpa.lock);
 
@@ -427,8 +461,6 @@ void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
             combine_page_base = buddy_page_base;
         }
 
-        // DEBUG
-        //raw_print_number(bpa_get_page_bit(page_base, temp_rank), FALSE, 2); raw_putc('\n');
         bpa_clear_page_bit(buddy_page_base, temp_rank);
         free_list_find_and_remove(&bpa.free_area[temp_rank].free_list, buddy_page_base);
 
@@ -445,7 +477,4 @@ void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
 
     bpa_set_page_bit(page_base, temp_rank);
     spin_release(&bpa.lock);
-
-    // DEBUG
-    //raw_print_number(bpa_get_page_bit(page_base, rank), FALSE, 2); raw_putc('\n');
 }
