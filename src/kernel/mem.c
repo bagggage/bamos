@@ -30,6 +30,16 @@ typedef struct UniversalMemoryAllocator {
 
 static UniversalMemoryAllocator uma;
 
+#ifdef KDEBUG
+void* malloc(const size_t size) {
+    return kmalloc(size);
+}
+
+void free(void* mem_block) {
+    kfree(mem_block);
+}
+#endif
+
 void* kmalloc(const size_t size) {
     kassert(size > 0 && size <= (1 << UMA_MAX_RANK));
 
