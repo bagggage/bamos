@@ -66,6 +66,8 @@ static inline void tsk_push(Task* const task) {
         }
     }
 
+    kassert(scheduler != NULL);
+
     spin_lock(&scheduler->lock);
 
     task->next = NULL;
@@ -129,6 +131,8 @@ __attribute__((noreturn, naked)) void tsk_launch(const Task* task) {
     register uint64_t r15 asm("%r15") = task->thread.exec_state.r15;
 
     asm volatile(
+        "pushfq \n"
+        "popq %%r11 \n"
         "mov %[instr_ptr],%%rcx \n"
         "mov %[stack_ptr],%%rsp \n"
         "mov %[base_ptr],%%rbp \n"
@@ -228,7 +232,7 @@ void tsk_start_scheduler() {
     //        task->thread.stack_ptr[2]
     //    );
     //}
-    if (proc_local->idx == 0) kernel_logger_clear();
+    //if (proc_local->idx == 0) kernel_logger_clear();
 
     tsk_launch(task);
 }
