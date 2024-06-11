@@ -2,6 +2,8 @@
 
 #include "definitions.h"
 
+#include "cpu/spinlock.h"
+
 #include "vm/object_mem_alloc.h"
 
 #include "utils/list.h"
@@ -43,6 +45,8 @@ typedef struct Device {
 typedef struct DevicePool {
     ListHead nodes;
     size_t size;
+
+    Spinlock lock;
 } DevicePool;
 
 #define DEV_FUNC(device_name, ret_t, func_name, ...) \

@@ -3,11 +3,22 @@
 #include "assert.h"
 #include "logger.h"
 #include "mem.h"
+#include "xhci.h"
+
+#include "dev/blk/nvme.h"
 
 #include "cpu/io.h"
 
 #define PCI_INVALID_VENDOR_ID 0xFFFF
 #define PCI_BAR_STEP_OFFSET 0x4
+
+typedef enum PciDevInitStatus {
+    PCI_DEV_DRIVER_FAILED = -1,
+    PCI_DEV_NO_DRIVER = 0,
+    PCI_DEV_SUCCESS = 1
+} PciDevInitStatus;
+
+static ObjectMemoryAllocator* pci_dev_oma = NULL;
 
 uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset) {
     const uint32_t address = (bus << 16) | (dev << 11) | (func << 8) | (offset & 0xFC) | 0x80000000;
@@ -63,12 +74,69 @@ static uint64_t pci_read_bar(const uint8_t bus, const uint8_t dev, const uint8_t
     return 0;
 }
 
+static void pci_read_config_space(PciDevice* const pci_dev) {
+    const uint32_t bus = pci_dev->bus;
+    const uint32_t dev = pci_dev->dev;
+    const uint32_t func = pci_dev->func;
+
+    pci_dev->config.device_id = pci_config_readw(bus, dev, func, 2);
+    pci_dev->config.prog_if = pci_config_readb(bus, dev, func, 0x9);
+    pci_dev->config.subclass = pci_config_readb(bus, dev, func, 0xA);
+    pci_dev->config.class_code = (pci_config_readw(bus, dev, func, 0xB) >> 8);  // for no reason readbyte on 0xB we always get 0xFF
+    pci_dev->config.bar0 = pci_read_bar(bus, dev, func, PCI_BAR0_OFFSET);
+    pci_dev->config.bar1 = pci_read_bar(bus, dev, func, PCI_BAR1_OFFSET);
+    pci_dev->config.bar2 = pci_read_bar(bus, dev, func, PCI_BAR2_OFFSET);
+    pci_dev->config.bar3 = pci_read_bar(bus, dev, func, PCI_BAR3_OFFSET);
+    pci_dev->config.bar4 = pci_read_bar(bus, dev, func, PCI_BAR4_OFFSET);
+    pci_dev->config.bar5 = pci_read_bar(bus, dev, func, PCI_BAR5_OFFSET);
+}
+
+static void pci_bus_push(PciBus* const bus, PciDevice* const dev) {
+    dev->next = NULL;
+
+    if (bus->nodes.next == NULL) {
+        bus->nodes.next = (void*)dev;
+        bus->nodes.prev = (void*)dev;
+    }
+    else {
+        dev->prev = (void*)bus->nodes.prev;
+
+        bus->nodes.prev->next = (void*)dev;
+        bus->nodes.prev = (void*)dev;
+    }
+
+    bus->size++;
+}
+
+static PciDevInitStatus pci_find_and_load_driver(PciDevice* const pci_device) {
+    Status status = KERNEL_OK;
+
+    switch (pci_device->config.class_code)
+    {
+    case PCI_STORAGE_CONTROLLER:
+        if (is_nvme_controller(pci_device)) status = init_nvme_controller(pci_device);
+        break;
+    case PCI_SERIAL_BUS_CONTROLLER:
+        if (is_xhci_controller(pci_device)) status = init_xhci_controller(pci_device);
+        break;
+    default:
+        return PCI_DEV_NO_DRIVER;
+        break;
+    }
+
+    return (status == KERNEL_OK) ? PCI_DEV_SUCCESS : PCI_DEV_DRIVER_FAILED;
+}
+
 Status init_pci_bus(PciBus* const pci_bus) {
-    if (pci_bus == NULL) return KERNEL_INVALID_ARGS;
+    kassert(pci_bus != NULL);
 
     pci_bus->nodes.next = NULL;
     pci_bus->nodes.prev = NULL;
     pci_bus->size = 0;
+
+    pci_dev_oma = _oma_new(sizeof(PciDevice), 1);
+
+    if (pci_dev_oma == NULL) return KERNEL_ERROR;
 
     for (uint8_t bus = 0; bus < 4; ++bus) {
         for (uint8_t dev = 0; dev < 32; ++dev) {
@@ -77,7 +145,7 @@ Status init_pci_bus(PciBus* const pci_bus) {
 
                 if (vendor_id == 0xFFFF || vendor_id == 0) continue;
 
-                PciDevice* current_dev = (PciDevice*)kmalloc(sizeof(PciDevice));
+                PciDevice* current_dev = (PciDevice*)oma_alloc(pci_dev_oma);
 
                 if (current_dev == NULL) return KERNEL_ERROR;
 
@@ -85,30 +153,17 @@ Status init_pci_bus(PciBus* const pci_bus) {
                 current_dev->dev = dev;
                 current_dev->func = func;
                 current_dev->config.vendor_id = vendor_id;
-                current_dev->config.device_id = pci_config_readw(bus, dev, func, 2);
-                current_dev->config.prog_if = pci_config_readb(bus, dev, func, 0x9);
-                current_dev->config.subclass = pci_config_readb(bus, dev, func, 0xA);
-                current_dev->config.class_code = (pci_config_readw(bus, dev, func, 0xB) >> 8);  // for no reason readbyte on 0xB we always get 0xFF
-                current_dev->config.bar0 = pci_read_bar(bus, dev, func, PCI_BAR0_OFFSET);
-                current_dev->config.bar1 = pci_read_bar(bus, dev, func, PCI_BAR1_OFFSET);
-                current_dev->config.bar2 = pci_read_bar(bus, dev, func, PCI_BAR2_OFFSET);
-                current_dev->config.bar3 = pci_read_bar(bus, dev, func, PCI_BAR3_OFFSET);
-                current_dev->config.bar4 = pci_read_bar(bus, dev, func, PCI_BAR4_OFFSET);
-                current_dev->config.bar5 = pci_read_bar(bus, dev, func, PCI_BAR5_OFFSET);
-                current_dev->next = NULL;
 
-                if (pci_bus->nodes.next == NULL) {
-                    pci_bus->nodes.next = (void*)current_dev;
-                    pci_bus->nodes.prev = (void*)current_dev;
+                pci_read_config_space(current_dev);
+                pci_bus_push(pci_bus, current_dev);
+
+                const PciDevInitStatus status = pci_find_and_load_driver(current_dev);
+
+                if (status == PCI_DEV_DRIVER_FAILED) {
+                    kernel_warn("Failed to load driver for device: PCI %u:%u.%u: %s\n",
+                        bus, dev, func, error_str
+                    );
                 }
-                else {
-                    current_dev->prev = (PciDevice*)pci_bus->nodes.prev;
-
-                    pci_bus->nodes.prev->next = (void*)current_dev;
-                    pci_bus->nodes.prev = (void*)current_dev;
-                }
-
-                pci_bus->size++;
             }
         }
     }
@@ -116,8 +171,13 @@ Status init_pci_bus(PciBus* const pci_bus) {
     return KERNEL_OK;
 }
 
-bool_t is_pci_bus(const Device* const device) {
-    if (device == NULL) return FALSE;
-    
-    return device->type == DEV_PCI_BUS;
+void pci_log_device(const PciDevice* pci_dev) {
+    kernel_msg("PCI: %u:%u.%u: vendor: %x: device: %x: class: %x: sub: %x: interface: %x\n",
+        pci_dev->bus, pci_dev->dev, pci_dev->func,
+        pci_dev->config.vendor_id,
+        pci_dev->config.device_id,
+        pci_dev->config.class_code,
+        pci_dev->config.subclass,
+        pci_dev->config.prog_if
+    );
 }

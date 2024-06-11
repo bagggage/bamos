@@ -19,15 +19,10 @@ static ObjectMemoryAllocator* dentry_oma = NULL;
 Status init_vfs() {
     UNUSED(home_dentry);
 
-    if (find_gpt_tables() != KERNEL_OK) {
-        error_str = "Not found any GPT table";
-        return KERNEL_ERROR;
-    }
-
     GptPartitionNode* partition_node = gpt_get_first_node();
 
     if (partition_node == NULL) {
-        error_str = "There is no any partition detected on disk";
+        error_str = "There is no any partition detected on disks";
         return KERNEL_ERROR;
     }
 
@@ -56,6 +51,8 @@ Status init_vfs() {
     }
 
     if (udev_init() == KERNEL_ERROR) return KERNEL_ERROR;
+
+    kernel_warn("VFS initialized\n");
 
     return KERNEL_OK;
 }

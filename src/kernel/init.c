@@ -34,8 +34,6 @@
 #include "proc/local.h"
 #include "proc/task_scheduler.h"
 
-#include "rawtsk/task.h"
-
 #include "vm/vm.h"
 
 extern BOOTBOOT bootboot;
@@ -132,15 +130,10 @@ Status init_pci() {
     return KERNEL_OK;
 }
 
-Status init_storage() {
-    if (init_storage_devices() != KERNEL_OK) return KERNEL_ERROR;
-    
-    return KERNEL_OK;
-}
-
 Status init_user_space() {
     const uint32_t cpu_idx = g_proc_local.idx;
     const uint64_t proc_local_ptr = (uint64_t)_proc_get_local_ptr(cpu_idx);
+    //kassert(proc_local_ptr != NULL);
 
     EFER efer = cpu_get_efer();
 
@@ -202,14 +195,9 @@ Status init_kernel() {
 
     spin_release(&cpus_init_lock);
 
+    if (init_usb()          != KERNEL_OK) return KERNEL_ERROR;
     if (init_pci()          != KERNEL_OK) return KERNEL_ERROR;
-    if (init_usb()          != KERNEL_OK) {
-        kernel_error("USB initialization failed: %s\n", error_str);
-    }
-    if (init_storage()      != KERNEL_OK) {
-        kernel_error("Storage devices initialization failed: %s\n", error_str);
-    }
- 
+
     init_syscalls();
 
     if (init_task_scheduler() != KERNEL_OK) return KERNEL_ERROR;
@@ -224,7 +212,7 @@ Status init_kernel() {
 
         return KERNEL_ERROR;
     }
-    
+
     return KERNEL_OK;
 }
 
@@ -237,7 +225,7 @@ Status init_io_devices() {
 
     if (init_bootboot_display(display) != KERNEL_OK) return KERNEL_ERROR;
     if (init_ps2_keyboard(keyboard) != KERNEL_OK) {
-        return KERNEL_ERROR;
+        kernel_warn("Failed to init PS/2 keyboard: %s\n", error_str);
     }
 
     return KERNEL_OK;

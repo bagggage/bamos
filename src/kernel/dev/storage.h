@@ -24,7 +24,3 @@ typedef struct StorageDevice {
     Device common; \
     StorageInterface interface; \
     size_t lba_size
-
-bool_t is_storage_device(const Device* const device);
-
-Status init_storage_devices();

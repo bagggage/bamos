@@ -84,27 +84,27 @@ typedef struct NvmeNamespaceInfo {
 } ATTR_PACKED NvmeNamespaceInfo;
 
 typedef struct NvmeController {
-    NvmeBar0* bar0;
-    NvmeSubmissionQueueEntry* asq;
-    NvmeComplQueueEntry* acq;
-    NvmeSubmissionQueueEntry* iosq;
-    NvmeComplQueueEntry* iocq;
+    volatile NvmeBar0* bar0;
+    volatile NvmeSubmissionQueueEntry* asq;
+    volatile NvmeComplQueueEntry* acq;
+    volatile NvmeSubmissionQueueEntry* iosq;
+    volatile NvmeComplQueueEntry* iocq;
     uint64_t page_size;
     PciDevice* pci_device;
 } NvmeController;
 
 typedef struct NvmeDevice {
     STORAGE_DEVICE_STRUCT_IMPL;
-    
-    NvmeController controller;
+
+    NvmeController* controller;
     NvmeNamespaceInfo* namespace_info;
     uint32_t nsid;
 } NvmeDevice;
 
-bool_t is_nvme(const uint8_t class_code, const uint8_t subclass);
+bool_t is_nvme_controller(const PciDevice* const pci_device);
 
-NvmeController create_nvme_controller(const PciDevice* const pci_device);
+Status init_nvme_controller(const PciDevice* const pci_device);
 
 // Create new nvme device and push it to the storage device list 
-bool_t init_nvme_devices_for_controller(NvmeController* const nvme_controller);
+bool_t nvme_init_devices_for_controller(NvmeController* const nvme_controller);
 

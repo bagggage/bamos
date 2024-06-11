@@ -1,6 +1,5 @@
 #include "usb.h"
 
-#include "ehci.h"
 #include "logger.h"
 
 static UsbBus* usb_bus = NULL;
@@ -13,7 +12,7 @@ Status init_usb() {
         return KERNEL_ERROR;
     }
 
-    return init_ehci();
+    return KERNEL_OK;
 }
 
 void usb_bus_push(UsbDevice* const device) {

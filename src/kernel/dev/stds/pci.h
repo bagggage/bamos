@@ -105,5 +105,3 @@ uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t fu
 void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset, const uint32_t value);
 
 Status init_pci_bus(PciBus* const pci_bus);
-
-bool_t is_pci_bus(const Device* const device);
