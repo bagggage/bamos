@@ -258,7 +258,7 @@ bool_t load_init_proc() {
     vm_map_kernel(process->addr_space.page_table);
     cpu_set_pml4(process->addr_space.page_table);
 
-    if (elf_load_prog(elf, process) == FALSE) {
+    if (elf_load(elf, process) == FALSE) {
         proc_delete(process);
         tsk_delete(task);
         kfree(elf);
@@ -266,7 +266,7 @@ bool_t load_init_proc() {
         return FALSE;
     }
 
-    task->thread.instruction_ptr = elf->entry;
+    task->thread.instruction_ptr = elf->entry + USER_SPACE_ADDR_BEGIN;
 
     kfree(elf);
 
@@ -312,6 +312,8 @@ bool_t load_init_proc() {
 
     task->process = process;
     init_proc = process;
+
+    kernel_msg("Init process starting...\n");
 
     tsk_awake(task);
 
@@ -940,14 +942,14 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
 
         proc_clear_segments(task->process);
 
-        if (elf_load_prog(elf, task->process) == FALSE) {
+        if (elf_load(elf, task->process) == FALSE) {
             proc_delete(task->process);
             tsk_extract(task);
             kernel_error("Failed to load process from ELF file\n");
             _kernel_break();
         }
         
-        task->thread.instruction_ptr = elf->entry;
+        task->thread.instruction_ptr = elf->entry + USER_SPACE_ADDR_BEGIN;
 
         kfree(file_buffer);
 

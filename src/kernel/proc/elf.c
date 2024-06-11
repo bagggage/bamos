@@ -47,83 +47,129 @@ static inline const char* elf_lookup_string(const ELF* elf, const uint32_t offse
 }
 
 static inline bool_t is_prog_section_valid(const ElfProgramHeader* prog) {
-    return !(prog->virt_address + prog->memory_size >= KERNEL_HEAP_VIRT_ADDRESS ||
-            prog->virt_address == 0 || prog->virt_address < USER_SPACE_ADDR_BEGIN ||
+    return !(prog->virt_address + prog->memory_size + USER_SPACE_ADDR_BEGIN >= KERNEL_HEAP_VIRT_ADDRESS ||
             prog->memory_size == 0 || prog->file_size > prog->memory_size ||
             (prog->flags & (ELF_PROG_FLAGS_EXEC | ELF_PROG_FLAGS_READABLE)) == 0);
+}
+
+static VMMemoryBlockNode* elf_load_prog(const uint8_t* file_base, const ElfProgramHeader* prog, Process* const process) {
+    kassert(prog != NULL && process != NULL && prog->type == ELF_PROG_TYPE_LOAD);
+
+    //kernel_msg("Prog header type: %x\n", prog->type);
+    //kernel_msg("Prog virt address: %x\n", prog->virt_address);
+    //kernel_msg("Prog memory size: %x\n", prog->memory_size);
+    //kernel_msg("Prog file size: %x\n", prog->file_size);
+    //kernel_msg("Prog flags: %b\n", prog->flags);
+
+    if (is_prog_section_valid(prog) == FALSE) return NULL;
+
+    VMMemoryBlockNode* segment = proc_push_segment(process);
+
+    if (segment == NULL) return NULL;
+
+    segment->block.pages_count = div_with_roundup(prog->memory_size, PAGE_BYTE_SIZE);
+    segment->block.page_base = bpa_allocate_pages(
+        log2upper(segment->block.pages_count)
+    ) / PAGE_BYTE_SIZE;
+
+    if (segment->block.page_base == 0) return NULL;
+
+    segment->block.virt_address = prog->virt_address + USER_SPACE_ADDR_BEGIN;
+
+    Status result = _vm_map_phys_to_virt(
+        (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
+        segment->block.virt_address,
+        process->addr_space.page_table,
+        segment->block.pages_count,
+        VMMAP_USER_ACCESS |
+        ((prog->flags & ELF_PROG_FLAGS_EXEC) ? VMMAP_EXEC : 0) |
+        ((prog->flags & ELF_PROG_FLAGS_WRITEABLE) ? VMMAP_WRITE : 0)
+    );
+
+    if (result != KERNEL_OK) {
+        bpa_free_pages(
+            (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
+            log2upper(segment->block.pages_count)
+        );
+        return NULL;
+    }
+
+    const uint8_t* segment_ptr = file_base + prog->offset;
+
+    memcpy((const void*)segment_ptr, (void*)segment->block.virt_address, prog->memory_size);
+
+    if (prog->memory_size > prog->file_size) {
+        memset(
+            (void*)(segment->block.virt_address + prog->file_size),
+            prog->memory_size - prog->file_size,
+            0
+        );
+    }
+
+    return segment;
 }
 
 static bool_t elf_load_exec(const ELF* elf, Process* const process) {
     kassert(elf->type == ELF_TYPE_EXEC);
 
-    //kernel_msg("Program header entries count: %u\n", elf->prog_header_entries_count);
-
-    if (elf->prog_header_entries_count == 0) return FALSE;
-
     for (uint32_t i = 0; i < elf->prog_header_entries_count; ++i) {
         const ElfProgramHeader* prog = elf_get_prog_header(elf, i);
 
-        //kernel_msg("Prog header type: %x\n", prog->type);
-        //kernel_msg("Prog virt address: %x\n", prog->virt_address);
-        //kernel_msg("Prog memory size: %x\n", prog->memory_size);
-        //kernel_msg("Prog file size: %x\n", prog->file_size);
-        //kernel_msg("Prog flags: %b\n", prog->flags);
-
         if (prog->type != ELF_PROG_TYPE_LOAD) continue;
 
-        if (is_prog_section_valid(prog) == FALSE) {
+        if (elf_load_prog((const uint8_t*)elf, prog, process) == NULL) {
             proc_clear_segments(process);
             return FALSE;
         }
+    }
 
-        VMMemoryBlockNode* segment = proc_push_segment(process);
+    return TRUE;
+}
 
-        if (segment == NULL) {
-            proc_clear_segments(process);
-            return FALSE;
+static bool_t elf_load_dyn_section(const ElfDynamicEntry* dyn, Process* const process) {
+    while (dyn->tag != ELF_DYN_TAG_NULL) {
+        dyn++;
+    }
+
+    return TRUE;
+}
+
+static bool_t elf_load_dyn(const ELF* elf, Process* const process) {
+    kassert(elf->type == ELF_TYPE_DYN);
+
+    bool_t is_dyn_loaded = FALSE;
+
+    for (uint32_t i = 0; i < elf->prog_header_entries_count; ++i) {
+        bool_t is_success = TRUE;
+
+        const ElfProgramHeader* prog = elf_get_prog_header(elf, i);
+
+        switch (prog->type)
+        {
+        case ELF_PROG_TYPE_LOAD: {
+            is_success = (elf_load_prog((const uint8_t*)elf, prog, process) != NULL);
+            break;
+        }
+        case ELF_PROG_TYPE_DYNAMIC: {
+            if (is_dyn_loaded) {
+                is_success = FALSE;
+                break;
+            }
+
+            const ElfDynamicEntry* dyn = (const ElfDynamicEntry*)((const uint8_t*)elf + prog->offset);
+
+            is_success = elf_load_dyn_section(dyn, process);
+            is_dyn_loaded = is_success;
+
+            break;
+        }
+        default:
+            break;
         }
 
-        segment->block.pages_count = div_with_roundup(prog->memory_size, PAGE_BYTE_SIZE);
-        segment->block.page_base = bpa_allocate_pages(
-            log2upper(segment->block.pages_count)
-        ) / PAGE_BYTE_SIZE;
-
-        if (segment->block.page_base == 0) {
+        if (is_success == FALSE) {
             proc_clear_segments(process);
             return FALSE;
-        }
-
-        segment->block.virt_address = prog->virt_address;
-
-        Status result = _vm_map_phys_to_virt(
-            (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
-            segment->block.virt_address,
-            process->addr_space.page_table,
-            segment->block.pages_count,
-            VMMAP_USER_ACCESS |
-            ((prog->flags & ELF_PROG_FLAGS_EXEC) ? VMMAP_EXEC : 0) |
-            ((prog->flags & ELF_PROG_FLAGS_WRITEABLE) ? VMMAP_WRITE : 0)
-        );
-
-        if (result != KERNEL_OK) {
-            bpa_free_pages(
-                (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
-                log2upper(segment->block.pages_count)
-            );
-            proc_clear_segments(process);
-            return FALSE;
-        }
-
-        const uint8_t* segment_ptr = (const uint8_t*)elf + prog->offset;
-
-        memcpy((const void*)segment_ptr, (void*)segment->block.virt_address, prog->memory_size);
-
-        if (prog->memory_size > prog->file_size) {
-            memset(
-                (void*)(segment->block.virt_address + prog->file_size),
-                prog->memory_size - prog->file_size,
-                0
-            );
         }
     }
 
@@ -134,12 +180,6 @@ static bool_t elf_load_reloc(const ELF* elf) {
     kassert(elf->type == ELF_TYPE_RELOC);
 
     return FALSE;   
-}
-
-static bool_t elf_load_dyn(const ELF* elf) {
-    kassert(elf->type == ELF_TYPE_DYN);
-
-    return FALSE;
 }
 
 ELF* elf_load_file(VfsDentry* const file_dentry) {
@@ -161,11 +201,11 @@ ELF* elf_load_file(VfsDentry* const file_dentry) {
     return result;
 }
 
-bool_t elf_load_prog(const ELF* elf, Process* const process) {
+bool_t elf_load(const ELF* elf, Process* const process) {
     UNUSED(elf_load_reloc);
-    UNUSED(elf_load_dyn);
 
     if (elf->header_size != sizeof(ELF) || elf->ph_offset % 4 != 0 || elf->sh_offset % 4 != 0) return FALSE;
+    if (elf->prog_header_entries_count == 0) return FALSE;
 
     bool_t result = FALSE;
 
@@ -173,6 +213,9 @@ bool_t elf_load_prog(const ELF* elf, Process* const process) {
     {
     case ELF_TYPE_EXEC:
         result = elf_load_exec(elf, process);
+        break;
+    case ELF_TYPE_DYN:
+        result = elf_load_dyn(elf, process);
         break;
     default:
         break;

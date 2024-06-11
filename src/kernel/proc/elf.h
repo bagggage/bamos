@@ -179,6 +179,43 @@ typedef struct ElfProgramHeader {
     uint64_t align;
 } ATTR_PACKED ElfProgramHeader;
 
+typedef enum ElfDynamicTag {
+    ELF_DYN_TAG_NULL = 0x0,
+    ELF_DYN_TAG_NEEDED = 0x1,
+    ELF_DYN_TAG_PLTRELSZ = 0x2,
+    ELF_DYN_TAG_PLTGOT = 0x3,
+    ELF_DYN_TAG_HASH = 0x4,
+    ELF_DYN_TAG_STRTAB = 0x5,
+    ELF_DYN_TAG_SYMTAB = 0x6,
+    ELF_DYN_TAG_RELA = 0x7,
+    ELF_DYN_TAG_RELASZ = 0x8,
+    ELF_DYN_TAG_RELAENT = 0x9,
+    ELF_DYN_TAG_STRSZ = 0x10,
+    ELF_DYN_TAG_SYMENT = 0x11,
+    ELF_DYN_TAG_INIT = 0x12,
+    ELF_DYN_TAG_FINI = 0x13,
+    ELF_DYN_TAG_SONAME = 0x14,
+    ELF_DYN_TAG_RPATH = 0x15,
+    ELF_DYN_TAG_SYMBOLIC = 0x16,
+    ELF_DYN_TAG_REL = 0x17,
+    ELF_DYN_TAG_RELSZ = 0x18,
+    ELF_DYN_TAG_RELENT = 0x19,
+    ELF_DYN_TAG_PLTREL = 0x20,
+    ELF_DYN_TAG_DEBUG = 0x21,
+    ELF_DYN_TAG_TEXTREL = 0x22,
+    ELF_DYN_TAG_JMPREL = 0x23,
+    ELF_DYN_TAG_LOPROC = 0x70000000,
+    ELF_DYN_TAG_HIPROC = 0x7fffffff
+} ElfDynamicTag;
+
+typedef struct ElfDynamicEntry {
+    uint64_t tag;
+    union {
+        uint64_t value;
+        uint64_t ptr;
+    };
+} ATTR_PACKED ElfDynamicEntry;
+
 typedef enum ElfSectionType {
     ELF_SECTION_TYPE_NULL = 0x0,
     ELF_SECTION_TYPE_PROGBITS = 0x1,
@@ -240,6 +277,6 @@ static inline bool_t is_elf_valid_and_supported(const ELF* elf) {
 }
 
 ELF* elf_load_file(VfsDentry* const file_dentry);
-bool_t elf_load_prog(const ELF* elf, Process* const process);
+bool_t elf_load(const ELF* elf, Process* const process);
 
 void elf_test(VfsDentry* const file_dentry);
