@@ -41,7 +41,7 @@ static inline void init_oma_pool() {
     is_oma_pool_initialized = TRUE;
 }
 
-ObjectMemoryAllocator* oma_new(const uint32_t object_size) {
+ObjectMemoryAllocator* _oma_new(const uint32_t object_size, const uint32_t bucket_pages_count) {
     if (is_oma_pool_initialized == FALSE) {
         init_oma_pool();
     }
@@ -50,6 +50,14 @@ ObjectMemoryAllocator* oma_new(const uint32_t object_size) {
 
     if (new_oma == NULL) return NULL;
 
+    *new_oma = _oma_init(bucket_pages_count, object_size);
+
+    return new_oma;
+}
+
+ObjectMemoryAllocator* oma_new(const uint32_t object_size) {
+    kassert(object_size > 0);
+
     uint32_t pages_count = div_with_roundup((uint64_t)object_size * OMA_DEFAULT_CAPACITY, PAGE_BYTE_SIZE);
 
     // Round to 2MB pages
@@ -57,9 +65,7 @@ ObjectMemoryAllocator* oma_new(const uint32_t object_size) {
         pages_count = div_with_roundup(pages_count, PAGES_PER_2MB) * PAGES_PER_2MB;
     }
 
-    *new_oma = _oma_init(pages_count, object_size);
-
-    return new_oma;
+    return _oma_new(object_size, pages_count);
 }
 
 void oma_clear(ObjectMemoryAllocator* oma) {

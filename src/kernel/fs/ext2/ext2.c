@@ -448,8 +448,6 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
             }
         }
 
-        uint32_t temp = buffer[helper1];
-
         ext2_read_block(buffer[helper1], buffer);
 
         if (buffer[helper2] == 0) {
@@ -459,7 +457,7 @@ static bool_t ext2_set_inode_block_index(Ext2Inode* const inode, const int32_t i
             }
         }
 
-        temp = buffer[helper2];
+        const uint32_t temp = buffer[helper2];
 
         ext2_read_block(buffer[helper2], buffer);
 
@@ -792,7 +790,7 @@ static bool_t ext2_create_dir_entry(const VfsDentry* const parent, const char* c
                                     const uint32_t entry_inode_index, DirInodeTypes type) {
     if (parent == NULL || entry_name == NULL) return FALSE;
     if (parent->inode->type != VFS_TYPE_DIRECTORY) return FALSE;
-    if (entry_inode_index <= 0) return FALSE;
+    if (entry_inode_index == 0) return FALSE;
 
     ext2_read_inode(parent->inode->index, global_ext2_inode);
 
@@ -1224,7 +1222,7 @@ static void ext2_fill_dentry(VfsDentry* const dentry) {
 static VfsDentry* ext2_create_dentry(const uint32_t inode_index, const char* const dentry_name, 
                                      const VfsDentry* const parent, VfsInodeTypes type) {
     if (dentry_name == NULL) return NULL;
-    if (inode_index <= 0) return NULL;
+    if (inode_index == 0) return NULL;
 
     VfsDentry* new_dentry = (VfsDentry*)vfs_new_dentry();
 

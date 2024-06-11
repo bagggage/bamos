@@ -66,7 +66,7 @@ void configure_lapic_timer() {
     lvt_timer.reserved1 = 0;
     lvt_timer.reserved2 = 0;
 
-    lapic_write(LAPIC_LVT_TIMER_REG, *(uint32_t*)&lvt_timer);
+    lapic_write(LAPIC_LVT_TIMER_REG, lvt_timer.value);
 }
 
 static uint64_t lapic_calc_min_clock_time() {

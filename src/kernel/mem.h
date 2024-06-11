@@ -34,8 +34,8 @@ bool_t is_virt_addr_range_mapped(const uint64_t address, const uint32_t pages_co
 Returns physical address that mapped to virtual.
 If virtual address is not mapped returns 'INVALID_ADDRESS'.
 */
-uint64_t get_phys_address(const uint64_t virt_addres);
-uint64_t _get_phys_address(const PageMapLevel4Entry* pml4, const uint64_t virt_addres);
+uint64_t get_phys_address(const uint64_t virt_addr);
+uint64_t _get_phys_address(const PageMapLevel4Entry* pml4, const uint64_t virt_addr);
 
 void memcpy(const void* src, void* dst, size_t size);
 void memset(void* dst, size_t size, uint8_t value);

@@ -26,6 +26,7 @@ typedef struct ObjectMemoryAllocator {
     uint32_t object_size;
 } ObjectMemoryAllocator;
 
+ObjectMemoryAllocator* _oma_new(const uint32_t object_size, const uint32_t bucket_pages_count);
 ObjectMemoryAllocator* oma_new(const uint32_t object_size);
 void oma_delete(ObjectMemoryAllocator* oma);
 

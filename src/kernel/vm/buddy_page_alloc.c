@@ -118,25 +118,25 @@ static void free_list_find_and_remove(ListHead* free_list, const uint32_t page_b
 static inline void bpa_clear_page_bit(const uint32_t page_base, const uint32_t rank) {
     const uint32_t bit_idx = page_base >> (1 + rank);
 
-    bpa.free_area[rank].bitmap[bit_idx / 8] &= ~(1 << (bit_idx % 8));
+    bpa.free_area[rank].bitmap[bit_idx / 8] &= ~(1u << (bit_idx % 8));
 }
 
 static inline void bpa_set_page_bit(const uint32_t page_base, const uint32_t rank) {
     const uint32_t bit_idx = page_base >> (1 + rank);
 
-    bpa.free_area[rank].bitmap[bit_idx / 8] |= (1 << (bit_idx % 8));
+    bpa.free_area[rank].bitmap[bit_idx / 8] |= (1u << (bit_idx % 8));
 }
 
 static inline void bpa_inverse_page_bit(const uint32_t page_base, const uint32_t rank) {
     const uint32_t bit_idx = page_base >> (1 + rank);
 
-    bpa.free_area[rank].bitmap[bit_idx / 8] ^= (1 << (bit_idx % 8));
+    bpa.free_area[rank].bitmap[bit_idx / 8] ^= (1u << (bit_idx % 8));
 }
 
 static inline uint8_t bpa_get_page_bit(const uint32_t page_base, const uint32_t rank) {
     const uint32_t bit_idx = page_base >> (1 + rank);
 
-    return bpa.free_area[rank].bitmap[bit_idx / 8] & (1 << (bit_idx % 8));
+    return bpa.free_area[rank].bitmap[bit_idx / 8] & (1u << (bit_idx % 8));
 }
 
 static inline bool_t bpa_push_free_mem_block(const uint32_t page_base_number, const uint32_t pages_count) {
@@ -148,9 +148,9 @@ static inline bool_t bpa_push_free_mem_block(const uint32_t page_base_number, co
 
         if (temp_rank >= BPA_MAX_BLOCK_RANK) temp_rank = BPA_MAX_BLOCK_RANK - 1;
 
-        uint32_t rank_page_count = (1 << temp_rank);
+        uint32_t rank_page_count = (1u << temp_rank);
 
-        while (temp_page_base % rank_page_count != 0) {
+        while ((temp_page_base % rank_page_count) != 0) {
             temp_rank--;
             rank_page_count >>= 1;
         }
@@ -184,10 +184,9 @@ void bpa_log_free_lists(const ListHead* list) {
     kernel_msg("Free list: %x: ", list);
 
     while (temp_entry != NULL) {
-        Color temp_color = kernel_logger_get_color();
-        kernel_logger_set_color(COLOR_LYELLOW);
+        kernel_logger_push_color(COLOR_LYELLOW);
         raw_print_number((uint64_t)temp_entry->phys_page_base * PAGE_BYTE_SIZE, FALSE, 16);
-        kernel_logger_set_color_struct(temp_color);
+        kernel_logger_pop_color();
         raw_puts(" -> ");
 
         temp_entry = temp_entry->next;
@@ -291,7 +290,7 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
         return KERNEL_ERROR;
     }
 
-    const uint8_t* bitmap_pool = (uint8_t*)(
+    uint8_t* const bitmap_pool = (uint8_t*)(
         oma_page_frame.virt_address +
         (div_with_roundup(required_oma_mem_pool_size, PAGE_BYTE_SIZE) * PAGE_BYTE_SIZE)
     );
@@ -422,10 +421,10 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
     return result;
 }
 
-void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
-    kassert((phys_page_address & 0xFFF) == 0 && rank < BPA_MAX_BLOCK_RANK);
+void bpa_free_pages(const uint64_t page_address, const uint32_t rank) {
+    kassert((page_address & 0xFFF) == 0 && rank < BPA_MAX_BLOCK_RANK);
 
-    uint32_t page_base = (uint32_t)(phys_page_address / PAGE_BYTE_SIZE);
+    uint32_t page_base = (uint32_t)(page_address / PAGE_BYTE_SIZE);
 
     spin_lock(&bpa.lock);
 
@@ -433,7 +432,7 @@ void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
     if (bpa_get_page_bit(page_base, rank) == 0 || rank == (BPA_MAX_BLOCK_RANK - 1)) {
         if (free_list_push_first(&bpa.free_area[rank].free_list, page_base) != TRUE) {
             // KERNEL PANIC
-            kernel_error("BPA: Failed to insert new entry while freeing pages: %x\n", phys_page_address);
+            kernel_error("BPA: Failed to insert new entry while freeing pages: %x\n", page_address);
             spin_release(&bpa.lock);
             return;
         }
@@ -470,7 +469,7 @@ void bpa_free_pages(const uint64_t phys_page_address, const uint32_t rank) {
 
     if (free_list_push_first(&bpa.free_area[temp_rank].free_list, page_base) != TRUE) {
         // KERNEL PANIC
-        kernel_error("BPA: Failed to insert new entry while freeing pages: %x\n", phys_page_address);
+        kernel_error("BPA: Failed to insert new entry while freeing pages: %x\n", page_address);
         spin_release(&bpa.lock);
         return;
     }

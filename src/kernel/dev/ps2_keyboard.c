@@ -273,13 +273,11 @@ Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
 
     outb(PS2_DATA_PORT, SET_DEFAULT_PARAMETERS);
 
-    uint8_t result;
-
-    if ((result = inb(PS2_DATA_PORT)) != ACK) {
+    if (inb(PS2_DATA_PORT) != ACK) {
         outb(PS2_DATA_PORT, SET_DEFAULT_PARAMETERS);
         wait(1000);
 
-        if ((result = inb(PS2_DATA_PORT)) != ACK) {
+        if (inb(PS2_DATA_PORT) != ACK) {
             error_str = "Device is not responding";
             return KERNEL_ERROR;
         }

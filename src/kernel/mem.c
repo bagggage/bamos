@@ -41,7 +41,7 @@ void free(void* mem_block) {
 #endif
 
 void* kmalloc(const size_t size) {
-    kassert(size > 0 && size <= (1 << UMA_MAX_RANK));
+    kassert((size > 0) && (size <= (1 << UMA_MAX_RANK)));
 
     uint32_t near_rank = log2upper(size);
     if (near_rank < UMA_MIN_RANK) near_rank = UMA_MIN_RANK;
@@ -74,7 +74,7 @@ void* krealloc(void* memory_block, const size_t size) {
 
     uint32_t i = 0;
 
-    for (i = 0; i < UMA_RANKS_COUNT; ++i) {
+    for (i = 0; i < UMA_RANKS_COUNT - 1; ++i) {
         if (_oma_is_containing_mem_block(memory_block, uma.oma_pool[i]) == FALSE) continue;
         break;
     }
@@ -280,14 +280,14 @@ static void log_memory_page_table_entry(const char* prefix, const size_t idx, co
     //static const uint64_t data_size_multipliers[] = { 2, 4 };
 
     if (size > 1) {
-        kernel_warn("%s[%u-%u]: %x-%x %u %s\n", prefix, idx - size, idx - 1,
+        kprintf("%s[%u-%u]: %x-%x %u %s\n", prefix, idx - size, idx - 1,
                     base_address,
                     base_address + ((size - 1) * data_size_units[level]),
                     size * ((level + 1) << 1),
                     data_size_units_strs[level]);
     }
     else {
-        kernel_warn("%s[%u]: %x %u %s\n", prefix, idx - 1, base_address, size * ((level + 1) << 1), data_size_units_strs[level]);
+        kprintf("%s[%u]: %x %u %s\n", prefix, idx - 1, base_address, size * ((level + 1) << 1), data_size_units_strs[level]);
     }
 }
 
@@ -301,13 +301,13 @@ void log_memory_page_tables(PageMapLevel4Entry* pml4) {
         if (pml4[i].present == FALSE) continue;
 
         PageDirPtrEntry* pdpe = (PageDirPtrEntry*)((uint64_t)pml4[i].page_ppn << 12);
-        kernel_warn("PML4E [%u]: %x\n", i, pdpe);
+        kprintf("PML4E [%u]: %x\n", i, pdpe);
 
         for (size_t j = 0; j < PAGE_TABLE_MAX_SIZE; ++j) {
             if (pdpe[j].present == FALSE) continue;
 
             PageDirEntry* pde = (PageDirEntry*)((uint64_t)pdpe[j].page_ppn << 12);
-            kernel_warn("|---PDPE [%u]: %x %s\n", j, (uint64_t)pde, pdpe[j].size ? "1 GB" : "");
+            kprintf("|---PDPE [%u]: %x %s\n", j, (uint64_t)pde, pdpe[j].size ? "1 GB" : "");
 
             uint64_t base_address = UINT64_MAX;
             uint64_t size = 1;
@@ -322,7 +322,7 @@ void log_memory_page_tables(PageMapLevel4Entry* pml4) {
                     continue;
                 }
 
-                uint64_t address = (uint64_t)((uint64_t)pde[g].page_ppn << 12);
+                const uint64_t address = (uint64_t)((uint64_t)pde[g].page_ppn << 12);
                 PageTableEntry* pte = (PageTableEntry*)address;
 
                 if (pde[g].size == 1) { 
@@ -349,7 +349,7 @@ void log_memory_page_tables(PageMapLevel4Entry* pml4) {
                 base_address = UINT64_MAX;
                 size = 1;
 
-                kernel_warn("%s[%u]: %x\n", pde_prefix, g, (uint64_t)pte);
+                kprintf("%s[%u]: %x\n", pde_prefix, g, (uint64_t)pte);
 
                 for (size_t h = 0; h < PAGE_TABLE_MAX_SIZE; ++h) {
                     if (pte[h].present == FALSE) { 
@@ -359,23 +359,23 @@ void log_memory_page_tables(PageMapLevel4Entry* pml4) {
                         continue;
                     }
 
-                    uint64_t address = (uint64_t)((uint64_t)pte[h].page_ppn << 12);
+                    const uint64_t _address = (uint64_t)((uint64_t)pte[h].page_ppn << 12);
 
                     //kernel_warn("|---|---|---Page table entry[%u]: %x 4 KB\n", h, address);
                     //continue;
 
                     if (base_address == UINT64_MAX) {
-                        base_address = address;
+                        base_address = _address;
                         size = 1;
                         continue;
                     }
-                    if (base_address == address - (size * PAGE_BYTE_SIZE)) {
+                    if (base_address == _address - (size * PAGE_BYTE_SIZE)) {
                         ++size;
                     }
                     else {
                         log_memory_page_table_entry(pte_prefix, h, base_address, size, PTE_LOG);
                         size = 1;
-                        base_address = address;
+                        base_address = _address;
                     }
                 }
 

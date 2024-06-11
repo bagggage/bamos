@@ -2,6 +2,8 @@
 #include "stdio.h"
 #include "fcntl.h"
 
+#define TTY_FILENAME "/dev/tty"
+
 extern int main();
 
 static FILE stdin_fd;
@@ -15,9 +17,9 @@ void __init(long long argc, char** argv, char** envp) {
     stdout = &stdout_fd;
     stderr = &stderr_fd;
 
-    stdin->_fileno =    open("/dev/tty0", O_RDONLY);
-    stdout->_fileno =   open("/dev/tty0", O_WRONLY);
-    stderr->_fileno =   open("/dev/tty0", O_WRONLY);
+    stdin->_fileno =    open(TTY_FILENAME, O_RDONLY);
+    stdout->_fileno =   open(TTY_FILENAME, O_WRONLY);
+    stderr->_fileno =   open(TTY_FILENAME, O_WRONLY);
 }
 
 __asm__(

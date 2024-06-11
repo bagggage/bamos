@@ -159,7 +159,7 @@ long _sys_close(unsigned int fd) {
     return (fd_close(proc_local->current_task->process, fd) ? 0 : -EBADF);
 }
 
-long _sys_mmap(void* address, size_t length, int protection, int flags, int fd, uint32_t offset) {
+long _sys_mmap(const void* address, size_t length, int protection, int flags, int fd, uint32_t offset) {
     UNUSED(fd); UNUSED(offset);
 
     ProcessorLocal* proc_local = proc_get_local();

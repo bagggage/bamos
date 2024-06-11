@@ -1,3 +1,3 @@
 #pragma once
 
-void sprintf(char* const buffer, const char* format, ...);
+void sprintf(char* const buffer, const char* fmt, ...);

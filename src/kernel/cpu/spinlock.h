@@ -15,7 +15,7 @@ static inline Spinlock spinlock_init() {
     return lock;
 }
 
-static inline void spin_lock(Spinlock* spinlock) {
+static inline void spin_lock(Spinlock* const spinlock) {
     while (__sync_lock_test_and_set(&spinlock->exclusion, 1)) {
         // Do nothing. This GCC builtin instruction
         // ensures memory barrier.
@@ -23,6 +23,6 @@ static inline void spin_lock(Spinlock* spinlock) {
     }
 }
 
-static inline void spin_release(Spinlock* spinlock) {
+static inline void spin_release(Spinlock* const spinlock) {
     __sync_lock_release(&spinlock->exclusion); // Memory barrier.
 }

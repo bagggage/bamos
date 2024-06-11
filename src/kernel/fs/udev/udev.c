@@ -122,7 +122,8 @@ static VfsDentry* make_tty(const uint16_t idx) {
     ((VfsInodeFile*)result->inode)->interface.read = &udev_read_tty;
     ((VfsInodeFile*)result->inode)->interface.write = &udev_write_tty;
 
-    sprintf(result->name, "tty%u", idx);
+    if (idx > 0) sprintf(result->name, "tty%u", idx);
+    else strcpy(result->name, "tty");
 
     result->childs = NULL;
     result->childs_count = 0;
@@ -215,7 +216,7 @@ Status udev_init() {
     VfsDentry* tty_dentry = make_tty(0);
 
     if (tty_dentry == NULL) {
-        error_str = "Udev fs: Failed to make 'tty0' entry";
+        error_str = "Udev fs: Failed to make 'tty' entry";
         return KERNEL_ERROR;
     }
 

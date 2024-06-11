@@ -932,7 +932,7 @@ static bool_t vm_map_page_frame(VMPageFrame* frame, PageMapLevel4Entry* pml4, VM
 }
 
 VMPageFrame _vm_alloc_pages(const uint32_t pages_count, const uint64_t virt_address, PageMapLevel4Entry* pml4, VMMapFlags flags) {
-    kassert(virt_address != NULL && pml4 != NULL && pages_count > 0);
+    kassert(virt_address != 0 && pml4 != NULL && pages_count > 0);
 
     uint32_t rank = BPA_MAX_BLOCK_RANK - 1;
     uint32_t rank_pages_count = 1 << rank;
