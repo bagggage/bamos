@@ -1,6 +1,7 @@
 #include "exceptions.h"
 
 #include "cpu/regs.h"
+#include "cpu/feature.h"
 
 #include "mem.h"
 #include "logger.h"
@@ -46,92 +47,145 @@ typedef union PageFaultErrorCode {
 
 // #DE [0] Divide error
 ATTR_INTRRUPT void intr_de_handler(InterruptFrame64* frame) {
-    kernel_error("#DE Divide error\n");
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("#DE Divide error\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #DB [1] Debug exception
 ATTR_INTRRUPT void intr_db_handler(InterruptFrame64* frame) {
-    kernel_error("#DB Debug exception\n");
+
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("#DB Debug exception\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #NMI [2] NMI
 ATTR_INTRRUPT void intr_nmi_handler(InterruptFrame64* frame) {
-    kernel_error("#NMI Non-maskable interrupt\n");
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("#NMI Non-maskable interrupt\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #BP [3] Breakpoint exception
 ATTR_INTRRUPT void intr_bp_handler(InterruptFrame64* frame) {
-    kernel_error("#BP Breakpoint exception\n");
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("#BP Breakpoint exception\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #OF [4] Overflow
 ATTR_INTRRUPT void intr_of_handler(InterruptFrame64* frame) {
-    kernel_error("#OF Overflow\n");
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("#OF Overflow\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #DE [5] BOUND Range exception
 ATTR_INTRRUPT void intr_br_handler(InterruptFrame64* frame) {
-    kernel_error("#BR BOUND Range exception\n");
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("#BR BOUND Range exception\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #UD [6] Invalid opcode
 ATTR_INTRRUPT void intr_ud_handler(InterruptFrame64* frame) {
-    kernel_error("#UD Invalid opcode\n");
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("#UD Invalid opcode\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #NM [7] Device not available
 ATTR_INTRRUPT void intr_nm_handler(InterruptFrame64* frame) {
-    kernel_error("#NM Device not available\n");
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("#NM Device not available\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #DF [8] Double fault
 ATTR_INTRRUPT void intr_df_handler(InterruptFrame64* frame, uint64_t error_code) {
-    kernel_error("#DF Double fault: E: %b\n", error_code);
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    kprintf("#DF Double fault: E: %b\n", error_code);
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #TS [10] Invalid TTS
 ATTR_INTRRUPT void intr_ts_handler(InterruptFrame64* frame, uint64_t error_code) {
-    kernel_error("#TS Invalid TSS: E: %b\n", error_code);
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    kprintf("#TS Invalid TSS: E: %b\n", error_code);
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #NP [11] Segment not present
 ATTR_INTRRUPT void intr_np_handler(InterruptFrame64* frame, uint64_t error_code) {
-    kernel_error("#NP Segment not present: E: %b\n", error_code);
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    kprintf("#NP Segment not present: E: %b\n", error_code);
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #SS [12] Segment fault
 ATTR_INTRRUPT void intr_ss_handler(InterruptFrame64* frame, uint64_t error_code) {
-    kernel_error("#SS Segment fault: E: %b\n", error_code);
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    kprintf("#SS Segment fault: E: %b\n", error_code);
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #GP [13] General protection fault
 ATTR_INTRRUPT void intr_gp_handler(InterruptFrame64* frame, uint64_t error_code) {
-    kernel_error("#GP General protection: E: %b\n", error_code);
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    kprintf("#GP General protection: E: %b\n", error_code);
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
@@ -143,13 +197,17 @@ ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code)
     PageXEntry* pxe = (PageXEntry*)((uint64_t)get_pxe_of_virt_addr(virt_address).entry);
 
 #ifdef KDEBUG
-    kernel_error("#PF Page fault: E: %b CR2: %x\n", (uint32_t)error_code, virt_address);
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    kprintf("#PF Page fault: CPU: %u: E: %b CR2: %x\n", cpu_get_idx(), (uint32_t)error_code, virt_address);
 
-    if (pxe == NULL) { 
+    kernel_logger_push_color(COLOR_LYELLOW);
+
+    if (pxe == NULL) {
         log_memory_page_tables(cpu_get_current_pml4());
     }
     else {
-        kernel_warn("PXE: %x; (%x) %c%c%c%c%c%c%c\n",
+        kprintf("PXE: %x; (%x) %c%c%c%c%c%c%c\n",
             (uint64_t)pxe,
             (uint64_t)pxe->page_ppn,
             pxe->present ?              'P' : '-',
@@ -161,12 +219,15 @@ ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code)
             pxe->execution_disabled ?   '-' : 'X');
 
         if (pxe->ignored_1 != 0 || pxe->ignored_2 != 0 || pxe->reserved_1 != 0 || (pxe->size == 1 && (pxe->page_ppn & 0x1FF) != 0)) {
-            kernel_error("Reserved bits is damaged\n");
+            kprintf("Reserved bits is damaged\n");
         }
         //log_memory_page_tables(cpu_get_current_pml4());
     }
 
+    kernel_logger_pop_color();
+
     log_intr_frame(frame);
+    kernel_logger_release();
 #endif
 
     _kernel_break();
@@ -175,15 +236,21 @@ ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code)
 
 // #AC [17] Alignment check
 ATTR_INTRRUPT void intr_ac_handler(InterruptFrame64* frame, uint64_t error_code) {
-    kernel_error("#AC Alignment check: E: %b\n", error_code);
+    kernel_logger_lock();
+    kprintf("#AC Alignment check: E: %b\n", error_code);
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 
 // #MC [18] Machine check
 ATTR_INTRRUPT void intr_mc_handler(InterruptFrame64* frame) {
-    kernel_error("#MC Machine check\n");
+    kernel_logger_lock();
+    raw_puts("#MC Machine check\n");
     log_intr_frame(frame);
+    kernel_logger_release();
+
     _kernel_break();
 }
 

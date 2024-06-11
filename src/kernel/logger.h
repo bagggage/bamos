@@ -54,6 +54,9 @@ uint16_t kernel_logger_get_cols();
 
 void kernel_logger_clear();
 
+void kernel_logger_push_color(uint8_t r, uint8_t g, uint8_t b);
+void kernel_logger_pop_color();
+
 void kernel_logger_set_color(uint8_t r, uint8_t g, uint8_t b);
 Color kernel_logger_get_color();
 
@@ -70,6 +73,8 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation);
 void raw_hexdump(const void* data, const size_t size);
 
 void kernel_raw_log(LogType log_type, const char* fmt, va_list args);
+
+void kprintf(const char* fmt, ...);
 
 // Prints log to display framebuffer
 static inline void kernel_log(LogType log_type, const char* fmt, ...) {

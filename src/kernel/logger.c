@@ -26,17 +26,37 @@ typedef struct Logger {
     uint32_t max_col;
     uint8_t color[4];
 
+    uint32_t color_stack[16];
+    uint32_t color_stack_size;
+
     Spinlock lock;
 } Logger;
 
 Logger logger = { NULL, {}, 0, 0, 0, 0, { 0xFF, 0xFF, 0xFF, 0xFF }, { 0 } };
 Framebuffer early_fb;
 
+void kernel_logger_push_color(uint8_t r, uint8_t g, uint8_t b) {
+    if (logger.color_stack_size >= (sizeof(logger.color_stack) / sizeof(uint32_t))) return;
+
+    kernel_logger_set_color(r, g, b);
+
+    logger.color_stack[logger.color_stack_size++] = *(uint32_t*)(&logger.color[0]);
+}
+
+void kernel_logger_pop_color() {
+    if (logger.color_stack_size <= 1) return;
+
+    logger.color_stack_size--;
+    *(uint32_t*)(&logger.color[0]) = logger.color_stack[logger.color_stack_size - 1];
+}
+
 void kernel_logger_lock() {
     spin_lock(&logger.lock);
 }
 
 void kernel_logger_release() {
+    while (logger.color_stack_size > 1) kernel_logger_pop_color();
+    
     spin_release(&logger.lock);
 }
 
@@ -129,7 +149,7 @@ Status init_kernel_logger(Framebuffer* fb, const uint8_t* font_binary_ptr) {
     logger.max_col = logger.fb->width / logger.font.width;
     logger.max_row = logger.fb->height / logger.font.height;
 
-    kernel_logger_set_color(COLOR_LGRAY);
+    kernel_logger_push_color(COLOR_LGRAY);
     is_initialized = TRUE;
 
     return KERNEL_OK;
@@ -309,8 +329,6 @@ void raw_print_number(uint64_t number, bool_t is_signed, uint8_t notation) {
 }
 
 void raw_hexdump(const void* data, const size_t size) {
-    spin_lock(&logger.lock);
-
 	char ascii[17];
 	ascii[16] = '\0';
 
@@ -355,41 +373,9 @@ void raw_hexdump(const void* data, const size_t size) {
 			}
 		}
 	}
-
-    spin_release(&logger.lock);
 }
 
-void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
-    //if (log_type == LOG_ERROR && logger.lock.exclusion != 0) {
-    //    kernel_logger_set_color(COLOR_LRED);
-    //    raw_puts("\n[Failed log]: ");
-    //    raw_puts(fmt);
-    //    spin_release(&logger.lock);
-    //    return;
-    //    //_kernel_break();
-    //}
-
-    spin_lock(&logger.lock);
-
-    switch (log_type)
-    {
-    case LOG_MSG:
-        kernel_logger_set_color(COLOR_LGRAY);
-        raw_puts("[Debug]: ");
-        break;
-    case LOG_WARN:
-        kernel_logger_set_color(COLOR_LYELLOW);
-        raw_puts("[Warn]:  ");
-        break;
-    case LOG_ERROR:
-        kernel_logger_set_color(COLOR_LRED);
-        raw_puts("[Error]: ");
-        break;
-    default:
-        raw_puts("[Unknown]: ");
-        break;
-    }
-
+static void vprintf(const char* fmt, va_list args) {
     char c;
 
     while ((c = *(fmt++)) != '\0') {
@@ -399,12 +385,10 @@ void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
             // For decimal numbers
             bool_t is_signed = TRUE;
             uint64_t arg_value;
-            uint64_t temp_color = *(uint64_t*)logger.color;
 
             switch (c)
             {
             case '\0':
-                spin_release(&logger.lock);
                 return;
             case 'u': // Unsigned
                 is_signed = FALSE; FALLTHROUGH;
@@ -453,27 +437,27 @@ void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
                 switch (arg_value)
                 {
                 case KERNEL_OK:
-                    kernel_logger_set_color(COLOR_LGREEN);
+                    kernel_logger_push_color(COLOR_LGREEN);
                     raw_puts("KERNEL OK");
                     break;
                 case KERNEL_INVALID_ARGS:
-                    kernel_logger_set_color(COLOR_LYELLOW);
+                    kernel_logger_push_color(COLOR_LYELLOW);
                     raw_puts("KERNEL INVALID ARGS");
                     break;
                 case KERNEL_ERROR:
-                    kernel_logger_set_color(COLOR_LRED);
+                    kernel_logger_push_color(COLOR_LRED);
                     raw_puts("KERNEL ERROR");
                     break;
                 case KERNEL_PANIC:
-                    kernel_logger_set_color(COLOR_LRED);
+                    kernel_logger_push_color(COLOR_LRED);
                     raw_puts("KERNEL PANIC");
                     break;
                 default:
-                    kernel_logger_set_color(COLOR_LRED);
+                    kernel_logger_push_color(COLOR_LRED);
                     raw_puts("KERNEL INVALID RESULT");
                     break;
                 }
-                *(uint64_t*)logger.color = temp_color;
+                kernel_logger_pop_color();
                 break;
             case '%':
                 raw_putc(c);
@@ -486,7 +470,42 @@ void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
             raw_putc(c);
         }
     }
+}
 
+void kprintf(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+void kernel_raw_log(LogType log_type, const char* fmt, va_list args) {
+    spin_lock(&logger.lock);
+
+    switch (log_type)
+    {
+    case LOG_MSG:
+        kernel_logger_push_color(COLOR_LGRAY);
+        raw_puts("[Debug]: ");
+        break;
+    case LOG_WARN:
+        kernel_logger_push_color(COLOR_LYELLOW);
+        raw_puts("[Warn]:  ");
+        break;
+    case LOG_ERROR:
+        kernel_logger_push_color(COLOR_LRED);
+        raw_puts("[Error]: ");
+        break;
+    default:
+        kernel_logger_push_color(COLOR_LGRAY);
+        raw_puts("[Unknown]: ");
+        break;
+    }
+
+    vprintf(fmt, args);
+
+    kernel_logger_pop_color();
     spin_release(&logger.lock);
 }
 

@@ -82,11 +82,11 @@ const DebugSymbol* get_debug_symbol(const uint64_t symbol_virt_address) {
 #define TRACE_INTERRUPT_DEPTH 2
 
 void log_trace(const uint32_t trace_start_depth) {
-    kernel_warn("Trace:\n");
+    raw_puts("Trace:\n");
 
     StackFrame* frame = (StackFrame*)__builtin_frame_address(0);
 
-    for (unsigned int i = 0; i < 6; ++i) {
+    for (unsigned int i = 0; i < 6 && is_virt_addr_mapped((uint64_t)frame); ++i) {
         if (frame->rbp == NULL) break;
         if (i < trace_start_depth || frame->rip == 0) {
             frame = frame->rbp;
@@ -95,7 +95,7 @@ void log_trace(const uint32_t trace_start_depth) {
 
         const DebugSymbol* dbg_symbol = get_debug_symbol(frame->rip);
 
-        kernel_warn("%x: %s(...)+%x\n",
+        kprintf("%x: %s(...)+%x\n",
             frame->rip,
             dbg_symbol == NULL ? "UNKNOWN SYMBOL" : dbg_symbol->name,
             dbg_symbol == NULL ? 0 : frame->rip - dbg_symbol->virt_address);
@@ -105,10 +105,16 @@ void log_trace(const uint32_t trace_start_depth) {
 #endif
 
 __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame64* frame) {
+    if (is_virt_addr_mapped(frame) == FALSE) return;
+
+    kernel_logger_push_color(COLOR_LYELLOW);
+
+    const ProcessorLocal* const local = proc_get_local();
+
 #ifdef KTRACE
     const DebugSymbol* dbg_symbol = get_debug_symbol(frame->rip);
 
-    kernel_warn("-> %x: %s(...)+%x\n",
+    kprintf("-> %x: %s(...)+%x\n",
         frame->rip,
         dbg_symbol == NULL ? "UNKNOWN SYMBOL" : dbg_symbol->name,
         dbg_symbol == NULL ? 0 : frame->rip - dbg_symbol->virt_address);
@@ -121,14 +127,16 @@ __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame6
     register uint64_t r14 asm("r14");
     register uint64_t r15 asm("r15");
 
-    kernel_warn(
-        "CPU: %u: Interrupt Frame:\n"
+    kprintf(
+        "CPU: %u: Interrupt Frame: (%x): Process: %u pid\n"
         "cr2: %x\ncr3: %x\n"
         "rax: %x; rdi: %x; rsi: %x; rcx: %x; rdx: %x; rbx: %x\n"
         "r10: %x r11: %x; r12: %x; r13: %x; r14: %x; r15: %x\n"
         "rip: %x:%x\n"
         "rsp: %x\nrflags: %b\ncs: %x\nss: %x\n",
         cpu_get_idx(),
+        frame,
+        (local->current_task) != NULL ? local->current_task->process->pid : 0,
         cpu_get_cr2(),
         cpu_get_cr3(),
         cpu_get_rax(), cpu_get_rdi(), cpu_get_rsi(), cpu_get_rcx(), cpu_get_rdx(), cpu_get_rbx(),
@@ -139,12 +147,23 @@ __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame6
         frame->cs,
         frame->ss);
 
-    raw_hexdump((void*)frame->rip, 16);
+    if (is_virt_addr_mapped(frame->rip)) raw_hexdump((void*)frame->rip, 16);
+
+    raw_puts("Stack dump:\n");
+
+    const uint64_t* stack = (void*)(frame + 1);
+
+    for (uint32_t i = 0; i < 10; ++i) {
+        kprintf(" [%u] %x\n", i, stack[i]);
+    }
 }
 
 __attribute__((target("general-regs-only"))) void intr_excp_panic(InterruptFrame64* frame, uint32_t error_code) {
-    kernel_error("[KERNEL PANIC] Unhandled interrupt exception: %x\n", error_code);
+    kernel_logger_lock();
+    kernel_logger_push_color(COLOR_LRED);
+    kprintf("[KERNEL PANIC] Unhandled interrupt exception: %x\n", error_code);
     log_intr_frame(frame);
+    kernel_logger_release();
     // Halt
     _kernel_break();
 }
@@ -161,8 +180,11 @@ ATTR_INTRRUPT void intr_excp_error_code_handler(InterruptFrame64* frame, uint64_
 
 // Default interrupt handler
 ATTR_INTRRUPT void intr_handler(InterruptFrame64* frame) {
-    kernel_warn("Unhandled interrupt:\n");
+    kernel_logger_release();
+    kernel_logger_push_color(COLOR_LRED);
+    raw_puts("Unhandled interrupt:\n");
     log_intr_frame(frame);
+    kernel_logger_release();
 }
 
 #ifdef KTRACE
