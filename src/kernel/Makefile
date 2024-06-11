@@ -1,4 +1,4 @@
-CROSS_ENV:=-fpic -ffreestanding -fno-omit-frame-pointer -fno-stack-protector -mincoming-stack-boundary=3 -mno-red-zone -nostdlib
+CROSS_ENV:=-fpic -fstrict-volatile-bitfields -ffreestanding -fno-omit-frame-pointer -fno-stack-protector -mincoming-stack-boundary=3 -mno-red-zone -nostdlib
 
 AS:=${TOOLCHAIN}/x86_64-elf-as
 LD:=${TOOLCHAIN}/x86_64-elf-ld
