@@ -31,7 +31,7 @@ ${OBJS}: ${SRCS}
 
 bin: ${OBJS}
 	@echo Linking: ${PROG_NAME}
-	@${CC} -T ${LINKLD} -o ${OUT} ${OBJS} -L${BUILD_DIR}/libc -l:libc.a -pie
+	@${LD} -T ${LINKLD} -o ${OUT} ${OBJS} -L${BUILD_DIR}/libc -l:libc.a -pie
 	@cp ${OUT} ${SAVE_DIR} 
 	@${TOOLCHAIN}/x86_64-elf-strip --strip-all ${SAVE_DIR}/${PROG_NAME}
 
