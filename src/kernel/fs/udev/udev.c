@@ -22,7 +22,7 @@ static UdevFs udev_fs = {
     .pci_bus = NULL
 };
 
-void udev_read_pci(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
+static uint32_t udev_read_pci(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
     if (inode->inode.index >= udev_fs.pci_bus->size) return;
     if (offset >= sizeof(PciConfigurationSpace)) return;
 
@@ -41,13 +41,15 @@ void udev_read_pci(const VfsInodeFile* const inode, const uint32_t offset, const
         (void*)buffer,
         bytes_to_read
     );
+
+    return bytes_to_read;
 }
 
 static inline bool_t is_ascii(const char c) {
     return ((c >= ' ' && c <= '~') || (c == '\n' || c == '\b')) ? TRUE : FALSE;
 }
 
-void udev_read_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
+static uint32_t udev_read_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
     UNUSED(offset);
 
     if (inode->inode.index != 0 || total_bytes == 0) return;
@@ -66,6 +68,8 @@ void udev_read_tty(const VfsInodeFile* const inode, const uint32_t offset, const
 
         buffer[i] = scan_code_to_ascii(scancode);
     }
+
+    return total_bytes;
 }
 
 static uint32_t _tty_handle_csi(const char* buffer) {
@@ -86,7 +90,7 @@ static uint32_t _tty_handle_csi(const char* buffer) {
     return 2;
 }
 
-void udev_write_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, const char* buffer) {
+static uint32_t udev_write_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, const char* buffer) {
     //kernel_msg("Writing %s\n", buffer);
     UNUSED(offset);
 
@@ -102,6 +106,8 @@ void udev_write_tty(const VfsInodeFile* const inode, const uint32_t offset, cons
     }
 
     kernel_logger_release();
+
+    return total_bytes;
 }
 
 static VfsDentry* make_tty(const uint16_t idx) {
@@ -109,7 +115,7 @@ static VfsDentry* make_tty(const uint16_t idx) {
 
     if (result == NULL) return NULL;
 
-    result->inode = vfs_new_inode_by_type(VFS_TYPE_FILE);
+    result->inode = vfs_new_inode_by_type(VFS_TYPE_CHARACTER_DEVICE);
 
     if (result->inode == NULL) {
         vfs_delete_dentry(result);
@@ -191,7 +197,7 @@ static bool_t make_pci_entries() {
             return FALSE;
         }
 
-        dentry->inode->file_size = 0;
+        dentry->inode->file_size = sizeof(PciConfigurationSpace);
         dentry->inode->hard_link_count = 1;
         dentry->inode->index = i - begin_idx;
         ((VfsInodeFile*)dentry->inode)->interface.read = &udev_read_pci;

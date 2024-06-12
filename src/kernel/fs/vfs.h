@@ -48,9 +48,9 @@ typedef struct VfsInode {
 typedef struct VfsDentry VfsDentry;
 typedef struct VfsInodeFile VfsInodeFile;
 
-DEV_FUNC(Vfs, void, read, const VfsInodeFile* const inode, const uint32_t offset,
+DEV_FUNC(Vfs, uint32_t, read, const VfsInodeFile* const inode, const uint32_t offset,
                           const uint32_t total_bytes, char* const buffer);
-DEV_FUNC(Vfs, void, write, const VfsInodeFile* const inode, const uint32_t offset,
+DEV_FUNC(Vfs, uint32_t, write, const VfsInodeFile* const inode, const uint32_t offset,
                            const uint32_t total_bytes, const char* buffer);
 
 typedef struct InodeFileInterface {

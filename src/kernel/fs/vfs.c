@@ -2,6 +2,7 @@
 
 #include "assert.h"
 #include "logger.h"
+#include "math.h"
 #include "mem.h"
 
 #include "fs/ext2/ext2.h"
@@ -263,48 +264,26 @@ VfsDentry* vfs_open(const char* const filename, VfsDentry* const parent) {
 
 uint32_t vfs_read(const VfsDentry* const dentry, const uint32_t offset, 
                  const uint32_t total_bytes, void* const buffer) {
-    if (dentry == NULL || buffer == NULL) return 0;
+    kassert(dentry != NULL || buffer != NULL);
+    kassert(dentry->inode->type != VFS_TYPE_DIRECTORY);
+
     if (total_bytes == 0) return 0;
-    if (dentry->inode->type != VFS_TYPE_FILE) return 0;
 
     VfsInodeFile* vfs_file = (VfsInodeFile*)dentry->inode;
 
-    const uint32_t buffer_size = (total_bytes >= VFS_MAX_BUFFER_SIZE) ? VFS_MAX_BUFFER_SIZE : total_bytes;
-
-    uint32_t counts_to_read = (total_bytes / VFS_MAX_BUFFER_SIZE) + 1;
-    uint32_t start_offset = 0;
-
-    while (counts_to_read > 0) {
-        vfs_file->interface.read(vfs_file, offset + start_offset, buffer_size, (char*)buffer + start_offset);
-
-        start_offset += VFS_MAX_BUFFER_SIZE;
-        counts_to_read--;
-    }
-
-    return total_bytes;
+    return vfs_file->interface.read(vfs_file, offset, total_bytes, (char*)buffer);
 }
 
 uint32_t vfs_write(const VfsDentry* const dentry, const uint32_t offset, 
                  const uint32_t total_bytes, const void* buffer) {
-    if (dentry == NULL || buffer == NULL) return 0;
-    if (total_bytes == 0 || total_bytes > VFS_MAX_BUFFER_SIZE) return 0;
-    if (dentry->inode->type != VFS_TYPE_FILE) return 0;
+    kassert(dentry != NULL && buffer != NULL);
+    kassert(dentry->inode->type != VFS_TYPE_DIRECTORY);
+
+    if (total_bytes == 0) return 0;
 
     VfsInodeFile* vfs_file = (VfsInodeFile*)dentry->inode;
 
-    const uint32_t buffer_size = (total_bytes >= VFS_MAX_BUFFER_SIZE) ? VFS_MAX_BUFFER_SIZE : total_bytes;
-
-    uint32_t counts_to_write = (total_bytes / VFS_MAX_BUFFER_SIZE) + 1;
-    uint32_t start_offset = 0;
-
-    while (counts_to_write > 0) {
-        vfs_file->interface.write(vfs_file, offset + start_offset, buffer_size, (const char*)buffer + start_offset);
-
-        start_offset += VFS_MAX_BUFFER_SIZE;
-        counts_to_write--;
-    }
-
-    return total_bytes;
+    return vfs_file->interface.write(vfs_file, offset, total_bytes, (const char*)buffer);
 }
 
 static unsigned int _vfs_get_path(const VfsDentry* const dentry, char* const buffer) {

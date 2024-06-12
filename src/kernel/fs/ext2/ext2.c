@@ -525,25 +525,26 @@ static void ext2_write_inode_block(const Ext2Inode* const inode,
     return;
 }
 
-static void ext2_read_inode_data(const VfsInodeFile* const vfs_inode, uint32_t offset,
+#define min(a, b) ((a) > (b) ? (b) : (a))
+
+static uint32_t ext2_read_inode_data(const VfsInodeFile* const vfs_inode, uint32_t offset,
                                  const uint32_t total_bytes, char* const buffer) {
     kassert(vfs_inode != NULL || buffer != NULL);
-    kassert(!(total_bytes > ext2_fs.block_size));
     kassert(vfs_inode->inode.type != VFS_TYPE_DIRECTORY);
-    kassert(total_bytes != 0);
+
+    if (total_bytes == 0 || offset >= vfs_inode->inode.file_size) return 0;
 
     ext2_read_inode(vfs_inode->inode.index, global_ext2_inode);
 
-    if (offset > global_ext2_inode->size_in_bytes_lower32) offset = global_ext2_inode->size_in_bytes_lower32;
-
-    const uint32_t start_offset = offset % ext2_fs.block_size;
-    const uint32_t end_offset = (global_ext2_inode->size_in_bytes_lower32 >= offset + total_bytes) ?
-                                (offset + total_bytes) : global_ext2_inode->size_in_bytes_lower32; 
-    const uint32_t start_block = offset / ext2_fs.block_size;
-    const uint32_t end_block = end_offset / ext2_fs.block_size;
-    
     global_ext2_inode->last_access_time = get_current_posix_time(clock_device);
     ext2_write_inode(vfs_inode->inode.index, global_ext2_inode);
+
+    const uint32_t avail_size = global_ext2_inode->size_in_bytes_lower32 - offset;
+    const uint32_t to_read = min(avail_size, total_bytes);
+    const uint32_t start_offset = offset % ext2_fs.block_size;
+    const uint32_t end_offset = offset + to_read;
+    const uint32_t start_block = offset / ext2_fs.block_size;
+    const uint32_t end_block = end_offset / ext2_fs.block_size;
 
     uint32_t current_offset = 0;
 
@@ -556,26 +557,27 @@ static void ext2_read_inode_data(const VfsInodeFile* const vfs_inode, uint32_t o
         if (i == start_block) {
             in_block_offset = start_offset;
 
-            if (i == end_block) in_block_size = end_offset - start_offset;
+            if (i == end_block) in_block_size = end_offset - offset;
+            else in_block_size -= start_offset;
         }
         else if (i == end_block) {
             in_block_size = end_offset % ext2_fs.block_size;
 
             if (in_block_size == 0) break;
         }
-                    
+
         memcpy(global_buffer + in_block_offset, buffer + current_offset, in_block_size);
 
         current_offset += in_block_size;
     }
+
+    return to_read;
 }
 
-static void ext2_write_inode_data(const VfsInodeFile* const vfs_inode, uint32_t offset,
+static uint32_t ext2_write_inode_data(const VfsInodeFile* const vfs_inode, uint32_t offset,
                                   const uint32_t total_bytes, const char* buffer) {
     kassert(vfs_inode != NULL || buffer != NULL);
-    kassert(!(total_bytes > ext2_fs.block_size));
-    kassert(vfs_inode->inode.type != VFS_TYPE_DIRECTORY);    
-    kassert(total_bytes != 0);
+    kassert(vfs_inode->inode.type != VFS_TYPE_DIRECTORY);
 
     const uint32_t buffer_len = strlen(buffer);
 
@@ -641,6 +643,8 @@ static void ext2_write_inode_data(const VfsInodeFile* const vfs_inode, uint32_t 
 
         current_offset += right_border - left_border;
     }
+
+    return total_bytes;
 }
 
 static void ext2_free_all_dir_entries(Ext2DirInode** all_dir_entries) {

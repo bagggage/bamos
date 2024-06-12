@@ -235,15 +235,17 @@ int fputs(const char* string, FILE* restrict stream) {
 int fgetc(FILE* restrict stream) {
     char c;
 
-    if (read(stream->_fileno, &c, 1) != 1) return EOF;
+    if (read(stream->_fileno, &c, 1) < 1) return EOF;
 
     return (int)c;
 }
 
 char* fgets(char* buffer, int size, FILE* restrict stream) {
-    read(stream->_fileno, buffer, (size_t)(size - 1));
+    const long readed = read(stream->_fileno, buffer, (size_t)(size - 1));
 
-    buffer[size - 1] = '\0';
+    if (readed < 0) return NULL;
+
+    buffer[readed] = '\0';
 
     return buffer;
 }
