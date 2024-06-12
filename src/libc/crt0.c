@@ -29,7 +29,6 @@ __asm__(
     "pop %r12 \n"
     "pop %r13 \n"
     "and $0xfffffffffffffff0,%rsp \n"
-    "sub $8,%rsp \n"
     "mov %rsp,%rbp \n"
     "xor %rax,%rax \n"
     "xor %rcx,%rcx \n"
