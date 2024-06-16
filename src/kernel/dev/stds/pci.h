@@ -98,6 +98,25 @@ typedef struct PciBus {
     BUS_STRUCT_IMPL;
 } PciBus;
 
+// Write to PCI devices registers on 32-bit bus
+static inline void pci_write64(void* const address, const uint64_t value) {
+    uint32_t* const ptr = (uint32_t*)address;
+
+    ptr[0] = ((uint64_32_t)value).lo;
+    ptr[1] = ((uint64_32_t)value).hi;
+}
+
+// Read from PCI devices registers on 32-bit bus
+static inline uint64_t pci_read64(void* const address) {
+    uint64_32_t result;
+    const uint32_t* const ptr = (uint32_t*)address;
+
+    result.lo = ptr[0];
+    result.hi = ptr[1];
+
+    return result.val;
+}
+
 uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
 uint16_t pci_config_readw(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
 uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
