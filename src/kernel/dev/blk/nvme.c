@@ -333,7 +333,7 @@ Status init_nvme_controller(const PciDevice* const pci_device) {
 
         return KERNEL_ERROR;
     }
-    
+
     return KERNEL_OK;
 }
 

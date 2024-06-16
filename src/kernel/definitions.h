@@ -22,6 +22,14 @@ typedef uint64_t size_t;
 typedef __int128_t int128_t;
 typedef __uint128_t uint128_t;
 
+typedef union {
+    struct {
+        uint32_t lo;
+        uint32_t hi;
+    };
+    uint64_t val;
+} uint64_32_t;
+
 #define TRUE 1
 #define FALSE 0
 

@@ -23,8 +23,8 @@ static UdevFs udev_fs = {
 };
 
 static uint32_t udev_read_pci(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
-    if (inode->inode.index >= udev_fs.pci_bus->size) return;
-    if (offset >= sizeof(PciConfigurationSpace)) return;
+    if (inode->inode.index >= udev_fs.pci_bus->size) return 0;
+    if (offset >= sizeof(PciConfigurationSpace)) return 0;
 
     PciDevice* device = (PciDevice*)udev_fs.pci_bus->nodes.next;
     const uint32_t idx = inode->inode.index;
@@ -52,11 +52,11 @@ static inline bool_t is_ascii(const char c) {
 static uint32_t udev_read_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, char* const buffer) {
     UNUSED(offset);
 
-    if (inode->inode.index != 0 || total_bytes == 0) return;
+    if (inode->inode.index != 0 || total_bytes == 0) return 0;
 
     KeyboardDevice* device = (KeyboardDevice*)dev_find_by_type(NULL, DEV_KEYBOARD);
 
-    if (device == NULL) return;
+    if (device == NULL) return 0;
 
     for (uint32_t i = 0; i < total_bytes; ++i) {
         KernelScancode scancode;
@@ -91,10 +91,9 @@ static uint32_t _tty_handle_csi(const char* buffer) {
 }
 
 static uint32_t udev_write_tty(const VfsInodeFile* const inode, const uint32_t offset, const uint32_t total_bytes, const char* buffer) {
-    //kernel_msg("Writing %s\n", buffer);
     UNUSED(offset);
 
-    if (inode->inode.index != 0 || total_bytes == 0) return;
+    if (inode->inode.index != 0 || total_bytes == 0) return 0;
 
     kernel_logger_lock();
 
