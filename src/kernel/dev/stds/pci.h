@@ -3,6 +3,7 @@
 #include "definitions.h"
 
 #include "dev/device.h"
+#include "intr/intr.h"
 
 #define PCI_CONFIG_ADDRESS_PORT 0xCF8
 #define PCI_CONFIG_DATA_PORT 0xCFC
@@ -51,38 +52,246 @@ typedef enum StorageControllerSubclass {
     OTHER_SUBCLASS = 0x80
 } StorageControllerSubclass;
 
+typedef enum PciExtCapabityID {
+    PCI_ECAP_NULL = 0,
+    PCI_ECAP_AER = 1,
+    PCI_ECAP_VIRT_CHANNEL = 2,
+    PCI_ECAP_DEV_SERIAL_NUM = 3,
+    PCI_ECAP_POWER_BUDGETING = 4,
+    PCI_ECAP_ROOT_COMP_LINK_DECL = 5,
+    PCI_ECAP_ROOT_COMP_INTER_LINK_CTRL = 6,
+    PCI_ECAP_ROOT_COMP_EVENT_COLL_EP_AS = 7,
+    PCI_ECAP_MULTI_FUNC_VIRT_CHANNEL = 8,
+    PCI_ECAP_VIRT_CHANNEL_1 = 9,
+    PCI_ECAP_ROOT_COMP_REG_BLOCK = 10,
+    PCI_ECAP_VENDOR_SPEC_EXT_CAP = 11,
+    PCI_ECAP_CONF_ACCESS_CORRELATION = 12,
+    PCI_ECAP_ACCESS_CTRL_SERVICE = 13,
+    PCI_ECAP_ALT_ROUTING_ID_INTERP = 14,
+    PCI_ECAP_ADDR_TRANS_SERVICE = 15,
+    PCI_ECAP_SINGLE_ROOT_IO_VIRT = 16,
+    PCI_ECAP_MULTI_ROOT_IO_VIRT = 17,
+    PCI_ECAP_MULTICAST = 18,
+    PCI_ECAP_PAGE_REQ_INTERFACE = 19,
+
+    PCI_ECAP_RESIZABLE_BAR = 21,
+    PCI_ECAP_DYN_POWER_ALLOC = 22,
+    PCI_ECAP_TPH_REQUESTTER = 23,
+    PCI_ECAP_LATENCY_TOL_REP = 24,
+    PCI_ECAP_SECONDARY_PCIE = 25,
+    PCI_ECAP_PROT_MULTIPLEXING = 26,
+    PCI_ECAP_PROC_ADDR_SPACE_ID = 27,
+    PCI_ECAP_LN_REQUESTER = 28,
+    PCI_ECAP_DOWNSTREAM_PORT_CONT = 29,
+    PCI_ECAP_L1_PM_SUBSTATES = 30,
+    PCI_ECAP_PERC_TIME_MEASUREMENT = 31,
+    PCI_ECAP_PCIE_OVER_MPHY = 32,
+    PCI_ECAP_FRS_QUEUEING = 33,
+    PCI_ECAP_READINESS_TIME_REP = 34,
+    PCI_ECAP_DESIG_VEND_SPEC_EXT_CAP = 35,
+    PCI_ECAP_VF_RESIZABLE_BAR = 36,
+    PCI_ECAP_DATA_LINK_FEATURE = 37,
+    PCI_ECAP_PHYS_LAYER_16GT_S = 38,
+    PCI_ECAP_LANE_MARG_RECEIVER = 39,
+    PCI_ECAP_HIERARCHY_ID = 40,
+    PCI_ECAP_NATIVE_PCIE_ENCLOSURE_MNGMT = 41,
+    PCI_ECAP_PHYS_LAYER_32GT_S = 42,
+    PCI_ECAP_ALTER_PROTOCOL = 43,
+    PCI_ECAP_SYS_FIRMWARE_INTERM = 44,
+} PciExtCapabilityID;
+
+typedef enum PciCapabilityID {
+    PCI_CAP_NULL = 0,
+    PCI_CAP_PCI_POWER_MNGMT_INTERFACE = 1,
+    PCI_CAP_AGP = 2,
+    PCI_CAP_VPD = 3,
+    PCI_CAP_SLOT_ID = 4,
+    PCI_CAP_MSI = 5,
+    PCI_CAP_COMP_PCI_HOT_SWAP = 6,
+    PCI_CAP_PCI_X = 7,
+    PCI_CAP_HYPER_TRANSPORT = 8,
+    PCI_CAP_VENDOR_SPECIFIC = 9,
+    PCI_CAP_DEBUG_PORT = 10,
+    PCI_CAP_COMP_PCI_CENTRAL_RES_CTRL = 11,
+    PCI_CAP_HOT_PLUG = 12,
+    PCI_CAP_BRIDGE_SUBSYS_VENDOR_ID = 13,
+    PCI_CAP_AGP_8X = 14,
+    PCI_CAP_SECURE_DEVICE = 15,
+    PCI_CAP_PCI_EXPRESS = 16,
+    PCI_CAP_MSI_X = 17,
+    PCI_CAP_SATA_DATA_IDX_CONF = 18,
+    PCI_CAP_ADVANCED_FEATURES = 19,
+    PCI_CAP_ENHANCED_ALLOC = 20,
+    PCI_CAP_FLATTENING_PORTAL_BRIDGE = 21
+} PciCapabilityID;
+
+typedef union PciExtCapabilityHeader {
+    struct {
+        uint32_t id : 16;
+        uint32_t version : 4;
+        uint32_t next_cap_off : 12;
+    };
+    uint32_t value;
+} ATTR_PACKED PciExtCapabilityHeader;
+
+typedef union PciCapabilityHeader {
+    struct {
+        uint32_t id : 8;
+        uint32_t next_cap_off : 8;
+        uint32_t specific : 16;
+    };
+    uint32_t value;
+} ATTR_PACKED PciCapabilityHeader;
+
+typedef union MsiXCtrlReg {
+    struct {
+        uint32_t reserved_1 : 16;
+        uint32_t table_size : 11;
+
+        uint32_t reserved_2 : 3;
+
+        uint32_t func_mask : 1;
+        uint32_t enable : 1;
+    };
+    uint32_t value;
+} ATTR_PACKED MsiXCtrlReg;
+
+typedef struct MsiXTableEntry {
+    uint64_32_t msg_addr;
+    uint32_t msg_data;
+    uint32_t ver_ctrl;
+} ATTR_PACKED MsiXTableEntry;
+
+typedef struct MsiXCapability {
+    MsiXCtrlReg control;
+
+    union {
+        struct {
+            uint32_t table_bar_indicator : 3;
+            uint32_t : 29;
+        };
+        uint32_t table_offset;
+        uint32_t dword_2;
+    };
+    union {
+        struct {
+            uint32_t pba_bar_indicator : 3;
+            uint32_t : 29;
+        };
+        uint32_t pba_offset;
+        uint32_t dword_3;
+    };
+} ATTR_PACKED MsiXCapability;
+
+typedef union PciCommandReg {
+    struct {
+        uint16_t io_space : 1;
+        uint16_t memory_space : 1;
+        uint16_t bus_master : 1;
+        uint16_t spec_cycles : 1;
+        uint16_t mem_write_inval_enable : 1;
+        uint16_t vga_palette_snoop : 1;
+        uint16_t parity_err_response : 1;
+
+        uint16_t reserved_1 : 1;
+
+        uint16_t serr_enable : 1;
+        uint16_t fast_b2b_enable : 1;
+        uint16_t intr_disable : 1;
+
+        uint16_t reserved_2 : 5;
+    };
+    uint16_t value;
+} ATTR_PACKED PciCommandReg;
+
+typedef union PciStatusReg {
+    struct {
+        uint16_t reserved_1 : 3;
+
+        uint16_t intr_status : 1;
+        uint16_t cap_list : 1;
+        uint16_t cap_66mhz : 1;
+
+        uint16_t reserved_2 : 1;
+
+        uint16_t fast_b2b_cap : 1;
+        uint16_t master_data_parity_err : 1;
+        uint16_t devsel_timing : 2;
+        uint16_t sig_target_abort : 1;
+        uint16_t recv_target_abort : 1;
+        uint16_t recv_master_abort : 1;
+        uint16_t sig_sys_err : 1;
+        uint16_t detected_parity_err : 1;
+    };
+    uint16_t value;
+} ATTR_PACKED PciStatusReg;
+
+/*
+Structure identical in layout to the PCI configuration space.
+*/
 typedef struct PciConfigurationSpace {
     uint16_t vendor_id;
     uint16_t device_id;
-    uint16_t command;
-    uint16_t status;
+
+    PciCommandReg command;
+    PciStatusReg status;
+
     uint8_t revision_id;
     uint8_t prog_if;
     uint8_t subclass;
     uint8_t class_code;
+
     uint8_t cache_line_size;
     uint8_t latency_timer;
     uint8_t header_type;
     uint8_t bist;
-    uint64_t bar0;
-    uint64_t bar1;
+
+    uint32_t bar0;
+    uint32_t bar1;
     uint32_t bar2;
     uint32_t bar3;
     uint32_t bar4;
     uint32_t bar5;
+
     uint32_t cardbus_cis_pointer;
+
     uint16_t subsystem_vendor_id;
     uint16_t subsystem_id;
-    uint32_t expansion_rom_base_address;
-    uint8_t capabilities_pointer;
-    uint8_t reserved1;
-    uint16_t reserved2;
-    uint32_t reserved3;
+
+    uint32_t expansion_rom_base;
+
+    uint8_t cap_offset : 8;
+    uint32_t reserved_1 : 24;
+
+    uint32_t reserved_2;
+
     uint8_t interrupt_line;
     uint8_t interrupt_pin;
     uint8_t min_grant;
     uint8_t max_latency;
-} ATTR_PACKED PciConfigurationSpace;
+} ATTR_PACKED ATTR_ALIGN(4) PciConfigurationSpace;
+
+typedef enum PciIntrType {
+    PCI_INTR_INTX = 0,
+    PCI_INTR_MSI,
+    PCI_INTR_MSIX
+} PciIntrType;
+
+typedef struct PciInterruptControl {
+    uint8_t type;
+    uint8_t bitmap[BYTE_SIZE];
+
+    uint32_t cap_base;
+
+    union {
+        struct {
+            MsiXCtrlReg control;
+
+            volatile MsiXTableEntry* table;
+            volatile uint64_t* pba;
+        } msi_x;
+    };
+} PciInterruptControl;
 
 typedef struct PciDevice {
     LIST_STRUCT_IMPL(PciDevice);
@@ -91,7 +300,16 @@ typedef struct PciDevice {
     uint8_t dev;
     uint8_t func;
 
+    uint32_t config_base;
+
     PciConfigurationSpace config;
+
+    uint64_t bar0;
+    uint64_t bar1;
+
+    uint32_t cap_base;
+
+    PciInterruptControl* intr_ctrl;
 } PciDevice;
 
 typedef struct PciBus {
@@ -117,10 +335,22 @@ static inline uint64_t pci_read64(void* const address) {
     return result.val;
 }
 
-uint8_t pci_config_readb(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
-uint16_t pci_config_readw(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
-uint32_t pci_config_readl(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset);
+uint32_t pci_get_capabilty(const PciDevice* const pci_dev, const uint8_t cap_id);
 
-void pci_config_writel(const uint8_t bus, const uint8_t dev, const uint8_t func, const uint8_t offset, const uint32_t value);
+uint32_t pci_get_dev_base(const uint8_t bus, const uint8_t dev, const uint8_t func);
+
+uint8_t pci_config_readb (const uint32_t base, const uint8_t offset);
+uint16_t pci_config_readw(const uint32_t base, const uint8_t offset);
+uint32_t pci_config_readl(const uint32_t base, const uint8_t offset);
+
+void pci_config_writel(const uint32_t base, const uint8_t offset, const uint32_t value);
+
+bool_t pci_init_msi_or_msi_x(PciDevice* const pci_dev);
+
+void pci_enable_bus_master(PciDevice* const pci_dev);
+
+bool_t pci_setup_precise_intr(PciDevice* const pci_dev, const InterruptLocation intr_location);
 
 Status init_pci_bus(PciBus* const pci_bus);
+
+void pci_log_device(const PciDevice* pci_dev);
