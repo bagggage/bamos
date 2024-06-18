@@ -121,6 +121,8 @@ Status _vm_map_phys_to_virt(
 );
 Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const size_t pages_count, VMMapFlags flags);
 
+uint64_t vm_map_mmio(const uint64_t phys_address, const uint32_t pages_count);
+
 void vm_unmap(const uint64_t virt_address, PageMapLevel4Entry* pml4, const uint32_t pages_count);
 
 /*

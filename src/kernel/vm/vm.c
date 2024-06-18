@@ -790,6 +790,25 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
     return _vm_map_phys_to_virt(phys_address, virt_address, g_proc_local.kernel_page_table, pages_count, flags);
 }
 
+uint64_t vm_map_mmio(const uint64_t phys_address, const uint32_t pages_count) {
+    const uint64_t virt_address = vm_heap_reserve(&kernel_heap, pages_count);
+
+    const Status result = _vm_map_phys_to_virt(
+        phys_address,
+        virt_address,
+        g_proc_local.kernel_page_table,
+        pages_count,
+        (VMMAP_CACHE_DISABLED | VMMAP_WRITE | VMMAP_GLOBAL)
+    );
+
+    if (result != KERNEL_OK) {
+        vm_heap_release(&kernel_heap, virt_address, pages_count);
+        return 0;
+    }
+
+    return virt_address;
+}
+
 static uint32_t get_max_near_rank_of(const uint32_t number) {
     uint32_t rank = BPA_MAX_BLOCK_RANK - 1; 
 
