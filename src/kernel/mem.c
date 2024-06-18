@@ -114,6 +114,10 @@ void kfree(void* memory_block) {
     kassert(FALSE);
 }
 
+uint64_t uma_get_allocated_bytes() {
+    return uma.allocated_bytes;
+}
+
 static Status init_kernel_uma() {
     uma.allocated_bytes = 0;
 

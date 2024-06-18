@@ -27,6 +27,8 @@ typedef struct FreeArea {
 typedef struct BuddyPageAllocator {
     FreeArea free_area[BPA_MAX_BLOCK_RANK];
     Spinlock lock;
+
+    uint32_t allocated_pages;
 } BuddyPageAllocator;
 
 Status init_buddy_page_allocator(VMMemoryMap* memory_map);
@@ -45,5 +47,7 @@ It's works properly only with same rank argument that was used to allocate pages
 Otherwise the behavior is undefined.
 */
 void bpa_free_pages(const uint64_t page_address, const uint32_t rank);
+
+uint64_t bpa_get_allocated_bytes();
 
 void bpa_log_free_lists(const ListHead* list);

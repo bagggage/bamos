@@ -404,6 +404,7 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
 //            temp_page_base += temp_pages_count;
 //            temp_pages_count >>= 1;
 //        }
+        bpa.allocated_pages += (1u << rank);
 
         spin_release(&bpa.lock);
 
@@ -416,6 +417,8 @@ uint64_t bpa_allocate_pages(const uint32_t rank) {
 
     bpa_inverse_page_bit(free_entry->phys_page_base, rank);
     free_list_remove_first(&bpa.free_area[rank].free_list);
+    bpa.allocated_pages += (1u << rank);
+
     spin_release(&bpa.lock);
 
     return result;
@@ -475,5 +478,11 @@ void bpa_free_pages(const uint64_t page_address, const uint32_t rank) {
     }
 
     bpa_set_page_bit(page_base, temp_rank);
+    bpa.allocated_pages -= (1u << rank);
+
     spin_release(&bpa.lock);
+}
+
+uint64_t bpa_get_allocated_bytes() {
+    return bpa.allocated_pages * PAGE_BYTE_SIZE;
 }

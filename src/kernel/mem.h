@@ -22,6 +22,8 @@ void* krealloc(void* memory_block, const size_t size);
 // Kernel space memory free
 void kfree(void* memory_block);
 
+uint64_t uma_get_allocated_bytes();
+
 void log_memory_page_tables(PageMapLevel4Entry* pml4);
 void log_boot_memory_map(const MMapEnt* memory_map, const size_t entries_count);
 
