@@ -104,9 +104,9 @@ typedef struct ProcLocalX2APIC {
 } ATTR_PACKED ProcLocalX2APIC;
 
 typedef enum APICDeliveryMode {
-    APIC_DELV_MODE_NORMAL = 0,
+    APIC_DELV_MODE_FIXED = 0,
     APIC_DELV_MODE_LOW_PRIORITY = 1,
-    APIC_DELV_MODE_SYS_MANG_INT = 2,
+    APIC_DELV_MODE_SMI = 2,
     APIC_DELV_MODE_NMI = 4,
     APIC_DELV_MODE_INIT = 5,
     APIC_DELV_MODE_SIPI = 6,
@@ -119,8 +119,8 @@ typedef enum APICDestMode {
 } APICDestMode;
 
 typedef enum APICTriggerMode {
-    APIC_DELIVERY_EDGE = 0,
-    APIC_DELIVERY_LEVEL = 1
+    APIC_TRIGGER_EDGE = 0,
+    APIC_TRIGGER_LEVEL = 1
 } APICTriggerMode;
 
 typedef enum APICDestType {
@@ -165,6 +165,35 @@ typedef union LVTTimerReg {
     uint32_t value;
 } ATTR_PACKED LVTTimerReg;
 
+typedef union MsiMessageAddress {
+    struct {
+        uint32_t reserved_1 : 2;
+        uint32_t dest_mode : 1;
+        uint32_t redir_hint_indicator : 1;
+        uint32_t reserved_2 : 8;
+        uint32_t dest_id : 8;
+        uint32_t constant : 12;
+    };
+    uint32_t value;
+} ATTR_PACKED MsiMessageAddress;
+
+typedef union MsiMessageData {
+    struct {
+        uint32_t vector : 8;
+        uint32_t delivery_mode : 3;
+        uint32_t reserved_1 : 3;
+        uint32_t trigger_level : 1; // For level mode: 0 - Deassert, 1 - Assert
+        uint32_t trigger_mode : 1;
+        uint32_t reserved_2 : 16;
+    };
+    uint32_t value;
+} ATTR_PACKED MsiMessageData;
+
+typedef struct MsiMessage {
+    MsiMessageAddress address;
+    MsiMessageData data;
+} MsiMessage;
+
 uint32_t lapic_read(const uint32_t reg);
 void lapic_write(const uint32_t reg, const uint32_t value);
 
@@ -177,5 +206,14 @@ MADTEntry* madt_find_first_entry_of_type(const MADTEntryType type);
 MADTEntry* madt_next_entry_of_type(MADTEntry* begin, const MADTEntryType type);
 
 bool_t is_apic_avail();
+
+typedef struct InterruptLocation InterruptLocation;
+
+MsiMessage apic_config_msi_message(
+    const InterruptLocation location,
+    const APICDestMode dest_mode,
+    const APICDeliveryMode deliv_mode,
+    const APICTriggerMode trigger_mode
+);
 
 Status init_apic();

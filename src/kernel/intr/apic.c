@@ -1,6 +1,7 @@
 #include "apic.h"
 
 #include "logger.h"
+#include "intr.h"
 
 #include "cpu/feature.h"
 #include "cpu/regs.h"
@@ -8,6 +9,8 @@
 #include "vm/vm.h"
 
 #define MSR_APIC_ENABLE 0x800
+
+#define MSI_ADDR_CONSTANT 0x0FEE
 
 typedef struct InterruptCommand {
     uint32_t vector             : 8;
@@ -82,6 +85,30 @@ static void apic_enable() {
 
 bool_t is_apic_avail() {
     return cpu_is_feature_supported(CPUID_FEAT_EDX_APIC);
+}
+
+MsiMessage apic_config_msi_message(
+    const InterruptLocation location,
+    const APICDestMode dest_mode,
+    const APICDeliveryMode deliv_mode,
+    const APICTriggerMode trigger_mode
+) {
+    MsiMessage msg;
+
+    msg.address.value = 0;
+    msg.data.value = 0;
+
+    msg.address.constant = MSI_ADDR_CONSTANT;
+    msg.address.dest_mode = dest_mode;
+    msg.address.dest_id = location.cpu_idx;
+
+    msg.data.vector = location.vector;
+    msg.data.delivery_mode = deliv_mode;
+    msg.data.trigger_mode = trigger_mode;
+
+    if (trigger_mode == APIC_TRIGGER_LEVEL) msg.data.trigger_level = 1;
+
+    return msg;
 }
 
 Status init_apic() {
