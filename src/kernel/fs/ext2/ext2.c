@@ -601,7 +601,7 @@ static uint32_t ext2_write_inode_data(const VfsInodeFile* const vfs_inode, uint3
 
         if (current_i_block_count != new_i_block_count) {
             if(!ext2_allocate_inode_block(global_ext2_inode, vfs_inode->inode.index, current_i_block_count)) {
-                return;
+                return 0;
             }
         }
     }
@@ -1358,7 +1358,7 @@ Status ext2_init(const StorageDevice* const storage_device,
         }
     }
 
-    clock_device = (ClockDevice*)dev_find(NULL, &is_clock_device);
+    clock_device = (ClockDevice*)dev_find_by_type(NULL, DEV_CLOCK);
 
     if (clock_device == NULL) {    
         kfree(superblock);

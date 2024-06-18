@@ -255,22 +255,24 @@ ATTR_INTRRUPT void intr_mc_handler(InterruptFrame64* frame) {
 }
 
 Status init_intr_exceptions() {
-    intr_set_idt_descriptor(DE_ISR, (void*)&intr_de_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(DB_ISR, (void*)&intr_db_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(NMI_ISR, (void*)&intr_nmi_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(BP_ISR, (void*)&intr_bp_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(OF_ISR, (void*)&intr_of_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(BR_ISR, (void*)&intr_br_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(UD_ISR, (void*)&intr_ud_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(NM_ISR, (void*)&intr_nm_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(DF_ISR, (void*)&intr_df_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(TS_ISR, (void*)&intr_ts_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(NP_ISR, (void*)&intr_np_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(SS_ISR, (void*)&intr_ss_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(GP_ISR, (void*)&intr_gp_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(PF_ISR, (void*)&intr_pf_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(AC_ISR, (void*)&intr_ac_handler, TRAP_GATE_FLAGS);
-    intr_set_idt_descriptor(MC_ISR, (void*)&intr_mc_handler, TRAP_GATE_FLAGS);
+    InterruptDescriptor64* const idt = intr_get_root_idt();
+
+    intr_set_idt_entry(idt, DE_ISR, (void*)&intr_de_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, DB_ISR, (void*)&intr_db_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, NMI_ISR, (void*)&intr_nmi_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, BP_ISR, (void*)&intr_bp_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, OF_ISR, (void*)&intr_of_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, BR_ISR, (void*)&intr_br_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, UD_ISR, (void*)&intr_ud_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, NM_ISR, (void*)&intr_nm_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, DF_ISR, (void*)&intr_df_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, TS_ISR, (void*)&intr_ts_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, NP_ISR, (void*)&intr_np_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, SS_ISR, (void*)&intr_ss_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, GP_ISR, (void*)&intr_gp_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, PF_ISR, (void*)&intr_pf_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, AC_ISR, (void*)&intr_ac_handler, TRAP_GATE_FLAGS);
+    intr_set_idt_entry(idt, MC_ISR, (void*)&intr_mc_handler, TRAP_GATE_FLAGS);
 
     return KERNEL_OK;
 }

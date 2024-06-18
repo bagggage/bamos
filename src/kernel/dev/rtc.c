@@ -113,7 +113,7 @@ static void get_rtc_current_time(ClockDevice* const clock_device) {
     asm("sti");
 }
 
-static void set_rtc_current_time(const DateAndTime* const date_and_time) {
+static void set_rtc_current_time(const DateTime* const date_and_time) {
     if (date_and_time == NULL) return;
     if (date_and_time->day == 0 || date_and_time->day > 31 ||
         date_and_time->hour > 24 || date_and_time->minute > 59 || 

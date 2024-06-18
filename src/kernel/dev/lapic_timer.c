@@ -98,7 +98,7 @@ static uint64_t lapic_calc_min_clock_time() {
 }
 
 Status init_lapic_timer(TimerDevice* dev) {
-    intr_set_idt_descriptor(LAPIC_TIMER_INT_VECTOR, &intr_lapic_timer_handler, INTERRUPT_GATE_FLAGS);
+    intr_set_idt_entry(intr_get_idt(g_proc_local.idx), LAPIC_TIMER_INT_VECTOR, &intr_lapic_timer_handler, INTERRUPT_GATE_FLAGS);
 
     // For current cpu
     configure_lapic_timer();

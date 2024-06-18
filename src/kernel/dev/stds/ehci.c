@@ -18,8 +18,8 @@ static EhciController* init_ehci_controller(PciDevice* const pci_dev) {
     if (ehci == NULL) return NULL;
 
     if (vm_map_phys_to_virt(
-                pci_dev->config.bar0,
-                pci_dev->config.bar0,
+                pci_dev->bar0,
+                pci_dev->bar0,
                 1,
                 (VMMAP_WRITE | VMMAP_CACHE_DISABLED | VMMAP_WRITE_THROW)
         ) != KERNEL_OK) {
@@ -28,10 +28,10 @@ static EhciController* init_ehci_controller(PciDevice* const pci_dev) {
         return NULL;
     }
 
-    ehci->cap_reg = (CapabilityReg*)pci_dev->config.bar0;
-    ehci->oper_regs = (UsbOperRegs*)(pci_dev->config.bar0 + ehci->cap_reg->length);
+    ehci->cap_reg = (CapabilityReg*)pci_dev->bar0;
+    ehci->oper_regs = (UsbOperRegs*)(pci_dev->bar0 + ehci->cap_reg->length);
 
-    kernel_msg("EHCI BAR0: %x\n", pci_dev->config.bar0);
+    kernel_msg("EHCI BAR0: %x\n", pci_dev->bar0);
     kernel_msg("Cap reg length: %x\n", ehci->cap_reg->length);
     kernel_msg("Cap reg version: %u%u%u%u\n",
         ehci->cap_reg->interface_version & 0xF,

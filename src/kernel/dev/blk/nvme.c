@@ -178,24 +178,21 @@ Status init_nvme_controller(const PciDevice* const pci_device) {
     }
 
     nvme->pci_device = (PciDevice*)pci_device;
-    nvme->bar0 = (NvmeBar0*)pci_device->config.bar0;
+    nvme->bar0 = (NvmeBar0*)vm_map_mmio(pci_device->bar0, PAGES_PER_2MB);
 
-    if (get_phys_address((uint64_t)nvme->bar0) != pci_device->config.bar0) {
-        vm_map_phys_to_virt(
-            pci_device->config.bar0,
-            pci_device->config.bar0,
-            PAGES_PER_2MB,
-            VMMAP_CACHE_DISABLED | VMMAP_GLOBAL | VMMAP_WRITE
-        );
-   }
+    if (nvme->bar0 == 0) {
+        error_str = LOG_PREFIX "Failed to map BAR0 space";
+        kfree(nvme);
+
+        return KERNEL_ERROR;
+    }
 
     // Enable interrupts, bus-mastering DMA, and memory space access
-    uint32_t command = pci_config_readl(pci_device->bus, pci_device->dev, pci_device->func, 0x04);
+    uint32_t command = pci_config_readl(pci_device->config_base, 0x04);
     command &= ~(1 << 10);
     command |= (1 << 1) | (1 << 2);
 
-    pci_config_writel(pci_device->bus, pci_device->dev, 
-                      pci_device->func, 0x04, command);
+    pci_config_writel(pci_device->config_base, 0x04, command);
 
     const uint32_t default_controller_state = nvme->bar0->cc;
     
@@ -205,8 +202,9 @@ Status init_nvme_controller(const PciDevice* const pci_device) {
     if (nvme->acq == NULL || nvme->asq == NULL) {
         error_str = LOG_PREFIX "no memory";
 
-        kfree((void*)nvme->acq);
-        kfree((void*)nvme->asq);
+        kfree(nvme->acq);
+        kfree(nvme->asq);
+        kfree(nvme);
 
         return KERNEL_ERROR;
     }
@@ -218,8 +216,8 @@ Status init_nvme_controller(const PciDevice* const pci_device) {
         if (nvme->bar0->csts & NVME_CTRL_ERROR){
             error_str = LOG_PREFIX "csts.cfs is set";
 
-            kfree((void*)nvme->acq);
-            kfree((void*)nvme->asq);
+            kfree(nvme->acq);
+            kfree(nvme->asq);
             kfree(nvme);
 
             return KERNEL_ERROR;
@@ -244,8 +242,8 @@ Status init_nvme_controller(const PciDevice* const pci_device) {
         if (nvme->bar0->csts & NVME_CTRL_ERROR){
             error_str = LOG_PREFIX "csts.cfs is set";
 
-            kfree((void*)nvme->acq);
-            kfree((void*)nvme->asq);
+            kfree(nvme->acq);
+            kfree(nvme->asq);
             kfree(nvme);
 
             return KERNEL_ERROR;
@@ -264,8 +262,8 @@ Status init_nvme_controller(const PciDevice* const pci_device) {
     if (nvme->iocq == NULL) {
         error_str = LOG_PREFIX "failed to allocate I/O command queue";
 
-        kfree((void*)nvme->acq);
-        kfree((void*)nvme->asq);
+        kfree(nvme->acq);
+        kfree(nvme->asq);
         kfree(nvme);
 
         return KERNEL_ERROR;
@@ -280,15 +278,15 @@ Status init_nvme_controller(const PciDevice* const pci_device) {
     memset(&cmd, sizeof(NvmeSubmissionQueueEntry), 0);
     cmd.command.opcode = NVME_ADMIN_CREATE_SUBMISSION_QUEUE;
     cmd.command.command_id = 1;
-    
+
     nvme->iosq = (NvmeSubmissionQueueEntry*)kmalloc(QUEUE_SIZE);
 
     if (nvme->iosq == NULL) {
         error_str = LOG_PREFIX "failed to allocate I/O submission queue";
 
-        kfree((void*)nvme->acq);
-        kfree((void*)nvme->asq);
-        kfree((void*)nvme->iocq);
+        kfree(nvme->acq);
+        kfree(nvme->asq);
+        kfree(nvme->iocq);
         kfree(nvme);
 
         return KERNEL_ERROR;
@@ -325,10 +323,10 @@ Status init_nvme_controller(const PciDevice* const pci_device) {
     }
 
     if (nvme_init_devices_for_controller(nvme) == FALSE) {
-        kfree((void*)nvme->acq);
-        kfree((void*)nvme->asq);
-        kfree((void*)nvme->iocq);
-        kfree((void*)nvme->iosq);
+        kfree(nvme->acq);
+        kfree(nvme->asq);
+        kfree(nvme->iocq);
+        kfree(nvme->iosq);
         kfree(nvme);
 
         return KERNEL_ERROR;
