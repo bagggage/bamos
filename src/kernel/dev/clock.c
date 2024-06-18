@@ -12,12 +12,6 @@ typedef enum TotalSeconds {
 
 static const uint16_t DAYS_PER_MONTH[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
-bool_t is_clock_device(const Device* const device) {
-    if (device == NULL) return FALSE;
-
-    return (device->type == DEV_CLOCK) ? TRUE : FALSE;
-}
-
 static bool_t is_leap_year(uint16_t year) {
     return (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
 }
