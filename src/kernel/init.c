@@ -47,7 +47,7 @@ static void wait_for_cpu_init() {
     spin_lock(&cpus_init_lock);
 
     vm_configure_cpu_page_table();
-    cpu_set_idtr(intr_get_kernel_idtr());
+    cpu_set_idtr(intr_get_idtr(g_proc_local.idx));
     configure_lapic_timer();
 
     spin_release(&cpus_init_lock);
@@ -183,8 +183,10 @@ Status init_user_space() {
 Status init_kernel() {
     if (split_logical_cores() != KERNEL_OK) return KERNEL_PANIC;
 
-    if (init_intr()         != KERNEL_OK) return KERNEL_PANIC;
+    if (intr_preinit_exceptions() != KERNEL_OK) return KERNEL_PANIC;
+
     if (init_memory()       != KERNEL_OK) return KERNEL_ERROR;
+    if (init_intr()         != KERNEL_OK) return KERNEL_ERROR;
 
     if (init_acpi()         != KERNEL_OK) return KERNEL_ERROR;
     if (init_apic()         != KERNEL_OK) return KERNEL_ERROR;

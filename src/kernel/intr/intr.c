@@ -1,20 +1,28 @@
 #include "intr.h"
 
+#include "assert.h"
 #include "exceptions.h"
-
 #include "logger.h"
+#include "math.h"
 #include "mem.h"
 
 #include "cpu/feature.h"
 #include "cpu/gdt.h"
 
-#define IDT_ENTRIES_COUNT 256
-#define IDT_EXCEPTION_ENTRIES_COUNT 32
+#include "vm/bitmap.h"
+#include "vm/buddy_page_alloc.h"
 
-static InterruptDescriptor64 idt_64[IDT_ENTRIES_COUNT];
-static IDTR64 idtr_64;
+#define IDT_EXCEPTION_ENTRIES_COUNT 32
+#define INTR_CTRL_MAX_CPUS (PAGE_BYTE_SIZE / sizeof(InterruptMap))
+#define INTR_CTRL_INVAL_IRQ 255
 
 extern uint64_t kernel_elf_start;
+extern BOOTBOOT bootboot;
+
+static InterruptDescriptor64 idt_root[IDT_ENTRIES_COUNT];
+static InterruptControlBlock intr_ctrl = {
+    .idts = NULL, .map = NULL, .cpu_count = 0
+};
 
 uint16_t get_current_kernel_cs() {
     uint16_t cs;
@@ -55,14 +63,14 @@ typedef struct OffsetAddress {
     uint32_t offset_3;
 } ATTR_PACKED OffsetAddress;
 
-void intr_set_idt_descriptor(const uint8_t idx, const void* isr, uint8_t flags) {
-    idt_64[idx].offset_1 = (uint64_t)isr & 0xFFFF;
-    idt_64[idx].offset_2 = ((uint64_t)isr >> 16) & 0xFFFF;
-    idt_64[idx].offset_3 = (uint64_t)isr >> 32;
-    idt_64[idx].ist = 0;
-    idt_64[idx].selector = get_current_kernel_cs();
-    idt_64[idx].type_attributes = flags;
-    idt_64[idx].reserved = 0;
+void intr_set_idt_entry(InterruptDescriptor64* const idt, const uint8_t idx, const void* isr, uint8_t flags) {
+    idt[idx].offset_1 = (uint64_t)isr & 0xFFFF;
+    idt[idx].offset_2 = ((uint64_t)isr >> 16) & 0xFFFF;
+    idt[idx].offset_3 = (uint64_t)isr >> 32;
+    idt[idx].ist = 0;
+    idt[idx].selector = get_current_kernel_cs();
+    idt[idx].type_attributes = flags;
+    idt[idx].reserved = 0;
 }
 
 #ifdef KTRACE
@@ -105,7 +113,7 @@ void log_trace(const uint32_t trace_start_depth) {
 #endif
 
 __attribute__((target("general-regs-only"))) void log_intr_frame(InterruptFrame64* frame) {
-    if (is_virt_addr_mapped(frame) == FALSE) return;
+    if (is_virt_addr_mapped((uint64_t)frame) == FALSE) return;
 
     kernel_logger_push_color(COLOR_LYELLOW);
 
@@ -208,10 +216,98 @@ static bool_t find_debug_sym_table(const uint8_t* initrd, const uint64_t initrd_
 }
 #endif
 
-Status init_intr() {
-    idtr_64.limit = sizeof(idt_64) - 1;
-    idtr_64.base = (uint64_t)&idt_64;
+static uint8_t _intr_reserve_vector(const uint8_t cpu_idx) {
+    InterruptMap* const map = intr_ctrl.map + cpu_idx;
+    const uint8_t begin_vec = IDT_EXCEPTION_ENTRIES_COUNT;
 
+    for (uint8_t i = (begin_vec / BYTE_SIZE);i < sizeof(InterruptMap); ++i) {
+        if (map->bytes[i] == 0xFF) continue;
+
+        uint8_t byte = map->bytes[i];
+
+        for (uint8_t j = 0; j < BYTE_SIZE; ++j) {
+            if ((byte & 1) == 0) {
+                const uint8_t idx = (i * BYTE_SIZE) + j;
+
+                _bitmap_set_bit(map->bytes, idx);
+
+                return idx;
+            }
+
+            byte >>= 1;
+        }
+    }
+
+    return 0;
+}
+
+InterruptLocation intr_reserve(const uint8_t cpu_idx) {
+    InterruptLocation result = { .cpu_idx = cpu_idx, .vector = 0 };
+
+    if (cpu_idx == INTR_ANY_CPU) {
+        for (result.cpu_idx = 0; result.cpu_idx < intr_ctrl.cpu_count && result.vector == 0; ++result.cpu_idx) {
+            result.vector = _intr_reserve_vector(result.cpu_idx);
+        }
+
+        if (result.vector != 0) result.cpu_idx--;
+    }
+    else {
+        result.vector = _intr_reserve_vector(cpu_idx);
+    }
+
+    return result;
+}
+
+void intr_release(const InterruptLocation location) {
+    kassert(location.cpu_idx < bootboot.numcores);
+
+    InterruptMap* const map = intr_ctrl.map + location.cpu_idx;
+
+    kassert(_bitmap_get_bit(map->bytes, location.vector) != 0);
+
+    _bitmap_clear_bit(map->bytes, location.vector);
+}
+
+bool_t intr_setup_handler(InterruptLocation location, InterruptHandler_t handler) {
+    if (location.cpu_idx >= bootboot.numcores || location.vector < 32) return FALSE;
+    if (_bitmap_get_bit(
+            intr_ctrl.map[location.cpu_idx].bytes,
+            location.vector
+        ) == 0) return FALSE;
+
+    InterruptDescriptor64* idt = intr_get_idt(location.cpu_idx);
+
+    intr_set_idt_entry(idt,location.vector, (void*)handler, INTERRUPT_GATE_FLAGS);
+
+    return TRUE;
+}
+
+Status init_intr() {
+    intr_ctrl.cpu_count = bootboot.numcores;
+
+    if (intr_ctrl.cpu_count == 1) return KERNEL_OK;
+    if (intr_ctrl.cpu_count > INTR_CTRL_MAX_CPUS) intr_ctrl.cpu_count = INTR_CTRL_MAX_CPUS;
+
+    const uint64_t mem_block = bpa_allocate_pages(log2(intr_ctrl.cpu_count));
+
+    if (mem_block == INVALID_ADDRESS) {
+        error_str = "Intr: Failed to allocate interrupt control block";
+        return KERNEL_ERROR;
+    }
+
+    intr_ctrl.idts = (InterruptDescriptorTable*)mem_block;
+    intr_ctrl.map = (InterruptMap*)(mem_block + (sizeof(InterruptDescriptorTable) * intr_ctrl.cpu_count));
+
+    for (uint32_t i = 0; i < intr_ctrl.cpu_count; ++i) {
+        if (i > 0) memcpy((void*)idt_root, (void*)(intr_ctrl.idts + i), sizeof(InterruptDescriptorTable));
+
+        memset((void*)(intr_ctrl.map + i), sizeof(InterruptMap), 0);
+    }
+
+    return KERNEL_OK;
+}
+
+Status intr_preinit_exceptions() {
 #ifdef KTRACE
     if (find_debug_sym_table((const uint8_t*)bootboot.initrd_ptr, bootboot.initrd_size) == FALSE) {
         draw_kpanic_screen();
@@ -224,10 +320,10 @@ Status init_intr() {
     for (uint8_t i = 0; i < IDT_EXCEPTION_ENTRIES_COUNT; ++i) {
         if (i == 8 || i == 10 || i == 11 || i == 12 ||
             i == 13 || i == 14 || i == 17 || i == 21) {
-            intr_set_idt_descriptor(i, &intr_excp_error_code_handler, TRAP_GATE_FLAGS);
+            intr_set_idt_entry(idt_root, i, &intr_excp_error_code_handler, TRAP_GATE_FLAGS);
         }
         else {
-            intr_set_idt_descriptor(i, &intr_excp_handler, TRAP_GATE_FLAGS);
+            intr_set_idt_entry(idt_root, i, &intr_excp_handler, TRAP_GATE_FLAGS);
         }
     }
 
@@ -235,15 +331,38 @@ Status init_intr() {
 
     // Setup regular interrupts
     for (uint16_t i = IDT_EXCEPTION_ENTRIES_COUNT; i < IDT_ENTRIES_COUNT; ++i) {
-        intr_set_idt_descriptor(i, &intr_handler, INTERRUPT_GATE_FLAGS);
+        intr_set_idt_entry(idt_root, i, &intr_handler, INTERRUPT_GATE_FLAGS);
     }
 
-    cpu_set_idtr(idtr_64);
-    intr_enable();
+    cpu_set_idtr(intr_get_idtr(0));
 
     return KERNEL_OK;
 }
 
-IDTR64 intr_get_kernel_idtr() {
-    return idtr_64;
+InterruptDescriptor64* intr_get_root_idt() {
+    return idt_root;
+}
+
+InterruptDescriptor64* intr_get_idt(const uint32_t cpu_idx) {
+    kassert(cpu_idx < intr_ctrl.cpu_count);
+
+    if (cpu_idx == 0) return idt_root;
+
+    return (intr_ctrl.idts + cpu_idx)->descriptor;
+}
+
+IDTR64 intr_get_idtr(const uint32_t cpu_idx) {
+    if (cpu_idx == 0) {
+        return (IDTR64) {
+            .base = (uint64_t)&idt_root,
+            .limit = sizeof(idt_root) - 1
+        };
+    }
+
+    IDTR64 idtr = {
+        .base = (uint64_t)(intr_ctrl.idts + cpu_idx),
+        .limit = sizeof(InterruptDescriptorTable) - 1
+    };
+
+    return idtr;
 }
