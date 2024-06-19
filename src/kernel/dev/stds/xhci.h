@@ -299,6 +299,12 @@ typedef struct XPortReg {
     XPortHardLPMCtrlReg hardware_lmp_ctrl; // USB3 reserved
 } ATTR_PACKED ATTR_ALIGN(4) XPortReg;
 
+typedef struct XEventRingSegTableEntry {
+    uint64_32_t seg_base;
+    uint32_t seg_size;
+    uint32_t reserved_1;
+} ATTR_PACKED XEventRingSegTableEntry;
+
 typedef struct XRuntimeIntrReg {
     struct {
         uint32_t intr_pending : 1;
@@ -467,8 +473,8 @@ typedef struct XhciDoorbellRegs {
 } ATTR_PACKED XhciDoorbellRegs;
 
 typedef struct XhciRing {
-    XTransferRequestBlock* enqueue;
-    XTransferRequestBlock* dequeue;
+    uint32_t enqueue;
+    uint32_t dequeue;
 
     XTransferRequestBlock* entries;
 } XhciRing;
@@ -714,15 +720,19 @@ typedef struct XhciController {
     volatile XRuntimeRegs* rt_regs;
     volatile XRuntimeIntrReg* intr_set;
 
-    uint32_t page_size;
-    uint32_t dev_ctx_size;
-    uint32_t slots_count;
+    uint16_t page_size;
+    uint16_t dev_ctx_size;
+    uint16_t slots_count;
+    uint16_t intr_count;
 
     // Device Context Array
     XDeviceContext** dev_context;
 
+    // Rings
     XhciRing cmd_ring;
     XhciRing transfer_ring;
+
+    XEventRingSegTableEntry* event_table;
 } XhciController;
 
 bool_t is_xhci_controller(const PciDevice* const pci_dev);
