@@ -48,7 +48,8 @@ typedef struct InterruptControlBlock {
     InterruptDescriptorTable* idts;
     InterruptMap* map;
 
-    uint32_t cpu_count;
+    uint16_t cpu_count;
+    uint16_t next_cpu;
 } InterruptControlBlock;
 
 static inline void intr_enable() {

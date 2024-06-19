@@ -21,7 +21,7 @@ extern BOOTBOOT bootboot;
 
 static InterruptDescriptor64 idt_root[IDT_ENTRIES_COUNT];
 static InterruptControlBlock intr_ctrl = {
-    .idts = NULL, .map = NULL, .cpu_count = 0
+    .idts = NULL, .map = NULL, .cpu_count = 0, .next_cpu = 0
 };
 
 uint16_t get_current_kernel_cs() {
@@ -245,11 +245,12 @@ InterruptLocation intr_reserve(const uint8_t cpu_idx) {
     InterruptLocation result = { .cpu_idx = cpu_idx, .vector = 0 };
 
     if (cpu_idx == INTR_ANY_CPU) {
-        for (result.cpu_idx = 0; result.cpu_idx < intr_ctrl.cpu_count && result.vector == 0; ++result.cpu_idx) {
+        for (uint16_t i = 0; i < intr_ctrl.cpu_count && result.vector == 0; ++i) {
+            result.cpu_idx = (i + intr_ctrl.next_cpu) % intr_ctrl.cpu_count;
             result.vector = _intr_reserve_vector(result.cpu_idx);
         }
 
-        if (result.vector != 0) result.cpu_idx--;
+        if (result.vector != 0) intr_ctrl.next_cpu = (result.cpu_idx + 1) % intr_ctrl.cpu_count;
     }
     else {
         result.vector = _intr_reserve_vector(cpu_idx);
@@ -296,10 +297,10 @@ Status init_intr() {
     }
 
     intr_ctrl.idts = (InterruptDescriptorTable*)mem_block;
-    intr_ctrl.map = (InterruptMap*)(mem_block + (sizeof(InterruptDescriptorTable) * intr_ctrl.cpu_count));
+    intr_ctrl.map = (InterruptMap*)(mem_block + (sizeof(InterruptDescriptorTable) * (intr_ctrl.cpu_count - 1)));
 
     for (uint32_t i = 0; i < intr_ctrl.cpu_count; ++i) {
-        if (i > 0) memcpy((void*)idt_root, (void*)(intr_ctrl.idts + i), sizeof(InterruptDescriptorTable));
+        if (i > 0) memcpy((void*)idt_root, (void*)(intr_ctrl.idts + (i - 1)), sizeof(InterruptDescriptorTable));
 
         memset((void*)(intr_ctrl.map + i), sizeof(InterruptMap), 0);
     }
@@ -348,7 +349,7 @@ InterruptDescriptor64* intr_get_idt(const uint32_t cpu_idx) {
 
     if (cpu_idx == 0) return idt_root;
 
-    return (intr_ctrl.idts + cpu_idx)->descriptor;
+    return (intr_ctrl.idts + (cpu_idx - 1))->descriptor;
 }
 
 IDTR64 intr_get_idtr(const uint32_t cpu_idx) {
@@ -360,7 +361,7 @@ IDTR64 intr_get_idtr(const uint32_t cpu_idx) {
     }
 
     IDTR64 idtr = {
-        .base = (uint64_t)(intr_ctrl.idts + cpu_idx),
+        .base = (uint64_t)(intr_ctrl.idts + (cpu_idx - 1)),
         .limit = sizeof(InterruptDescriptorTable) - 1
     };
 

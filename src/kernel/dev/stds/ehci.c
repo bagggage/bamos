@@ -6,9 +6,9 @@
 
 static inline bool_t is_ehci_device(const PciDevice* const pci_dev) {
     return (
-        pci_dev->config.class_code == PCI_SERIAL_BUS_CONTROLLER &&
-        pci_dev->config.subclass == 0x3 &&
-        pci_dev->config.prog_if == 0x20
+        pci_dev->config->class_code == PCI_SERIAL_BUS_CONTROLLER &&
+        pci_dev->config->subclass == 0x3 &&
+        pci_dev->config->prog_if == 0x20
     ) ? TRUE : FALSE;
 }
 

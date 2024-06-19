@@ -2,6 +2,7 @@
 
 #include <bootboot.h>
 
+#include "assert.h"
 #include "logger.h"
 #include "mem.h"
 
@@ -39,7 +40,7 @@ static bool_t is_acpi_enabled(const FADT* fadt) {
 
 ACPISDTHeader* acpi_find_entry(const char signature[4]) {
     for (size_t i = 0; i < acpi_xsdt_size; ++i) {
-        ACPISDTHeader* entry = (ACPISDTHeader*)acpi_xsdt->other_sdt[i];
+        ACPISDTHeader* const entry = (ACPISDTHeader*)acpi_xsdt->other_sdt[i];
         const char* sign = entry->signature;
 
         if (*(uint32_t*)signature == *(uint32_t*)sign) return entry;
@@ -50,14 +51,14 @@ ACPISDTHeader* acpi_find_entry(const char signature[4]) {
 
 Status init_acpi() {
     acpi_xsdt = (XSDT*)bootboot.arch.x86_64.acpi_ptr;
-    acpi_xsdt_size = (acpi_xsdt->header.length - sizeof(acpi_xsdt->header)) / 8U;
+    acpi_xsdt_size = ((uint64_t)acpi_xsdt->header.length - sizeof(acpi_xsdt->header)) / 8U;
 
     if (acpi_checksum(&acpi_xsdt->header) == FALSE) {
         error_str = "XSDT Checksum failed";
         return KERNEL_ERROR;
     }
 
-    kernel_msg("ACPI v%u.0\n", (uint32_t)acpi_xsdt->header.revision + 1);
+    kernel_msg("ACPI v%u.0: %x\n", (uint32_t)acpi_xsdt->header.revision + 1, (uint64_t)acpi_xsdt);
     kernel_msg("XSDT Entries count: %u\n", acpi_xsdt_size);
 
     acpi_fadt = (FADT*)acpi_find_entry("FACP");

@@ -306,6 +306,8 @@ Status init_buddy_page_allocator(VMMemoryMap* memory_map) {
     kernel_warn("BPA: Bitmap: %x\n", (uint64_t)bitmap_pool);
 #endif
 
+    bpa.allocated_pages = required_mem_pool_pages_count;
+
     if (init_bpa_free_lists(
             memory_map, bitmap_pool,
             div_with_roundup(required_bitmap_pool_size, PAGE_BYTE_SIZE) * PAGE_BYTE_SIZE
