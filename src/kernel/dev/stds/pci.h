@@ -5,6 +5,8 @@
 #include "dev/device.h"
 #include "intr/intr.h"
 
+#include "acpi.h"
+
 #define PCI_CONFIG_ADDRESS_PORT 0xCF8
 #define PCI_CONFIG_DATA_PORT 0xCFC
 
@@ -143,6 +145,48 @@ typedef union PciCapabilityHeader {
     uint32_t value;
 } ATTR_PACKED PciCapabilityHeader;
 
+typedef union MsiCtrlReg {
+    struct {
+        uint32_t reserved_1 : 16;
+
+        uint32_t enable : 1;
+        uint32_t multiple_cap : 3; // count = (1 << 'n')
+        uint32_t multiple_enable : 3;
+        uint32_t cap_64bit : 1;
+        uint32_t vector_masking : 1;
+
+        uint32_t reserved_2 : 7;
+    };
+    uint32_t value;
+} ATTR_PACKED MsiCtrlReg;
+
+typedef struct MsiCapability {
+    MsiCtrlReg control;
+    uint32_t msg_addr;
+
+    union {
+        struct {
+            uint32_t msg_data;
+
+            uint32_t mask_bits;
+            uint32_t pend_bits;
+        } x32;
+        struct {
+            uint32_t msg_addr_upper;
+            uint32_t msg_data;
+
+            uint32_t mask_bits;
+            uint32_t pend_bits;
+        } x64;
+
+        struct {
+            uint32_t dword_3;
+            uint32_t dword_4;
+            uint32_t dword_5;
+        };
+    };
+} ATTR_PACKED MsiCapability;
+
 typedef union MsiXCtrlReg {
     struct {
         uint32_t reserved_1 : 16;
@@ -260,8 +304,8 @@ typedef struct PciConfigurationSpace {
 
     uint32_t expansion_rom_base;
 
-    uint8_t cap_offset : 8;
-    uint32_t reserved_1 : 24;
+    uint8_t cap_offset;
+    uint8_t reserved_1[3];
 
     uint32_t reserved_2;
 
@@ -290,31 +334,68 @@ typedef struct PciInterruptControl {
             volatile MsiXTableEntry* table;
             volatile uint64_t* pba;
         } msi_x;
+        struct {
+            MsiCtrlReg control;
+        } msi;
     };
 } PciInterruptControl;
 
 typedef struct PciDevice {
     LIST_STRUCT_IMPL(PciDevice);
 
+    uint16_t seg;
     uint8_t bus;
     uint8_t dev;
     uint8_t func;
 
     uint32_t config_base;
 
-    PciConfigurationSpace config;
-
+    const PciConfigurationSpace* config;
     uint64_t bar0;
-    uint64_t bar1;
-
-    uint32_t cap_base;
 
     PciInterruptControl* intr_ctrl;
 } PciDevice;
 
+typedef struct MCFGConfigSpaceAllocEntry {
+    uint64_t base;
+    uint16_t segment;
+
+    uint8_t start_bus;
+    uint8_t end_bus;
+
+    uint32_t reserved_1;
+} ATTR_PACKED MCFGConfigSpaceAllocEntry;
+
+typedef struct MCFG {
+    ACPISDTHeader header;
+    uint64_t reserved_1;
+
+    MCFGConfigSpaceAllocEntry entries[];
+} ATTR_PACKED MCFG;
+
 typedef struct PciBus {
     BUS_STRUCT_IMPL;
+
+    MCFG* mcfg;
 } PciBus;
+
+typedef uint8_t  (*PciConfigReadB_t)(const PciDevice* pci_dev, const uint8_t offset);
+typedef uint16_t (*PciConfigReadW_t)(const PciDevice* pci_dev, const uint8_t offset);
+typedef uint32_t (*PciConfigReadL_t)(const PciDevice* pci_dev, const uint8_t offset);
+
+typedef void (*PciConfigWriteW_t)(const PciDevice* pci_dev, const uint8_t offset, const uint16_t value);
+typedef void (*PciConfigWriteL_t)(const PciDevice* pci_dev, const uint8_t offset, const uint32_t value);
+
+typedef struct PciConfSpaceAccessMechanism {
+    PciConfigReadB_t readb;
+    PciConfigReadW_t readw;
+    PciConfigReadL_t readl;
+
+    PciConfigWriteW_t writew;
+    PciConfigWriteL_t writel;
+} PciConfSpaceAccessMechanism;
+
+extern PciConfSpaceAccessMechanism _g_pci_conf_space_access_mechanism;
 
 // Write to PCI devices registers on 32-bit bus
 static inline void pci_write64(void* const address, const uint64_t value) {
@@ -336,17 +417,22 @@ static inline uint64_t pci_read64(void* const address) {
 }
 
 uint32_t pci_get_capabilty(const PciDevice* const pci_dev, const uint8_t cap_id);
-
 uint32_t pci_get_dev_base(const uint8_t bus, const uint8_t dev, const uint8_t func);
+uint64_t pcie_get_dev_base(const uint64_t seg_base, const uint8_t bus, const uint8_t dev, const uint8_t func);
 
-uint8_t pci_config_readb (const uint32_t base, const uint8_t offset);
-uint16_t pci_config_readw(const uint32_t base, const uint8_t offset);
-uint32_t pci_config_readl(const uint32_t base, const uint8_t offset);
+#define pci_config_readb(pci_dev, offset) \
+    (_g_pci_conf_space_access_mechanism.readb((pci_dev),(offset)))
+#define pci_config_readw(pci_dev, offset) \
+    (_g_pci_conf_space_access_mechanism.readw((pci_dev),(offset)))
+#define pci_config_readl(pci_dev, offset) \
+    (_g_pci_conf_space_access_mechanism.readl((pci_dev),(offset)))
 
-void pci_config_writel(const uint32_t base, const uint8_t offset, const uint32_t value);
+#define pci_config_writew(pci_dev, offset, value) \
+    (_g_pci_conf_space_access_mechanism.writew((pci_dev),(offset),(value)))
+#define pci_config_writel(pci_dev, offset, value) \
+    (_g_pci_conf_space_access_mechanism.writel((pci_dev),(offset),(value)))
 
 bool_t pci_init_msi_or_msi_x(PciDevice* const pci_dev);
-
 void pci_enable_bus_master(PciDevice* const pci_dev);
 
 bool_t pci_setup_precise_intr(PciDevice* const pci_dev, const InterruptLocation intr_location);
