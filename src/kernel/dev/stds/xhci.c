@@ -8,6 +8,7 @@
 #include "mem.h"
 #include "usb.h"
 
+#include "intr/apic.h"
 #include "intr/intr.h"
 #include "vm/buddy_page_alloc.h"
 
@@ -20,10 +21,16 @@
 #define	XHCI_INTEL_USB2PRM      0xd4 // USB 2.0 Port Routing Mask
 #define	XHCI_INTEL_XUSB2PR      0xd0 // USB 2.0 Port Routing
 
+#define XHCI_EVENT_HANDLER_BUSY 8
+
 #define XHCI_RING_ENTRIES_COUNT (PAGE_BYTE_SIZE / sizeof(XTransferRequestBlock))
 #define XHCI_RING_AVAIL_COUNT   (XHCI_RING_ENTRIES_COUNT - 1)
+#define XHCI_MAX_CONTROLLERS 16
 
 extern BOOTBOOT bootboot;
+
+static XhciController* g_controllers[XHCI_MAX_CONTROLLERS] = { NULL };
+static uint32_t g_last_ctrl = 0;
 
 bool_t is_xhci_controller(const PciDevice* const pci_dev) {
     return (
@@ -134,7 +141,73 @@ ATTR_INTRRUPT void xhci_intr_handler(InterruptFrame64* frame) {
     kprintf("XHCI Interrupt\n");
     kernel_logger_pop_color();
 
-    _kernel_break();
+    XhciController* xhci = NULL;
+
+    for (uint32_t i = 0; i < g_last_ctrl; ++i) {
+        if (g_controllers[i]->oper_regs->status_reg.event_intr) {
+            xhci = g_controllers[i];
+            xhci->oper_regs->status_reg.event_intr = 1;
+            break;
+        }
+    }
+
+    if (xhci == NULL) {
+        kernel_warn(LOG_PREFIX "interrupt handler can't found halted controller");
+        lapic_eoi();
+        return;
+    }
+
+    volatile XRuntimeIntrReg* const intr_regs = xhci->rt_regs->intr_regs;
+
+    kprintf("XHCI: %x\n", (uint64_t)xhci);
+
+    for (uint32_t i = 0; i < xhci->intr_count; ++i) {
+        const uint64_t dequeue = ((uint64_t)intr_regs[i].event_ring_dequeue.hi << 32) | intr_regs[i].event_ring_dequeue.lo;
+        if ((dequeue & XHCI_EVENT_HANDLER_BUSY) == 0) continue;
+
+        kprintf("Int[%u]: IE: %b: IP: %b\n", i, intr_regs[i].intr_enable, intr_regs[i].intr_pending);
+
+        XEventTrb* event = (XEventTrb*)(dequeue & (~0xFull));
+        uint8_t ccs_bit = (xhci->event_bitmap >> i) & 1;
+
+        if (event->cycle_bit != ccs_bit) event++;
+
+        while (event->cycle_bit == ccs_bit) {
+            switch (event->type)
+            {
+            case TRB_PORT_STAT_CHANGE_EVENT:
+                volatile XPortReg* port = xhci->port_regs + (event->port_id - 1);
+                kernel_msg("Port: %u: CSC: %b: CCS: %b: PP: %b\n",
+                    event->port_id, port->stat_ctrl.conn_stat_change,
+                    port->stat_ctrl.curr_conn_stat, port->stat_ctrl.power);
+
+                break;
+            case TRB_LINK:
+                xhci->event_bitmap ^= (1 << i);
+                ccs_bit ^= 1;
+
+                event = (XEventTrb*)event->trb_ptr.val;
+                continue;
+                break;
+            default:
+                kernel_msg("Event: %x: type: %u\n", (uint64_t)event, event->type);
+                break;
+            }
+
+            event->cycle_bit = !ccs_bit;
+            event++;
+        }
+
+        // If not the start of the ring
+        if (((uint64_t)event & 0xFFF) != 0) event--;
+
+        intr_regs[i].event_ring_dequeue.hi = ((uint64_t)event >> 32);
+        intr_regs[i].event_ring_dequeue.lo = (uint32_t)((uint64_t)event);
+        intr_regs[i].intr_pending = 1;
+    }
+
+    kernel_warn("EOI\n");
+    lapic_eoi();
 }
 
 static bool_t xhci_init(XhciController* const xhci) {
@@ -277,7 +350,7 @@ static bool_t xhci_init(XhciController* const xhci) {
 
         if (intr_location.vector == 0 ||
             pci_setup_precise_intr(xhci->pci_dev, intr_location) == FALSE ||
-            intr_setup_handler(intr_location, (void*)&xhci_intr_handler) == FALSE ||
+            intr_setup_handler(intr_location, (void*)xhci_intr_handler) == FALSE ||
             xhci_alloc_event_ring(xhci, i, event_ring_table_phys + i) == FALSE)
         {
             error_str = LOG_PREFIX "Failed to initialize interrupt";
@@ -291,11 +364,12 @@ static bool_t xhci_init(XhciController* const xhci) {
 
         // interrupt tick rate: 2000 * 250ns (interrupt per 0.5 ms)
         xhci->rt_regs->intr_regs[i].intr_moder_interval = 2000;
-        xhci->rt_regs->intr_regs[i].intr_moder_counter = 0;
+        xhci->rt_regs->intr_regs[i].intr_moder_counter = 2000;
 
-        //xhci->rt_regs->intr_regs[i].intr_pending = 1;
         xhci->rt_regs->intr_regs[i].intr_enable = 1;
     }
+
+    xhci->event_bitmap = UINT64_MAX;
 
     return TRUE;
 }
@@ -308,6 +382,11 @@ void xhci_enumerate_ports(XhciController* const xhci) {
 
 Status init_xhci_controller(PciDevice* const pci_dev) {
     kassert(is_xhci_controller(pci_dev));
+
+    if (g_last_ctrl >= XHCI_MAX_CONTROLLERS) {
+        error_str = LOG_PREFIX "Max controllers limit has reached";
+        return KERNEL_COUGH;
+    }
 
     XhciController* const xhci = (XhciController*)kmalloc(sizeof(XhciController));
 
@@ -357,14 +436,12 @@ Status init_xhci_controller(PciDevice* const pci_dev) {
         xhci->rt_regs->intr_regs->intr_moder_interval
     );
 
+    g_controllers[g_last_ctrl++] = xhci;
+
     xhci->oper_regs->command_reg.run = 1;
     xhci->oper_regs->command_reg.intr_enable = 1;
 
     while (xhci->oper_regs->status_reg.host_contrl_hltd);
-
-    kernel_msg(LOG_PREFIX "Enabled\n");
-
-    //xhci_enumerate_ports(xhci);
 
     _kernel_break();
 

@@ -329,7 +329,7 @@ typedef struct XRuntimeRegs {
     XRuntimeIntrReg intr_regs[];
 } ATTR_PACKED ATTR_ALIGN(4) XRuntimeRegs;
 
-#pragma region Transfer Ring
+#pragma region TRB and TD
 
 typedef struct XTransferDescriptor {
     uint32_t next_link; // Standard next link pointer
@@ -448,6 +448,49 @@ typedef struct XTransferRequestBlock {
     XTrbStatus status;
     XTrbControl ctrl;
 } ATTR_PACKED XTransferRequestBlock;
+
+typedef struct XEventTrb {
+    union {
+        uint64_32_t trb_ptr;
+        struct { // Port Status Change TRB
+            uint32_t : 24;
+            uint32_t port_id : 8;
+        };
+        struct { // Doorbell TRB
+            uint32_t db_reason : 5;
+            uint32_t : 27;
+        };
+    };
+
+    union {
+        struct {
+            uint32_t cmd_complete_param : 24;
+            uint32_t complete_code : 8;
+        };
+        struct {
+            uint32_t transfer_length : 24;
+            uint32_t : 8;
+        };
+    };
+    
+    union {
+        struct { // Transfer TRB
+            uint32_t cycle_bit : 1;
+            uint32_t : 1;
+            uint32_t event_data : 1;
+            uint32_t : 7;
+            uint32_t type : 6;
+            uint32_t endpoint_id : 5;
+            uint32_t : 3;
+            uint32_t slot_id : 8;
+        };
+        struct { // Cmd Completion TRB & Doorbell TRB
+            uint32_t : 16;
+            uint32_t vf_id : 8;
+            uint32_t : 8;
+        };
+    };
+} ATTR_PACKED XEventTrb;
 
 #pragma endregion
 
@@ -721,9 +764,15 @@ typedef struct XhciController {
     volatile XRuntimeIntrReg* intr_set;
 
     uint16_t page_size;
-    uint16_t dev_ctx_size;
     uint16_t slots_count;
     uint16_t intr_count;
+    uint8_t dev_ctx_size;
+
+    // Producer Cycle State
+    struct {
+        uint8_t tr_pcs : 1;
+        uint8_t cmd_pcs : 1;
+    };
 
     // Device Context Array
     XDeviceContext** dev_context;
@@ -733,6 +782,7 @@ typedef struct XhciController {
     XhciRing transfer_ring;
 
     XEventRingSegTableEntry* event_table;
+    uint64_t event_bitmap; // Contains CCS bits for each interrupter event ring
 } XhciController;
 
 bool_t is_xhci_controller(const PciDevice* const pci_dev);

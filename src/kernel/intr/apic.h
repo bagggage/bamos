@@ -198,6 +198,13 @@ uint32_t lapic_read(const uint32_t reg);
 void lapic_write(const uint32_t reg, const uint32_t value);
 
 /*
+Send EOI (End Of Interrupt) signal to LAPIC
+*/
+static inline void lapic_eoi() {
+    lapic_write(LAPIC_EOI_REG, 0);
+}
+
+/*
 Returns current cpu index.
 */
 uint32_t lapic_get_cpu_idx();
