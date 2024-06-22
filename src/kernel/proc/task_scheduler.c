@@ -125,6 +125,9 @@ void tsk_extract(Task* const task) {
 }
 
 __attribute__((noreturn, naked)) void tsk_launch(const Task* task) {
+    register uint64_t rdi asm("%rdi") = task->thread.exec_state.rdi;
+    register uint64_t rsi asm("%rsi") = task->thread.exec_state.rsi;
+    register uint64_t rdx asm("%rdx") = task->thread.exec_state.rdx;
     register uint64_t r12 asm("%r12") = task->thread.exec_state.r12;
     register uint64_t r13 asm("%r13") = task->thread.exec_state.r13;
     register uint64_t r14 asm("%r14") = task->thread.exec_state.r14;
@@ -137,20 +140,15 @@ __attribute__((noreturn, naked)) void tsk_launch(const Task* task) {
         "mov %[stack_ptr],%%rsp \n"
         "mov %[base_ptr],%%rbp \n"
         "xor %%rax,%%rax \n"
-        "xor %%rdi,%%rdi \n"
-        "xor %%rsi,%%rsi \n"
-        "xor %%rdx,%%rdx \n"
         "xor %%rbx,%%rbx \n"
         "sysretq"
-        : 
+        :
         :
         [instr_ptr] "g" (task->thread.instruction_ptr),
         [stack_ptr] "g" (task->thread.stack_ptr),
         [base_ptr] "g" (task->thread.base_ptr),
-        "r"(r12),
-        "r"(r13),
-        "r"(r14),
-        "r"(r15)
+        "r"(rdi),"r"(rsi),"r"(rdx),
+        "r"(r12),"r"(r13),"r"(r14),"r"(r15)
         : "%rcx", "memory"
     );
 }

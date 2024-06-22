@@ -7,8 +7,12 @@
 #define SYS_STAT    4
 
 #define SYS_MMAP    9
-
+#define SYS_MPROTECT 10
 #define SYS_MUNMAP  11
+#define SYS_BRK     12
+
+#define SYS_PREAD64 17
+#define SYS_PWRITE64 18
 
 #define SYS_ACCESS  21
 
@@ -27,6 +31,8 @@
 #define SYS_FCHDIR  81
 
 #define SYS_GETPPID 110
+
+#define SYS_ARCH_PRCTL 158
 
 #ifndef KERNEL
 

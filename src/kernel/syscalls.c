@@ -6,8 +6,11 @@
 #include "math.h"
 #include "mem.h"
 
+#include "cpu/regs.h"
+
 #include "fs/vfs.h"
 
+#include "libc/asm/prctl.h"
 #include "libc/dirent.h"
 #include "libc/errno.h"
 #include "libc/fcntl.h"
@@ -21,19 +24,21 @@
 
 #define ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))
 
-void* syscall_table[256] = { NULL };
+void* syscall_table[512] = { NULL };
 
-__attribute__((naked)) void invalid_syscall_msg(uint64_t syscall_idx) {
+void invalid_syscall_msg(uint64_t syscall_idx) {
     kernel_warn("INVALID SYSCALL: %u\n", syscall_idx);
 }
 
 __attribute__((naked)) void _syscall_handler() {
     asm volatile (
-        "cmp $256,%%rax \n"                     // Check syscall idx
+        "cmp $512,%%rax \n"                     // Check syscall idx
         "jae _invalid_syscall \n"
+        "pushq %%rax \n"
         "movq syscall_table(,%%rax,8),%%rax \n"  // Get pointer to handler
         "test %%rax,%%rax \n"                   // Check if syscall handler exists
         "jz _invalid_syscall \n"
+        "add $8,%%rsp \n"
         "pushq %%rbp \n"                        // Save rbp
         "pushq %%rcx \n"                        // Save return address
         "pushq %%r11 \n"                        // Save rflags
@@ -51,10 +56,10 @@ __attribute__((naked)) void _syscall_handler() {
         "popq %%rbp \n"
         "sysretq \n"                            // Return rax;
         "_invalid_syscall: \n"
+        "popq %%rdi \n"
         "pushq %%rbp \n"                        // Save rbp
         "pushq %%rcx \n"                        // Save return address
         "pushq %%r11 \n"                        // Save rflags
-        "mov %%rax,%%rdi \n"
         "call invalid_syscall_msg \n"
         "popq %%r11 \n"                        // Save rflags
         "popq %%rcx \n"                        // Save return address
@@ -223,6 +228,62 @@ long _sys_munmap(void* address, size_t length) {
     return 0;
 }
 
+long _sys_brk(uint64_t brk) {
+    return -ENOMEM;
+}
+
+long _sys_pread64(unsigned int fd, char* buffer, size_t count, int64_t offset) {
+    ProcessorLocal* proc_local = proc_get_local();
+
+    if (count == 0) return -EINVAL;
+    if (is_virt_addr_mapped_userspace(
+            proc_local->current_task->process->addr_space.page_table,
+            (uint64_t)buffer
+        ) == FALSE) {
+        return -EFAULT;
+    }
+
+    if (fd >= proc_local->current_task->process->files_capacity) {
+        return -EBADF;
+    }
+
+    FileDescriptor* file = proc_local->current_task->process->files[fd];
+
+    if (file == NULL || (file->mode & O_WRONLY) != 0) return -EBADF;
+    if (offset >= file->dentry->inode->file_size) return 0;
+
+    const uint32_t readed = vfs_read(file->dentry, offset, count, (void*)buffer);
+
+    return readed;
+}
+
+long _sys_pwrite64(unsigned int fd, const char* buffer, size_t count, int64_t offset) {
+    ProcessorLocal* proc_local = proc_get_local();
+
+    if (count == 0) return -EINVAL;
+    if (is_virt_addr_mapped_userspace(
+            proc_local->current_task->process->addr_space.page_table,
+            (uint64_t)buffer
+        ) == FALSE) {
+        return -EFAULT;
+    }
+
+    if (fd >= proc_local->current_task->process->files_capacity) {
+        return -EBADF;
+    }
+
+    FileDescriptor* file = proc_local->current_task->process->files[fd];
+
+    if (file == NULL ||
+        (file->mode & O_WRONLY || file->mode & O_RDWR) == 0) {
+        return -EBADF;
+    }
+
+    const uint32_t writen = vfs_write(file->dentry, offset, count, (const void*)buffer);
+
+    return writen;
+}
+
 long _sys_access(const char* pathname, int mode) {
     ProcessorLocal* proc_local = proc_get_local();
 
@@ -365,6 +426,47 @@ pid_t _sys_getppid() {
     return proc_get_local()->current_task->process->parent->pid;
 }
 
+long _sys_arch_prctl(int code, const uint64_t address) {
+    const ProcessorLocal* proc_local = proc_get_local();
+
+    const bool_t is_mapped = is_virt_addr_mapped_userspace(
+        proc_local->current_task->process->addr_space.page_table,
+        address
+    );
+
+    kernel_msg("CODE: %x\n", code);
+
+    bool_t is_get = FALSE;
+    uint64_t value = 0;
+
+    switch (code)
+    {
+    case ARCH_GET_CPUID:
+        is_get = TRUE; value = proc_local->idx;
+        break;
+    case ARCH_GET_FS:
+        is_get = TRUE; value = cpu_get_fs();
+        break;
+    case ARCH_SET_FS:
+        if (is_mapped) cpu_set_msr(MSR_FG_BASE, address);
+        else return -EPERM;
+        break;
+    case ARCH_GET_GS:
+    case ARCH_SET_GS:
+        kernel_msg("TRY TO GET/SET GS: %x\n", address);
+    default:
+        return -EINVAL;
+    }
+
+    if (is_get) {
+        if (is_mapped == FALSE) return -EFAULT;
+
+        *((uint64_t*)address) = value;
+    }
+
+    return 0;
+}
+
 void init_syscalls() {
     syscall_table[SYS_READ]     = (void*)&_sys_read;
     syscall_table[SYS_WRITE]    = (void*)&_sys_write;
@@ -374,6 +476,10 @@ void init_syscalls() {
     syscall_table[SYS_MMAP]     = (void*)&_sys_mmap;
 
     syscall_table[SYS_MUNMAP]   = (void*)&_sys_munmap;
+    syscall_table[SYS_BRK]      = (void*)&_sys_brk;
+
+    syscall_table[SYS_PREAD64]  = (void*)&_sys_pread64;
+    syscall_table[SYS_PWRITE64] = (void*)&_sys_pwrite64;
 
     syscall_table[SYS_ACCESS]   = (void*)&_sys_access;
 
@@ -391,4 +497,6 @@ void init_syscalls() {
     syscall_table[SYS_FCHDIR]   = (void*)&_sys_fchdir;
 
     syscall_table[SYS_GETPPID]  = (void*)&_sys_getppid;
+
+    syscall_table[SYS_ARCH_PRCTL] = (void*)&_sys_arch_prctl;
 }
