@@ -18,7 +18,7 @@
 #define PAGE_KB_SIZE (PAGE_BYTE_SIZE / KB_SIZE)
 
 #define UMA_MIN_RANK 3
-#define UMA_RANKS_COUNT 13
+#define UMA_RANKS_COUNT 20 // 4 MB max
 #define UMA_MAX_RANK (UMA_MIN_RANK + UMA_RANKS_COUNT - 1)
 
 typedef struct UniversalMemoryAllocator {
@@ -124,7 +124,10 @@ static Status init_kernel_uma() {
     for (uint32_t rank = UMA_MIN_RANK; rank <= UMA_MAX_RANK; ++rank) {
         const uint32_t obj_rank_size = 1 << rank;
     
-        ObjectMemoryAllocator* new_oma = oma_new(obj_rank_size);
+        ObjectMemoryAllocator* new_oma = NULL;
+
+        if (obj_rank_size < PAGE_BYTE_SIZE) new_oma = oma_new(obj_rank_size);
+        else new_oma = _oma_new(obj_rank_size, ((obj_rank_size / PAGE_BYTE_SIZE) * 4) + 1);
 
         if (new_oma == NULL) {
             error_str = "UMA: Can't create new OMA";
