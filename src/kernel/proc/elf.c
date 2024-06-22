@@ -12,6 +12,8 @@
 #include "vm/vm.h"
 #include "vm/buddy_page_alloc.h"
 
+#include <libc/errno.h>
+
 #define ELF_SECTION_NAME_UNDEFINED 0
 
 bool_t is_elf_valid(const ELF* elf) {
@@ -52,7 +54,7 @@ static inline bool_t is_prog_section_valid(const ElfProgramHeader* prog) {
             (prog->flags & (ELF_PROG_FLAGS_EXEC | ELF_PROG_FLAGS_READABLE)) == 0);
 }
 
-static VMMemoryBlockNode* elf_load_prog(const uint8_t* file_base, const ElfProgramHeader* prog, Process* const process) {
+static int elf_load_prog(const VfsDentry* file, const ElfProgramHeader* prog, Process* const process) {
     kassert(prog != NULL && process != NULL && prog->type == ELF_PROG_TYPE_LOAD);
 
     //kernel_msg("Prog header type: %x\n", prog->type);
@@ -61,18 +63,18 @@ static VMMemoryBlockNode* elf_load_prog(const uint8_t* file_base, const ElfProgr
     //kernel_msg("Prog file size: %x\n", prog->file_size);
     //kernel_msg("Prog flags: %b\n", prog->flags);
 
-    if (is_prog_section_valid(prog) == FALSE) return NULL;
+    if (is_prog_section_valid(prog) == FALSE) return -ENOEXEC;
 
     VMMemoryBlockNode* segment = proc_push_segment(process);
 
-    if (segment == NULL) return NULL;
+    if (segment == NULL) return -ENOMEM;
 
-    segment->block.pages_count = div_with_roundup(prog->memory_size, PAGE_BYTE_SIZE);
+    segment->block.pages_count = div_with_roundup((prog->virt_address & 0xFFF) + prog->memory_size, PAGE_BYTE_SIZE);
     segment->block.page_base = bpa_allocate_pages(
         log2upper(segment->block.pages_count)
     ) / PAGE_BYTE_SIZE;
 
-    if (segment->block.page_base == 0) return NULL;
+    if (segment->block.page_base == 0) return -ENOMEM;
 
     segment->block.virt_address = prog->virt_address + USER_SPACE_ADDR_BEGIN;
 
@@ -86,44 +88,60 @@ static VMMemoryBlockNode* elf_load_prog(const uint8_t* file_base, const ElfProgr
         ((prog->flags & ELF_PROG_FLAGS_WRITEABLE) ? VMMAP_WRITE : 0)
     );
 
+    kernel_msg("  Pages count: %u: Base: %x: Top: %x\n",
+        segment->block.pages_count,
+        segment->block.virt_address,
+        segment->block.virt_address + (segment->block.pages_count * PAGE_BYTE_SIZE)
+    );
+
     if (result != KERNEL_OK) {
         bpa_free_pages(
             (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
             log2upper(segment->block.pages_count)
         );
-        return NULL;
+        return -ENOMEM;
     }
 
-    const uint8_t* segment_ptr = file_base + prog->offset;
-
-    memcpy((const void*)segment_ptr, (void*)segment->block.virt_address, prog->memory_size);
+    const uint64_t phys_base = 
+        ((uint64_t)segment->block.page_base * PAGE_BYTE_SIZE) |
+        (segment->block.virt_address & 0xFFF);
+    
+    if (vfs_read(file, prog->offset, prog->file_size, (void*)phys_base) < prog->file_size) {
+        bpa_free_pages(
+            (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
+            log2upper(segment->block.pages_count)
+        );
+        return -EIO;
+    }
 
     if (prog->memory_size > prog->file_size) {
         memset(
-            (void*)(segment->block.virt_address + prog->file_size),
+            (void*)(phys_base + prog->file_size),
             prog->memory_size - prog->file_size,
             0
         );
     }
 
-    return segment;
+    return 0;
 }
 
-static bool_t elf_load_exec(const ELF* elf, Process* const process) {
-    kassert(elf->type == ELF_TYPE_EXEC);
+static int elf_load_exec(const ElfFile* elf_file, Process* const process) {
+    kassert(elf_file->header->type == ELF_TYPE_EXEC);
 
-    for (uint32_t i = 0; i < elf->prog_header_entries_count; ++i) {
-        const ElfProgramHeader* prog = elf_get_prog_header(elf, i);
+    for (uint32_t i = 0; i < elf_file->header->prog_header_entries_count; ++i) {
+        const ElfProgramHeader* prog = elf_file->progs + i;
 
         if (prog->type != ELF_PROG_TYPE_LOAD) continue;
 
-        if (elf_load_prog((const uint8_t*)elf, prog, process) == NULL) {
+        int result = 0;
+
+        if ((result = elf_load_prog(elf_file->dentry, prog, process)) < 0) {
             proc_clear_segments(process);
-            return FALSE;
+            return result;
         }
     }
 
-    return TRUE;
+    return 0;
 }
 
 static bool_t elf_load_dyn_section(const ElfDynamicEntry* dyn, Process* const process) {
@@ -134,32 +152,40 @@ static bool_t elf_load_dyn_section(const ElfDynamicEntry* dyn, Process* const pr
     return TRUE;
 }
 
-static bool_t elf_load_dyn(const ELF* elf, Process* const process) {
-    kassert(elf->type == ELF_TYPE_DYN);
+const ElfProgramHeader* elf_find_prog(const ElfFile* elf_file, const ElfProgramType prog_type) {
+    for (uint32_t i = 0; i < elf_file->header->prog_header_entries_count; ++i) {
+        const ElfProgramHeader* prog = elf_file->progs + i;
 
-    bool_t is_dyn_loaded = FALSE;
+        if (prog->type == prog_type) return prog;
+    }
 
-    for (uint32_t i = 0; i < elf->prog_header_entries_count; ++i) {
-        bool_t is_success = TRUE;
+    return NULL;
+}
 
-        const ElfProgramHeader* prog = elf_get_prog_header(elf, i);
+static int elf_load_dyn(const ElfFile* elf_file, Process* const process) {
+    kassert(elf_file->header->type == ELF_TYPE_DYN);
+
+    for (uint32_t i = 0; i < elf_file->header->prog_header_entries_count; ++i) {
+        int result = 0;
+
+        const ElfProgramHeader* prog = elf_file->progs + i;
 
         switch (prog->type)
         {
         case ELF_PROG_TYPE_LOAD: {
-            is_success = (elf_load_prog((const uint8_t*)elf, prog, process) != NULL);
+            result = elf_load_prog(elf_file->dentry, prog, process);
             break;
         }
         case ELF_PROG_TYPE_DYNAMIC: {
-            if (is_dyn_loaded) {
-                is_success = FALSE;
-                break;
-            }
+            //if (is_dyn_loaded) {
+            //    is_success = FALSE;
+            //    break;
+            //}
 
-            const ElfDynamicEntry* dyn = (const ElfDynamicEntry*)((const uint8_t*)elf + prog->offset);
+            //const ElfDynamicEntry* dyn = (const ElfDynamicEntry*)((const uint8_t*)elf + prog->offset);
 
-            is_success = elf_load_dyn_section(dyn, process);
-            is_dyn_loaded = is_success;
+            //is_success = elf_load_dyn_section(dyn, process);
+            //is_dyn_loaded = is_success;
 
             break;
         }
@@ -167,13 +193,13 @@ static bool_t elf_load_dyn(const ELF* elf, Process* const process) {
             break;
         }
 
-        if (is_success == FALSE) {
+        if (result < 0) {
             proc_clear_segments(process);
-            return FALSE;
+            return result;
         }
     }
 
-    return TRUE;
+    return 0;
 }
 
 static bool_t elf_load_reloc(const ELF* elf) {
@@ -182,40 +208,64 @@ static bool_t elf_load_reloc(const ELF* elf) {
     return FALSE;   
 }
 
-ELF* elf_load_file(VfsDentry* const file_dentry) {
-    kassert(file_dentry != NULL && file_dentry->inode != NULL);
+int elf_read_file(ElfFile* const elf_file) {
+    kassert(elf_file != NULL && elf_file->dentry != NULL && elf_file->dentry->inode->type == VFS_TYPE_FILE);
 
-    if (file_dentry->inode->file_size < sizeof(ELF) + sizeof(ElfProgramHeader)) return FALSE;
+    // Read ELF header
+    ELF* const elf = (ELF*)kmalloc(sizeof(ELF));
 
-    ELF* result = (ELF*)kmalloc(file_dentry->inode->file_size);
-
-    if (result == NULL) return NULL;
-
-    const uint64_t readed = vfs_read(file_dentry, 0, file_dentry->inode->file_size, (void*)result);
-
-    if (readed != file_dentry->inode->file_size) {
-        kfree(result);
-        return FALSE;
+    if (elf == NULL) return -ENOMEM;
+    if (vfs_read(elf_file->dentry, 0, sizeof(ELF), (void*)elf) < sizeof(ELF)) {
+        kfree(elf);
+        return -EIO;
     }
 
-    return result;
+    // Read prog headers
+    if (elf->prog_header_entries_count < 1) return NULL;
+
+    const uint32_t size = elf->prog_header_entries_count * sizeof(ElfProgramHeader);
+    ElfProgramHeader* progs = (ElfProgramHeader*)kmalloc(size);
+
+    if (progs == NULL) {
+        kfree(elf);
+        return -ENOMEM;
+    }
+
+    if (vfs_read(elf_file->dentry, elf->ph_offset, size, (void*)progs) < size) {
+        kfree(elf);
+        kfree(progs);
+        return -EIO;
+    }
+
+    elf_file->header = elf;
+    elf_file->progs = progs;
+
+    return 0;
 }
 
-bool_t elf_load(const ELF* elf, Process* const process) {
+void elf_free_file(ElfFile* const elf_file) {
+    kfree(elf_file->header);
+    kfree(elf_file->progs);
+}
+
+int elf_load(const ElfFile* elf_file, Process* const process) {
+    kassert(elf_file != NULL && process != NULL);
+
     UNUSED(elf_load_reloc);
 
-    if (elf->header_size != sizeof(ELF) || elf->ph_offset % 4 != 0 || elf->sh_offset % 4 != 0) return FALSE;
-    if (elf->prog_header_entries_count == 0) return FALSE;
+    const ELF* elf = elf_file->header;
 
-    bool_t result = FALSE;
+    if (elf->header_size != sizeof(ELF) || elf->ph_offset % 4 != 0 || elf->sh_offset % 4 != 0) return FALSE;
+
+    int result = 0;
 
     switch (elf->type)
     {
     case ELF_TYPE_EXEC:
-        result = elf_load_exec(elf, process);
+        result = elf_load_exec(elf_file, process);
         break;
     case ELF_TYPE_DYN:
-        result = elf_load_dyn(elf, process);
+        result = elf_load_dyn(elf_file, process);
         break;
     default:
         break;
@@ -227,7 +277,7 @@ bool_t elf_load(const ELF* elf, Process* const process) {
 static bool_t elf_test_log(const void* elf_file) {
     const ELF* elf = (const ELF*)elf_file;
 
-    if (elf->header_size != sizeof(ELF) || elf->ph_offset % 4 != 0 || elf->sh_offset % 4 != 0) return FALSE;
+    if (elf->header_size != sizeof(ELF) || elf->ph_offset % 4 != 0 || elf->sh_offset % 4 != 0) return -ENOEXEC;
 
     kernel_msg("ELF: %x\n", elf);
     kernel_msg("ELF Header size: %u\n", (uint32_t)elf->header_size);

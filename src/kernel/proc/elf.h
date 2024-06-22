@@ -10,6 +10,8 @@ ELF File format description.
 
 #define ELF_MAGIC 0x464C457F
 
+#define ELF_INTERP_IGNORE "/lib/ld64.so.1"
+
 typedef enum ElfType {
     ELF_TYPE_NONE = 0x00,
     ELF_TYPE_RELOC = 0x01,
@@ -267,6 +269,16 @@ typedef struct ElfSectionHeader {
     uint64_t entry_size;
 } ATTR_PACKED ElfSectionHeader;
 
+/*
+Struct used during loading programs from ELF files.
+*/
+typedef struct ElfFile {
+    VfsDentry* dentry;
+
+    ELF* header;
+    ElfProgramHeader* progs;
+} ElfFile;
+
 typedef struct Process Process;
 
 bool_t is_elf_valid(const ELF* elf);
@@ -276,7 +288,11 @@ static inline bool_t is_elf_valid_and_supported(const ELF* elf) {
     return (is_elf_valid(elf) && is_elf_supported(elf));
 }
 
-ELF* elf_load_file(VfsDentry* const file_dentry);
-bool_t elf_load(const ELF* elf, Process* const process);
+const ElfProgramHeader* elf_find_prog(const ElfFile* elf_file, const ElfProgramType prog_type);
+
+int elf_read_file(ElfFile* const elf_file);
+void elf_free_file(ElfFile* const elf_file);
+
+int elf_load(const ElfFile* elf_file, Process* const process);
 
 void elf_test(VfsDentry* const file_dentry);

@@ -210,18 +210,57 @@ static char** load_environs(uint32_t* const count) {
     return envp;
 }
 
+int proc_load_from_elf(const char* filename, Task* const task) {
+    VfsDentry* file = vfs_open(filename, task->process->work_dir);
+
+    if (file == NULL) return -ENOENT;
+    if (file->inode->type != VFS_TYPE_FILE || file->inode->file_size < 3) return -ENOEXEC;
+
+    ElfFile elf_file = { .dentry = file };
+
+    int result = 0;
+    if ((result = elf_read_file(&elf_file)) < 0) return result;
+    if (is_elf_valid_and_supported(elf_file.header) == FALSE) return -ENOEXEC;
+
+    const ElfProgramHeader* interp = elf_find_prog(&elf_file, ELF_PROG_TYPE_INTERP);
+
+    if (interp == NULL) {
+load_progs:
+        task->thread.instruction_ptr = elf_file.header->entry + USER_SPACE_ADDR_BEGIN;
+        result = elf_load(&elf_file, task->process);
+
+        elf_free_file(&elf_file);
+        return result;
+    }
+
+    char interp_str[256] = { '\0' };
+
+    if (interp->file_size > 256) {
+        elf_free_file(&elf_file);
+        return -ENOEXEC;
+    }
+    if (vfs_read(file, interp->offset, interp->file_size, (void*)interp_str) < interp->file_size) {
+        elf_free_file(&elf_file);
+        return -EIO;
+    }
+
+    if (strcmp(interp_str, ELF_INTERP_IGNORE) == 0) goto load_progs;
+
+    elf_free_file(&elf_file);
+
+    file = vfs_open(interp_str, NULL);
+    if (file == NULL) return -ENOENT;
+
+    elf_file.dentry = file;
+    result = elf_read_file(&elf_file);
+
+    if (result < 0) return result;
+    if (is_elf_valid_and_supported(elf_file.header) == FALSE) return -ELIBBAD;
+
+    goto load_progs;
+}
+
 bool_t load_init_proc() {
-    VfsDentry* file_dentry = vfs_open(INIT_PROC_FILENAME, NULL);
-
-    if (file_dentry == NULL) {
-        error_str = "'init' process executable file at path " INIT_PROC_FILENAME " not found";
-        return FALSE;
-    }
-    if (file_dentry->inode->type != VFS_TYPE_FILE) {
-        error_str = INIT_PROC_FILENAME " is not an executable file";
-        return FALSE;
-    }
-
     Process* process = proc_new();
 
     if (process == NULL) {
@@ -238,37 +277,35 @@ bool_t load_init_proc() {
         return FALSE;
     }
 
-    ELF* elf = elf_load_file(file_dentry);
-
-    if (elf == NULL) {
-        proc_delete(process);
-        tsk_delete(task);
-        error_str = "Failed to load file: " INIT_PROC_FILENAME;
-        return FALSE;
-    }
-
-    if (is_elf_valid_and_supported(elf) == FALSE) {
-        proc_delete(process);
-        tsk_delete(task);
-        kfree(elf);
-        error_str = INIT_PROC_FILENAME ": Incorrect elf file format";
-        return FALSE;
-    }
+    task->process = process;
 
     vm_map_kernel(process->addr_space.page_table);
     cpu_set_pml4(process->addr_space.page_table);
 
-    if (elf_load(elf, process) == FALSE) {
+    int result = proc_load_from_elf(INIT_PROC_FILENAME, task);
+
+    if (result < 0) {
+        cpu_set_pml4(g_proc_local.kernel_page_table);
         proc_delete(process);
         tsk_delete(task);
-        kfree(elf);
-        error_str = "Invalid program segments or not enough memory";
+
+        switch (-result) {
+        case ENOENT:
+            error_str = "'init' process executable file at path " INIT_PROC_FILENAME " not found";
+            break;
+        case ENOMEM:
+            error_str = "Not enough memory to load program";
+            break;
+        case ENOEXEC:
+            error_str = INIT_PROC_FILENAME ": Incorrect elf file format";
+            break;
+        default:
+            error_str = "Something went wrog while loading process from ELF file";
+            break;
+        }
+
         return FALSE;
     }
-
-    task->thread.instruction_ptr = elf->entry + USER_SPACE_ADDR_BEGIN;
-
-    kfree(elf);
 
     const VMMemoryBlockNode* top_segment = (VMMemoryBlockNode*)process->addr_space.segments.prev;
 
@@ -303,14 +340,11 @@ bool_t load_init_proc() {
         kfree(environs);
     }
 
-    task->thread.stack_ptr -= 3;
-    task->thread.stack_ptr[0] = 0; // argc
-    task->thread.stack_ptr[1] = 0; // argv
-    task->thread.stack_ptr[2] = (uint64_t)env_ptr;
-
+    task->thread.exec_state.rdi = 0;
+    task->thread.exec_state.rsi = 0;
+    task->thread.exec_state.rdx = (uint64_t)env_ptr;
     task->thread.base_ptr = task->thread.stack_ptr;
 
-    task->process = process;
     init_proc = process;
 
     kernel_msg("Init process starting...\n");
@@ -798,6 +832,9 @@ char** proc_put_args_strings(uint64_t** const stack, char** strings, const uint3
 }
 
 static inline ExecutionState _save_exec_state() {
+    register uint64_t rdi asm ("%rdi");
+    register uint64_t rsi asm ("%rsi");
+    register uint64_t rdx asm ("%rdx");
     register uint64_t r12 asm ("%r12");
     register uint64_t r13 asm ("%r13");
     register uint64_t r14 asm ("%r14");
@@ -805,6 +842,9 @@ static inline ExecutionState _save_exec_state() {
 
     ExecutionState thread_exec_state;
 
+    thread_exec_state.rdi = rdi;
+    thread_exec_state.rsi = rsi;
+    thread_exec_state.rdx = rdx;
     thread_exec_state.r12 = r12;
     thread_exec_state.r13 = r13;
     thread_exec_state.r14 = r14;
@@ -910,94 +950,61 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
         }
     }
 
-    VfsDentry* file_dentry = vfs_open(filename, task->process->work_dir);
+    // Copy args and environs
+    const uint64_t argc_val = (argv == NULL ? 0 : count_strings(argv));
+    const uint64_t envc_val = (envp == NULL ? 0 : count_strings(envp));
 
-    if (file_dentry == NULL) return -ENOENT;
-    if (file_dentry->inode->file_size < 3) return -ENOEXEC;
+    if (argv) argv = copy_strings(argv, argc_val);
+    if (envp) envp = copy_strings(envp, envc_val);
 
-    uint8_t* file_buffer = (uint8_t*)kmalloc(file_dentry->inode->file_size);
+    char filename_temp[256] = { '\0' };
+    strcpy(filename_temp, filename);
 
-    if (file_buffer == NULL) return -ENOMEM;
+    proc_clear_segments(task->process);
 
-    uint32_t readed = vfs_read(file_dentry, 0, file_dentry->inode->file_size, (void*)file_buffer);
+    // Load from file
+    int result = proc_load_from_elf(filename, task);
+    if (result < 0) return result;
 
-    if (readed < file_dentry->inode->file_size) {
-        kfree(file_buffer);
-        return -EIO;
-    }
+    // Cleanup
+    proc_close_files(task->process);
+    proc_dealloc_vm_pages(task->process);
 
-    if (file_buffer[0] == '#' && file_buffer[1] == '!') {
-        // It is a shell script
-        // TODO
-        kassert(FALSE && "Not implemented");
-    }
-    else if (is_elf_valid_and_supported((ELF*)file_buffer)) {
-        const uint64_t argc_val = (argv == NULL ? 0 : count_strings(argv));
-        const uint64_t envc_val = (envp == NULL ? 0 : count_strings(envp));
+    // Heap
+    const VMMemoryBlockNode* top_segment =
+        (VMMemoryBlockNode*)task->process->addr_space.segments.prev;
 
-        if (argv) argv = copy_strings(argv, argc_val);
-        if (envp) envp = copy_strings(envp, envc_val);
+    vm_heap_construct(
+        &task->process->addr_space.heap,
+        (
+            top_segment->block.virt_address +
+            ((uint64_t)top_segment->block.pages_count * PAGE_BYTE_SIZE) +
+            PAGE_BYTE_SIZE
+        )
+    );
 
-        ELF* elf = (ELF*)file_buffer;
+    // Stack
+    task->thread.stack_ptr = (uint64_t*)(task->thread.stack.virt_address +
+        ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
+    );
 
-        proc_clear_segments(task->process);
+    // Put args and environs on the stack
+    char** argv_ptr = proc_put_args_strings(&task->thread.stack_ptr, argv, argc_val);
+    char** env_ptr = proc_put_args_strings(&task->thread.stack_ptr, envp, envc_val);
 
-        if (elf_load(elf, task->process) == FALSE) {
-            proc_delete(task->process);
-            tsk_extract(task);
-            kernel_error("Failed to load process from ELF file\n");
-            _kernel_break();
-        }
-        
-        task->thread.instruction_ptr = elf->entry + USER_SPACE_ADDR_BEGIN;
+    if (argv) kfree(argv);
+    if (envp) kfree(envp);
 
-        kfree(file_buffer);
+    task->thread.base_ptr = task->thread.stack_ptr;
+    task->thread.exec_state = (ExecutionState){ argc_val, (uint64_t)argv_ptr, (uint64_t)env_ptr, 0, 0, 0, 0 };
 
-        proc_close_files(task->process);
-        proc_dealloc_vm_pages(task->process);
+    //kernel_msg("phys: %x\n", get_phys_address(proc_local->current_task->thread.instruction_ptr));
+    //kernel_msg("real: %x\n", (uint64_t)((VMMemoryBlockNode*)proc_local->current_task->process->addr_space.segments.next)->block.page_base * PAGE_BYTE_SIZE);
 
-        const VMMemoryBlockNode* top_segment =
-            (VMMemoryBlockNode*)task->process->addr_space.segments.prev;
+    //kernel_msg("Instr: %x\n", proc_local->current_task->thread.instruction_ptr);
+    //kernel_msg("Page table cpu: %x\n", g_proc_local.idx);
 
-        vm_heap_construct(
-            &task->process->addr_space.heap,
-            (
-                top_segment->block.virt_address +
-                ((uint64_t)top_segment->block.pages_count * PAGE_BYTE_SIZE) +
-                PAGE_BYTE_SIZE
-            )
-        );
-
-        task->thread.stack_ptr = (uint64_t*)(task->thread.stack.virt_address +
-            ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
-        );
-
-        char** argv_ptr = proc_put_args_strings(&task->thread.stack_ptr, argv, argc_val);
-        char** env_ptr = proc_put_args_strings(&task->thread.stack_ptr, envp, envc_val);
-
-        if (argv) kfree(argv);
-        if (envp) kfree(envp);
-
-        task->thread.stack_ptr -= 3;
-        task->thread.stack_ptr[0] = (uint64_t)argc_val;
-        task->thread.stack_ptr[1] = (uint64_t)argv_ptr;
-        task->thread.stack_ptr[2] = (uint64_t)env_ptr;
-
-        task->thread.base_ptr = task->thread.stack_ptr;
-        task->thread.exec_state = (ExecutionState){ 0, 0, 0, 0 };
-
-        //kernel_msg("phys: %x\n", get_phys_address(proc_local->current_task->thread.instruction_ptr));
-        //kernel_msg("real: %x\n", (uint64_t)((VMMemoryBlockNode*)proc_local->current_task->process->addr_space.segments.next)->block.page_base * PAGE_BYTE_SIZE);
-
-        //kernel_msg("Instr: %x\n", proc_local->current_task->thread.instruction_ptr);
-        //kernel_msg("Page table cpu: %x\n", g_proc_local.idx);
-
-        tsk_launch(task);
-    }
-    else {
-        kfree(file_buffer);
-        return -ENOEXEC;
-    }
+    tsk_launch(task);
 
     return 0;
 }
