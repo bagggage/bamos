@@ -16,6 +16,7 @@
 #endif
 
 #define UNUSED(x) (void)(x)
+#define USE(x)      asm volatile(""::"g"(x))
 
 typedef uint8_t bool_t;
 typedef uint64_t size_t;
@@ -52,6 +53,7 @@ typedef enum Status {
 #define ATTR_INTRRUPT       __attribute__((interrupt, target("general-regs-only")))
 #define ATTR_NORETURN       __attribute__((noreturn))
 #define ATTR_USED           __attribute__((used))
+#define ATTR_INLINE_ASM     inline __attribute__((always_inline, target("general-regs-only")))
 
 #define FALLTHROUGH __attribute__ ((fallthrough))
 

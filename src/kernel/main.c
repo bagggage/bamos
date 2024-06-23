@@ -1,6 +1,8 @@
 #include "init.h"
 #include "logger.h"
 
+#include "vm/buddy_page_alloc.h"
+
 #include "proc/task_scheduler.h"
 
 // Entry point called from bootloader
@@ -23,5 +25,7 @@ void _start() {
         _kernel_break();
     }
 
-    tsk_start_scheduler();
+    kernel_msg("Used memory: %u KB, %u MB\n", bpa_get_allocated_bytes() / KB_SIZE, bpa_get_allocated_bytes() / MB_SIZE);
+
+    tsk_schedule();
 }

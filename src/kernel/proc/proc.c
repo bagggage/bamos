@@ -9,6 +9,7 @@
 #include "math.h"
 #include "mem.h"
 #include "task_scheduler.h"
+#include "syscalls.h"
 
 #include "cpu/spinlock.h"
 
@@ -87,7 +88,7 @@ void proc_release_id(pid_t id) {
     spin_release(&pid_lock);
 }
 
-static void log_process(const Process* process) {
+void log_process(const Process* process) {
     kernel_warn("Process: %x\n", process);
 
     if (process == NULL) return;
@@ -226,7 +227,7 @@ int proc_load_from_elf(const char* filename, Task* const task) {
 
     if (interp == NULL) {
 load_progs:
-        task->thread.instruction_ptr = elf_file.header->entry + USER_SPACE_ADDR_BEGIN;
+        task->ip = elf_file.header->entry + USER_SPACE_ADDR_BEGIN;
         result = elf_load(&elf_file, task->process);
 
         elf_free_file(&elf_file);
@@ -277,6 +278,7 @@ bool_t load_init_proc() {
         return FALSE;
     }
 
+    task->after_fork = 0;
     task->process = process;
 
     vm_map_kernel(process->addr_space.page_table);
@@ -326,25 +328,34 @@ bool_t load_init_proc() {
         return FALSE;
     }
 
-    task->thread.stack_ptr = (uint64_t*)(
+    uint64_t stack_ptr = (uint64_t*)(
         task->thread.stack.virt_address +
         ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
     );
 
     uint32_t env_count = 0;
     char** environs = load_environs(&env_count);
-    char** env_ptr = proc_put_args_strings(&task->thread.stack_ptr, environs, env_count);
+    char** env_ptr = proc_put_args_strings(&stack_ptr, environs, env_count);
 
     if (environs) {
         kfree(environs[0]);
         kfree(environs);
     }
 
-    task->thread.exec_state.rdi = 0;
-    task->thread.exec_state.rsi = 0;
-    task->thread.exec_state.rdx = (uint64_t)env_ptr;
-    task->thread.base_ptr = task->thread.stack_ptr;
+    // Make syscall frame
+    stack_ptr -= sizeof(SyscallFrame);
+    SyscallFrame* const syscall_frame = (SyscallFrame*)stack_ptr;
+    syscall_frame->rflags = get_rflags() | RFLAGS_IF;
+    syscall_frame->rip = task->ip;
 
+    // Init registers
+    stack_ptr -= sizeof(ArgsRegs);
+    ArgsRegs* const args_regs = (ArgsRegs*)stack_ptr;
+    args_regs->arg0 = 0;
+    args_regs->arg1 = 0;
+    args_regs->arg2 = (uint64_t)env_ptr;
+
+    task->thread.exec_state = (ExecutionState*)stack_ptr;
     init_proc = process;
 
     kernel_msg("Init process starting...\n");
@@ -831,35 +842,11 @@ char** proc_put_args_strings(uint64_t** const stack, char** strings, const uint3
     return result;
 }
 
-static inline ExecutionState _save_exec_state() {
-    register uint64_t rdi asm ("%rdi");
-    register uint64_t rsi asm ("%rsi");
-    register uint64_t rdx asm ("%rdx");
-    register uint64_t r12 asm ("%r12");
-    register uint64_t r13 asm ("%r13");
-    register uint64_t r14 asm ("%r14");
-    register uint64_t r15 asm ("%r15");
-
-    ExecutionState thread_exec_state;
-
-    thread_exec_state.rdi = rdi;
-    thread_exec_state.rsi = rsi;
-    thread_exec_state.rdx = rdx;
-    thread_exec_state.r12 = r12;
-    thread_exec_state.r13 = r13;
-    thread_exec_state.r14 = r14;
-    thread_exec_state.r15 = r15;
-
-    return thread_exec_state;
-}
-
 long _sys_clone() {
     return 0;
 }
 
-pid_t _sys_fork() {
-    const ExecutionState src_exec_state = _save_exec_state();
-
+pid_t _do_fork() {
     ProcessorLocal* proc_local = proc_get_local();
     //kernel_warn("SYS FORK: CPU: %u\n", proc_local->idx);
 
@@ -876,7 +863,6 @@ pid_t _sys_fork() {
 
     task->process = process;
 
-    //vm_heap_construct(&process->addr_space.heap, g_proc_local.current_task->process->addr_space.heap.virt_base);
     vm_map_kernel(process->addr_space.page_table);
 
     if (thread_copy_stack(&proc_local->current_task->thread, &task->thread, process) == FALSE) {
@@ -910,17 +896,27 @@ pid_t _sys_fork() {
     }
 
     process->work_dir = proc_local->current_task->process->work_dir;
-
-    task->thread.instruction_ptr = (uint64_t)proc_local->instruction_ptr;
-    task->thread.stack_ptr = (uint64_t*)((uint64_t)proc_local->user_stack + sizeof(UserStack));
-    task->thread.base_ptr = (uint64_t*)proc_local->user_stack->base_pointer;
-    task->thread.exec_state = src_exec_state;
-
     proc_add_child(proc_local->current_task->process, process);
+
+    task->thread.exec_state = (ExecutionState*)((uint64_t)proc_local->user_stack - sizeof(CallerSaveRegs));
+    task->after_fork = 1;
 
     tsk_awake(task);
 
     return process->pid;
+}
+
+__attribute__((naked)) pid_t _sys_fork() {
+    save_caller_regs();
+
+    const ProcessorLocal* proc_local = proc_get_local();
+    CallerSaveRegs* const caller_regs = (CallerSaveRegs*)((uint64_t)proc_local->user_stack - sizeof(CallerSaveRegs));
+
+    load_caller_regs(caller_regs);
+
+    const uint64_t result = _do_fork();
+
+    ret(result);
 }
 
 long _sys_execve(const char* filename, char** argv, char** envp) {
@@ -984,27 +980,40 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
     );
 
     // Stack
-    task->thread.stack_ptr = (uint64_t*)(task->thread.stack.virt_address +
+    uint64_t stack_ptr = (uint64_t*)(task->thread.stack.virt_address +
         ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
     );
 
     // Put args and environs on the stack
-    char** argv_ptr = proc_put_args_strings(&task->thread.stack_ptr, argv, argc_val);
-    char** env_ptr = proc_put_args_strings(&task->thread.stack_ptr, envp, envc_val);
+    char** argv_ptr = proc_put_args_strings(&stack_ptr, argv, argc_val);
+    char** env_ptr = proc_put_args_strings(&stack_ptr, envp, envc_val);
 
     if (argv) kfree(argv);
     if (envp) kfree(envp);
 
-    task->thread.base_ptr = task->thread.stack_ptr;
-    task->thread.exec_state = (ExecutionState){ argc_val, (uint64_t)argv_ptr, (uint64_t)env_ptr, 0, 0, 0, 0 };
+    stack_ptr -= sizeof(SyscallFrame);
+    SyscallFrame* const syscall_frame = (SyscallFrame*)stack_ptr;
+    syscall_frame->rip = task->ip;
+    syscall_frame->rflags = get_rflags();
+
+    stack_ptr -= sizeof(ArgsRegs);
+    ArgsRegs* const args_regs = (ArgsRegs*)stack_ptr;
+    args_regs->arg0 = argc_val;
+    args_regs->arg1 = (uint64_t)argv_ptr;
+    args_regs->arg2 = (uint64_t)env_ptr;
+
+    task->thread.exec_state = (ExecutionState*)stack_ptr;
+    task->after_fork = 0;
+
+    //kprintf("Args: %x: argc: %u:%u: argv: %x envp: %x\n", args_regs, args_regs->arg0, argc_val, args_regs->arg1, args_regs->arg2);
 
     //kernel_msg("phys: %x\n", get_phys_address(proc_local->current_task->thread.instruction_ptr));
     //kernel_msg("real: %x\n", (uint64_t)((VMMemoryBlockNode*)proc_local->current_task->process->addr_space.segments.next)->block.page_base * PAGE_BYTE_SIZE);
 
-    //kernel_msg("Instr: %x\n", proc_local->current_task->thread.instruction_ptr);
+    //kernel_msg("Instr: %x\n", proc_local->current_task->ip);
     //kernel_msg("Page table cpu: %x\n", g_proc_local.idx);
 
-    tsk_launch(task);
+    tsk_exec(task);
 
     return 0;
 }
@@ -1052,14 +1061,16 @@ long _sys_exit(int error_code) {
     proc_detach_childs(proc_local->current_task->process);
     proc_dealloc_vm_pages(proc_local->current_task->process);
 
-    tsk_extract(proc_local->current_task);
-
     cpu_set_pml4(proc_local->kernel_page_table);
     vm_free_page_table(proc_local->current_task->process->addr_space.page_table);
 
     proc_local->current_task->process->addr_space.page_table = NULL;
 
-    tsk_next();
+    tsk_extract(proc_local->current_task);
+
+    proc_local->current_task = NULL;
+
+    tsk_schedule();
 
     return 0;
 }

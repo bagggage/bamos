@@ -64,7 +64,16 @@ typedef struct Task {
     LIST_STRUCT_IMPL(Task);
 
     Process* process;
-    ProcessorLocal* local_cpu;
+    
+    union {
+        uint64_t ip; // Temporary storage for instruction pointer
+
+        struct {
+            uint64_t after_fork : 1;
+            uint64_t : 63;
+        };
+    };
+
     Thread thread;
 } Task;
 
@@ -75,6 +84,8 @@ void proc_release_id(pid_t id);
 
 Process* proc_new();
 void proc_delete(Process* process);
+
+void log_process(const Process* process);
 
 VMMemoryBlockNode* proc_push_segment(Process* const process);
 void proc_clear_segments(Process* const process);

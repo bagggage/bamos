@@ -23,9 +23,9 @@ void tsk_delete(Task* const task);
 
 void tsk_awake(Task* const task);
 void tsk_extract(Task* const task);
-void tsk_launch(const Task* task);
-void tsk_next();
+void tsk_exec(const Task* task);
+Task* tsk_next(volatile TaskScheduler* const scheduler);
 
-void tsk_start_scheduler();
+void tsk_schedule();
 
-void tsk_switch_to(Task* const task);
+void tsk_timer_intr();

@@ -24,6 +24,8 @@
 
 #define ALIGN(x, a) (((x) + (a) - 1) & ~((a) - 1))
 
+typedef long (*syscall_t)(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
+
 void* syscall_table[512] = { NULL };
 
 void invalid_syscall_msg(uint64_t syscall_idx) {
@@ -31,46 +33,103 @@ void invalid_syscall_msg(uint64_t syscall_idx) {
 }
 
 __attribute__((naked)) void _syscall_handler() {
-    asm volatile (
-        "cmp $512,%%rax \n"                     // Check syscall idx
-        "jae _invalid_syscall \n"
-        "pushq %%rax \n"
-        "movq syscall_table(,%%rax,8),%%rax \n"  // Get pointer to handler
-        "test %%rax,%%rax \n"                   // Check if syscall handler exists
-        "jz _invalid_syscall \n"
-        "add $8,%%rsp \n"
-        "pushq %%rbp \n"                        // Save rbp
-        "pushq %%rcx \n"                        // Save return address
-        "pushq %%r11 \n"                        // Save rflags
-        "movq %%gs:0,%%r11 \n"                  // Get processor local data pointer
-        "movq %%rsp,%a0(%%r11) \n"              // Save user stack
-        "movq %%rcx,%a2(%%r11) \n"              // Save instruction pointer
-        "movq %a1(%%r11),%%rsp \n"              // Switch to kernel stack
-        "movq %%rsp,%%rbp \n"                   // Might be unnecessary?
-        "movq %%r10,%%rcx \n"                   // r10 contains arg3 (Syscall ABI), mov it to rcx (System V call ABI)
-        "call *%%rax \n"                        // Make call
-        "mov %%gs:0,%%r11 \n"
-        "movq %a0(%%r11),%%rsp \n"              // Restore user stack, return address, flags
-        "popq %%r11 \n"
-        "popq %%rcx \n"
-        "popq %%rbp \n"
-        "sysretq \n"                            // Return rax;
-        "_invalid_syscall: \n"
-        "popq %%rdi \n"
-        "pushq %%rbp \n"                        // Save rbp
-        "pushq %%rcx \n"                        // Save return address
-        "pushq %%r11 \n"                        // Save rflags
-        "call invalid_syscall_msg \n"
-        "popq %%r11 \n"                        // Save rflags
-        "popq %%rcx \n"                        // Save return address
-        "popq %%rbp \n"                        // Save rbp
-        "movq $0xffffffffffffffff,%%rax \n"     // Return -1;
-        "sysretq"
-        ::
-        "i" (offsetof(ProcessorLocal, user_stack)),
-        "i" (offsetof(ProcessorLocal, kernel_stack)),
-        "i" (offsetof(ProcessorLocal, instruction_ptr))
-    );
+    register uint64_t ip asm("%rcx");
+    register uint64_t rflags asm("%r11");
+
+    register uint64_t syscall asm("%rax");
+
+    register uint64_t arg1 asm("%rdi");
+    register uint64_t arg2 asm("%rsi");
+    register uint64_t arg3 asm("%rdx");
+    register uint64_t arg4 asm("%r10");
+    register uint64_t arg5 asm("%r8");
+    register uint64_t arg6 asm("%r9");
+
+    if (syscall >= sizeof(syscall_table) / sizeof(syscall_table[0])) goto invalid_syscall;
+
+    {
+        // Get syscall handler in asm, in case to use only rax register
+        asm volatile("mov syscall_table(,%1,8),%0":"=r"(syscall):"r"(syscall));
+
+        if (syscall == 0) goto invalid_syscall;
+
+        // Protect rcx,r11 from compiler allocation before saving
+        USE(ip); USE(rflags);
+        store_syscall_frame();
+
+        {
+            register ProcessorLocal* proc_local asm("%rcx") = proc_get_local();
+            USE(proc_local);
+
+            store_stack((uint64_t*)&proc_local->user_stack);
+            load_stack((uint64_t)proc_local->kernel_stack);
+        }
+
+        register long result asm("%rax") = ((syscall_t)syscall)(arg1,arg2,arg3,arg4,arg5,arg6);
+
+        {
+            register ProcessorLocal* proc_local asm("%r11") = proc_get_local();
+            USE(proc_local);
+
+            load_stack((uint64_t)proc_local->user_stack);
+        }
+
+        restore_syscall_frame();
+        sysret();
+
+        USE(result);
+    }
+
+    //asm volatile (
+    //    "cmp $512,%%rax \n"                     // Check syscall idx
+    //    "jae _invalid_syscall \n"
+    //    "pushq %%rax \n"
+    //    "movq syscall_table(,%%rax,8),%%rax \n"  // Get pointer to handler
+    //    "test %%rax,%%rax \n"                   // Check if syscall handler exists
+    //    "jz _invalid_syscall \n"
+    //    "add $8,%%rsp \n"
+    //    "pushq %%rbp \n"                        // Save rbp
+    //    "pushq %%rcx \n"                        // Save return address
+    //    "or %a3,%%r11 \n"                       // Enable interrupts
+    //    "pushq %%r11 \n"                        // Save rflags
+    //    "movq %%gs:0,%%r11 \n"                  // Get processor local data pointer
+    //    "movq %%rsp,%a0(%%r11) \n"              // Save user stack
+    //    "movq %%rcx,%a2(%%r11) \n"              // Save instruction pointer
+    //    "movq %a1(%%r11),%%rsp \n"              // Switch to kernel stack
+    //    "movq %%rsp,%%rbp \n"                   // Might be unnecessary?
+    //    "movq %%r10,%%rcx \n"                   // r10 contains arg3 (Syscall ABI), mov it to rcx (System V call ABI)
+    //    "call *%%rax \n"                        // Make call
+    //    "mov %%gs:0,%%r11 \n"
+    //    "movq %a0(%%r11),%%rsp \n"              // Restore user stack, return address, flags
+    //    "popq %%r11 \n"
+    //    "popq %%rcx \n"
+    //    "popq %%rbp \n"
+    //    "sysretq \n"                            // Return rax;
+    //    "_invalid_syscall: \n"
+    //    "popq %%rdi \n"
+    //    "pushq %%rbp \n"                        // Save rbp
+    //    "pushq %%rcx \n"                        // Save return address
+    //    "pushq %%r11 \n"                        // Save rflags
+    //    "call invalid_syscall_msg \n"
+    //    "popq %%r11 \n"                         // Restore rflags
+    //    "popq %%rcx \n"                         // Restore return address
+    //    "popq %%rbp \n"                         // Restore rbp
+    //    "movq $0xffffffffffffffff,%%rax \n"     // Return -1;
+    //    "sysretq"
+    //    ::
+    //    "i" (offsetof(ProcessorLocal, user_stack)),
+    //    "i" (offsetof(ProcessorLocal, kernel_stack)),
+    //    "i" (offsetof(ProcessorLocal, instruction_ptr)),
+    //    "i" (RFLAGS_IF)
+    //);
+
+invalid_syscall:
+    {
+        register uint64_t result asm("%rax") = -1ll;
+
+        USE(result);
+        sysret();
+    }
 }
 
 long _sys_read(unsigned int fd, char* buffer, size_t count) {
@@ -229,6 +288,8 @@ long _sys_munmap(void* address, size_t length) {
 }
 
 long _sys_brk(uint64_t brk) {
+    UNUSED(brk);
+
     return -ENOMEM;
 }
 
@@ -250,7 +311,7 @@ long _sys_pread64(unsigned int fd, char* buffer, size_t count, int64_t offset) {
     FileDescriptor* file = proc_local->current_task->process->files[fd];
 
     if (file == NULL || (file->mode & O_WRONLY) != 0) return -EBADF;
-    if (offset >= file->dentry->inode->file_size) return 0;
+    if (offset >= (int64_t)file->dentry->inode->file_size) return 0;
 
     const uint32_t readed = vfs_read(file->dentry, offset, count, (void*)buffer);
 
@@ -456,6 +517,7 @@ long _sys_arch_prctl(int code, const uint64_t address) {
         kernel_msg("TRY TO GET/SET GS: %x\n", address);
     default:
         return -EINVAL;
+        break;
     }
 
     if (is_get) {

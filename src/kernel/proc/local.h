@@ -11,19 +11,12 @@
 /*
 Local data per logical processor.
 */
-
-typedef struct UserStack {
-    uint64_t rflags;
-    uint64_t return_address;
-    uint64_t base_pointer;
-} ATTR_PACKED UserStack;
-
 typedef struct ProcessorLocal {
     uint32_t idx;
     uint32_t ioapic_idx;
 
     uint64_t* kernel_stack;
-    UserStack* user_stack;
+    SyscallFrame* user_stack;
     uint64_t* instruction_ptr;
 
     Task* current_task;

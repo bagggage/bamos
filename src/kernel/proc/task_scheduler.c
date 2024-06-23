@@ -7,12 +7,16 @@
 #include "logger.h"
 #include "math.h"
 #include "mem.h"
+#include "syscalls.h"
 
 #include "cpu/gdt.h"
 #include "cpu/spinlock.h"
 #include "cpu/regs.h"
 
+#include "dev/lapic_timer.h"
+
 #include "intr/apic.h"
+#include "intr/intr.h"
 
 #include "vm/object_mem_alloc.h"
 
@@ -124,46 +128,28 @@ void tsk_extract(Task* const task) {
     oma_free((void*)task, task_oma);
 }
 
-__attribute__((noreturn, naked)) void tsk_launch(const Task* task) {
-    register uint64_t rdi asm("%rdi") = task->thread.exec_state.rdi;
-    register uint64_t rsi asm("%rsi") = task->thread.exec_state.rsi;
-    register uint64_t rdx asm("%rdx") = task->thread.exec_state.rdx;
-    register uint64_t r12 asm("%r12") = task->thread.exec_state.r12;
-    register uint64_t r13 asm("%r13") = task->thread.exec_state.r13;
-    register uint64_t r14 asm("%r14") = task->thread.exec_state.r14;
-    register uint64_t r15 asm("%r15") = task->thread.exec_state.r15;
+void tsk_exec(const Task* task) {
+    restore_stack(&task->thread);
+    restore_args_regs();
+    restore_syscall_frame();
 
-    asm volatile(
-        "pushfq \n"
-        "popq %%r11 \n"
-        "mov %[instr_ptr],%%rcx \n"
-        "mov %[stack_ptr],%%rsp \n"
-        "mov %[base_ptr],%%rbp \n"
-        "xor %%rax,%%rax \n"
-        "xor %%rbx,%%rbx \n"
-        "sysretq"
-        :
-        :
-        [instr_ptr] "g" (task->thread.instruction_ptr),
-        [stack_ptr] "g" (task->thread.stack_ptr),
-        [base_ptr] "g" (task->thread.base_ptr),
-        "r"(rdi),"r"(rsi),"r"(rdx),
-        "r"(r12),"r"(r13),"r"(r14),"r"(r15)
-        : "%rcx", "memory"
-    );
+    sysret();
 }
 
-void tsk_next() {
-    ProcessorLocal* proc_local = proc_get_local();
-    volatile TaskScheduler* scheduler = &schedulers[proc_local->idx];
+static ATTR_INLINE_ASM void tsk_sysret(const Task* task) {
+    restore_stack(&task->thread);
+    restore_caller_regs();
+    restore_syscall_frame();
 
-    while (scheduler->count == 0);
+    asm volatile("xor %rax,%rax");
 
+    sysret();
+}
+
+Task* tsk_next(volatile TaskScheduler* const scheduler) {
     spin_lock((Spinlock*)&scheduler->lock);
 
     Task* task = (void*)scheduler->task_queue.next;
-
-    proc_local->current_task = task;
 
     if (scheduler->task_queue.prev != scheduler->task_queue.next) {
         scheduler->task_queue.next = (void*)task->next;
@@ -177,14 +163,10 @@ void tsk_next() {
 
     spin_release((Spinlock*)&scheduler->lock);
 
-    if (cpu_get_current_pml4() != task->process->addr_space.page_table) {
-        cpu_set_pml4(task->process->addr_space.page_table);
-    }
-
-    tsk_launch(task);
+    return task;
 }
 
-void tsk_start_scheduler() {
+void tsk_schedule() {
     kassert(schedulers != NULL);
 
     ProcessorLocal* proc_local = proc_get_local();
@@ -194,25 +176,17 @@ void tsk_start_scheduler() {
 
     while (scheduler->count == 0);
 
-    spin_lock((Spinlock*)&scheduler->lock);
+    Task* const task = tsk_next(scheduler);
 
-    Task* task = (void*)scheduler->task_queue.next;
+
+    if (task->process->addr_space.page_table != cpu_get_current_pml4()) {
+        cpu_set_pml4(task->process->addr_space.page_table);
+    }
 
     proc_local->current_task = task;
 
-    if (scheduler->task_queue.prev != scheduler->task_queue.next) {
-        scheduler->task_queue.next = (void*)task->next;
-        task->next->prev = NULL;
-        task->next = NULL;
-
-        task->prev = (void*)scheduler->task_queue.prev;
-        task->prev->next = task;
-        scheduler->task_queue.prev = (void*)task;
-    }
-
-    spin_release((Spinlock*)&scheduler->lock);
-
-    cpu_set_pml4(task->process->addr_space.page_table);
+    if (task->after_fork) tsk_sysret(task);
+    else tsk_exec(task);
 
     //kernel_msg("Starting scheduler %u: pml4: %x: ip: %x:[%x]:%x (%x): sp: %x\n",
     //    proc_local->idx,
@@ -231,25 +205,46 @@ void tsk_start_scheduler() {
     //    );
     //}
     //if (proc_local->idx == 0) kernel_logger_clear();
-
-    tsk_launch(task);
 }
 
-void tsk_switch_to(Task* const task) {
-    ProcessorLocal* proc_local = proc_get_local();
-    TaskScheduler* scheduler = &schedulers[proc_local->idx];
+__attribute__((naked)) void tsk_timer_intr() {
+    intr_disable();
 
-    if (scheduler->task_queue.prev != (void*)task && scheduler->task_queue.next == (void*)task) {
-        scheduler->task_queue.next = (void*)task->next;
-        task->next->prev = NULL;
-        task->next = NULL;
+    register InterruptFrame64* frame asm("%rsp");
+    load_stack(frame->rsp);
 
-        task->prev = (void*)scheduler->task_queue.prev;
-        task->prev->next = task;
-        scheduler->task_queue.prev = (void*)task;
+    stack_alloc(sizeof(InterruptFrame64));
+    save_regs();
+
+    register ProcessorLocal* const proc_local = proc_get_local();
+    store_stack(&proc_local->current_task->thread.exec_state);
+    load_stack((uint64_t)proc_local->kernel_stack);
+
+    {
+        const InterruptFrame64* src = (InterruptFrame64*)((uint64_t)proc_local->kernel_stack - sizeof(InterruptFrame64));
+        proc_local->current_task->thread.exec_state->intr_frame = *src;
     }
+
+    kernel_msg("Interrupt\n");
+    //kernel_msg("Interrupt: CPU: %u: task: %x: rflags: %b\n", proc_local->idx, proc_local->current_task, get_rflags());
+    //log_process(proc_local->current_task->process);
+    //_kernel_break();
+
+    TaskScheduler* const scheduler = &schedulers[proc_local->idx];
+    Task* const task = tsk_next(scheduler);
 
     if (cpu_get_current_pml4() != task->process->addr_space.page_table) {
         cpu_set_pml4(task->process->addr_space.page_table);
     }
+
+    if (task->after_fork) {
+        lapic_eoi();
+        tsk_exec(task);
+    }
+
+    load_stack((uint64_t)task->thread.exec_state);
+
+    lapic_eoi();
+    restore_regs();
+    intr_ret();
 }

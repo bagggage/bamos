@@ -36,6 +36,8 @@
 
 #include "vm/vm.h"
 
+#define RFLAGS_IF (1 << 9)
+
 extern BOOTBOOT bootboot;
 extern uint64_t initstack[];
 extern const uint8_t _binary_font_psf_start;
@@ -57,7 +59,7 @@ static void wait_for_cpu_init() {
 
     spin_release(&cpus_userspace_lock);
 
-    tsk_start_scheduler();
+    tsk_schedule();
 
     kassert(FALSE);
 }
@@ -144,6 +146,7 @@ Status init_user_space() {
     cpu_set_msr(MSR_STAR, ((3ull << 3) << 32));
     cpu_set_msr(MSR_LSTAR, (uint64_t)&_syscall_handler);
     cpu_set_msr(MSR_CSTAR, 0x0);
+    cpu_set_msr(MSR_SFMASK, RFLAGS_IF);
     cpu_set_msr(MSR_SWAPGS_BASE, proc_local_ptr);
 
     asm volatile("swapgs");

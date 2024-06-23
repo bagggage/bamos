@@ -71,8 +71,6 @@ bool_t thread_copy_stack(const Thread* src_thread, Thread* const dst_thread, con
         dst_thread->stack.pages_count * PAGE_BYTE_SIZE
     );
 
-    dst_thread->stack_ptr = src_thread->stack_ptr;
-
     return TRUE;
 }
 
