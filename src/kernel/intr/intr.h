@@ -11,6 +11,9 @@
 
 #define INTR_ANY_CPU 0xFF
 
+#define INTR_KERNEL_STACK 0
+#define INTR_USER_STACK   2
+
 typedef struct InterruptDescriptor64 {
     uint16_t offset_1;        // offset bits 0..15
     uint16_t selector;        // a code segment selector in GDT or LDT
@@ -52,15 +55,36 @@ typedef struct InterruptControlBlock {
     uint16_t next_cpu;
 } InterruptControlBlock;
 
-static inline void intr_enable() {
+typedef struct TaskStateSegment {
+    uint32_t reserved_1;
+
+    uint64_t rsp0, rsp1, rsp2;
+    uint64_t reserved_2;
+
+    uint64_t ist[7];
+
+    uint64_t reserved_3;
+    uint16_t reserved_4;
+    uint16_t iopb;
+} ATTR_PACKED TaskStateSegment;
+
+static ATTR_INLINE_ASM void intr_enable() {
     asm volatile("sti");
 }
 
-static inline void intr_disable() {
+static ATTR_INLINE_ASM void intr_disable() {
     asm volatile("cli");
 }
 
-void intr_set_idt_entry(InterruptDescriptor64* const idt, const uint8_t idx, const void* isr, uint8_t flags);
+static ATTR_INLINE_ASM void intr_ret() {
+    asm volatile("iretq");
+}
+
+void intr_set_idt_entry(
+    InterruptDescriptor64* const idt,
+    const uint8_t idx, const void* isr,
+    const uint8_t flags, const uint8_t ist
+);
 
 /*
 Reserve available interrupt vector in IDT and returns it.
@@ -74,11 +98,13 @@ Release previously reserved interrupt vector for specific cpu.
 */
 void intr_release(const InterruptLocation location);
 
+bool_t intr_take_vector(const InterruptLocation location);
+
 /*
 Setup handler on location in IDT.
 If required location is invalid or not reserved, than returns `FALSE`.
 */
-bool_t intr_setup_handler(const InterruptLocation location, InterruptHandler_t const handler);
+bool_t intr_setup_handler(const InterruptLocation location, InterruptHandler_t const handler, const uint8_t stack);
 
 Status init_intr();
 Status intr_preinit_exceptions();
@@ -90,6 +116,13 @@ InterruptDescriptor64* intr_get_idt(const uint32_t cpu_idx);
 Returns kernel IDTR for specific cpu.
 */
 IDTR64 intr_get_idtr(const uint32_t cpu_idx);
+
+static ATTR_INLINE_ASM void intr(const uint32_t vector) {
+    asm volatile(
+        "int %0"::"i"(vector):
+        "%rax","%rdi","%rsi","%rdx","%rcx","%r8","%r9","%r10","%r11"
+    );
+}
 
 #ifdef KTRACE
 void log_trace(const uint32_t trace_start_depth);

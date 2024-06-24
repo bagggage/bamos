@@ -63,11 +63,17 @@ typedef struct OffsetAddress {
     uint32_t offset_3;
 } ATTR_PACKED OffsetAddress;
 
-void intr_set_idt_entry(InterruptDescriptor64* const idt, const uint8_t idx, const void* isr, uint8_t flags) {
+void intr_set_idt_entry(
+    InterruptDescriptor64* const idt,
+    const uint8_t idx, const void* isr,
+    const uint8_t flags, const uint8_t ist
+) {
+    kassert(ist <= INTR_USER_STACK);
+
     idt[idx].offset_1 = (uint64_t)isr & 0xFFFF;
     idt[idx].offset_2 = ((uint64_t)isr >> 16) & 0xFFFF;
     idt[idx].offset_3 = (uint64_t)isr >> 32;
-    idt[idx].ist = 0;
+    idt[idx].ist = ist;
     idt[idx].selector = get_current_kernel_cs();
     idt[idx].type_attributes = flags;
     idt[idx].reserved = 0;
@@ -269,7 +275,19 @@ void intr_release(const InterruptLocation location) {
     _bitmap_clear_bit(map->bytes, location.vector);
 }
 
-bool_t intr_setup_handler(InterruptLocation location, InterruptHandler_t handler) {
+bool_t intr_take_vector(const InterruptLocation location) {
+    kassert(location.cpu_idx < bootboot.numcores && location.vector < IDT_ENTRIES_COUNT);
+
+    InterruptMap* const map = intr_ctrl.map + location.cpu_idx;
+
+    if (_bitmap_get_bit(map->bytes, location.vector) != 0) return FALSE;
+
+    _bitmap_set_bit(map->bytes, location.vector);
+
+    return TRUE;
+}
+
+bool_t intr_setup_handler(const InterruptLocation location, InterruptHandler_t handler, const uint8_t stack) {
     if (location.cpu_idx >= bootboot.numcores || location.vector < 32) return FALSE;
     if (_bitmap_get_bit(
             intr_ctrl.map[location.cpu_idx].bytes,
@@ -278,7 +296,7 @@ bool_t intr_setup_handler(InterruptLocation location, InterruptHandler_t handler
 
     InterruptDescriptor64* idt = intr_get_idt(location.cpu_idx);
 
-    intr_set_idt_entry(idt,location.vector, (void*)handler, INTERRUPT_GATE_FLAGS);
+    intr_set_idt_entry(idt, location.vector, (void*)handler, INTERRUPT_GATE_FLAGS, stack);
 
     return TRUE;
 }
@@ -321,10 +339,10 @@ Status intr_preinit_exceptions() {
     for (uint8_t i = 0; i < IDT_EXCEPTION_ENTRIES_COUNT; ++i) {
         if (i == 8 || i == 10 || i == 11 || i == 12 ||
             i == 13 || i == 14 || i == 17 || i == 21) {
-            intr_set_idt_entry(idt_root, i, &intr_excp_error_code_handler, TRAP_GATE_FLAGS);
+            intr_set_idt_entry(idt_root, i, &intr_excp_error_code_handler, TRAP_GATE_FLAGS, INTR_KERNEL_STACK);
         }
         else {
-            intr_set_idt_entry(idt_root, i, &intr_excp_handler, TRAP_GATE_FLAGS);
+            intr_set_idt_entry(idt_root, i, &intr_excp_handler, TRAP_GATE_FLAGS, INTR_KERNEL_STACK);
         }
     }
 
@@ -332,7 +350,7 @@ Status intr_preinit_exceptions() {
 
     // Setup regular interrupts
     for (uint16_t i = IDT_EXCEPTION_ENTRIES_COUNT; i < IDT_ENTRIES_COUNT; ++i) {
-        intr_set_idt_entry(idt_root, i, &intr_handler, INTERRUPT_GATE_FLAGS);
+        intr_set_idt_entry(idt_root, i, &intr_handler, INTERRUPT_GATE_FLAGS, INTR_KERNEL_STACK);
     }
 
     cpu_set_idtr(intr_get_idtr(0));
