@@ -132,18 +132,27 @@ Status init_pci() {
     return KERNEL_OK;
 }
 
+TaskStateSegment* g_tss = NULL;
+SegmentDescriptor* g_gdt = NULL;
+
 Status init_user_space() {
+    static uint32_t gdt_size = 0;
+    static const uint32_t gdt_segs_count = 8;
+
     const uint32_t cpu_idx = g_proc_local.idx;
     const uint64_t proc_local_ptr = (uint64_t)_proc_get_local_ptr(cpu_idx);
-    //kassert(proc_local_ptr != NULL);
 
     EFER efer = cpu_get_efer();
 
     // Enable syscalls
     efer.syscall_ext = 1;
 
+    const uint64_t star = 
+        ((3 * sizeof(SegmentDescriptor)) << 32) | // KERNEL
+        (3ull << 48); // USER
+
     cpu_set_efer(efer);
-    cpu_set_msr(MSR_STAR, ((3ull << 3) << 32));
+    cpu_set_msr(MSR_STAR, star);
     cpu_set_msr(MSR_LSTAR, (uint64_t)&_syscall_handler);
     cpu_set_msr(MSR_CSTAR, 0x0);
     cpu_set_msr(MSR_SFMASK, RFLAGS_IF);
@@ -151,34 +160,99 @@ Status init_user_space() {
 
     asm volatile("swapgs");
 
-    if (cpu_idx != 0) return KERNEL_OK;
+    intr_disable();
+    lapic_mask_lvt(LAPIC_LVT_TIMER_REG, FALSE);
+
+    if (cpu_idx != 0) {
+        cpu_set_gdt(g_gdt, gdt_size - 1);
+        cpu_set_ss(4, FALSE, 0);
+
+        cpu_set_tss(
+            (gdt_segs_count * sizeof(SegmentDescriptor)) +
+            (cpu_idx * sizeof(SystemSegmentDescriptor))
+        );
+
+        g_proc_local.tss = g_tss + cpu_idx;
+        return KERNEL_OK;
+    }
 
     SegmentDescriptor* gdt = (SegmentDescriptor*)cpu_get_current_gdtr().base;
 
+    {
     // Move kernel segments
-    gdt[3] = gdt[7]; // Code
-    gdt[4] = gdt[6]; // Data
+        //SegmentDescriptor* const ker_code = gdt + 7;
+        //ker_code->access_byte.access = 1;
+        //ker_code->access_byte.read_write = 1;
+        //ker_code->access_byte.dc = 0;
+        //ker_code->access_byte.exec = 1;
+
+        //ker_code->access_byte.present = 1;
+        //ker_code->access_byte.privilage_level = 0;
+        //ker_code->access_byte.descriptor_type = 1;
+        //ker_code->base_1 = 0;
+        //ker_code->base_2 = 0;
+        //ker_code->base_3 = 0;
+        //ker_code->limit_1 = 0xFFFF;
+        //ker_code->limit_2 = 0xF;
+        //ker_code->flags = 0b1010;
+        gdt[3] = gdt[cpu_get_cs() / sizeof(SegmentDescriptor)]; // Code
+
+        //gdt[4] = *ker_code; // Data
+        //gdt[4].access_byte.exec = 0;
+        gdt[4] = gdt[cpu_get_ss() / sizeof(SegmentDescriptor)]; // Data
+        gdt[4].flags = 0b1100;
+        gdt[4].access_byte.read_write = 1;
+    }
+
+    cpu_set_ss(4, FALSE, 0);
 
     // Initialize user segments
-    SegmentDescriptor* user_segs = gdt + 1;
+    SegmentDescriptor* const user_segs = gdt + 1;
 
+    // [1]: Data: [2]: Code
     for (uint8_t i = 0; i < 2; ++i) {
-        user_segs[i].base_1 = 0;
-        user_segs[i].base_2 = 0;
-        user_segs[i].base_3 = 0;
-        user_segs[i].limit_1 = 0xFFFF;
-        user_segs[i].limit_2 = 0xF;
-        user_segs[i].flags = (i == 0 ? 0b1010 : 0b1100);
-
-        SegmentAccessByte* access_byte = (SegmentAccessByte*)&user_segs[i].access_byte;
-
-        access_byte->present = 1;
-        access_byte->privilage_level = USER_PRIVILAGE_LEVEL;
-        access_byte->descriptor_type = 1;
-        access_byte->exec = i;
-        access_byte->dc = 0;
-        access_byte->read_write = 1;
+        user_segs[i] = gdt[i == 0 ? 4 : 3];
+        user_segs[i].access_byte.privilage_level = 3;
     }
+
+    // Configure own GDT and per CPU TSS
+    g_tss = kcalloc(sizeof(TaskStateSegment) * bootboot.numcores);
+
+    gdt_size = (sizeof(SegmentDescriptor) * (gdt_segs_count + 1)) + (sizeof(SystemSegmentDescriptor) * bootboot.numcores);
+    g_gdt = (SegmentDescriptor*)kcalloc(gdt_size);
+
+    if (g_gdt == NULL || g_tss == NULL) {
+        error_str = "Failed to allocate GDT/LDT/TSS";
+        return KERNEL_ERROR;
+    }
+
+    memcpy((void*)gdt, (void*)g_gdt, (sizeof(SegmentDescriptor) * gdt_segs_count));
+
+    SystemSegmentDescriptor* ssd = (SystemSegmentDescriptor*)(uint64_t)(g_gdt + gdt_segs_count);
+    TaskStateSegment* tss = g_tss;
+
+    for (uint32_t i = 0; i < bootboot.numcores; ++i) {
+        const uint64_t base = (uint64_t)tss;
+        tss->rsp0 = (uint64_t)_proc_get_local_data_by_idx(i)->kernel_stack;
+
+        ssd->base_1 = (uint16_t)base;
+        ssd->base_2 = (uint8_t)(base >> 16);
+        ssd->base_3 = (uint8_t)(base >> 24);
+        ssd->base_4 = (uint32_t)(base >> 32);
+        ssd->flags = 0x0;
+        ssd->access_byte_val = 0x89;
+        ssd->limit_1 = sizeof(TaskStateSegment);
+        ssd->limit_2 = 0;
+        ssd->access_byte.privilage_level = 0;
+
+        tss++;
+        ssd++;
+    }
+
+    cpu_set_gdt(g_gdt, gdt_size - 1);
+    cpu_set_tss(sizeof(SegmentDescriptor) * gdt_segs_count);
+
+    g_proc_local.tss = g_tss + cpu_idx;
 
     return KERNEL_OK;
 }
