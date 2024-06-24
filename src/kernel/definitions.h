@@ -4,6 +4,9 @@
 
 // Kernel defenitions used in implementetion
 
+#define XSTRINGIFY(x) STRINGIFY(x)
+#define STRINGIFY(x) #x
+
 #ifndef NULL
     #define NULL ((void*)0)
 #endif
@@ -54,7 +57,10 @@ typedef enum Status {
 #define ATTR_NORETURN       __attribute__((noreturn))
 #define ATTR_USED           __attribute__((used))
 #define ATTR_INLINE_ASM     inline __attribute__((always_inline, target("general-regs-only")))
+#define ATTR_NAKED          __attribute__((naked))
 
 #define FALLTHROUGH __attribute__ ((fallthrough))
 
-static inline ATTR_NORETURN void _kernel_break() { while(1); }
+static ATTR_INLINE_ASM void _hlt() { asm volatile("hlt"); }
+
+static inline ATTR_NORETURN void _kernel_break() { while(1) _hlt(); }
