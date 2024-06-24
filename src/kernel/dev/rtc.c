@@ -69,8 +69,6 @@ static uint8_t get_day_of_week(uint16_t year, const uint8_t month, const uint8_t
 }
 
 static void get_rtc_current_time(ClockDevice* const clock_device) {
-    asm("cli");
-
     while (is_rtc_used());
 
     clock_device->date_and_time.second = get_rtc_register(RTC_SECOND_REGISTER);
@@ -109,8 +107,6 @@ static void get_rtc_current_time(ClockDevice* const clock_device) {
 
     // to prevent blocking IRQ8, just read the register C
     get_rtc_register(RTC_C_REGISTER);
-
-    asm("sti");
 }
 
 static void set_rtc_current_time(const DateTime* const date_and_time) {
@@ -128,8 +124,6 @@ static void set_rtc_current_time(const DateTime* const date_and_time) {
     } else {
         year_last_two_digits = date_and_time->year;
     }
-
-    asm("cli");
 
     while(is_rtc_used());
 
@@ -163,20 +157,14 @@ static void set_rtc_current_time(const DateTime* const date_and_time) {
 
     // to prevent blocking IRQ8, just read the register C
     get_rtc_register(RTC_C_REGISTER);
-
-    asm("sti");
 }
 
 Status init_rtc(ClockDevice* const clock_device) {
     if (clock_device == NULL) return KERNEL_INVALID_ARGS;
 
-    asm("cli");
-
     // select Status Register A, and disable NMI (by setting the 7 bit)
     outb(0x70, RTC_A_REGISTER + 0x80);
-    outb(0x71, CMOS_RAM);	
-
-    asm("sti");
+    outb(0x71, CMOS_RAM);
 
     clock_device->interface.get_current_time = &get_rtc_current_time;
     clock_device->interface.set_current_time = &set_rtc_current_time;

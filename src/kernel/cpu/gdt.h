@@ -19,7 +19,11 @@ typedef struct SegmentDescriptor {
     uint16_t limit_1;
     uint16_t base_1;
     uint8_t base_2;
-    uint8_t access_byte;
+
+    union {
+        SegmentAccessByte access_byte;
+        uint8_t access_byte_val;
+    };
 
     struct {
         uint8_t limit_2 : 4;
@@ -28,6 +32,26 @@ typedef struct SegmentDescriptor {
 
     uint8_t base_3;
 } ATTR_PACKED SegmentDescriptor;
+
+typedef struct SystemSegmentDescriptor {
+    uint16_t limit_1;
+    uint16_t base_1;
+    uint8_t base_2;
+
+    union {
+        SegmentAccessByte access_byte;
+        uint8_t access_byte_val;
+    };
+
+    struct {
+        uint8_t limit_2 : 4;
+        uint8_t flags : 4;
+    } ATTR_PACKED;
+
+    uint8_t base_3;
+    uint32_t base_4;
+    uint32_t reserved_1;
+} ATTR_PACKED SystemSegmentDescriptor;
 
 typedef struct SegmentSelector {
     uint16_t rpl : 2;       // Requested privilege level
@@ -40,6 +64,9 @@ typedef struct GDTR64 {
     uint16_t size;
     uint64_t base;
 } ATTR_PACKED GDTR64;
+
+extern TaskStateSegment* g_tss;
+extern SegmentDescriptor* g_gdt;
 
 static inline GDTR64 cpu_get_current_gdtr() {
     GDTR64 gdtr_64;
@@ -58,6 +85,20 @@ static inline void cpu_set_gdt(const SegmentDescriptor* gdt, const uint32_t size
     asm volatile("lgdt %0"::"memory"(gdtr_64));
 }
 
+static inline void cpu_set_tss(const uint16_t ldt_selector) {
+    asm volatile("ltr %0"::"m"(ldt_selector));
+}
+
+static inline void cpu_set_es(const uint16_t segment_idx, const bool_t is_local, const uint8_t privilage_level) {
+    SegmentSelector es;
+
+    es.segment_idx = segment_idx;
+    es.table_idx = is_local ? 1 : 0;
+    es.rpl = privilage_level;
+
+    asm volatile("mov %0,%%es"::"a"(es));
+}
+
 static inline void cpu_set_gs(const uint16_t segment_idx, const bool_t is_local, const uint8_t privilage_level) {
     SegmentSelector gs;
 
@@ -68,14 +109,14 @@ static inline void cpu_set_gs(const uint16_t segment_idx, const bool_t is_local,
     asm volatile("mov %0,%%gs"::"a"(gs));
 }
 
-static inline void cpu_set_cs(const uint16_t segment_idx, const bool_t is_local, const uint8_t privilage_level) {
-    SegmentSelector cs;
+static inline void cpu_set_ss(const uint16_t segment_idx, const bool_t is_local, const uint8_t privilage_level) {
+    SegmentSelector ss;
 
-    cs.segment_idx = segment_idx;
-    cs.table_idx = is_local ? 1 : 0;
-    cs.rpl = privilage_level;
+    ss.segment_idx = segment_idx;
+    ss.table_idx = is_local ? 1 : 0;
+    ss.rpl = privilage_level;
 
-    asm volatile("mov %0,%%cs"::"a"(cs));
+    asm volatile("mov %0,%%ss"::"a"(ss));
 }
 
 static inline void cpu_set_ds(const uint16_t segment_idx, const bool_t is_local, const uint8_t privilage_level) {

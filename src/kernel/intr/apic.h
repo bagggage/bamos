@@ -140,16 +140,19 @@ typedef enum APICTimerMode {
     APIC_TIMER_MODE_PERIODIC = 1
 } APICTimerMode;
 
-typedef struct LVTInterruptReg {
-    uint32_t vector             : 8;
-    uint32_t delivery_mode      : 3;
-    uint32_t reserved0          : 1;
-    uint32_t delivery_status    : 1;
-    uint32_t pin_polarity       : 1;
-    uint32_t remote_irr         : 1;
-    uint32_t trigger_mode       : 1;
-    uint32_t mask               : 1;
-    uint32_t reserved1          : 15;
+typedef union LVTInterruptReg {
+    struct {
+        uint32_t vector             : 8;
+        uint32_t delivery_mode      : 3;
+        uint32_t reserved0          : 1;
+        uint32_t delivery_status    : 1;
+        uint32_t pin_polarity       : 1;
+        uint32_t remote_irr         : 1;
+        uint32_t trigger_mode       : 1;
+        uint32_t mask               : 1;
+        uint32_t reserved1          : 15;
+    };
+    uint32_t value;
 } ATTR_PACKED LVTInterruptReg;
 
 typedef union LVTTimerReg {
@@ -194,20 +197,37 @@ typedef struct MsiMessage {
     MsiMessageData data;
 } MsiMessage;
 
-uint32_t lapic_read(const uint32_t reg);
-void lapic_write(const uint32_t reg, const uint32_t value);
+extern uint64_t g_lapic_address;
 
-/*
-Send EOI (End Of Interrupt) signal to LAPIC
-*/
-static inline void lapic_eoi() {
-    lapic_write(LAPIC_EOI_REG, 0);
+static ATTR_INLINE_ASM uint32_t lapic_read(const uint32_t reg) {
+    return *(uint32_t*)(g_lapic_address + reg);
+}
+
+static ATTR_INLINE_ASM void lapic_write(const uint32_t reg, const uint32_t value) {
+    *(uint32_t*)(g_lapic_address + reg) = value;
 }
 
 /*
 Returns current cpu index.
 */
-uint32_t lapic_get_cpu_idx();
+static inline uint32_t lapic_get_cpu_idx() {
+    return lapic_read(LAPIC_ID_REG);
+}
+
+/*
+Send EOI (End Of Interrupt) signal to LAPIC
+*/
+static ATTR_INLINE_ASM void lapic_eoi() {
+    lapic_write(LAPIC_EOI_REG, 0);
+}
+
+static ATTR_INLINE_ASM void lapic_mask_lvt(const uint32_t lvt_reg, const bool_t is_masked) {
+    LVTInterruptReg reg_val = (LVTInterruptReg)lapic_read(lvt_reg);
+
+    reg_val.mask = (is_masked ? 1 : 0);
+
+    lapic_write(lvt_reg, reg_val.value);
+}
 
 MADTEntry* madt_find_first_entry_of_type(const MADTEntryType type);
 MADTEntry* madt_next_entry_of_type(MADTEntry* begin, const MADTEntryType type);

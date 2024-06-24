@@ -7,6 +7,8 @@
 
 #include "cpu/feature.h"
 
+#include "proc/task_scheduler.h"
+
 #include "intr/apic.h"
 #include "intr/intr.h"
 
@@ -29,11 +31,11 @@ static uint8_t divider_value_table[] = {
     0b110, // 128
 };
 
-static ATTR_INTRRUPT void intr_lapic_timer_handler(InterruptFrame64* frame) {
+ATTR_INTRRUPT void intr_lapic_timer_handler(InterruptFrame64* frame) {
     UNUSED(frame);
 
     kernel_msg("Counter: %u\n", lapic_read(LAPIC_CURR_COUNTER_REG));
-    lapic_write(LAPIC_EOI_REG, 1);
+    lapic_eoi();
 }
 
 static void lapic_timer_set_divider(const uint32_t value) {
@@ -54,17 +56,27 @@ static void lapic_timer_set_divider_impl(TimerDevice*, const uint32_t value) {
 
 void configure_lapic_timer() {
     lapic_timer_set_divider(1);
-    lapic_write(LAPIC_INIT_COUNTER_REG, UINT32_MAX);
+    lapic_write(LAPIC_INIT_COUNTER_REG, (3u * (1u / NS_TO_MS)));
 
     LVTTimerReg lvt_timer;
+    const InterruptLocation intr_location = intr_reserve(g_proc_local.idx);
+
+    if (intr_location.vector == 0) {
+        kernel_error("Failed to configure LAPIC interrupt, no available vectors in IDT\n");
+        return;
+    }
 
     lvt_timer.delivery_status = 0;
     lvt_timer.mask = 1;
     lvt_timer.timer_mode = APIC_TIMER_MODE_PERIODIC;
-    lvt_timer.vector = LAPIC_TIMER_INT_VECTOR;
+    lvt_timer.vector = intr_location.vector;
     lvt_timer.reserved0 = 0;
     lvt_timer.reserved1 = 0;
     lvt_timer.reserved2 = 0;
+
+    if (intr_setup_handler(intr_location, (InterruptHandler_t)tsk_timer_intr, INTR_KERNEL_STACK) == FALSE) {
+        kernel_error("Failed to setup ISR for LAPIC timer\n");
+    }
 
     lapic_write(LAPIC_LVT_TIMER_REG, lvt_timer.value);
 }
@@ -98,8 +110,6 @@ static uint64_t lapic_calc_min_clock_time() {
 }
 
 Status init_lapic_timer(TimerDevice* dev) {
-    intr_set_idt_entry(intr_get_idt(g_proc_local.idx), LAPIC_TIMER_INT_VECTOR, &intr_lapic_timer_handler, INTERRUPT_GATE_FLAGS);
-
     // For current cpu
     configure_lapic_timer();
 
@@ -114,9 +124,6 @@ Status init_lapic_timer(TimerDevice* dev) {
     kernel_msg("LAPIC Timer: min clock timer ~ %u ps (%u ns)\n",
             dev->min_clock_time,
             (uint32_t)((double)dev->min_clock_time * PS_TO_NS));
-
-    // // Enable interrupts
-    // lapic_write(LAPIC_LVT_TIMER_REG, lapic_read(LAPIC_LVT_TIMER_REG) & (~(1 << 16)));
 
     return KERNEL_OK;
 }

@@ -27,6 +27,8 @@ typedef struct InterruptCommand {
 
 static MADT* apic_madt = NULL;
 
+uint64_t g_lapic_address = 0;
+
 //static MADTEntry* get_madt_entry_at(const size_t idx) {
 //    MADTEntry* entry = &apic_madt->entries;
 //
@@ -63,18 +65,6 @@ MADTEntry* madt_next_entry_of_type(MADTEntry* begin, const MADTEntryType type) {
     }
 
     return NULL;
-}
-
-uint32_t lapic_read(const uint32_t reg) {
-    return *(uint32_t*)((uint64_t)apic_madt->lapic_address + reg);
-}
-
-void lapic_write(const uint32_t reg, const uint32_t value) {
-    *(uint32_t*)((uint64_t)apic_madt->lapic_address + reg) = value;
-}
-
-uint32_t lapic_get_cpu_idx() {
-    return lapic_read(LAPIC_ID_REG);
 }
 
 static void apic_enable() {
@@ -132,7 +122,8 @@ Status init_apic() {
 
     kernel_msg("APIC Local register base: %x\n", (uint64_t)apic_madt->lapic_address);
 
-    if (vm_map_phys_to_virt((uint64_t)apic_madt->lapic_address,
+    if (vm_map_phys_to_virt(
+            (uint64_t)apic_madt->lapic_address,
             (uint64_t)apic_madt->lapic_address,
             1,
             VMMAP_WRITE | VMMAP_CACHE_DISABLED) != KERNEL_OK) {
@@ -141,6 +132,8 @@ Status init_apic() {
     }
 
     apic_enable();
+
+    g_lapic_address = (uint64_t)apic_madt->lapic_address;
 
     //MADTEntry* entry = &apic_madt->entries;
 

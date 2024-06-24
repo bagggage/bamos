@@ -32,7 +32,7 @@ void invalid_syscall_msg(uint64_t syscall_idx) {
     kernel_warn("INVALID SYSCALL: %u\n", syscall_idx);
 }
 
-__attribute__((naked)) void _syscall_handler() {
+ATTR_NAKED void _syscall_handler() {
     register uint64_t ip asm("%rcx");
     register uint64_t rflags asm("%r11");
 
@@ -70,6 +70,8 @@ __attribute__((naked)) void _syscall_handler() {
         {
             register ProcessorLocal* proc_local asm("%r11") = proc_get_local();
             USE(proc_local);
+
+            proc_local->user_stack->rflags |= RFLAGS_IF;
 
             load_stack((uint64_t)proc_local->user_stack);
         }

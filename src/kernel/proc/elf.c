@@ -221,7 +221,7 @@ int elf_read_file(ElfFile* const elf_file) {
     }
 
     // Read prog headers
-    if (elf->prog_header_entries_count < 1) return NULL;
+    if (elf->prog_header_entries_count < 1) return -ENOEXEC;
 
     const uint32_t size = elf->prog_header_entries_count * sizeof(ElfProgramHeader);
     ElfProgramHeader* progs = (ElfProgramHeader*)kmalloc(size);
