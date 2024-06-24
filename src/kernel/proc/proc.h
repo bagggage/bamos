@@ -60,6 +60,15 @@ typedef struct Process {
     uint32_t result_value;
 } Process;
 
+typedef enum TaskState {
+    TSK_STATE_EXEC = 0,
+    TSK_STATE_AFTER_FORK,
+    TSK_STATE_SWITCH,
+    TSK_STATE_WAIT,
+
+    TSK_STATE_NONE
+} TaskState;
+
 typedef struct Task {
     LIST_STRUCT_IMPL(Task);
 
@@ -67,11 +76,7 @@ typedef struct Task {
     
     union {
         uint64_t ip; // Temporary storage for instruction pointer
-
-        struct {
-            uint64_t after_fork : 1;
-            uint64_t : 63;
-        };
+        uint64_t state;
     };
 
     Thread thread;

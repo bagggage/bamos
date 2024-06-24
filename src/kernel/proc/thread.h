@@ -82,6 +82,24 @@ typedef struct Thread {
     uint8_t state;
 } Thread;
 
+static ATTR_INLINE_ASM void switch_stack(const uint64_t stack) {
+    asm volatile(
+        "mov %%rsp,%%rax \n"
+        "mov %0,%%rsp \n"
+        "push (%%rax)"
+        ::"g"(stack)
+        : "%rax"
+    );
+}
+
+static ATTR_INLINE_ASM void stack_round(const uint32_t size) {
+    asm volatile(
+        "and $~0xf,%%rsp \n"
+        "sub %0,%%rsp"
+        ::"g"(size)
+    );
+}
+
 static ATTR_INLINE_ASM void stack_alloc(const uint32_t size) {
     asm volatile("sub %0,%%rsp"::"g"(size));
 }
@@ -90,22 +108,30 @@ static ATTR_INLINE_ASM void stack_free(const uint32_t size) {
     asm volatile("add %0,%%rsp"::"g"(size));
 }
 
+static ATTR_INLINE_ASM void save_syscall_frame() {
+    asm volatile(
+        "pop %rax \n"
+        "pushf \n"
+        "push %rax"
+    );
+}
+
 static ATTR_INLINE_ASM void store_syscall_frame() {
-    asm volatile (
+    asm volatile(
         "push %r11 \n"
         "push %rcx"
     );
 }
 
 static ATTR_INLINE_ASM void restore_syscall_frame() {
-    asm volatile (
+    asm volatile(
         "pop %rcx \n"
         "pop %r11"
     );
 }
 
 static ATTR_INLINE_ASM void restore_args_regs() {
-    asm volatile (
+    asm volatile(
         "pop %rdi \n"
         "pop %rsi \n"
         "pop %rdx \n"
@@ -129,19 +155,19 @@ static ATTR_INLINE_ASM void store_stack(uint64_t* const storage) {
     asm volatile("mov %%rsp,%0":"=g"(*storage));
 }
 
-static ATTR_INLINE_ASM void load_stack(uint64_t const value) {
+static ATTR_INLINE_ASM void load_stack(const uint64_t value) {
     asm volatile("mov %0,%%rsp"::"g"(value));
 }
 
 static ATTR_INLINE_ASM void save_stack(Thread* const thread) {
-    asm volatile (
+    asm volatile(
         "mov %%rsp,%0"
         : "=g" (thread->exec_state)
     );
 }
 
-static ATTR_INLINE_ASM void restore_stack(Thread* const thread) {
-    asm volatile (
+static ATTR_INLINE_ASM void restore_stack(const Thread* thread) {
+    asm volatile(
         "mov %0,%%rsp"
         :
         : "g" (thread->exec_state)

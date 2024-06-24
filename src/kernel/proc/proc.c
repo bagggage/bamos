@@ -262,14 +262,14 @@ load_progs:
 }
 
 bool_t load_init_proc() {
-    Process* process = proc_new();
+    Process* const process = proc_new();
 
     if (process == NULL) {
         error_str = "Not enough memory";
         return FALSE;
     }
 
-    Task* task = tsk_new();
+    Task* const task = tsk_new();
 
     if (task == NULL) {
         proc_delete(process);
@@ -278,7 +278,6 @@ bool_t load_init_proc() {
         return FALSE;
     }
 
-    task->after_fork = 0;
     task->process = process;
 
     vm_map_kernel(process->addr_space.page_table);
@@ -328,7 +327,7 @@ bool_t load_init_proc() {
         return FALSE;
     }
 
-    uint64_t stack_ptr = (uint64_t*)(
+    uint64_t stack_ptr = (
         task->thread.stack.virt_address +
         ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
     );
@@ -356,6 +355,7 @@ bool_t load_init_proc() {
     args_regs->arg2 = (uint64_t)env_ptr;
 
     task->thread.exec_state = (ExecutionState*)stack_ptr;
+    task->state = TSK_STATE_EXEC;
     init_proc = process;
 
     kernel_msg("Init process starting...\n");
@@ -847,14 +847,14 @@ long _sys_clone() {
 }
 
 pid_t _do_fork() {
-    ProcessorLocal* proc_local = proc_get_local();
+    ProcessorLocal* const proc_local = proc_get_local();
     //kernel_warn("SYS FORK: CPU: %u\n", proc_local->idx);
 
-    Process* process = proc_new();
+    Process* const process = proc_new();
 
     if (process == NULL) return -ENOMEM;
 
-    Task* task = tsk_new();
+    Task* const task = tsk_new();
 
     if (task == NULL) {
         proc_delete(process);
@@ -899,14 +899,14 @@ pid_t _do_fork() {
     proc_add_child(proc_local->current_task->process, process);
 
     task->thread.exec_state = (ExecutionState*)((uint64_t)proc_local->user_stack - sizeof(CallerSaveRegs));
-    task->after_fork = 1;
+    task->state = TSK_STATE_AFTER_FORK;
 
     tsk_awake(task);
 
     return process->pid;
 }
 
-__attribute__((naked)) pid_t _sys_fork() {
+ATTR_NAKED pid_t _sys_fork() {
     save_caller_regs();
 
     const ProcessorLocal* proc_local = proc_get_local();
@@ -1003,7 +1003,7 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
     args_regs->arg2 = (uint64_t)env_ptr;
 
     task->thread.exec_state = (ExecutionState*)stack_ptr;
-    task->after_fork = 0;
+    task->state = TSK_STATE_EXEC;
 
     //kprintf("Args: %x: argc: %u:%u: argv: %x envp: %x\n", args_regs, args_regs->arg0, argc_val, args_regs->arg1, args_regs->arg2);
 
@@ -1018,10 +1018,10 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
     return 0;
 }
 
-long _sys_wait4(pid_t pid, int* stat_loc, int options) {
+long _do_wait4(pid_t pid, int* stat_loc, int options) {
     UNUSED(options);
 
-    ProcessorLocal* proc_local = proc_get_local();
+    ProcessorLocal* const proc_local = proc_get_local();
 
     if (stat_loc != NULL &&
         is_virt_addr_mapped_userspace(
@@ -1032,16 +1032,18 @@ long _sys_wait4(pid_t pid, int* stat_loc, int options) {
     }
 
     if (pid == -1) {
-        volatile Process* child = (void*)proc_local->current_task->process->childs.next;
+        volatile Process* const child = (void*)proc_local->current_task->process->childs.next;
 
         if (child != NULL) {
-            while (child->addr_space.page_table != NULL);
+            while (child->addr_space.page_table != NULL) {
+                tsk_wait();
+            }
 
             const pid_t pid = child->pid;
 
             if (stat_loc != NULL) *stat_loc = child->result_value;
 
-            proc_detach_child(proc_local->current_task->process, child);
+            proc_detach_child(proc_local->current_task->process, (Process*)child);
             proc_delete((Process*)child);
 
             return pid;
@@ -1049,6 +1051,15 @@ long _sys_wait4(pid_t pid, int* stat_loc, int options) {
     }
 
     return 0;
+}
+
+ATTR_NAKED long _sys_wait4(pid_t pid, int* stat_loc, int options) {
+    register ProcessorLocal* const proc_local = proc_get_local();
+    switch_stack((uint64_t)proc_local->user_stack);
+
+    const long result = _do_wait4(pid, stat_loc, options);
+
+    ret(result);
 }
 
 long _sys_exit(int error_code) {

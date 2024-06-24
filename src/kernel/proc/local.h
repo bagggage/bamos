@@ -17,7 +17,7 @@ typedef struct ProcessorLocal {
 
     uint64_t* kernel_stack;
     SyscallFrame* user_stack;
-    uint64_t* instruction_ptr;
+    TaskStateSegment* tss;
 
     Task* current_task;
     PageMapLevel4Entry* kernel_page_table;
