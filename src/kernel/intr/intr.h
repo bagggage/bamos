@@ -66,7 +66,7 @@ typedef struct TaskStateSegment {
     uint64_t reserved_3;
     uint16_t reserved_4;
     uint16_t iopb;
-} ATTR_PACKED TaskStateSegment;
+} ATTR_PACKED ATTR_ALIGN(4) TaskStateSegment;
 
 static ATTR_INLINE_ASM void intr_enable() {
     asm volatile("sti");

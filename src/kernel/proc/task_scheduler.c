@@ -54,6 +54,8 @@ Status init_task_scheduler() {
         }
 
         schedulers[i].lock = spinlock_init();
+
+        _proc_get_local_data_by_idx(i)->scheduler = schedulers + i;
     }
 
     return KERNEL_OK;
@@ -111,7 +113,7 @@ void tsk_awake(Task* const task) {
 }
 
 void tsk_extract(Task* const task) {
-    TaskScheduler* scheduler = &schedulers[proc_get_local()->idx];
+    TaskScheduler* const scheduler = proc_get_local()->scheduler;
 
     spin_lock(&scheduler->lock);
 
@@ -143,7 +145,7 @@ void tsk_extract(Task* const task) {
     oma_free((void*)task, task_oma);
 }
 
-void tsk_exec(const Task* task) {
+ATTR_NORETURN ATTR_NAKED void tsk_exec(const Task* task) {
     restore_stack(&task->thread);
     restore_args_regs();
     restore_syscall_frame();
@@ -192,8 +194,6 @@ ATTR_NAKED void tsk_wait() {
     save_caller_regs();
     store_stack(&proc_local->tss->rsp0);
 
-    register const uint64_t stack = proc_local->tss->rsp0;
-
     intr(TSK_WAIT_INTR);
 
     restore_caller_regs();
@@ -206,9 +206,9 @@ static ATTR_INLINE_ASM void tsk_resume(Task* const task) {
     intr_ret();
 }
 
-ATTR_NORETURN void tsk_schedule() {
+ATTR_NORETURN ATTR_NAKED void tsk_schedule() {
     ProcessorLocal* const proc_local = proc_get_local();
-    volatile TaskScheduler* scheduler = &schedulers[proc_local->idx];
+    volatile TaskScheduler* scheduler = proc_local->scheduler;
 
     while (scheduler->count == 0);
 
@@ -256,7 +256,7 @@ ATTR_NAKED void tsk_timer_intr() {
         register InterruptFrame64* frame asm("%rsp");
 
         load_stack(frame->rsp);
-        stack_round(sizeof(InterruptFrame64));
+        stack_alloc(sizeof(InterruptFrame64));
         save_regs();
     }
 

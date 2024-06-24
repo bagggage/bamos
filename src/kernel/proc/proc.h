@@ -108,4 +108,4 @@ long _sys_clone();
 pid_t _sys_fork();
 long _sys_execve(const char* filename, char** argv, char** envp);
 long _sys_wait4(pid_t pid, int* stat_loc, int options);
-long _sys_exit(int error_code);
+void _sys_exit(int error_code);

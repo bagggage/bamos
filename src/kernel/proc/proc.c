@@ -923,26 +923,30 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
     ProcessorLocal* proc_local = proc_get_local();
     Task* const task = proc_local->current_task;
 
-    if (is_virt_addr_mapped_userspace(
-            task->process->addr_space.page_table,
-            (uint64_t)filename
-        ) == FALSE) {
-        return -EFAULT;
-    }
-    if (argv != NULL) {
+    {
+        const PageMapLevel4Entry* const page_table = task->process->addr_space.page_table;
+
         if (is_virt_addr_mapped_userspace(
-                task->process->addr_space.page_table,
-                (uint64_t)argv
+                page_table,
+                (uint64_t)filename
             ) == FALSE) {
             return -EFAULT;
         }
-    }
-    if (envp != NULL) {
-        if (is_virt_addr_mapped_userspace(
-                task->process->addr_space.page_table,
-                (uint64_t)envp
-            ) == FALSE) {
-            return -EFAULT;
+        if (argv != NULL) {
+            if (is_virt_addr_mapped_userspace(
+                    page_table,
+                    (uint64_t)argv
+                ) == FALSE) {
+                return -EFAULT;
+            }
+        }
+        if (envp != NULL) {
+            if (is_virt_addr_mapped_userspace(
+                    page_table,
+                    (uint64_t)envp
+                ) == FALSE) {
+                return -EFAULT;
+            }
         }
     }
 
@@ -953,14 +957,16 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
     if (argv) argv = copy_strings(argv, argc_val);
     if (envp) envp = copy_strings(envp, envc_val);
 
-    char filename_temp[256] = { '\0' };
-    strcpy(filename_temp, filename);
+    {
+        char filename_temp[128] = { '\0' };
+        strcpy(filename_temp, filename);
 
-    proc_clear_segments(task->process);
+        proc_clear_segments(task->process);
 
-    // Load from file
-    int result = proc_load_from_elf(filename, task);
-    if (result < 0) return result;
+        // Load from file
+        int result = proc_load_from_elf(filename_temp, task);
+        if (result < 0) return result;
+    }
 
     // Cleanup
     proc_close_files(task->process);
@@ -1003,15 +1009,7 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
     args_regs->arg2 = (uint64_t)env_ptr;
 
     task->thread.exec_state = (ExecutionState*)stack_ptr;
-    task->state = TSK_STATE_EXEC;
-
-    //kprintf("Args: %x: argc: %u:%u: argv: %x envp: %x\n", args_regs, args_regs->arg0, argc_val, args_regs->arg1, args_regs->arg2);
-
-    //kernel_msg("phys: %x\n", get_phys_address(proc_local->current_task->thread.instruction_ptr));
-    //kernel_msg("real: %x\n", (uint64_t)((VMMemoryBlockNode*)proc_local->current_task->process->addr_space.segments.next)->block.page_base * PAGE_BYTE_SIZE);
-
-    //kernel_msg("Instr: %x\n", proc_local->current_task->ip);
-    //kernel_msg("Page table cpu: %x\n", g_proc_local.idx);
+    task->state = TSK_STATE_NONE;
 
     tsk_exec(task);
 
@@ -1022,17 +1020,18 @@ long _do_wait4(pid_t pid, int* stat_loc, int options) {
     UNUSED(options);
 
     ProcessorLocal* const proc_local = proc_get_local();
+    Process* const process = proc_local->current_task->process;
 
     if (stat_loc != NULL &&
         is_virt_addr_mapped_userspace(
-                proc_local->current_task->process->addr_space.page_table,
+                process->addr_space.page_table,
                 (uint64_t)stat_loc
             ) == FALSE) {
         return -EFAULT;
     }
 
     if (pid == -1) {
-        volatile Process* const child = (void*)proc_local->current_task->process->childs.next;
+        volatile Process* const child = (void*)process->childs.next;
 
         if (child != NULL) {
             while (child->addr_space.page_table != NULL) {
@@ -1043,7 +1042,7 @@ long _do_wait4(pid_t pid, int* stat_loc, int options) {
 
             if (stat_loc != NULL) *stat_loc = child->result_value;
 
-            proc_detach_child(proc_local->current_task->process, (Process*)child);
+            proc_detach_child(process, (Process*)child);
             proc_delete((Process*)child);
 
             return pid;
@@ -1053,35 +1052,50 @@ long _do_wait4(pid_t pid, int* stat_loc, int options) {
     return 0;
 }
 
+void raw_stack_dump(const uint64_t* stack, const uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+        raw_print_number(stack[i], FALSE, 16);
+        raw_putc('\n');
+    }
+}
+
 ATTR_NAKED long _sys_wait4(pid_t pid, int* stat_loc, int options) {
     register ProcessorLocal* const proc_local = proc_get_local();
-    switch_stack((uint64_t)proc_local->user_stack);
+    load_stack((uint64_t)proc_local->user_stack);
 
     const long result = _do_wait4(pid, stat_loc, options);
 
-    ret(result);
+    restore_syscall_frame();
+    sysret();
 }
 
-long _sys_exit(int error_code) {
-    ProcessorLocal* proc_local = proc_get_local();
+ATTR_NORETURN ATTR_NAKED void _sys_exit(int error_code) {
+    ProcessorLocal* const proc_local = proc_get_local();
+    Process* const process = proc_local->current_task->process;
 
-    proc_local->current_task->process->result_value = error_code;
+    process->result_value = error_code;
 
-    proc_clear_segments(proc_local->current_task->process);
-    proc_close_files(proc_local->current_task->process);
-    proc_detach_childs(proc_local->current_task->process);
-    proc_dealloc_vm_pages(proc_local->current_task->process);
+    proc_clear_segments(process);
+    proc_close_files(process);
+    proc_detach_childs(process);
+    proc_dealloc_vm_pages(process);
 
     cpu_set_pml4(proc_local->kernel_page_table);
-    vm_free_page_table(proc_local->current_task->process->addr_space.page_table);
+    vm_free_page_table(process->addr_space.page_table);
 
-    proc_local->current_task->process->addr_space.page_table = NULL;
+    kernel_warn("task next: %x: curr: %x: queue size: %u\n",
+        proc_local->scheduler->task_queue.next, proc_local->current_task,
+        proc_local->scheduler->count
+    );
 
     tsk_extract(proc_local->current_task);
 
-    proc_local->current_task = NULL;
+    kernel_warn("task next: %x: curr: %x: queue size: %u\n",
+        proc_local->scheduler->task_queue.next, proc_local->current_task,
+        proc_local->scheduler->count
+    );
+
+    process->addr_space.page_table = NULL;
 
     tsk_schedule();
-
-    return 0;
 }
