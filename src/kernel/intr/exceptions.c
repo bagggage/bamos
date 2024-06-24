@@ -47,6 +47,8 @@ typedef union PageFaultErrorCode {
 
 // #DE [0] Divide error
 ATTR_INTRRUPT void intr_de_handler(InterruptFrame64* frame) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     raw_puts("#DE Divide error\n");
@@ -58,6 +60,7 @@ ATTR_INTRRUPT void intr_de_handler(InterruptFrame64* frame) {
 
 // #DB [1] Debug exception
 ATTR_INTRRUPT void intr_db_handler(InterruptFrame64* frame) {
+    intr_disable();
 
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
@@ -70,6 +73,8 @@ ATTR_INTRRUPT void intr_db_handler(InterruptFrame64* frame) {
 
 // #NMI [2] NMI
 ATTR_INTRRUPT void intr_nmi_handler(InterruptFrame64* frame) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     raw_puts("#NMI Non-maskable interrupt\n");
@@ -81,6 +86,8 @@ ATTR_INTRRUPT void intr_nmi_handler(InterruptFrame64* frame) {
 
 // #BP [3] Breakpoint exception
 ATTR_INTRRUPT void intr_bp_handler(InterruptFrame64* frame) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     raw_puts("#BP Breakpoint exception\n");
@@ -92,6 +99,8 @@ ATTR_INTRRUPT void intr_bp_handler(InterruptFrame64* frame) {
 
 // #OF [4] Overflow
 ATTR_INTRRUPT void intr_of_handler(InterruptFrame64* frame) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     raw_puts("#OF Overflow\n");
@@ -103,6 +112,8 @@ ATTR_INTRRUPT void intr_of_handler(InterruptFrame64* frame) {
 
 // #DE [5] BOUND Range exception
 ATTR_INTRRUPT void intr_br_handler(InterruptFrame64* frame) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     raw_puts("#BR BOUND Range exception\n");
@@ -114,6 +125,8 @@ ATTR_INTRRUPT void intr_br_handler(InterruptFrame64* frame) {
 
 // #UD [6] Invalid opcode
 ATTR_INTRRUPT void intr_ud_handler(InterruptFrame64* frame) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     raw_puts("#UD Invalid opcode\n");
@@ -125,6 +138,8 @@ ATTR_INTRRUPT void intr_ud_handler(InterruptFrame64* frame) {
 
 // #NM [7] Device not available
 ATTR_INTRRUPT void intr_nm_handler(InterruptFrame64* frame) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     raw_puts("#NM Device not available\n");
@@ -136,6 +151,8 @@ ATTR_INTRRUPT void intr_nm_handler(InterruptFrame64* frame) {
 
 // #DF [8] Double fault
 ATTR_INTRRUPT void intr_df_handler(InterruptFrame64* frame, uint64_t error_code) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     kprintf("#DF Double fault: E: %b\n", error_code);
@@ -147,6 +164,8 @@ ATTR_INTRRUPT void intr_df_handler(InterruptFrame64* frame, uint64_t error_code)
 
 // #TS [10] Invalid TTS
 ATTR_INTRRUPT void intr_ts_handler(InterruptFrame64* frame, uint64_t error_code) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     kprintf("#TS Invalid TSS: E: %b\n", error_code);
@@ -158,6 +177,8 @@ ATTR_INTRRUPT void intr_ts_handler(InterruptFrame64* frame, uint64_t error_code)
 
 // #NP [11] Segment not present
 ATTR_INTRRUPT void intr_np_handler(InterruptFrame64* frame, uint64_t error_code) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     kprintf("#NP Segment not present: E: %b\n", error_code);
@@ -169,6 +190,8 @@ ATTR_INTRRUPT void intr_np_handler(InterruptFrame64* frame, uint64_t error_code)
 
 // #SS [12] Segment fault
 ATTR_INTRRUPT void intr_ss_handler(InterruptFrame64* frame, uint64_t error_code) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     kprintf("#SS Segment fault: E: %b\n", error_code);
@@ -180,6 +203,8 @@ ATTR_INTRRUPT void intr_ss_handler(InterruptFrame64* frame, uint64_t error_code)
 
 // #GP [13] General protection fault
 ATTR_INTRRUPT void intr_gp_handler(InterruptFrame64* frame, uint64_t error_code) {
+    intr_disable();
+
     kernel_logger_lock();
     kernel_logger_push_color(COLOR_LRED);
     kprintf("#GP General protection: E: %b\n", error_code);
@@ -191,6 +216,8 @@ ATTR_INTRRUPT void intr_gp_handler(InterruptFrame64* frame, uint64_t error_code)
 
 // #PF [14] Page fault exception
 ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code) {
+    intr_disable();
+
     //PageFaultErrorCode pf_error = *(PageFaultErrorCode*)&error_code;
     uint64_t virt_address = cpu_get_cr2();
 
