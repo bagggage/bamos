@@ -78,7 +78,11 @@ typedef struct ExecutionState {
 typedef struct Thread {
     VMMemoryBlock stack;
 
-    ExecutionState* exec_state;
+    union {
+        ExecutionState* exec_state;
+        uint64_t stack_ptr;
+    };
+
     uint8_t state;
 } Thread;
 
@@ -246,6 +250,10 @@ static ATTR_INLINE_ASM void save_regs() {
 static ATTR_INLINE_ASM void restore_regs() {
     restore_caller_regs();
     restore_scratch_regs();
+}
+
+static inline uint64_t thread_get_stack_top(const Thread* const thread) {
+    return thread->stack.virt_address + ((uint64_t)thread->stack.pages_count * PAGE_BYTE_SIZE) - 0x10;
 }
 
 bool_t thread_allocate_stack(Process* const process, Thread* const thread);

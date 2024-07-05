@@ -14,6 +14,7 @@
 
 typedef int32_t pid_t;
 typedef struct ProcessorLocal ProcessorLocal;
+typedef struct Task Task;
 
 typedef struct VMMemoryBlockNode {
     LIST_STRUCT_IMPL(VMMemoryBlockNode);
@@ -22,11 +23,11 @@ typedef struct VMMemoryBlockNode {
 
 typedef struct ProcessAddressSpace {
     ListHead segments;
-    uint64_t stack_base; // Top address of the start of the stack
-
-    VMMemoryBlock environment;
+    VMMemoryBlockNode* interp_seg;
 
     VMHeap heap;
+
+    uint64_t stack_base; // Top address of the start of the stack
 
     Spinlock lock;
 
@@ -93,6 +94,7 @@ void proc_delete(Process* process);
 void log_process(const Process* process);
 
 VMMemoryBlockNode* proc_push_segment(Process* const process);
+VMMemoryBlockNode* proc_insert_segment(Process* const process, VMMemoryBlockNode* const prev_seg);
 void proc_clear_segments(Process* const process);
 bool_t proc_copy_segments(const Process* src_proc, Process* const dst_proc);
 bool_t proc_copy_files(const Process* src_proc, Process* const dst_proc);
@@ -102,7 +104,17 @@ VMPageFrameNode* proc_push_vm_page(Process* const process);
 void proc_dealloc_vm_page(Process* const process, VMPageFrameNode* const page_frame);
 void proc_dealloc_vm_pages(Process* const process);
 
+void proc_shutdown(Task* const task, const int status_code);
+
 char** proc_put_args_strings(uint64_t** const stack, char** strings, const uint32_t count);
+
+static inline void proc_add_aux(Thread* const thread, const uint32_t type, const uint64_t value) {
+    thread->stack_ptr -= sizeof(uint64_t) * 2;
+    uint64_t* const dst = (uint64_t*)thread->stack_ptr;
+
+    dst[0] = type;
+    dst[1] = value;
+}
 
 long _sys_clone();
 pid_t _sys_fork();

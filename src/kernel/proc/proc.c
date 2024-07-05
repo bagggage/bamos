@@ -21,6 +21,7 @@
 #include "utils/string_utils.h"
 
 #include "libc/errno.h"
+#include "libc/fcntl.h"
 
 #define INIT_PROC_FILENAME "/usr/bin/init"
 #define ENVIRONS_FILENAME  "/etc/environment"
@@ -138,12 +139,12 @@ void log_process(const Process* process) {
 
         while (phys_page != NULL) {
             raw_print_number((uint64_t)phys_page->phys_page_base * PAGE_BYTE_SIZE, FALSE, 16);
-            raw_putc(' ');
+            raw_puts(", ");
 
             phys_page = phys_page->next;
         }
 
-        raw_print_number((uint32_t)page->frame.count * (PAGE_BYTE_SIZE / KB_SIZE), FALSE, 16);
+        raw_print_number((uint32_t)page->frame.count * (PAGE_BYTE_SIZE / KB_SIZE), FALSE, 10);
         raw_puts(" KB\n");
 
         page = page->next;
@@ -211,54 +212,184 @@ static char** load_environs(uint32_t* const count) {
     return envp;
 }
 
-int proc_load_from_elf(const char* filename, Task* const task) {
-    VfsDentry* file = vfs_open(filename, task->process->work_dir);
+static inline int proc_load_elf_file(ElfFile* const elf_file, const char* filename, const VfsDentry* parent_dir) {
+    kernel_msg("Filename: %s: parent_dir: %x\n", filename, parent_dir);
+
+    VfsDentry* file = vfs_open(filename, parent_dir);
 
     if (file == NULL) return -ENOENT;
     if (file->inode->type != VFS_TYPE_FILE || file->inode->file_size < 3) return -ENOEXEC;
 
-    ElfFile elf_file = { .dentry = file };
+    elf_file->dentry = file;
 
-    int result = 0;
-    if ((result = elf_read_file(&elf_file)) < 0) return result;
-    if (is_elf_valid_and_supported(elf_file.header) == FALSE) return -ENOEXEC;
+    int result = elf_read_file(elf_file);
+    if (result < 0) return result;
 
-    const ElfProgramHeader* interp = elf_find_prog(&elf_file, ELF_PROG_TYPE_INTERP);
-
-    if (interp == NULL) {
-load_progs:
-        task->ip = elf_file.header->entry + USER_SPACE_ADDR_BEGIN;
-        result = elf_load(&elf_file, task->process);
-
-        elf_free_file(&elf_file);
-        return result;
-    }
-
-    char interp_str[256] = { '\0' };
-
-    if (interp->file_size > 256) {
-        elf_free_file(&elf_file);
+    if (is_elf_valid_and_supported(elf_file->header) == FALSE) {
+        elf_free_file(elf_file);
         return -ENOEXEC;
     }
-    if (vfs_read(file, interp->offset, interp->file_size, (void*)interp_str) < interp->file_size) {
-        elf_free_file(&elf_file);
-        return -EIO;
+
+    return 0;
+}
+
+static uint64_t proc_calc_brk(const VMMemoryBlockNode* last_seg) {
+    const uint64_t result = last_seg->block.virt_address +
+        (last_seg->block.pages_count * PAGE_BYTE_SIZE) + PROC_BRK_MAX_SIZE;
+
+    return (result / GB_SIZE) * GB_SIZE;
+}
+
+static void proc_make_aux_vec(Task* const task, const char* prog_name, const ElfFile* const prog_elf) {
+    const bool_t align = (task->thread.stack_ptr % 16) == 0;
+    const uint32_t progs_size = prog_elf->header->prog_entries_count * prog_elf->header->prog_entry_size;
+    const uint64_t ph_ptr = (task->thread.stack_ptr - progs_size) & (~0xFull);
+
+    memcpy(prog_elf->progs, (void*)ph_ptr, progs_size);
+
+    const uint32_t name_len = strlen(prog_name) + 1;
+    const uint64_t fn_ptr = (ph_ptr - name_len) & (~0xFull);
+    memcpy(prog_name, (void*)fn_ptr, name_len);
+
+    task->thread.stack_ptr = fn_ptr - (align ? 0 : 8);
+
+    proc_add_aux(&task->thread, AT_NULL, 0);
+
+    proc_add_aux(&task->thread, AT_SECURE, 0);
+    proc_add_aux(&task->thread, AT_FLAGS, 0);
+
+    proc_add_aux(&task->thread, AT_GID, 0);
+    proc_add_aux(&task->thread, AT_UID, 0);
+    proc_add_aux(&task->thread, AT_EGID, 0);
+    proc_add_aux(&task->thread, AT_EUID, 0);
+
+    proc_add_aux(&task->thread, AT_PAGESZ, PAGE_BYTE_SIZE);
+
+    if (task->process->addr_space.interp_seg != NULL) {
+        proc_add_aux(&task->thread, AT_BASE, task->process->addr_space.interp_seg->block.virt_address);
+    }
+    else {
+        proc_add_aux(&task->thread, AT_BASE, prog_elf->load_base);
     }
 
-    if (strcmp(interp_str, ELF_INTERP_IGNORE) == 0) goto load_progs;
+    proc_add_aux(&task->thread, AT_ENTRY, prog_elf->header->entry + prog_elf->load_base);
+
+    proc_add_aux(&task->thread, AT_PHNUM, prog_elf->header->prog_entries_count);
+    proc_add_aux(&task->thread, AT_PHENT, prog_elf->header->prog_entry_size);
+
+    proc_add_aux(&task->thread, AT_PHDR, ph_ptr);
+    proc_add_aux(&task->thread, AT_EXECFN, fn_ptr);
+}
+
+static int proc_load_elf_interp(const char* filename, Task* const task) {
+    ElfFile elf_file;
+
+    int result = proc_load_elf_file(&elf_file, filename, task->process->work_dir);
+    if (result < 0) return (result == -ENOEXEC) ? -ELIBBAD : result;
+
+    const VMMemoryBlockNode* last_proc_seg = (void*)task->process->addr_space.segments.prev;
+
+    elf_file.load_base = proc_calc_brk(last_proc_seg);
+
+    if (elf_load(&elf_file, task->process) < 0) result = (result == -ENOEXEC) ? -ELIBBAD : result;
+    else {
+        task->process->addr_space.interp_seg = last_proc_seg->next;
+        task->ip = elf_file.header->entry + elf_file.load_base;
+    }
 
     elf_free_file(&elf_file);
+    return result;
+}
 
-    file = vfs_open(interp_str, NULL);
-    if (file == NULL) return -ENOENT;
+int proc_load_from_elf(const char* filename, Task* const task) {
+    ElfFile elf_file;
+    elf_file.load_base = USER_SPACE_ADDR_BEGIN;
 
-    elf_file.dentry = file;
-    result = elf_read_file(&elf_file);
-
+    int result = proc_load_elf_file(&elf_file, filename, task->process->work_dir);
     if (result < 0) return result;
-    if (is_elf_valid_and_supported(elf_file.header) == FALSE) return -ELIBBAD;
 
-    goto load_progs;
+    // Find interpreter
+    const ElfProgramHeader* interp = elf_find_prog(&elf_file, ELF_PROG_TYPE_INTERP);
+
+    char interp_str[256] = { '\0' };
+    if (interp) {
+        result = -ENOEXEC;
+        if (interp->file_size > 256) goto out_free_elf;
+
+        result = -EIO;
+        if (vfs_read(elf_file.dentry, interp->offset, interp->file_size, (void*)interp_str) < interp->file_size) goto out_free_elf;
+    }
+
+    // Load program
+    result = elf_load(&elf_file, task->process);
+    task->ip = elf_file.header->entry + elf_file.load_base;
+
+    if (interp != NULL && strcmp(interp_str, ELF_INTERP_IGNORE) != 0) {
+        result = proc_load_elf_interp(interp_str, task);
+
+        if (result < 0) proc_clear_segments(task->process);
+    }
+
+    if (result == 0) proc_make_aux_vec(task, filename, &elf_file);
+
+out_free_elf:
+    elf_free_file(&elf_file);
+    return result;
+}
+
+static void proc_files_close_on_exec(Process* const process) {
+    for (uint32_t i = 0; i < process->files_capacity; ++i) {
+        FileDescriptor* const file = process->files[i];
+
+        if (file == NULL) continue;
+        if (file->mode & O_CLOEXEC) fd_close(process, i);
+    }
+}
+
+static void proc_construct_heap(Process* const process) {
+    const VMMemoryBlockNode* last_seg =
+        (VMMemoryBlockNode*)process->addr_space.segments.prev;
+
+    const uint64_t virt_base = (process->addr_space.interp_seg == NULL) ?
+        proc_calc_brk(last_seg) : (last_seg->block.virt_address + 
+        ((uint64_t)last_seg->block.pages_count * PAGE_BYTE_SIZE) + PAGE_BYTE_SIZE);
+
+    vm_heap_construct(&process->addr_space.heap, virt_base);
+}
+
+static ExecutionState* proc_make_exec_frame(uint64_t stack_ptr, const uint64_t entry_ptr,
+    const char** envp, const uint32_t env_count,
+    const char** argv, const uint32_t arg_count
+) {
+    // Complete auxiliary vector
+    uint64_t* const env_vec = ((uint64_t*)stack_ptr) - (env_count + 1);
+    env_vec[env_count] = 0;
+    if (envp) memcpy(envp, env_vec, env_count * sizeof(char*));
+
+    uint64_t* const arg_vec = env_vec - (arg_count + 2);
+    arg_vec[arg_count + 1] = 0;
+    arg_vec[0] = arg_count;
+    if (argv) memcpy(argv, arg_vec + 1, arg_count * sizeof(char*));
+
+    stack_ptr = (uint64_t)arg_vec;
+
+    kernel_msg("stack: %x: argc: %u envc: %u\n", stack_ptr, arg_count, env_count);
+    kassert((stack_ptr % 16) == 0);
+
+    // Make syscall frame
+    stack_ptr -= sizeof(SyscallFrame);
+    SyscallFrame* const syscall_frame = (SyscallFrame*)stack_ptr;
+    syscall_frame->rflags = get_rflags() | RFLAGS_IF;
+    syscall_frame->rip = entry_ptr;
+
+    // Init registers
+    stack_ptr -= sizeof(ArgsRegs);
+    ArgsRegs* const args_regs = (ArgsRegs*)stack_ptr;
+    args_regs->arg0 = arg_count;
+    args_regs->arg1 = (uint64_t)(arg_vec + 1);
+    args_regs->arg2 = (uint64_t)env_vec;
+
+    return (ExecutionState*)stack_ptr;
 }
 
 bool_t load_init_proc() {
@@ -283,9 +414,31 @@ bool_t load_init_proc() {
     vm_map_kernel(process->addr_space.page_table);
     cpu_set_pml4(process->addr_space.page_table);
 
+    if (thread_allocate_stack(process, &task->thread) == FALSE) {
+        proc_delete(process);
+        tsk_delete(task);
+        error_str = "Failed to allocate stack";
+        return FALSE;
+    }
+
+    uint32_t env_count = 0;
+    char** environs = load_environs(&env_count);
+
+    uint64_t stack_ptr = thread_get_stack_top(&task->thread) & (~0xFull);
+    char** env_ptr = proc_put_args_strings(&stack_ptr, environs, env_count);
+
+    if (environs) {
+        kfree(environs[0]);
+        kfree(environs);
+    }
+
+    if ((env_count + 3) % 2 != 0) stack_ptr -= 8;
+    task->thread.stack_ptr = stack_ptr;
+
     int result = proc_load_from_elf(INIT_PROC_FILENAME, task);
 
     if (result < 0) {
+        thread_dealloc_stack(&task->thread);
         cpu_set_pml4(g_proc_local.kernel_page_table);
         proc_delete(process);
         tsk_delete(task);
@@ -308,54 +461,13 @@ bool_t load_init_proc() {
         return FALSE;
     }
 
-    const VMMemoryBlockNode* top_segment = (VMMemoryBlockNode*)process->addr_space.segments.prev;
+    proc_construct_heap(process);
 
-    vm_heap_construct(
-        &process->addr_space.heap,
-        (
-            top_segment->block.virt_address +
-            ((uint64_t)top_segment->block.pages_count * PAGE_BYTE_SIZE) +
-            PAGE_BYTE_SIZE
-        )
-    );
-
-    if (thread_allocate_stack(process, &task->thread) == FALSE) {
-        proc_clear_segments(process);
-        proc_delete(process);
-        tsk_delete(task);
-        error_str = "Failed to allocate stack";
-        return FALSE;
-    }
-
-    uint64_t stack_ptr = (
-        task->thread.stack.virt_address +
-        ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
-    );
-
-    uint32_t env_count = 0;
-    char** environs = load_environs(&env_count);
-    char** env_ptr = proc_put_args_strings(&stack_ptr, environs, env_count);
-
-    if (environs) {
-        kfree(environs[0]);
-        kfree(environs);
-    }
-
-    // Make syscall frame
-    stack_ptr -= sizeof(SyscallFrame);
-    SyscallFrame* const syscall_frame = (SyscallFrame*)stack_ptr;
-    syscall_frame->rflags = get_rflags() | RFLAGS_IF;
-    syscall_frame->rip = task->ip;
-
-    // Init registers
-    stack_ptr -= sizeof(ArgsRegs);
-    ArgsRegs* const args_regs = (ArgsRegs*)stack_ptr;
-    args_regs->arg0 = 0;
-    args_regs->arg1 = 0;
-    args_regs->arg2 = (uint64_t)env_ptr;
-
-    task->thread.exec_state = (ExecutionState*)stack_ptr;
+    task->thread.exec_state = proc_make_exec_frame(task->thread.stack_ptr, task->ip, env_ptr, env_count, NULL, 0);
     task->state = TSK_STATE_EXEC;
+
+    kfree(env_ptr);
+
     init_proc = process;
 
     kernel_msg("Init process starting...\n");
@@ -375,6 +487,8 @@ Process* proc_new() {
     Process* process = (Process*)oma_alloc(proc_oma);
 
     if (process != NULL) {
+        memset(process, sizeof(Process), 0);
+
         process->pid = proc_generate_id();
         process->addr_space.page_table = vm_alloc_page_table();
 
@@ -384,35 +498,8 @@ Process* proc_new() {
         }
 
         process->addr_space.lock = spinlock_init();
-        process->addr_space.heap = (VMHeap){
-            .free_list = (ListHead){
-                .next = NULL,
-                .prev = NULL
-            },
-            .virt_base = 0,
-            .virt_top = 0
-        };
-        process->addr_space.segments = (ListHead){
-            .next = NULL,
-            .prev = NULL
-        };
-        process->addr_space.stack_base = 0;
-
-        process->work_dir = NULL;
-
-        process->files = NULL;
-        process->files_capacity = 0;
         process->files_lock = spinlock_init();
-
         process->vm_lock = spinlock_init();
-        process->vm_pages = (ListHead){
-            .next = NULL,
-            .prev = NULL
-        };
-
-        process->parent = NULL;
-        process->childs.next = NULL;
-        process->childs.prev = NULL;
     }
 
     return process;
@@ -439,21 +526,43 @@ VMMemoryBlockNode* proc_push_segment(Process* const process) {
         if (seg_oma == NULL) return NULL;
     }
 
-    VMMemoryBlockNode* node = oma_alloc(seg_oma);
+    VMMemoryBlockNode* node = (VMMemoryBlockNode*)oma_alloc(seg_oma);
 
     if (node == NULL) return NULL;
 
     if (process->addr_space.segments.next == NULL) {
         node->prev = NULL;
-        process->addr_space.segments.next = (ListHead*)node;
+        process->addr_space.segments.next = (void*)node;
     }
     else {
-        node->prev = (VMMemoryBlockNode*)process->addr_space.segments.prev;
-        process->addr_space.segments.prev->next = (ListHead*)node;
+        node->prev = (void*)process->addr_space.segments.prev;
+        process->addr_space.segments.prev->next = (void*)node;
     }
 
     node->next = NULL;
-    process->addr_space.segments.prev = (ListHead*)node;
+    process->addr_space.segments.prev = (void*)node;
+
+    return node;
+}
+
+VMMemoryBlockNode* proc_insert_segment(Process* const process, VMMemoryBlockNode* const prev_seg) {
+    kassert(seg_oma != NULL);
+
+    VMMemoryBlockNode* node = (VMMemoryBlockNode*)oma_alloc(seg_oma);
+
+    if (node == NULL) return NULL;
+
+    if (process->addr_space.segments.prev == (void*)prev_seg) {
+        node->next = NULL;
+        process->addr_space.segments.prev = (void*)node;
+    }
+    else {
+        node->next = prev_seg->next;
+        prev_seg->next->prev = node;
+    }
+
+    node->prev = prev_seg;
+    prev_seg->next = node;
 
     return node;
 }
@@ -791,6 +900,23 @@ void proc_detach_childs(Process* const parent) {
     }
 }
 
+void proc_shutdown(Task* const task, const int status_code) {
+    Process* const process = task->process;
+
+    process->result_value = status_code;
+
+    proc_dealloc_vm_pages(process);
+    proc_clear_segments(process);
+    proc_close_files(process);
+    proc_detach_childs(process);
+
+    vm_free_page_table(process->addr_space.page_table);
+
+    tsk_extract(task);
+
+    process->addr_space.page_table = NULL;
+}
+
 static char** copy_strings(const char** strings, const uint32_t count) {
     uint32_t length = 0;
 
@@ -822,8 +948,7 @@ static char** copy_strings(const char** strings, const uint32_t count) {
 char** proc_put_args_strings(uint64_t** const stack, char** strings, const uint32_t count) {
     uint64_t* cursor = *stack;
 
-    cursor -= count + 1;
-    char** result = (char**)cursor;
+    char** result = count > 0 ? (char**)kmalloc(count * sizeof(char*)) : NULL;
 
     for (uint32_t i = 0; i < count; ++i) {
         const char* arg = strings[i];
@@ -837,8 +962,6 @@ char** proc_put_args_strings(uint64_t** const stack, char** strings, const uint3
 
     *stack = (uint64_t*)((uint64_t)cursor & (~0xFull));
 
-    result[count] = NULL;
-
     return result;
 }
 
@@ -848,62 +971,54 @@ long _sys_clone() {
 
 pid_t _do_fork() {
     ProcessorLocal* const proc_local = proc_get_local();
+    Process* const curr_process = proc_local->current_task->process;
     //kernel_warn("SYS FORK: CPU: %u\n", proc_local->idx);
 
     Process* const process = proc_new();
-
-    if (process == NULL) return -ENOMEM;
+    if (process == NULL) goto out;
 
     Task* const task = tsk_new();
-
-    if (task == NULL) {
-        proc_delete(process);
-        return -ENOMEM;
-    }
+    if (task == NULL) goto out_task;
 
     task->process = process;
 
     vm_map_kernel(process->addr_space.page_table);
 
     if (thread_copy_stack(&proc_local->current_task->thread, &task->thread, process) == FALSE) {
-        proc_delete(process);
-        tsk_delete(task);
-        return -ENOMEM;
+        goto out_stack;
+    }
+    if (proc_copy_segments(curr_process, process) == FALSE) {
+        goto out_segments;
+    }
+    if (proc_copy_vm_pages(curr_process, process) == FALSE) {
+        goto out_vm_pages;
+    }
+    if (proc_copy_files(curr_process, process) == FALSE) {
+        goto out_files;
     }
 
-    if (proc_copy_segments(proc_local->current_task->process, process) == FALSE) {
-        thread_dealloc_stack(&task->thread);
-        proc_delete(process);
-        tsk_delete(task);
-        return -ENOMEM;
-    }
+    process->work_dir = curr_process->work_dir;
+    proc_add_child(curr_process, process);
 
-    if (proc_copy_vm_pages(proc_local->current_task->process, process) == FALSE) {
-        proc_clear_segments(process);
-        thread_dealloc_stack(&task->thread);
-        proc_delete(process);
-        tsk_delete(task);
-        return -ENOMEM;
-    }
-
-    if (proc_copy_files(proc_local->current_task->process, process) == FALSE) {
-        proc_dealloc_vm_pages(process);
-        proc_clear_segments(process);
-        thread_dealloc_stack(&task->thread);
-        proc_delete(process);
-        tsk_delete(task);
-        return -ENOMEM;
-    }
-
-    process->work_dir = proc_local->current_task->process->work_dir;
-    proc_add_child(proc_local->current_task->process, process);
-
-    task->thread.exec_state = (ExecutionState*)((uint64_t)proc_local->user_stack - sizeof(CallerSaveRegs));
+    task->thread.stack_ptr = (uint64_t)proc_local->user_stack - sizeof(CallerSaveRegs);
     task->state = TSK_STATE_AFTER_FORK;
 
     tsk_awake(task);
 
     return process->pid;
+
+out_files:
+    proc_dealloc_vm_pages(process);
+out_vm_pages:
+    proc_clear_segments(process);
+out_segments:
+    thread_dealloc_stack(&task->thread);
+out_stack:
+    tsk_delete(task);
+out_task:
+    proc_delete(process);
+out:
+    return -ENOMEM;
 }
 
 ATTR_NAKED pid_t _sys_fork() {
@@ -951,65 +1066,42 @@ long _sys_execve(const char* filename, char** argv, char** envp) {
     }
 
     // Copy args and environs
-    const uint64_t argc_val = (argv == NULL ? 0 : count_strings(argv));
     const uint64_t envc_val = (envp == NULL ? 0 : count_strings(envp));
+    const uint64_t argc_val = (argv == NULL ? 0 : count_strings(argv));
 
-    if (argv) argv = copy_strings(argv, argc_val);
     if (envp) envp = copy_strings(envp, envc_val);
+    if (argv) argv = copy_strings(argv, argc_val);
 
-    {
-        char filename_temp[128] = { '\0' };
-        strcpy(filename_temp, filename);
+    char filename_temp[128] = { '\0' };
+    strcpy(filename_temp, filename);
 
-        proc_clear_segments(task->process);
-
-        // Load from file
-        int result = proc_load_from_elf(filename_temp, task);
-        if (result < 0) return result;
-    }
-
-    // Cleanup
-    proc_close_files(task->process);
-    proc_dealloc_vm_pages(task->process);
-
-    // Heap
-    const VMMemoryBlockNode* top_segment =
-        (VMMemoryBlockNode*)task->process->addr_space.segments.prev;
-
-    vm_heap_construct(
-        &task->process->addr_space.heap,
-        (
-            top_segment->block.virt_address +
-            ((uint64_t)top_segment->block.pages_count * PAGE_BYTE_SIZE) +
-            PAGE_BYTE_SIZE
-        )
-    );
-
-    // Stack
-    uint64_t stack_ptr = (uint64_t*)(task->thread.stack.virt_address +
-        ((uint64_t)task->thread.stack.pages_count * PAGE_BYTE_SIZE) - 8
-    );
+    uint64_t stack_ptr = thread_get_stack_top(&task->thread);
 
     // Put args and environs on the stack
-    char** argv_ptr = proc_put_args_strings(&stack_ptr, argv, argc_val);
     char** env_ptr = proc_put_args_strings(&stack_ptr, envp, envc_val);
+    char** argv_ptr = proc_put_args_strings(&stack_ptr, argv, argc_val);
 
-    if (argv) kfree(argv);
-    if (envp) kfree(envp);
+    kfree(envp);
+    kfree(argv);
 
-    stack_ptr -= sizeof(SyscallFrame);
-    SyscallFrame* const syscall_frame = (SyscallFrame*)stack_ptr;
-    syscall_frame->rip = task->ip;
-    syscall_frame->rflags = get_rflags();
+    if ((envc_val + argc_val + 3) % 2 != 0) stack_ptr -= 8;
+    task->thread.stack_ptr = stack_ptr;
 
-    stack_ptr -= sizeof(ArgsRegs);
-    ArgsRegs* const args_regs = (ArgsRegs*)stack_ptr;
-    args_regs->arg0 = argc_val;
-    args_regs->arg1 = (uint64_t)argv_ptr;
-    args_regs->arg2 = (uint64_t)env_ptr;
+    proc_clear_segments(task->process);
+    proc_dealloc_vm_pages(task->process);
 
-    task->thread.exec_state = (ExecutionState*)stack_ptr;
+    // Load from file
+    int result = proc_load_from_elf(filename_temp, task);
+    if (result < 0) return result;
+
+    proc_files_close_on_exec(task->process);
+    proc_construct_heap(task->process);
+
+    task->thread.exec_state = proc_make_exec_frame(task->thread.stack_ptr, task->ip, env_ptr, envc_val, argv_ptr, argc_val);
     task->state = TSK_STATE_NONE;
+
+    kfree(env_ptr);
+    kfree(argv_ptr);
 
     tsk_exec(task);
 
@@ -1055,7 +1147,9 @@ long _do_wait4(pid_t pid, int* stat_loc, int options) {
 void raw_stack_dump(const uint64_t* stack, const uint32_t count) {
     for (uint32_t i = 0; i < count; ++i) {
         raw_print_number(stack[i], FALSE, 16);
-        raw_putc('\n');
+        raw_puts(" <- (");
+        raw_print_number((uint64_t)(stack + i), FALSE, 16);
+        raw_puts(")\n");
     }
 }
 
@@ -1071,31 +1165,10 @@ ATTR_NAKED long _sys_wait4(pid_t pid, int* stat_loc, int options) {
 
 ATTR_NORETURN ATTR_NAKED void _sys_exit(int error_code) {
     ProcessorLocal* const proc_local = proc_get_local();
-    Process* const process = proc_local->current_task->process;
-
-    process->result_value = error_code;
-
-    proc_clear_segments(process);
-    proc_close_files(process);
-    proc_detach_childs(process);
-    proc_dealloc_vm_pages(process);
 
     cpu_set_pml4(proc_local->kernel_page_table);
-    vm_free_page_table(process->addr_space.page_table);
 
-    kernel_warn("task next: %x: curr: %x: queue size: %u\n",
-        proc_local->scheduler->task_queue.next, proc_local->current_task,
-        proc_local->scheduler->count
-    );
-
-    tsk_extract(proc_local->current_task);
-
-    kernel_warn("task next: %x: curr: %x: queue size: %u\n",
-        proc_local->scheduler->task_queue.next, proc_local->current_task,
-        proc_local->scheduler->count
-    );
-
-    process->addr_space.page_table = NULL;
+    proc_shutdown(proc_local->current_task, error_code);
 
     tsk_schedule();
 }
