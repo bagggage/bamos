@@ -5,6 +5,7 @@
 
 #include "cpu/spinlock.h"
 
+#include "math.h"
 #include "mem.h"
 
 #include "video/font.h"
@@ -124,6 +125,38 @@ Color kernel_logger_get_color() {
     return color;
 }
 
+typedef __attribute__((vector_size(32), aligned(256))) long long m256i;
+
+static inline void fast_memcpy256(const void* src, void* dst, const size_t size) {
+    m256i* dst_vec = (m256i*)dst;
+    const m256i* src_vec = (const m256i*)src;
+
+    size_t count = size / sizeof(m256i);
+
+    for (; count > 0; count -= 4, src_vec += 4, dst_vec += 4) {
+        *dst_vec = *src_vec;
+        *(dst_vec + 1) = *(src_vec + 1);
+        *(dst_vec + 2) = *(src_vec + 2);
+        *(dst_vec + 3) = *(src_vec + 3);
+    }
+}
+
+static inline void fast_memset256(void* const dst, const size_t size, const uint8_t value) {
+    m256i val;
+
+    for (uint64_t i = 0; i < sizeof(m256i) / sizeof(uint64_t); ++i) ((uint64_t*)&val)[i] = value;
+
+    m256i* dst_vec = (m256i*)dst;
+    size_t count = size / sizeof(m256i);
+
+    for (; count > 0; count -= 4, dst_vec += 4) {
+        *dst_vec       = val;
+        *(dst_vec + 1) = val;
+        *(dst_vec + 2) = val;
+        *(dst_vec + 3) = val;
+    }
+}
+
 bool_t is_initialized = FALSE;
 
 bool_t is_logger_initialized() {
@@ -168,10 +201,13 @@ void kernel_logger_set_cursor_pos(uint16_t row, uint16_t col) {
     logger.col = col % logger.max_col;
 }
 
-static inline void fast_memcpy(const uint64_t* src, uint64_t* dst, const size_t size) {
-    for (size_t i = 0; i < (size / sizeof(uint64_t)); ++i) {
-        dst[i] = src[i];
-    }
+// Scrolls raw terminal up
+static inline void scroll_logger_fb(uint8_t rows_offset) {
+    const size_t rows_byte_offset = (uint64_t)rows_offset * logger.fb->scanline * logger.font.height;
+    const size_t fb_size = (uint64_t)logger.fb->height * logger.fb->scanline;
+
+    fast_memcpy256((logger.fb->base + rows_byte_offset), logger.fb->base, fb_size - rows_byte_offset);
+    fast_memset256(logger.fb->base + (fb_size - rows_byte_offset), rows_byte_offset, 0);
 }
 
 void kernel_logger_clear() {
@@ -180,22 +216,10 @@ void kernel_logger_clear() {
     logger.col = 0;
     logger.row = 0;
 
-    const size_t fb_size = ((uint64_t)logger.fb->height * logger.fb->scanline) / sizeof(uint64_t);
+    const size_t fb_size = ((uint64_t)logger.fb->height * logger.fb->scanline);
 
-    for (uint64_t i = 0; i < fb_size; ++i) {
-        ((uint64_t*)logger.fb->base)[i] = 0;
-    }
-
+    fast_memset256(logger.fb->base, fb_size, 0);
     spin_release(&logger.lock);
-}
-
-// Scrolls raw terminal up
-static inline void scroll_logger_fb(uint8_t rows_offset) {
-    const size_t rows_byte_offset = (uint64_t)rows_offset * logger.fb->scanline * logger.font.height;
-    const size_t fb_size = (uint64_t)logger.fb->height * logger.fb->scanline;
-
-    fast_memcpy((uint64_t*)(logger.fb->base + rows_byte_offset), (uint64_t*)logger.fb->base, fb_size - rows_byte_offset);
-    memset(logger.fb->base + (fb_size - rows_byte_offset), rows_byte_offset, 0x0);
 }
 
 // FIXME: when array size set to uint32_max - program terminated 1 error
@@ -270,7 +294,8 @@ void raw_putc(char c) {
         uint32_t mask = (1 << (logger.font.width - 1));
 
         for (uint32_t x = 0; x < logger.font.width; ++x) {
-            *(uint32_t*)(logger.fb->base + curr_offset + (x << 2)) = (glyph[y] & mask ? *(uint32_t*)logger.color : 0x00000000);
+            const uint32_t color = (glyph[y] & mask ? *(uint32_t*)logger.color : 0x00000000);
+            *(uint32_t*)(logger.fb->base + curr_offset + (x << 2)) = color;
             mask >>= 1;
         }
 
