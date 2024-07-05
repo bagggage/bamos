@@ -10,7 +10,7 @@
 
 #include "utils/list.h"
 
-#define PROC_STACK_VIRT_ADDRESS (KERNEL_HEAP_VIRT_ADDRESS - (GB_SIZE * 512ULL))
+#define PROC_STACK_VIRT_ADDRESS (USER_SPACE_ADDR_BEGIN + (GB_SIZE * 512ULL * 48ULL))
 
 typedef int32_t pid_t;
 typedef struct ProcessorLocal ProcessorLocal;

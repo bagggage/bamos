@@ -242,13 +242,10 @@ static uint64_t proc_calc_brk(const VMMemoryBlockNode* last_seg) {
 
 static void proc_make_aux_vec(Task* const task, const char* prog_name, const ElfFile* const prog_elf) {
     const bool_t align = (task->thread.stack_ptr % 16) == 0;
-    const uint32_t progs_size = prog_elf->header->prog_entries_count * prog_elf->header->prog_entry_size;
-    const uint64_t ph_ptr = (task->thread.stack_ptr - progs_size) & (~0xFull);
-
-    memcpy(prog_elf->progs, (void*)ph_ptr, progs_size);
+    const uint64_t ph_ptr = prog_elf->load_base + prog_elf->header->ph_offset;
 
     const uint32_t name_len = strlen(prog_name) + 1;
-    const uint64_t fn_ptr = (ph_ptr - name_len) & (~0xFull);
+    const uint64_t fn_ptr = (task->thread.stack_ptr - name_len) & (~0xFull);
     memcpy(prog_name, (void*)fn_ptr, name_len);
 
     task->thread.stack_ptr = fn_ptr - (align ? 0 : 8);
@@ -283,13 +280,12 @@ static void proc_make_aux_vec(Task* const task, const char* prog_name, const Elf
 
 static int proc_load_elf_interp(const char* filename, Task* const task) {
     ElfFile elf_file;
-
-    int result = proc_load_elf_file(&elf_file, filename, task->process->work_dir);
-    if (result < 0) return (result == -ENOEXEC) ? -ELIBBAD : result;
-
     const VMMemoryBlockNode* last_proc_seg = (void*)task->process->addr_space.segments.prev;
 
     elf_file.load_base = proc_calc_brk(last_proc_seg);
+
+    int result = proc_load_elf_file(&elf_file, filename, task->process->work_dir);
+    if (result < 0) return (result == -ENOEXEC) ? -ELIBBAD : result;
 
     if (elf_load(&elf_file, task->process) < 0) result = (result == -ENOEXEC) ? -ELIBBAD : result;
     else {
