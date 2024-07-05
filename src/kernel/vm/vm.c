@@ -93,16 +93,21 @@ static inline uint64_t vm_kernel_virt_to_phys(const uint64_t kernel_virt_address
     return kernel_virt_address + vm_kernel_virt_to_phys_offset;
 }
 
-static void vm_config_page_table_entry(PageXEntry* page_table_entry, const uint64_t redirection_base, VMMapFlags flags) {
-    page_table_entry->present               = 1;
+static void vm_ctrl_page_table_entry(PageXEntry* const page_table_entry, const VMMapFlags flags) {
     page_table_entry->writeable             = ((flags & VMMAP_WRITE) != 0);
     page_table_entry->user_access           = ((flags & VMMAP_USER_ACCESS) != 0);
     page_table_entry->size                  = ((flags & VMMAP_USE_LARGE_PAGES) != 0);
     page_table_entry->global                = page_table_entry->size && ((flags & VMMAP_GLOBAL) != 0);
     page_table_entry->cache_disabled        = ((flags & VMMAP_CACHE_DISABLED) != 0);
     page_table_entry->write_through         = ((flags & VMMAP_WRITE_THROW) != 0);
-    page_table_entry->page_ppn              = (redirection_base >> 12);
     page_table_entry->execution_disabled    = ((flags & VMMAP_EXEC) == 0);
+}
+
+static void vm_config_page_table_entry(PageXEntry* const page_table_entry, const uint64_t redirection_base, const VMMapFlags flags) {
+    page_table_entry->present               = 1;
+    page_table_entry->page_ppn              = (redirection_base >> 12);
+
+    vm_ctrl_page_table_entry(page_table_entry, flags);
 }
 
 static void vm_map_high_kernel(PageMapLevel4Entry* pml4) {
@@ -111,7 +116,7 @@ static void vm_map_high_kernel(PageMapLevel4Entry* pml4) {
                         (uint64_t)&fb,
                         pml4,
                         div_with_roundup(div_with_roundup(bootboot.fb_size, MB_SIZE * 2) * MB_SIZE * 2, PAGE_BYTE_SIZE),
-                        (VMMAP_FORCE | VMMAP_WRITE_THROW | VMMAP_CACHE_DISABLED | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES | VMMAP_GLOBAL));
+                        (VMMAP_FORCE | VMMAP_WRITE | VMMAP_USE_LARGE_PAGES | VMMAP_GLOBAL));
 
     // Map bootboot
     _vm_map_phys_to_virt(get_phys_address((uint64_t)&bootboot),
@@ -790,6 +795,43 @@ Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const s
     return _vm_map_phys_to_virt(phys_address, virt_address, g_proc_local.kernel_page_table, pages_count, flags);
 }
 
+void vm_map_ctrl(uint64_t virt_address, PageMapLevel4Entry* const pml4, const uint32_t pages_count, const VMMapFlags flags) {
+    kassert(pml4 != NULL && pages_count > 0 && pages_count < INT32_MAX);
+
+    int32_t pages_to_remap_count = pages_count;
+
+    PageXEntry* pxe_stack[4] = { NULL, NULL, NULL, NULL };
+    PageXEntry* pxe = pml4 + ((const VirtualAddress*)&virt_address)->p4_index;
+
+    for (uint32_t level = 4;;) {
+        const uint32_t idx = ((uint64_t)pxe % PAGE_TABLE_SIZE) / sizeof(PageXEntry);
+
+        if (level > 1 && pxe->size == 0) {
+            vm_prioritize_pxe_flags(pxe, flags);
+
+            pxe_stack[--level] = pxe + 1;
+            pxe = (PageXEntry*)((uint64_t)pxe->page_ppn * PAGE_BYTE_SIZE) + get_virt_addres_px_idx(virt_address, level - 1);
+        }
+        else if (level == 1) {
+            for (uint32_t i = 0; i < (PAGE_TABLE_MAX_SIZE - idx) && pages_to_remap_count > 0; ++i) {
+                vm_ctrl_page_table_entry(pxe + i, flags);
+
+                pages_to_remap_count--;
+            }
+
+            if (pages_to_remap_count > 0) pxe = pxe_stack[level++];
+        }
+        else {
+            vm_ctrl_page_table_entry(pxe, flags);
+
+            const uint32_t pxe_pages_count = 1 << ((level - 1) * 9);
+            pages_to_remap_count -= pxe_pages_count;
+        }
+
+        if (pages_to_remap_count < 1) return;
+    }
+}
+
 uint64_t vm_map_mmio(const uint64_t phys_address, const uint32_t pages_count) {
     const uint64_t virt_address = vm_heap_reserve(&kernel_heap, pages_count);
 
@@ -807,16 +849,6 @@ uint64_t vm_map_mmio(const uint64_t phys_address, const uint32_t pages_count) {
     }
 
     return virt_address;
-}
-
-static uint32_t get_max_near_rank_of(const uint32_t number) {
-    uint32_t rank = BPA_MAX_BLOCK_RANK - 1; 
-
-    while (number < (1u << rank)) {
-        rank--;
-    }
-
-    return rank;
 }
 
 static bool_t frame_push_phys_page(VMPageFrame* frame, const uint64_t phys_page) {
@@ -857,14 +889,14 @@ static void frame_clear_phys_pages(VMPageFrame* frame) {
 }
 
 static void frame_free_phys_pages(VMPageFrame* frame) {
-    uint32_t rank = get_max_near_rank_of(frame->count);
+    uint32_t rank = log2(frame->count);
     uint32_t rank_pages_count = 1 << rank;
     uint32_t pages_to_free_count = frame->count;
 
     VMPageList* page = (VMPageList*)(void*)frame->phys_pages.next;
 
     while (page != NULL) {
-        bpa_free_pages(page->phys_page_base * PAGE_BYTE_SIZE, rank);
+        bpa_free_pages((uint64_t)page->phys_page_base * PAGE_BYTE_SIZE, rank);
 
         pages_to_free_count -= rank_pages_count;
 
@@ -922,10 +954,9 @@ uint64_t vm_find_free_virt_address(const PageMapLevel4Entry* pml4 ,const uint32_
     return INVALID_ADDRESS;
 }
 
-static bool_t vm_map_page_frame(VMPageFrame* frame, PageMapLevel4Entry* pml4, VMMapFlags flags) {
-    uint32_t rank_pages_count = 1 << get_max_near_rank_of(frame->count);
+static bool_t vm_map_page_frame(const VMPageFrame* frame, uint64_t virt_address, PageMapLevel4Entry* pml4, VMMapFlags flags) {
+    uint32_t rank_pages_count = 1 << log2(frame->count);
     uint32_t pages_to_map_count = frame->count;
-    uint64_t virt_address = frame->virt_address;
 
     VMPageList* page = (VMPageList*)(void*)frame->phys_pages.next;
 
@@ -944,8 +975,6 @@ static bool_t vm_map_page_frame(VMPageFrame* frame, PageMapLevel4Entry* pml4, VM
 
         page = page->next;
     }
-
-    frame->flags = flags;
 
     return TRUE;
 }
@@ -988,11 +1017,13 @@ VMPageFrame _vm_alloc_pages(const uint32_t pages_count, const uint64_t virt_addr
 
     frame.virt_address = virt_address;
 
-    if (vm_map_page_frame(&frame, pml4, flags) == FALSE) {
+    if (vm_map_page_frame(&frame, frame.virt_address, pml4, flags) == FALSE) {
         frame_free_phys_pages(&frame);
         frame.count = 0;
         return frame;
     }
+
+    frame.flags = flags;
 
     return frame;
 }

@@ -19,6 +19,7 @@ Virtual memory.
 #define KERNEL_STACK_SIZE (KB_SIZE * 4)
 
 #define USER_SPACE_ADDR_BEGIN (DMA_VIRT_ADDRESS + DMA_SIZE)
+#define PROC_BRK_MAX_SIZE   (GB_SIZE * 4ULL)
 
 #define PAGE_TABLE_SIZE PAGE_BYTE_SIZE
 
@@ -120,6 +121,8 @@ Status _vm_map_phys_to_virt(
     VMMapFlags flags
 );
 Status vm_map_phys_to_virt(uint64_t phys_address, uint64_t virt_address, const size_t pages_count, VMMapFlags flags);
+
+void vm_map_ctrl(uint64_t virt_address, PageMapLevel4Entry* const pml4, const uint32_t pages_count, const VMMapFlags flags);
 
 uint64_t vm_map_mmio(const uint64_t phys_address, const uint32_t pages_count);
 
