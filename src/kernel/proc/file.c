@@ -66,8 +66,8 @@ static inline long fd_push(Process* const process, FileDescriptor* const descrip
     return result;
 }
 
-long fd_open(Process* const process, const char* const filename, int flags) {
-    VfsDentry* dentry = vfs_open(filename, process->work_dir);
+long fd_open(Process* const process, const VfsDentry* parent, const char* const filename, int flags) {
+    VfsDentry* const dentry = vfs_open(filename, parent == NULL ? process->work_dir : parent);
 
     if (dentry == NULL) return -ENOENT;
     if ((flags & O_DIRECTORY) != 0 && dentry->inode->type != VFS_TYPE_DIRECTORY) return -ENOTDIR;
@@ -81,16 +81,6 @@ long fd_open(Process* const process, const char* const filename, int flags) {
     }
 
     spin_lock(&process->files_lock);
-
-    // Check if already opened
-    //for (uint32_t i = 0; i < process->files_capacity; ++i) {
-    //    if (process->files[i] != NULL &&
-    //        process->files[i]->dentry == dentry &&
-    //        process->files[i]->mode == flags) {
-    //        spin_release(&process->files_lock);
-    //        return -3;
-    //    }
-    //}
 
     FileDescriptor* descriptor = fd_new();
 
