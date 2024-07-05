@@ -1,10 +1,14 @@
 #include "exceptions.h"
 
+#include "mem.h"
+#include "logger.h"
+
 #include "cpu/regs.h"
 #include "cpu/feature.h"
 
-#include "mem.h"
-#include "logger.h"
+#include "proc/proc.h"
+#include "proc/task_scheduler.h"
+
 #include "vm/vm.h"
 
 #define DE_ISR 0
@@ -45,6 +49,17 @@ typedef union PageFaultErrorCode {
     uint64_t value;
 } ATTR_PACKED PageFaultErrorCode;
 
+static void handle_return() {
+    ProcessorLocal* const proc_local = proc_get_local();
+
+    if (proc_local->current_task == NULL) _kernel_break();
+
+    cpu_set_pml4(proc_local->kernel_page_table);
+    log_process(proc_local->current_task->process);
+    proc_shutdown(proc_local->current_task, -1);
+    tsk_schedule();
+}
+
 // #DE [0] Divide error
 ATTR_INTRRUPT void intr_de_handler(InterruptFrame64* frame) {
     intr_disable();
@@ -55,7 +70,7 @@ ATTR_INTRRUPT void intr_de_handler(InterruptFrame64* frame) {
     log_intr_frame(frame);
     kernel_logger_release();
 
-    _kernel_break();
+    handle_return();
 }
 
 // #DB [1] Debug exception
@@ -133,7 +148,7 @@ ATTR_INTRRUPT void intr_ud_handler(InterruptFrame64* frame) {
     log_intr_frame(frame);
     kernel_logger_release();
 
-    _kernel_break();
+    handle_return();
 }
 
 // #NM [7] Device not available
@@ -211,7 +226,7 @@ ATTR_INTRRUPT void intr_gp_handler(InterruptFrame64* frame, uint64_t error_code)
     log_intr_frame(frame);
     kernel_logger_release();
 
-    _kernel_break();
+    handle_return();
 }
 
 // #PF [14] Page fault exception
@@ -231,7 +246,7 @@ ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code)
     kernel_logger_push_color(COLOR_LYELLOW);
 
     if (pxe == NULL) {
-        log_memory_page_tables(cpu_get_current_pml4());
+        //log_memory_page_tables(cpu_get_current_pml4());
     }
     else {
         kprintf("PXE: %x; (%x) %c%c%c%c%c%c%c\n",
@@ -257,8 +272,7 @@ ATTR_INTRRUPT void intr_pf_handler(InterruptFrame64* frame, uint64_t error_code)
     kernel_logger_release();
 #endif
 
-    _kernel_break();
-    //if (pf_error.user == 0) _kernel_break();
+    handle_return();
 }
 
 // #AC [17] Alignment check
