@@ -47,6 +47,6 @@ char* getenv(const char* restrict name) {
     return NULL;
 }
 
-__attribute__((noreturn)) void exit(int status) {
+__attribute__((noreturn, naked)) void exit(int status) {
     _syscall_arg1(SYS_EXIT, status);
 }

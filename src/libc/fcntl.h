@@ -18,6 +18,10 @@
 #define O_NOATIME   01000000
 #define O_CLOEXEC   02000000
 
+#define AT_FDCWD	-100
+
+typedef unsigned int mode_t;
+
 #ifndef KERNEL
 
 #include "sys/syscall.h"
@@ -28,6 +32,10 @@ static inline int open(const char* pathname, int flags) {
 
 static inline int close(unsigned int fd) {
     return _syscall_arg1(SYS_CLOSE, fd);
+}
+
+static inline int openat(int dir_fd, const char* pathname, int flags, mode_t mode) {
+    return _syscall_arg4(SYS_OPENAT, dir_fd, (_arg_t)pathname, flags, mode);
 }
 
 #endif

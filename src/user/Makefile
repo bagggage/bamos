@@ -1,4 +1,4 @@
-CROSS_ENV:=-fpie -fomit-frame-pointer -ffreestanding -fno-stack-protector -mno-red-zone -nostdlib
+CROSS_ENV:=-fpic -fomit-frame-pointer -ffreestanding -fno-stack-protector -mno-red-zone -nostdlib
 
 AS:=${TOOLCHAIN}/x86_64-elf-as
 AR:=${TOOLCHAIN}/x86_64-elf-ar
@@ -28,6 +28,8 @@ SAVE_DIR:=${shell lsblk -o MOUNTPOINT -nr ${SAVE_DEV}}/usr/bin
 ${OBJS}: ${SRCS}
 	@${MKDIR} ${@D}
 	@${CC} ${CC_FLAGS} ${PP_DEF} ${CC_INCLUDE} -c $(patsubst ${BUILD_APP}/%.o, ${SRC_APP}/%.c, $@) -o $@
+
+#-dynamic-linker=/lib64/ld-linux-x86-64.so.2
 
 bin: ${OBJS}
 	@echo Linking: ${PROG_NAME}

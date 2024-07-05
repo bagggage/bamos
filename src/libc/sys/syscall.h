@@ -14,7 +14,10 @@
 #define SYS_PREAD64 17
 #define SYS_PWRITE64 18
 
+#define SYS_WRITEV  20
 #define SYS_ACCESS  21
+
+#define SYS_SHMAT   30
 
 #define SYS_GETPID  39
 
@@ -33,6 +36,10 @@
 #define SYS_GETPPID 110
 
 #define SYS_ARCH_PRCTL 158
+
+#define SYS_EXIT_GROUP 231
+
+#define SYS_OPENAT  257
 
 #ifndef KERNEL
 
