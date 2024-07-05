@@ -54,7 +54,7 @@ static inline bool_t is_prog_section_valid(const ElfProgramHeader* prog) {
             (prog->flags & (ELF_PROG_FLAGS_EXEC | ELF_PROG_FLAGS_READABLE)) == 0);
 }
 
-static int elf_load_prog(const VfsDentry* file, const ElfProgramHeader* prog, Process* const process) {
+static int elf_load_prog(const ElfFile* elf_file, const ElfProgramHeader* prog, Process* const process) {
     kassert(prog != NULL && process != NULL && prog->type == ELF_PROG_TYPE_LOAD);
 
     //kernel_msg("Prog header type: %x\n", prog->type);
@@ -76,7 +76,7 @@ static int elf_load_prog(const VfsDentry* file, const ElfProgramHeader* prog, Pr
 
     if (segment->block.page_base == 0) return -ENOMEM;
 
-    segment->block.virt_address = prog->virt_address + USER_SPACE_ADDR_BEGIN;
+    segment->block.virt_address = prog->virt_address + elf_file->load_base;
 
     Status result = _vm_map_phys_to_virt(
         (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
@@ -88,11 +88,13 @@ static int elf_load_prog(const VfsDentry* file, const ElfProgramHeader* prog, Pr
         ((prog->flags & ELF_PROG_FLAGS_WRITEABLE) ? VMMAP_WRITE : 0)
     );
 
-    kernel_msg("  Pages count: %u: Base: %x: Top: %x\n",
-        segment->block.pages_count,
-        segment->block.virt_address,
-        segment->block.virt_address + (segment->block.pages_count * PAGE_BYTE_SIZE)
-    );
+    //kernel_msg("  Pages count: %u: Base: %x: Top: %x\n",
+    //    segment->block.pages_count,
+    //    segment->block.virt_address,
+    //    segment->block.virt_address + (segment->block.pages_count * PAGE_BYTE_SIZE)
+    //);
+
+    kassert(is_virt_addr_mapped(segment->block.virt_address));
 
     if (result != KERNEL_OK) {
         bpa_free_pages(
@@ -106,7 +108,7 @@ static int elf_load_prog(const VfsDentry* file, const ElfProgramHeader* prog, Pr
         ((uint64_t)segment->block.page_base * PAGE_BYTE_SIZE) |
         (segment->block.virt_address & 0xFFF);
     
-    if (vfs_read(file, prog->offset, prog->file_size, (void*)phys_base) < prog->file_size) {
+    if (vfs_read(elf_file->dentry, prog->offset, prog->file_size, (void*)phys_base) < prog->file_size) {
         bpa_free_pages(
             (uint64_t)segment->block.page_base * PAGE_BYTE_SIZE,
             log2upper(segment->block.pages_count)
@@ -128,14 +130,14 @@ static int elf_load_prog(const VfsDentry* file, const ElfProgramHeader* prog, Pr
 static int elf_load_exec(const ElfFile* elf_file, Process* const process) {
     kassert(elf_file->header->type == ELF_TYPE_EXEC);
 
-    for (uint32_t i = 0; i < elf_file->header->prog_header_entries_count; ++i) {
+    for (uint32_t i = 0; i < elf_file->header->prog_entries_count; ++i) {
         const ElfProgramHeader* prog = elf_file->progs + i;
 
         if (prog->type != ELF_PROG_TYPE_LOAD) continue;
 
         int result = 0;
 
-        if ((result = elf_load_prog(elf_file->dentry, prog, process)) < 0) {
+        if ((result = elf_load_prog(elf_file, prog, process)) < 0) {
             proc_clear_segments(process);
             return result;
         }
@@ -153,7 +155,7 @@ static bool_t elf_load_dyn_section(const ElfDynamicEntry* dyn, Process* const pr
 }
 
 const ElfProgramHeader* elf_find_prog(const ElfFile* elf_file, const ElfProgramType prog_type) {
-    for (uint32_t i = 0; i < elf_file->header->prog_header_entries_count; ++i) {
+    for (uint32_t i = 0; i < elf_file->header->prog_entries_count; ++i) {
         const ElfProgramHeader* prog = elf_file->progs + i;
 
         if (prog->type == prog_type) return prog;
@@ -165,7 +167,7 @@ const ElfProgramHeader* elf_find_prog(const ElfFile* elf_file, const ElfProgramT
 static int elf_load_dyn(const ElfFile* elf_file, Process* const process) {
     kassert(elf_file->header->type == ELF_TYPE_DYN);
 
-    for (uint32_t i = 0; i < elf_file->header->prog_header_entries_count; ++i) {
+    for (uint32_t i = 0; i < elf_file->header->prog_entries_count; ++i) {
         int result = 0;
 
         const ElfProgramHeader* prog = elf_file->progs + i;
@@ -173,7 +175,7 @@ static int elf_load_dyn(const ElfFile* elf_file, Process* const process) {
         switch (prog->type)
         {
         case ELF_PROG_TYPE_LOAD: {
-            result = elf_load_prog(elf_file->dentry, prog, process);
+            result = elf_load_prog(elf_file, prog, process);
             break;
         }
         case ELF_PROG_TYPE_DYNAMIC: {
@@ -221,9 +223,9 @@ int elf_read_file(ElfFile* const elf_file) {
     }
 
     // Read prog headers
-    if (elf->prog_header_entries_count < 1) return -ENOEXEC;
+    if (elf->prog_entries_count < 1) return -ENOEXEC;
 
-    const uint32_t size = elf->prog_header_entries_count * sizeof(ElfProgramHeader);
+    const uint32_t size = elf->prog_entries_count * sizeof(ElfProgramHeader);
     ElfProgramHeader* progs = (ElfProgramHeader*)kmalloc(size);
 
     if (progs == NULL) {
@@ -289,7 +291,7 @@ static bool_t elf_test_log(const void* elf_file) {
 
     kernel_msg("%x\n", section);
 
-    for (uint32_t i = 1; i < elf->sect_header_entries_count; ++i) {
+    for (uint32_t i = 1; i < elf->sect_entries_count; ++i) {
         kernel_msg("Section: %s size: %x: offset: %x: address: %x\n",
             elf_lookup_string(elf, section->name_offset),
             section->size,
