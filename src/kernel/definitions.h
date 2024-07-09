@@ -31,10 +31,10 @@ typedef enum Status {
     KERNEL_PANIC,
 } Status;
 
-#define BYTE_SIZE 8
-#define KB_SIZE 1024U
-#define MB_SIZE ((uint64_t)KB_SIZE * 1024U)
-#define GB_SIZE (MB_SIZE * 1024U)
+static inline constexpr auto BYTE_SIZE = 8u;
+static inline constexpr auto KB_SIZE = 1024u;
+static inline constexpr auto MB_SIZE = ((uint64_t)KB_SIZE * 1024u);
+static inline constexpr auto GB_SIZE = (MB_SIZE * 1024U);
 
 #define ATTR_ALIGN(align)   __attribute__((aligned(align)))
 #define ATTR_PACKED         __attribute__((packed))
