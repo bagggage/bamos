@@ -6,9 +6,21 @@
 #include "assert.h"
 #include "trace.h"
 
+#include "vm/vm.h"
+
 #include "video/fb.h"
 
+/*
+Kernel linking symbols.
+Defined at `config/linker.ld`.
+*/
 extern BOOTBOOT bootboot;
+extern int mmio; // Ignored
+extern int fb;
+extern int environment;
+extern int initstack; // CPU Stack size
+extern int kernel_elf_start;
+extern int kernel_elf_end;
 
 BootMemMap Boot::mem_map;
 
@@ -26,9 +38,9 @@ ColorFormat bootboot_make_color_fmt(const uint8_t fb_type) {
     return RGBA;
 }
 
-void Boot::get_fb(Framebuffer* const fb) {
-    *fb = Framebuffer(
-        bootboot.fb_ptr,
+void Boot::get_fb(Framebuffer* const fb_ptr) {
+    *fb_ptr = Framebuffer(
+        reinterpret_cast<uintptr_t>(&fb),
         bootboot.fb_scanline,
         bootboot.fb_width,
         bootboot.fb_height,
@@ -130,6 +142,69 @@ void Boot::init_mem_map() {
     if (invalid_ents_num) {
         error("Invalid memory map entries: ", invalid_ents_num);
     }
+}
+
+BootMemMapping* Boot::get_mem_mappings() {
+    static BootMemMapping* mem_mappings = nullptr;
+
+    if (mem_mappings == nullptr) {
+        mem_mappings = reinterpret_cast<BootMemMapping*>(alloc(1));
+
+        enum MemMappingsOrder {
+            MAP_FRAMEBUFFER = 0,
+            MAP_BOOTBOOT,
+            MAP_KERNEL,
+            MAP_ENVIRONMENT,
+            MAP_STACK
+        };
+
+        mem_mappings[MAP_FRAMEBUFFER] = { 
+            .phys = bootboot.fb_ptr,
+            .virt = BOOTBOOT_FB,
+            .pages = (16 * MB_SIZE) / Arch::page_size,
+            .flags = (VM::MMAP_LARGE | VM::MMAP_WRITE)
+        };
+        mem_mappings[MAP_BOOTBOOT] = {
+            .phys = VM::get_phys(reinterpret_cast<uintptr_t>(&bootboot)),
+            .virt = reinterpret_cast<uintptr_t>(&bootboot),
+            .pages = 1,
+            .flags = VM::MMAP_WRITE
+        };
+        mem_mappings[MAP_KERNEL] = {
+            .phys = VM::get_phys(reinterpret_cast<uintptr_t>(&kernel_elf_start)),
+            .virt = reinterpret_cast<uintptr_t>(&kernel_elf_start),
+            .pages = static_cast<uint32_t>(div_roundup(
+                reinterpret_cast<uint64_t>(&kernel_elf_end) -
+                reinterpret_cast<uint64_t>(&kernel_elf_start),
+                Arch::page_size
+            )),
+            .flags = (VM::MMAP_WRITE | VM::MMAP_EXEC)
+        };
+        mem_mappings[MAP_ENVIRONMENT] = {
+            .phys = VM::get_phys(reinterpret_cast<uintptr_t>(&environment)),
+            .virt = reinterpret_cast<uintptr_t>(&environment),
+            .pages = 1,
+            .flags = VM::MMAP_WRITE
+        };
+
+        // Stacks
+        const auto stack_size = reinterpret_cast<uintptr_t>(&initstack);
+        const auto stacks_pages = div_roundup(bootboot.numcores * stack_size, Arch::page_size);
+        const auto stack_base = UINTPTR_MAX - Arch::page_size;
+
+        for (auto i = 0u; i < stacks_pages; ++i) {
+            const auto base = stack_base - (i * Arch::page_size);
+
+            mem_mappings[MAP_STACK + i] = {
+                .phys = VM::get_phys(base),
+                .virt = base,
+                .pages = 1,
+                .flags = VM::MMAP_WRITE
+            };
+        }
+    }
+
+    return mem_mappings;
 }
 
 void BootMemMap::remove(const uint32_t idx) {

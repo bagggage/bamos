@@ -30,12 +30,11 @@
 
 ENTRY(_start)
 
-heap        = 0xfffffe0000000000;
 mmio        = 0xfffffffff8000000; /* these are configurable for level 2 loaders */
 fb          = 0xfffffffffc000000;
 bootboot    = 0xffffffffff000000; /* default = 0xffffffffffe00000 */
 environment = 0xffffffffff001000; /* default = 0xffffffffffe01000 */
-initstack = 2048;
+initstack   = 2048;
 
 PHDRS
 {

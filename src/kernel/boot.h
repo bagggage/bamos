@@ -33,6 +33,13 @@ struct BootMemMap {
     void remove(const uint32_t idx);
 };
 
+struct BootMemMapping {
+    uintptr_t phys;
+    uintptr_t virt;
+    uint32_t pages;
+    uint8_t flags;
+};
+
 class Boot {
 private:
     static BootMemMap mem_map;
@@ -46,9 +53,12 @@ public:
 
     static uint32_t get_cpus_num();
     static const DebugSymbolTable* get_dbg_table();
+
     static inline BootMemMap& get_mem_map() {
         return mem_map;
     }
+
+    static BootMemMapping* get_mem_mappings();
 
     static void* alloc(const uint32_t pages_num);
 };
