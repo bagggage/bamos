@@ -1,9 +1,10 @@
 #pragma once
 
-#include "definitions.h"
-
 #include "arch.h"
-#include "list.h"
+#include "definitions.h"
+#include "oma.h"
+
+#include "utils/list.h"
 
 class Heap {
 private:
@@ -23,6 +24,10 @@ private:
 
     void remove_range(RangeNode* const node, const uint32_t pages);
 public:
+    Heap() = default;
+    Heap(const uintptr_t base)
+    : start(base) {}
+
     uintptr_t reserve(const uint32_t pages);
     void release(const uintptr_t base, const uint32_t pages);
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "alloc.h"
+#include "assert.h"
 #include "type-traits.h"
 
 template<typename T, template<class> typename Alloc = NullAllocator>
@@ -27,11 +28,14 @@ public:
 
         friend class List<T, Alloc>;
     public:
+        Iter(Node* node): node(node) {};
         Iter(Node& node): node(&node) {};
 
-        Iter& operator=(const Iter& other) {
-            return node = other.node;
-        }
+        Iter(const Iter&) = default;
+        Iter(Iter&&) = default;
+
+        Iter& operator=(const Iter&) = default;
+        Iter& operator=(Iter&&) = default;
 
         Iter& operator++() { 
             node = node->next;
@@ -57,7 +61,7 @@ public:
             return temp;
         }
 
-        inline Node* get_node() { return node; }
+        inline Node* get_node() const { return node; }
 
         T& operator*() const { return node->value; };
         T* operator->() { return &node->value; };
@@ -69,11 +73,11 @@ public:
     inline Iter begin() { return Iter(head); }
     inline Iter end() { return Iter(nullptr); }
 
-    inline T* head() { return head; }
-    inline T* tail() { return tail; }
+    inline T& get_head() { return head->value; }
+    inline T& get_tail() { return tail->value; }
 
-    inline const T* head() const { return head; }
-    inline const T* tail() const { return tail; }
+    inline const T& get_head() const { return head->value; }
+    inline const T& get_tail() const { return tail->value; }
 
     void push_front(const T& value) {
         static_assert(is_alloc);
@@ -173,10 +177,6 @@ public:
         else return node;
     }
 
-    pop_ret_t remove(const Iter& where) {
-        return remove(&*where);
-    }
-
     pop_ret_t remove(Node* const node) {
         if (head == tail) {
             kassert(head == node);
@@ -185,20 +185,24 @@ public:
             tail = nullptr;
         }
         else if (head == node) {
-            head = node.next;
-            node.next->prev = nullptr;
+            head = node->next;
+            node->next->prev = nullptr;
         }
         else if (tail == node) {
-            tail = node.prev;
-            node.prev->next = nullptr;
+            tail = node->prev;
+            node->prev->next = nullptr;
         }
         else {
-            node.next->prev = node.prev;
-            node.prev->next = node.next;
+            node->next->prev = node->prev;
+            node->prev->next = node->next;
         }
 
         if constexpr (is_alloc) Allocator::free(node);
         else return node;
+    }
+
+    pop_ret_t remove(const Iter& where) {
+        return remove(where.get_node());
     }
 
     inline bool empty() const {

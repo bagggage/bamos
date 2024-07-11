@@ -25,6 +25,11 @@ char* Fmt::num_to_str(char* buffer, uint64_t num, const bool is_signed, const ui
 }
 
 template<>
+char* Fmt::to_str<uint8_t>(char* buffer, const uint8_t num) {
+    return num_to_str(buffer, num, false, 10);
+}
+
+template<>
 char* Fmt::to_str<uint16_t>(char* buffer, const uint16_t num) {
     return num_to_str(buffer, num, false, 10);
 }

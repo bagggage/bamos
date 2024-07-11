@@ -6,9 +6,11 @@
 
 #include "intr/intr.h"
 
+#include "utils/list.h"
+
 #include "video/text-output.h"
 
-#include "utils/list.h"
+#include "vm/vm.h"
 
 extern "C"
 Status init() {
