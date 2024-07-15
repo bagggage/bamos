@@ -2,6 +2,49 @@
 
 #include "definitions.h"
 
+#define MSR_EFER        0xC0000080
+#define MSR_STAR        0xC0000081
+#define MSR_LSTAR       0xC0000082
+#define MSR_CSTAR       0xC0000083
+#define MSR_SFMASK      0xC0000084
+#define MSR_FG_BASE     0xC0000100
+#define MSR_GS_BASE     0xC0000101
+#define MSR_SWAPGS_BASE 0xC0000102
+
+#define MSR_APIC_BASE 0x1B
+#define MSR_APIC_BASE_BSP 0x100
+
+#define MSR_SYSENTER_CS 0x174
+
+union EFER {
+    struct {
+        uint64_t syscall_ext                : 1;
+        uint64_t reserved_1                 : 7;
+        uint64_t long_mode_enable           : 1;
+        uint64_t reserved_2                 : 1;
+        uint64_t long_mode_active           : 1;
+        uint64_t noexec_enable              : 1;
+        uint64_t secure_vm_enable           : 1;
+        uint64_t long_mode_seg_limit_enable : 1;
+        uint64_t fast_fxsave_restor_enable  : 1;
+        uint64_t translation_cache_ext      : 1;
+        uint64_t reserved_3                 : 48;
+    };
+    uint64_t value;
+};
+
+struct ATTR_PACKED STAR {
+    uint32_t syscall_eip;
+    uint16_t kernel_segment_base;
+    uint16_t user_segment_base;
+};
+
+// Syscall RIP for long mode
+typedef uint64_t LSTAR;
+
+// Syscall RIP for compat. mode
+typedef uint64_t CSTAR;
+
 /*
 Registers is structured according to System V ABI (x86-64).
 In reverse order of putting on stack.
@@ -171,4 +214,62 @@ static ATTR_INLINE_ASM uint16_t get_cs() {
 
 static ATTR_INLINE_ASM void set_idtr(const IDTR idtr) {
     asm volatile("lidt %0"::"memory"(idtr));
+}
+
+static ATTR_INLINE_ASM uint64_t get_msr(uint32_t msr) {
+    uint32_t value_l = 0;
+    uint32_t value_h = 0;
+
+    asm volatile("rdmsr":"=a"(value_l),"=d"(value_h):"c"(msr));
+
+    return value_l | ((uint64_t)value_h << 32);
+}
+
+static ATTR_INLINE_ASM void set_msr(uint32_t msr, uint64_t value) {
+    const void* value_ptr = (void*)&value;
+
+    asm volatile("wrmsr"::"a"(*(uint32_t*)value_ptr), "d"(*(((uint32_t*)value_ptr) + 1)), "c"(msr));
+}
+
+static ATTR_INLINE_ASM EFER get_efer() {
+    return EFER(get_msr(MSR_EFER));
+}
+
+static ATTR_INLINE_ASM void set_efer(const EFER& efer) {
+    set_msr(MSR_EFER, efer.value);
+}
+
+static ATTR_INLINE_ASM uint64_t get_cr0() {
+    uint64_t result;
+    asm volatile("mov %%cr0,%0":"=r"(result));
+
+    return result;
+}
+
+static ATTR_INLINE_ASM uint64_t get_cr1() {
+    uint64_t result;
+    asm volatile("mov %%cr1,%0":"=r"(result));
+
+    return result;
+}
+
+static ATTR_INLINE_ASM uint64_t get_cr2() {
+    uint64_t result;
+    asm volatile("mov %%cr2,%0":"=r"(result));
+
+    return result;
+}
+
+static ATTR_INLINE_ASM uint64_t get_cr3() {
+    uint64_t result;
+    asm volatile("mov %%cr3,%0":"=r"(result));
+
+    return result;
+}
+
+static ATTR_INLINE_ASM uint64_t get_cr4() {
+    uint64_t result;
+    asm volatile("mov %%cr4,%0":"=r"(result));
+
+    return result;
 }
