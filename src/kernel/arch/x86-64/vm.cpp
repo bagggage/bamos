@@ -9,19 +9,7 @@
 
 static OMA page_table_oma;
 
-static bool early_mmap_dma();
-
 Status Arch_x86_64::vm_init() {
-    EFER efer = get_efer();
-    efer.noexec_enable = 1;
-
-    set_efer(efer);
-
-    if (early_mmap_dma() == false) {
-        error("Failed to map DMA: no memory");
-        return KERNEL_ERROR;
-    }
-
     constexpr auto pt_pool_pages = 512;
     void* const oma_pool = Boot::alloc(pt_pool_pages);
 
@@ -102,94 +90,83 @@ uintptr_t Arch_x86_64::get_phys(const PageTable* page_table, const uintptr_t vir
             return pt_entry->get_base() | get_inpage_offset(3 - pt_idx, virt_addr);
         }
 
-        pt_entry = reinterpret_cast<PageTableEntry*>(pt_entry->get_base()) + get_pxe_idx(2 - pt_idx, virt_addr);
+        pt_entry = pt_entry->get_next() + get_pxe_idx(2 - pt_idx, virt_addr);
     }
 
     return invalid_phys;
 }
 
-static void log_pt_helper(const PageTable* pt, const uint8_t level) {
-    using PageTableEntry = Arch_x86_64::PageTableEntry;
+using PageTableEntry = Arch_x86_64::PageTableEntry;
 
-    const char* prefix = "";
-    const char* size_str = " KB";
-    uint64_t size_step = KB_SIZE * 4;
-    uint32_t size_units = 4;
+namespace logging {
+    static const char* prefixies[] = { "", "---|---|---", "---|---", "---" };
+    static const char* size_strs[] = { "", " KB", " MB", " GB" };
+    static const uint64_t size_steps[] = { 0, KB_SIZE * 4, MB_SIZE * 2, GB_SIZE };
+    static const uint32_t size_units[] = { 0, 4, 2, 1 };
 
-    switch (level) {
-    case 1: prefix = "---|---|---"; break;
-    case 2: prefix = "---|---"; size_str = " MB"; size_step = 2 * MB_SIZE; size_units = 2; break;
-    case 3: prefix = "---"; size_str = " GB"; size_step = GB_SIZE; size_units = 1; break;
-    default: break;
+    static void log_pte(const PageTableEntry* pte, const uintptr_t prev_base, const uint32_t pte_idx, const uint8_t level) {
+        const auto prev_idx = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pte) & 0xFFF) / 8;
+        if (pte_idx - prev_idx > 1) {
+            const auto last_idx = pte_idx == 511 ? pte_idx : pte_idx - 1;
+
+            info('|', prefixies[level], 'P', level, " Entry [", prev_idx, '-', last_idx, "]: ",
+                pte->get_base(), '-', prev_base + size_steps[level], ' ', (last_idx - prev_idx + 1) * size_units[level], size_strs[level]);
+        }
+        else {
+            info('|', prefixies[level], 'P', level, " Entry [", prev_idx, "]: ", pte->get_base(), ' ', size_units, size_strs[level]);
+        }
     }
 
-    const PageTableEntry* pte = nullptr;
-    uintptr_t prev_base = 0;
+    static void log_pt_helper(const PageTable* pt, const uint8_t level) {
+        using PageTableEntry = Arch_x86_64::PageTableEntry;
 
-    for (auto pte_idx = 0u; pte_idx < Arch_x86_64::page_table_size; ++pte_idx) {
-        const PageTableEntry& curr_pte = pt[pte_idx];
+        const PageTableEntry* pte = nullptr;
+        uintptr_t prev_base = 0;
 
-        if (curr_pte.present == 0) {
-            if (pte) goto pte_log;
-            continue;
-        }
+        for (auto pte_idx = 0u; pte_idx < Arch_x86_64::page_table_size; ++pte_idx) {
+            const PageTableEntry& curr_pte = pt[pte_idx];
 
-        if (pte && (curr_pte.size || level == 1)) {
-            if (curr_pte.get_base() == prev_base + size_step &&
-                curr_pte.writeable == pte->writeable && curr_pte.exec_disabled == pte->exec_disabled) {
-                prev_base += size_step;
-
-                if (pte_idx != 511) [[likely]] continue;
+            if (curr_pte.present == 0) {
+                if (pte) {
+                    log_pte(pte, prev_base, pte_idx, level);
+                    pte = nullptr;
+                }
+                continue;
             }
 
-            pte_log: {
-                const auto prev_idx = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pte) & 0xFFF) / 8;
-                if (pte_idx - prev_idx > 1) {
-                    const auto last_idx = pte_idx == 511 ? pte_idx : pte_idx - 1;
+            if (pte && (curr_pte.size || level == 1)) {
+                if (curr_pte.get_base() == prev_base + size_steps[level] &&
+                    curr_pte.writeable == pte->writeable && curr_pte.exec_disabled == pte->exec_disabled) {
+                    prev_base += size_steps[level];
 
-                    info('|', prefix, 'P', level, " Entry [", prev_idx, '-', last_idx, "]: ",
-                        pte->get_base(), '-', prev_base + size_step, ' ', (last_idx - prev_idx + 1) * size_units, size_str);
-                }
-                else {
-                    info('|', prefix, 'P', level, " Entry [", prev_idx, "]: ", pte->get_base(), ' ', size_units, size_str);
-                }
-
-                if (curr_pte.present == 0 || prev_idx == 511) {
-                    pte = nullptr;
+                    if (pte_idx == 511) [[unlikely]] log_pte(pte, prev_base, pte_idx, level);
                     continue;
                 }
-                else if (curr_pte.size == 0 & level > 1) {
-                    pte = nullptr;
-                    goto log_next_pt;
-                }
-                else if (pte_idx == 511) {
-                    goto pte_set_base;
-                }
+
+                kassert(pte->size || level == 1);
+
+                log_pte(pte, prev_base, pte_idx, level);
+
+            pte_next_base:
+                pte = &curr_pte;
+                prev_base = curr_pte.get_base();
+
+                if (pte_idx == 511) log_pte(pte, prev_base, pte_idx, level);
+                continue;
+            }
+            else if (curr_pte.size || level == 1) {
+                goto pte_next_base;
             }
 
-            kassert(pte->size || level == 1);
+            if (pte) {
+                log_pte(pte, prev_base, pte_idx, level);
+                pte = nullptr;
+            }
 
-            pte = &curr_pte;
-            prev_base = curr_pte.get_base();
+            warn('`', prefixies[level], 'P', level, " Entry [", pte_idx, "]: ", VM::get_phys_dma(&curr_pte), " -> ", curr_pte.get_base());
 
-            continue;
+            if (level > 1) log_pt_helper(curr_pte.get_next(), level - 1);
         }
-        else if (curr_pte.size || level == 1) {
-        pte_set_base:
-            pte = &curr_pte;
-            prev_base = curr_pte.get_base();
-
-            if (pte_idx == 511) goto pte_log;
-
-            continue;
-        }
-
-        if (pte) goto pte_log;
-
-        log_next_pt:
-        warn('`', prefix, 'P', level, " Entry [", pte_idx, "]: ", VM::get_phys_dma(&curr_pte), " -> ", curr_pte.get_base());
-
-        if (level > 1) log_pt_helper(curr_pte.get_next(), level - 1);
     }
 }
 
@@ -203,7 +180,7 @@ void Arch_x86_64::log_pt(const PageTable* page_table) {
 
         const PageTable* p3t = p4e.get_next();
 
-        log_pt_helper(p3t, 3);
+        logging::log_pt_helper(p3t, 3);
     }
 }
 
@@ -246,9 +223,9 @@ bool Arch_x86_64::remap_large(PageTableEntry* pte, const bool is_gb_page) {
     return true;
 }
 
-static bool early_mmap_dma() {
-    PageTable* pt = Arch_x86_64::get_page_table();
-    const auto p4_idx = get_pxe_idx(3, Arch_x86_64::dma_start);
+bool Arch_x86_64::early_mmap_dma() {
+    PageTable* pt = VM::get_phys_dma(get_page_table());
+    const auto p4_idx = get_pxe_idx(3, dma_start);
     PageTable* pt3 = reinterpret_cast<PageTable*>(Boot::alloc(1));
 
     {
@@ -256,15 +233,15 @@ static bool early_mmap_dma() {
 
         auto& pte = pt[p4_idx];
 
-        pte = Arch_x86_64::PageTableEntry(reinterpret_cast<uintptr_t>(pt3), VM::MMAP_WRITE);
+        pte = PageTableEntry(reinterpret_cast<uintptr_t>(pt3), VM::MMAP_WRITE);
         uint64_t val = *reinterpret_cast<uint64_t*>(&pte);
     }
 
-    Arch_x86_64::PageTableEntry template_pte(static_cast<uintptr_t>(0), (VM::MMAP_GLOBAL | VM::MMAP_LARGE | VM::MMAP_WRITE));
+    PageTableEntry template_pte(static_cast<uintptr_t>(0), (VM::MMAP_GLOBAL | VM::MMAP_LARGE | VM::MMAP_WRITE));
 
-    for (auto i = 0u; i < (Arch_x86_64::dma_size / GB_SIZE); ++i) {
+    for (auto i = 0u; i < (dma_size / GB_SIZE); ++i) {
         pt3[i] = template_pte;
-        template_pte.page_ppn += (GB_SIZE / Arch_x86_64::page_size);
+        template_pte.page_ppn += (GB_SIZE / page_size);
     }
 
     return true;
