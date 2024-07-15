@@ -9,17 +9,30 @@
 
 static OMA page_table_oma;
 
-Status Arch_x86_64::vm_init() {
-    constexpr auto pt_pool_pages = 512;
+static bool early_mmap_dma();
 
+Status Arch_x86_64::vm_init() {
+    EFER efer = get_efer();
+    efer.noexec_enable = 1;
+
+    set_efer(efer);
+
+    if (early_mmap_dma() == false) {
+        error("Failed to map DMA: no memory");
+        return KERNEL_ERROR;
+    }
+
+    constexpr auto pt_pool_pages = 512;
     void* const oma_pool = Boot::alloc(pt_pool_pages);
 
-    if (oma_pool == nullptr) [[unlikely]] {
+    if (oma_pool == Boot::alloc_fail) [[unlikely]] {
         error("Failed to allocate memory for VM page table pool");
         return KERNEL_ERROR;
     }
 
-    page_table_oma = OMA(sizeof(PageTableEntry) * page_table_size, oma_pool, pt_pool_pages);
+    const auto virt_oma_pool = VM::get_virt_dma(oma_pool);
+
+    page_table_oma = OMA(sizeof(PageTableEntry) * page_table_size, virt_oma_pool, pt_pool_pages);
     page_table_oma.log();
 
     return KERNEL_OK;
@@ -79,13 +92,17 @@ uintptr_t Arch_x86_64::get_phys(const PageTable* page_table, const uintptr_t vir
     const PageTableEntry* pt_entry = &page_table[get_pxe_idx(3, virt_addr)];
 
     for (auto pt_idx = 0u; pt_idx < 4; pt_idx++) {
+        debug("PTE[", pt_idx, "]: ", *reinterpret_cast<const uint64_t*>(pt_entry));
+
         if (pt_entry->present == 0) break;
 
         if (pt_entry->size || pt_idx == 3) {
+            debug("PTE: ", *reinterpret_cast<const uint64_t*>(pt_entry));
+
             return pt_entry->get_base() | get_inpage_offset(3 - pt_idx, virt_addr);
         }
 
-        pt_entry = pt_entry->get_next() + get_pxe_idx(2 - pt_idx, virt_addr);
+        pt_entry = reinterpret_cast<PageTableEntry*>(pt_entry->get_base()) + get_pxe_idx(2 - pt_idx, virt_addr);
     }
 
     return invalid_phys;
@@ -137,13 +154,16 @@ static void log_pt_helper(const PageTable* pt, const uint8_t level) {
                     info('|', prefix, 'P', level, " Entry [", prev_idx, "]: ", pte->get_base(), ' ', size_units, size_str);
                 }
 
-                if (curr_pte.present == 0 || pte_idx == 511) {
+                if (curr_pte.present == 0 || prev_idx == 511) {
                     pte = nullptr;
                     continue;
                 }
                 else if (curr_pte.size == 0 & level > 1) {
                     pte = nullptr;
                     goto log_next_pt;
+                }
+                else if (pte_idx == 511) {
+                    goto pte_set_base;
                 }
             }
 
@@ -155,6 +175,7 @@ static void log_pt_helper(const PageTable* pt, const uint8_t level) {
             continue;
         }
         else if (curr_pte.size || level == 1) {
+        pte_set_base:
             pte = &curr_pte;
             prev_base = curr_pte.get_base();
 
@@ -166,7 +187,7 @@ static void log_pt_helper(const PageTable* pt, const uint8_t level) {
         if (pte) goto pte_log;
 
         log_next_pt:
-        warn('`', prefix, 'P', level, " Entry [", pte_idx, "]: ", &curr_pte, " -> ", curr_pte.get_base());
+        warn('`', prefix, 'P', level, " Entry [", pte_idx, "]: ", VM::get_phys_dma(&curr_pte), " -> ", curr_pte.get_base());
 
         if (level > 1) log_pt_helper(curr_pte.get_next(), level - 1);
     }
@@ -178,7 +199,7 @@ void Arch_x86_64::log_pt(const PageTable* page_table) {
 
         if (p4e.present == 0) continue;
 
-        warn("P4 Entry [", p4_idx, "]: ", &p4e);
+        warn("P4 Entry [", p4_idx, "]: ", VM::get_phys_dma(&p4e));
 
         const PageTable* p3t = p4e.get_next();
 
@@ -202,14 +223,16 @@ static inline uint8_t make_mmap_flags(uint8_t raw_flags, const uintptr_t virt, c
     return result;
 }
 
-void Arch_x86_64::remap_large(PageTableEntry* pte, const bool is_gb_page) {
+bool Arch_x86_64::remap_large(PageTableEntry* pte, const bool is_gb_page) {
     PageTableEntry template_pte = *pte;
     template_pte.size = is_gb_page ? 1 : 0;
 
     PageTable* pt = PageTable::alloc();
+    if (pt == PageTable::alloc_fail) return false;
 
-    pte->page_ppn = reinterpret_cast<uintptr_t>(pt) / page_size;
+    pte->page_ppn = VM::get_phys_dma(reinterpret_cast<uintptr_t>(pt)) / page_size;
     pte->size = 0;
+    pte->global = 0;
 
     const auto pages_step = is_gb_page ? pages_per_2_mb : 1;
 
@@ -219,6 +242,32 @@ void Arch_x86_64::remap_large(PageTableEntry* pte, const bool is_gb_page) {
         entry = template_pte;
         template_pte.page_ppn += pages_step;
     }
+    
+    return true;
+}
+
+static bool early_mmap_dma() {
+    PageTable* pt = Arch_x86_64::get_page_table();
+    const auto p4_idx = get_pxe_idx(3, Arch_x86_64::dma_start);
+    PageTable* pt3 = reinterpret_cast<PageTable*>(Boot::alloc(1));
+
+    {
+        if (pt3 == Boot::alloc_fail) return false;
+
+        auto& pte = pt[p4_idx];
+
+        pte = Arch_x86_64::PageTableEntry(reinterpret_cast<uintptr_t>(pt3), VM::MMAP_WRITE);
+        uint64_t val = *reinterpret_cast<uint64_t*>(&pte);
+    }
+
+    Arch_x86_64::PageTableEntry template_pte(static_cast<uintptr_t>(0), (VM::MMAP_GLOBAL | VM::MMAP_LARGE | VM::MMAP_WRITE));
+
+    for (auto i = 0u; i < (Arch_x86_64::dma_size / GB_SIZE); ++i) {
+        pt3[i] = template_pte;
+        template_pte.page_ppn += (GB_SIZE / Arch_x86_64::page_size);
+    }
+
+    return true;
 }
 
 uintptr_t Arch_x86_64::mmap(
@@ -255,14 +304,19 @@ uintptr_t Arch_x86_64::mmap(
             if (pte->present == 0) {
                 // Allocate new page table if not present
                 PageTable* new_pt = PageTable::alloc();
+                if (new_pt == PageTable::alloc_fail) return 0;
 
                 *pte = template_pte;
                 pte->size = 0;
-                pte->page_ppn = reinterpret_cast<uintptr_t>(new_pt) / page_size;
+                pte->global = 0;
+                pte->page_ppn = VM::get_phys_dma(reinterpret_cast<uintptr_t>(new_pt)) / page_size;
             }
             else if (pte->size) {
                 // Remap large page
-                remap_large(pte, pt_idx == 1);
+                if (remap_large(pte, pt_idx == 1) == false) return 0;
+                pte->prioritize_flags(temp_flags);
+            }
+            else {
                 pte->prioritize_flags(temp_flags);
             }
 
@@ -270,7 +324,7 @@ uintptr_t Arch_x86_64::mmap(
             if (pte_idx == 511) [[unlikely]] pt_stack[pt_idx] = nullptr;
             else [[likely]] pt_stack[pt_idx] = pte + 1;
 
-            debug("pt: ", pte, " -> ", pte->get_next());
+            debug("pt: ", VM::get_phys_dma(pte), " -> ", pte->get_next());
 
             // Go to the next pte in the next page table
             pte_idx = mapped_pages == 0 ? get_pxe_idx(2 - pt_idx, virt) : 0;
@@ -297,7 +351,7 @@ uintptr_t Arch_x86_64::mmap(
             }
 
             for (; entries_to_map > 0 && pte_idx < page_table_size; ++pte_idx, --entries_to_map) {
-                debug("mmap: ", pte, ": -> ", (template_pte.page_ppn + mapped_pages) * page_size, template_pte.size ? " (large)" : " (page)");
+                //debug("mmap: ", VM::get_phys_dma(pte), ": -> ", (template_pte.page_ppn + mapped_pages) * page_size, template_pte.size ? " (large)" : " (page)");
 
                 *pte = template_pte;
                 pte->page_ppn += mapped_pages;
@@ -332,7 +386,7 @@ uintptr_t Arch_x86_64::mmap(
         }
     }
 
-    return invalid_phys;
+    return invalid_virt;
 }
 
 void Arch_x86_64::unmap(
@@ -340,7 +394,7 @@ void Arch_x86_64::unmap(
     const uint32_t pages,
     PageTable* const page_table
 ) {
-
+     
 }
 
 void Arch_x86_64::map_ctrl(

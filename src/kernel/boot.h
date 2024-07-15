@@ -1,7 +1,8 @@
 #pragma once
 
 #include "definitions.h"
-#include "math.h"
+
+#include "utils/math.h"
 
 class Framebuffer;
 struct DebugSymbolTable;
@@ -25,9 +26,13 @@ struct BootMemMap {
     inline bool is_empty() const { return size == 0; }
 
     inline uint32_t get_max_page() const {
-        const Entry& ent = entries[size - 1];
+        for (auto i = size - 1; i > 0; --i) {
+            if (entries[i].type != MEM_FREE) continue;
 
-        return ent.base + ent.pages - 1;
+            return entries[i].base + entries[i].pages - 1;
+        }
+
+        return 0;
     }
 
     void remove(const uint32_t idx);
@@ -49,6 +54,8 @@ private:
 
     static void* early_alloc(const uint32_t size);
 public:
+    static inline auto alloc_fail = reinterpret_cast<void*>(0xF000000000000000);
+public:
     static void get_fb(Framebuffer* const fb);
 
     static uint32_t get_cpus_num();
@@ -61,4 +68,6 @@ public:
     static BootMemMapping* get_mem_mappings();
 
     static void* alloc(const uint32_t pages_num);
+
+    static void switch_to_dma();
 };

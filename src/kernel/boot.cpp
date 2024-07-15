@@ -148,27 +148,34 @@ BootMemMapping* Boot::get_mem_mappings() {
     static BootMemMapping* mem_mappings = nullptr;
 
     if (mem_mappings == nullptr) {
-        mem_mappings = reinterpret_cast<BootMemMapping*>(alloc(1));
+        mem_mappings = reinterpret_cast<BootMemMapping*>(VM::get_virt_dma(alloc(1)));
 
         enum MemMappingsOrder {
-            MAP_FRAMEBUFFER = 0,
+            MAP_DMA = 0,
+            MAP_FRAMEBUFFER,
             MAP_BOOTBOOT,
             MAP_KERNEL,
             MAP_ENVIRONMENT,
             MAP_STACK
         };
 
+        mem_mappings[MAP_DMA] = {
+            .phys = 0x0,
+            .virt = Arch::dma_start,
+            .pages = Arch::dma_size / Arch::page_size,
+            .flags = (VM::MMAP_LARGE | VM::MMAP_WRITE | VM::MMAP_GLOBAL)
+        };
         mem_mappings[MAP_FRAMEBUFFER] = { 
             .phys = bootboot.fb_ptr,
-            .virt = BOOTBOOT_FB,
+            .virt = reinterpret_cast<uintptr_t>(&fb),
             .pages = (16 * MB_SIZE) / Arch::page_size,
-            .flags = (VM::MMAP_LARGE | VM::MMAP_WRITE)
+            .flags = (VM::MMAP_LARGE | VM::MMAP_WRITE | VM::MMAP_GLOBAL)
         };
         mem_mappings[MAP_BOOTBOOT] = {
             .phys = VM::get_phys(reinterpret_cast<uintptr_t>(&bootboot)),
             .virt = reinterpret_cast<uintptr_t>(&bootboot),
             .pages = 1,
-            .flags = VM::MMAP_WRITE
+            .flags = (VM::MMAP_WRITE | VM::MMAP_GLOBAL)
         };
         mem_mappings[MAP_KERNEL] = {
             .phys = VM::get_phys(reinterpret_cast<uintptr_t>(&kernel_elf_start)),
@@ -178,19 +185,19 @@ BootMemMapping* Boot::get_mem_mappings() {
                 reinterpret_cast<uint64_t>(&kernel_elf_start),
                 Arch::page_size
             )),
-            .flags = (VM::MMAP_WRITE | VM::MMAP_EXEC)
+            .flags = (VM::MMAP_WRITE | VM::MMAP_EXEC | VM::MMAP_GLOBAL)
         };
         mem_mappings[MAP_ENVIRONMENT] = {
             .phys = VM::get_phys(reinterpret_cast<uintptr_t>(&environment)),
             .virt = reinterpret_cast<uintptr_t>(&environment),
             .pages = 1,
-            .flags = VM::MMAP_WRITE
+            .flags = (VM::MMAP_WRITE | VM::MMAP_GLOBAL)
         };
 
         // Stacks
         const auto stack_size = reinterpret_cast<uintptr_t>(&initstack);
         const auto stacks_pages = div_roundup(bootboot.numcores * stack_size, Arch::page_size);
-        const auto stack_base = UINTPTR_MAX - Arch::page_size;
+        const auto stack_base = UINTPTR_MAX - Arch::page_size + 1;
 
         for (auto i = 0u; i < stacks_pages; ++i) {
             const auto base = stack_base - (i * Arch::page_size);
@@ -199,9 +206,11 @@ BootMemMapping* Boot::get_mem_mappings() {
                 .phys = VM::get_phys(base),
                 .virt = base,
                 .pages = 1,
-                .flags = VM::MMAP_WRITE
+                .flags = (VM::MMAP_WRITE | VM::MMAP_GLOBAL)
             };
         }
+
+        mem_mappings[MAP_STACK + stacks_pages] = { .phys = 0, .virt = 0, .pages = 0, .flags = 0 };
     }
 
     return mem_mappings;
@@ -236,5 +245,9 @@ void* Boot::alloc(const uint32_t pages_num) {
         return reinterpret_cast<void*>(base * Arch::page_size);
     }
 
-    return nullptr;
+    return alloc_fail;
+}
+
+void Boot::switch_to_dma() {
+    mem_map.entries = reinterpret_cast<BootMemMap::Entry*>(VM::get_virt_dma(mem_map.entries));
 }
