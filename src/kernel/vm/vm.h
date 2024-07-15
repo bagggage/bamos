@@ -52,20 +52,27 @@ public:
         return phys + Arch::dma_start;
     }
 
-    static inline void* get_virt_dma(const void* phys) {
-        return reinterpret_cast<void*>(get_virt_dma(reinterpret_cast<uintptr_t>(phys)));
+    template<typename T>
+    static inline T* get_virt_dma(T* const phys) {
+        return reinterpret_cast<T*>(get_virt_dma(reinterpret_cast<uintptr_t>(phys)));
     }
 
     static inline uintptr_t get_phys_dma(const uintptr_t virt) {
         return virt - Arch::dma_start;
     }
 
-    static inline void* get_phys_dma(const void* virt) {
-        return reinterpret_cast<void*>(get_phys_dma(reinterpret_cast<uintptr_t>(virt)));
+    template<typename T>
+    static inline T* get_phys_dma(T* const virt) {
+        return reinterpret_cast<T*>(get_phys_dma(reinterpret_cast<uintptr_t>(virt)));
     }
 
     static inline uintptr_t get_phys(const uintptr_t virt_addr, const PageTable* page_table = Arch::get_page_table()) { 
         return Arch::get_phys(page_table, virt_addr);
+    }
+
+    template<typename T>
+    static inline uintptr_t get_phys(T* const ptr, const PageTable* page_table = Arch::get_page_table()) {
+        return Arch::get_phys(page_table, reinterpret_cast<uintptr_t>(ptr));
     }
 
     static inline uintptr_t mmap(

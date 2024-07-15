@@ -24,7 +24,8 @@ static ATTR_NAKED void common_handler(Regs* const regs, const uint32_t vec, cons
         "r12: ", regs->callee.r12,  ", ",
         "r13: ", regs->callee.r13,  ", ",
         "r14: ", regs->callee.r14,  ", ",
-        "r15: ", regs->callee.r15
+        "r15: ", regs->callee.r15,   '\n',
+        "cr2: ", get_cr2(), ", cr3: ", get_cr3(), ", cr4: ", get_cr4()
     );
 
     _kernel_break();

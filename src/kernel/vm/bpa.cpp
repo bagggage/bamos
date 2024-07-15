@@ -71,7 +71,6 @@ Status BPA::init() {
 
     const uint32_t mem_pool_pages = oma_bucket_pages + bitmap_pages;
 
-
     void* const mem_pool = Boot::alloc(mem_pool_pages);
 
     if (mem_pool == Boot::alloc_fail) {
@@ -79,7 +78,7 @@ Status BPA::init() {
         return KERNEL_ERROR;
     }
 
-    void* const vm_mem_pool = VM::get_virt_dma(mem_pool);
+    void* const virt_mem_pool = VM::get_virt_dma(mem_pool);
 
     {
         const uint32_t kb_per_page = Arch::page_size / KB_SIZE;
@@ -89,11 +88,11 @@ Status BPA::init() {
         info("BPA: bitmap: ", bitmap_pages * kb_per_page, " KB");
     }
 
-    uint8_t* const bitmap_base = reinterpret_cast<uint8_t*>(vm_mem_pool) + (oma_bucket_pages * Arch::page_size);
+    uint8_t* const bitmap_base = reinterpret_cast<uint8_t*>(virt_mem_pool) + (oma_bucket_pages * Arch::page_size);
     fill(bitmap_base, 0xFFu, bitmap_pages * Arch::page_size);
 
     auto& free_nodes_oma = FreeArea::List_t::Allocator::_get_oma();
-    free_nodes_oma = OMA(sizeof(FreeArea::List_t::Node), vm_mem_pool, oma_bucket_pages);
+    free_nodes_oma = OMA(sizeof(FreeArea::List_t::Node), virt_mem_pool, oma_bucket_pages);
 
     if (init_areas(bitmap_base, bitmap_size) == false) {
         error("Failed to fill free areas: not enough OMA capacity");
