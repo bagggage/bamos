@@ -9,10 +9,14 @@ class List {
 public:
     class Node {
     public:
-        Node* next;
-        Node* prev;
+        Node* next = nullptr;
+        Node* prev = nullptr;
 
         T value;
+
+        Node() = default;
+        Node(const T& value): value(value) {}
+        Node(T&& value): value(value) {}
     };
 
     using Allocator = Alloc<Node>;
@@ -24,7 +28,7 @@ private:
 public:
     class Iter {
     private:
-        Node* node;
+        Node* node = nullptr;
 
         friend class List<T, Alloc>;
     public:
@@ -70,6 +74,8 @@ public:
         friend bool operator!=(const Iter& lhs, const Iter& rhs) { return lhs.node != rhs.node; };
     };
 
+    constexpr List() = default;
+
     inline Iter begin() { return Iter(head); }
     inline Iter end() { return Iter(nullptr); }
 
@@ -83,7 +89,7 @@ public:
         static_assert(is_alloc);
 
         Node* node = reinterpret_cast<Node*>(Allocator::alloc());
-        node->value = value;
+        *node = Node(value);
         push_front(node);
     }
 
@@ -91,7 +97,7 @@ public:
         static_assert(is_alloc);
 
         Node* node = reinterpret_cast<Node*>(Allocator::alloc());
-        node->value = value;
+        *node = Node(value);
         push_back(node);
     }
 
@@ -99,7 +105,7 @@ public:
         static_assert(is_alloc);
 
         Node* node = reinterpret_cast<Node*>(Allocator::alloc());
-        node->value = value;
+        *node = Node(value);
         insert(before, node);
     }
 
