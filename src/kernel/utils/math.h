@@ -16,7 +16,7 @@ static inline constexpr T1 max(const T1& lhs, const T2& rhs) {
     return (lhs >= rhs) ? lhs : static_cast<T1>(rhs);
 }
 
-static inline uint32_t popcount(const uint32_t number) {
+static inline constexpr uint32_t popcount(const uint32_t number) {
     uint32_t result = number;
 
     result = (result & 0x55555555u) + ((result >> 1) & 0x55555555u);
@@ -28,19 +28,38 @@ static inline uint32_t popcount(const uint32_t number) {
     return result;
 }
 
-uint32_t log2(uint32_t number);
+static inline constexpr uint32_t log2(uint32_t number) {
+    number |= (number >> 1);
+    number |= (number >> 2);
+    number |= (number >> 4);
+    number |= (number >> 8);
+    number |= (number >> 16);
 
-static inline uint32_t log2upper(uint32_t number) {
+    return (popcount(number) - 1);
+}
+
+static inline constexpr uint32_t log2upper(uint32_t number) {
     return (popcount(number) > 1) ? (log2(number) + 1) : log2(number);
 }
 
-static inline uint32_t bcd_to_decimal(const uint32_t bcd) {
+static inline constexpr uint32_t bcd_to_decimal(const uint32_t bcd) {
     return ((bcd / 16 * 10) + (bcd % 16));
 }
 
-static inline uint32_t decimal_to_bcd(const uint32_t decimal) {
+static inline constexpr uint32_t decimal_to_bcd(const uint32_t decimal) {
     return ((decimal / 10 * 16) + (decimal % 10));
 }
 
-uint32_t log2(uint32_t number);
-uint64_t pow(const uint64_t value, uint64_t power);
+static inline constexpr uint64_t pow(const uint64_t value, uint64_t power) {
+    if (power <= 1) return 1;
+
+    uint64_t return_value = value;
+
+    while (power > 1) {
+        return_value *= value;
+
+        --power;
+    }
+
+    return return_value;
+}

@@ -11,6 +11,8 @@ public:
     : bytes(base)
     {}
 
+    inline const uint8_t* get_map() const { return bytes; }
+
     inline uint8_t get(const size_t bit_idx) {
         const uint8_t bitmask = 1 << (bit_idx % BYTE_SIZE);
 
