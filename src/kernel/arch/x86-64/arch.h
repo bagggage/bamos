@@ -63,6 +63,7 @@ public:
 
     using PageTable = PageTableEntry;
 private:
+    static bool early_mmap_dma();
     static bool remap_large(PageTableEntry* pte, const bool is_gb_page);
 public:
     static void preinit();
@@ -75,7 +76,7 @@ public:
         uint64_t cr3;
         asm volatile("mov %%cr3,%0":"=r"(cr3));
 
-        return reinterpret_cast<PageTable*>(cr3 & (~0xFFFul));
+        return reinterpret_cast<PageTable*>((cr3 & (~0xFFFul)) + dma_start);
     }
 
     static ATTR_INLINE_ASM void set_page_table(PageTable* const page_table) {

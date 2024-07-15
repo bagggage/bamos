@@ -2,6 +2,7 @@
 
 #include <cpuid.h>
 
+#include "logger.h"
 #include "spinlock.h"
 
 #include "intr/lapic.h"
@@ -77,6 +78,20 @@ void Arch_x86_64::preinit() {
     auto idx = get_cpu_idx();
 
     if (idx != 0) wait_for_init();
+
+    EFER efer = get_efer();
+    efer.noexec_enable = 1;
+
+    set_efer(efer);
+
+    if (early_mmap_dma() == false) {
+        error("Failed to map DMA: no memory");
+        _kernel_break();
+    }
+
+    GDTR gdtr = get_gdtr();
+    gdtr.base += dma_start;
+    set_gdtr(gdtr);
 }
 
 uint32_t Arch_x86_64::get_cpu_idx() {

@@ -114,6 +114,11 @@ struct ATTR_PACKED IDTR {
     uint64_t base;
 };
 
+struct ATTR_PACKED GDTR {
+    uint16_t limit;
+    uint64_t base;
+};
+
 static ATTR_INLINE_ASM uint64_t get_stack() {
     uint64_t result;
 
@@ -212,7 +217,7 @@ static ATTR_INLINE_ASM uint16_t get_cs() {
     return result;
 }
 
-static ATTR_INLINE_ASM void set_idtr(const IDTR idtr) {
+static ATTR_INLINE_ASM void set_idtr(const IDTR& idtr) {
     asm volatile("lidt %0"::"memory"(idtr));
 }
 
@@ -272,4 +277,15 @@ static ATTR_INLINE_ASM uint64_t get_cr4() {
     asm volatile("mov %%cr4,%0":"=r"(result));
 
     return result;
+}
+
+static ATTR_INLINE_ASM GDTR get_gdtr() {
+    GDTR gdtr;
+    asm volatile("sgdt %0":"=memory"(gdtr));
+
+    return gdtr;
+}
+
+static ATTR_INLINE_ASM void set_gdtr(const GDTR& gdtr) {
+    asm volatile("lgdt %0"::"memory"(gdtr));
 }
