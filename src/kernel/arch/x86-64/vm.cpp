@@ -80,13 +80,9 @@ uintptr_t Arch_x86_64::get_phys(const PageTable* page_table, const uintptr_t vir
     const PageTableEntry* pt_entry = &page_table[get_pxe_idx(3, virt_addr)];
 
     for (auto pt_idx = 0u; pt_idx < 4; pt_idx++) {
-        debug("PTE[", pt_idx, "]: ", *reinterpret_cast<const uint64_t*>(pt_entry));
-
         if (pt_entry->present == 0) break;
 
         if (pt_entry->size || pt_idx == 3) {
-            debug("PTE: ", *reinterpret_cast<const uint64_t*>(pt_entry));
-
             return pt_entry->get_base() | get_inpage_offset(3 - pt_idx, virt_addr);
         }
 
@@ -270,7 +266,7 @@ uintptr_t Arch_x86_64::mmap(
             max_pt = 1;
     }
 
-    debug("virt: ", virt, ": phys: ", phys, ": flags: ", flags, ": temp flags: ", temp_flags, ": max pt: ", max_pt);
+    //debug("virt: ", virt, ": phys: ", phys, ": flags: ", flags, ": temp flags: ", temp_flags, ": max pt: ", max_pt);
 
     uint32_t mapped_pages = 0;
 
@@ -301,7 +297,7 @@ uintptr_t Arch_x86_64::mmap(
             if (pte_idx == 511) [[unlikely]] pt_stack[pt_idx] = nullptr;
             else [[likely]] pt_stack[pt_idx] = pte + 1;
 
-            debug("pt: ", VM::get_phys_dma(pte), " -> ", pte->get_next());
+            //debug("pt: ", VM::get_phys_dma(pte), " -> ", pte->get_next());
 
             // Go to the next pte in the next page table
             pte_idx = mapped_pages == 0 ? get_pxe_idx(2 - pt_idx, virt) : 0;

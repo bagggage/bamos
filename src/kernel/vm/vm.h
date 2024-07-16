@@ -3,35 +3,12 @@
 #include "arch.h"
 #include "definitions.h"
 #include "heap.h"
+#include "frame.h"
 
 #include "utils/list.h"
 
 class VM {
 public:
-    struct PageFrame {
-        PageFrame(uint32_t base, uint16_t size, bool is_base = true)
-        : base(base), size(size), is_base(is_base)
-        {}
-
-        PageFrame(uintptr_t base, uint8_t rank)
-        : base(base / Arch::page_size), size(1 << rank), is_base(true)
-        {}
-
-        uint32_t base;
-        uint16_t size;
-
-        bool is_base;
-
-        inline uint32_t end() const { return base + size; }
-    };
-
-    class MemFrame {
-    private:
-        List<PageFrame> pages;
-    public:
-        inline const List<PageFrame>& get_pages() const { return pages; }
-    };
-
     enum MapFlags : uint8_t {
         MMAP_NONE,
         MMAP_WRITE = 0x1,
