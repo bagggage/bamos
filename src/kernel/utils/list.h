@@ -4,6 +4,9 @@
 #include "assert.h"
 #include "type-traits.h"
 
+/*
+Double linked list
+*/
 template<typename T, template<class> typename Alloc = NullAllocator>
 class List {
 public:
@@ -164,6 +167,8 @@ public:
     using pop_ret_t = tt::enable_if<is_alloc == false, Node*>::type;
 
     pop_ret_t pop_back() {
+        kassert(tail != nullptr);
+
         Node* node = tail;
 
         if (node->prev) tail = tail->prev;
@@ -174,6 +179,8 @@ public:
     }
 
     pop_ret_t pop_front() {
+        kassert(head != nullptr);
+
         Node* node = head;
 
         if (node->next) head = head->next;
@@ -209,6 +216,139 @@ public:
 
     pop_ret_t remove(const Iter& where) {
         return remove(where.get_node());
+    }
+
+    inline bool empty() const {
+        return head == nullptr;
+    }
+};
+
+/*
+Single linked list
+*/
+template<typename T, template<class> typename Alloc = NullAllocator>
+class SList {
+public:
+    class Node {
+    public:
+        Node* next = nullptr;
+
+        T value;
+
+        Node() = default;
+        Node(const T& value): value(value) {}
+        Node(T&& value): value(value) {}
+    };
+
+    using Allocator = Alloc<Node>;
+private:
+    Node* head = nullptr;
+
+    static constexpr bool is_alloc = (tt::is_same<Allocator, NullAllocator<Node>> == false);
+public:
+    class Iter {
+    private:
+        Node* node = nullptr;
+
+        friend class List<T, Alloc>;
+    public:
+        Iter(Node* node): node(node) {};
+        Iter(Node& node): node(&node) {};
+
+        Iter(const Iter&) = default;
+        Iter(Iter&&) = default;
+
+        Iter& operator=(const Iter&) = default;
+        Iter& operator=(Iter&&) = default;
+
+        Iter& operator++() { 
+            node = node->next;
+            return *this;
+        }
+
+        Iter& operator++(int) {
+            Iter temp = *this;
+            node = node->next;
+
+            return temp;
+        }
+
+        inline Node* get_node() const { return node; }
+
+        T& operator*() const { return node->value; };
+        T* operator->() { return &node->value; };
+
+        friend bool operator==(const Iter& lhs, const Iter& rhs) { return lhs.node == rhs.node; };
+        friend bool operator!=(const Iter& lhs, const Iter& rhs) { return lhs.node != rhs.node; };
+    };
+
+    constexpr SList() = default;
+
+    inline Iter begin() { return Iter(head); }
+    inline Iter end() { return Iter(nullptr); }
+
+    inline T& get_head() { return head->value; }
+
+    inline const T& get_head() const { return head->value; }
+
+    void push_front(const T& value) {
+        static_assert(is_alloc);
+
+        Node* node = reinterpret_cast<Node*>(Allocator::alloc());
+        *node = Node(value);
+        push_front(node);
+    }
+
+    void insert(const Iter& before, const T& value) {
+        static_assert(is_alloc);
+
+        Node* node = reinterpret_cast<Node*>(Allocator::alloc());
+        *node = Node(value);
+        insert(before, node);
+    }
+
+    void push_front(Node* const node) {
+        if (head) node->next = head;
+
+        head = node;
+    }
+
+    void insert(const Iter& before, Node* const node) {
+        insert(&*before, node);
+    }
+
+    void insert(Node* const before, Node* const node) {
+        kassert(before != nullptr);
+
+        node->next = before->next;
+        before->next = node;
+    }
+
+    using pop_ret_t = tt::enable_if<is_alloc == false, Node*>::type;
+
+    pop_ret_t pop_front() {
+        kassert(head != nullptr);
+
+        Node* node = head;
+
+        if (node->next) head = head->next;
+        else head = nullptr;
+
+        if constexpr (is_alloc) Allocator::free(node);
+        else return node;
+    }
+
+    pop_ret_t remove_after(Node* const node) {
+        kassert(node != nullptr && node->next != nullptr);
+
+        node->next = node->next->next;
+
+        if constexpr (is_alloc) Allocator::free(node->next);
+        else return node->next;
+    }
+
+    pop_ret_t remove_after(const Iter& where) {
+        return remove_after(where.get_node());
     }
 
     inline bool empty() const {
