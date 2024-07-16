@@ -4,6 +4,7 @@
 
 #include "oma.h"
 #include "spinlock.h"
+#include "frame.h"
 
 #include "utils/bitmap.h"
 #include "utils/list.h"
@@ -63,4 +64,9 @@ public:
 
     static uintptr_t alloc_pages(const unsigned rank);
     static void free_pages(const uintptr_t base, const unsigned rank);
+
+    using PageFrameList = SList<PhysPageFrame, OmaAllocator>;
+
+    static PageFrameList alloc(const uint32_t pages);
+    static void free(PageFrameList& pages);
 };

@@ -228,3 +228,47 @@ void BPA::free_pages(const uintptr_t base, const unsigned rank) {
 
     lock.release();
 }
+
+BPA::PageFrameList BPA::alloc(const uint32_t pages) {
+    PageFrameList result;
+
+    uint32_t temp_rank = 0;
+    uint32_t temp_pages = pages;
+
+    while (temp_pages != 0) {
+        if (temp_pages & 1) {
+            if (temp_rank < max_areas) [[likely]] {
+                const auto phys_ptr = alloc_pages(temp_rank);
+                if (phys_ptr == alloc_fail) goto fail;
+
+                result.push_front(PhysPageFrame(phys_ptr / Arch::page_size, temp_rank));
+            }
+            else {
+                for (auto i = (max_areas - 1) * 2; i < (temp_rank * 2); ++i) {
+                    const auto phys_ptr = alloc_pages(max_areas - 1);
+                    if (phys_ptr == alloc_fail) goto fail;
+
+                    result.push_front(PhysPageFrame(phys_ptr / Arch::page_size, temp_rank));
+                }
+            }
+        }
+
+        temp_rank++;
+        temp_pages >>= 1;
+    }
+
+    return result;
+
+fail:
+    free(result);
+    return PageFrameList();
+}
+
+void BPA::free(PageFrameList& pages) {
+    while (pages.empty() == false) {
+        auto& frame = pages.get_head();
+        free_pages(frame.base * Arch::page_size, log2(frame.size));
+
+        pages.pop_front();
+    }
+}
