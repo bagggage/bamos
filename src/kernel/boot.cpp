@@ -169,7 +169,7 @@ BootMemMapping* Boot::get_mem_mappings() {
             .phys = bootboot.fb_ptr,
             .virt = reinterpret_cast<uintptr_t>(&fb),
             .pages = (16 * MB_SIZE) / Arch::page_size,
-            .flags = (VM::MMAP_LARGE | VM::MMAP_WRITE | VM::MMAP_GLOBAL)
+            .flags = (VM::MMAP_LARGE | VM::MMAP_WRITE | VM::MMAP_GLOBAL | VM::MMAP_CACHE_DISABLE)
         };
         mem_mappings[MAP_BOOTBOOT] = {
             .phys = VM::get_phys(reinterpret_cast<uintptr_t>(&bootboot)),

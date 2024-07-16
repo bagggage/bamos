@@ -17,7 +17,7 @@ fi
 unset GTK_PATH
 #qemu-img create -f raw ${DIST_DIR}/nvme.img 512M
 #mkfs -t ext2 ${DIST_DIR}/nvme.img
-qemu-system-x86_64 -enable-kvm -bios ${UEFI} -smp cores=4 -nic none -m 128M -no-reboot \
+qemu-system-x86_64 -enable-kvm -bios ${UEFI} -cpu host -smp cores=2 -nic none -m 64M -no-reboot \
  -drive file=${DIST_DIR}/bamos.iso,media=cdrom \
  -drive file=${DRIVE_IMG},if=none,id=nvm \
  -device nvme,id=nvme-ctrl-0,addr=06,serial=deadbeef,drive=nvm \

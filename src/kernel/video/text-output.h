@@ -25,7 +25,10 @@ struct Cursor {
 class TextOutput {
 private:
     static Framebuffer fb;
+    static uintptr_t double_base;
     static RawFont font;
+
+    static uint32_t* font_texture;
 
     static Cursor cursor;
     static uint16_t cols;
@@ -33,6 +36,7 @@ private:
 
     static uint32_t curr_col;
 
+    static void fast_blt(const uintptr_t src, const uintptr_t dst, const uint32_t width, const uint32_t height) ;
     static uint64_t calc_fb_offset();
     static void scroll_fb(uint8_t rows_offset);
 public:
