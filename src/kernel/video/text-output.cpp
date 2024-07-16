@@ -10,15 +10,13 @@
 #include "utils/string.h"
 
 Framebuffer TextOutput::fb = {};
-uintptr_t   TextOutput::double_base = 0;
+char*       TextOutput::buffer = nullptr;
 RawFont     TextOutput::font = {};
 uint32_t*   TextOutput::font_texture = 0;
 Cursor      TextOutput::cursor = {};
 uint16_t    TextOutput::cols = {};
 uint16_t    TextOutput::rows = {};
 uint32_t    TextOutput::curr_col = {};
-
-static uint32_t max_writen_col = 0;
 
 extern const uint8_t _binary_font_psf_start;
 
@@ -56,9 +54,10 @@ fast_memset256(void* const dst, const size_t size, const uint8_t value) {
     }
 }
 
-uint64_t TextOutput::calc_fb_offset() {
-    return (static_cast<uint64_t>(cursor.row) * (static_cast<uint64_t>(fb.scanline) * font.height)) +
-        ((cursor.col * font.width) * sizeof(uint32_t));
+uint64_t TextOutput::calc_fb_offset(const uint32_t row, const uint32_t col) {
+    return (static_cast<uint64_t>(row) *
+        (static_cast<uint64_t>(fb.scanline) * font.height)) +
+        ((col * font.width) * sizeof(uint32_t));
 }
 
 void TextOutput::fast_blt(const uintptr_t src, const uintptr_t dst, const uint32_t width, const uint32_t height) {
@@ -77,14 +76,38 @@ void TextOutput::fast_blt(const uintptr_t src, const uintptr_t dst, const uint32
 }
 
 void TextOutput::scroll_fb(uint8_t rows_offset) {
-    const size_t rows_byte_offset = static_cast<uint64_t>(rows_offset) * fb.scanline * font.height;
-    const size_t fb_size = static_cast<uint64_t>(fb.height) * fb.scanline;
-    const auto line_width = font.width * max_writen_col;
+    const auto fb_size = fb.scanline * fb.height;
+    const auto row_size = fb.scanline * font.height;
+    size_t buff_offset = 0;
 
-    fast_blt(double_base + rows_byte_offset, double_base, line_width, fb.height - font.height);
-    fast_memset256(reinterpret_cast<void*>(double_base + (fb_size - rows_byte_offset)), rows_byte_offset, 0);
+    for (auto row = 1u; row < rows; ++row) {
+        buff_offset += cols;
 
-    fast_blt(double_base, fb.base, line_width, fb.height);
+        for (auto col = 0u; col < cols; ++col) {
+            const auto prev_offset = buff_offset - cols;
+            const char c = buffer[buff_offset + col];
+
+            if (c == '\n' || c == '\0') [[unlikely]] {
+                char prev_c = buffer[prev_offset + col];
+
+                while (prev_c != '\0' && prev_c != '\n' && col < cols) {
+                    draw(' ', row - 1, col);
+                    buffer[prev_offset + col] = '\0';
+
+                    ++col;
+                    prev_c = buffer[prev_offset + col];
+                }
+
+                break;
+            }
+
+            buffer[prev_offset + col] = c;
+
+            draw(c, row - 1, col);
+        }
+    }
+
+    fast_memset256(reinterpret_cast<void*>(fb.base + fb_size - row_size), row_size, 0);
 }
 
 static void render_font_texture(uint32_t* const texture, const RawFont& font) {
@@ -125,12 +148,11 @@ void TextOutput::init() {
     cursor = { 0, 0 };
     curr_col = Color(COLOR_LRED).pack(fb.format);
 
-    double_base = reinterpret_cast<uintptr_t>(Boot::alloc((fb.height * fb.width * sizeof(uint32_t)) / Arch::page_size));
-    kassert(double_base != reinterpret_cast<uintptr_t>(Boot::alloc_fail));
+    const auto buffer_pages = div_roundup(rows * cols, Arch::page_size);
+    buffer = reinterpret_cast<char*>(Boot::alloc(buffer_pages));
+    buffer = VM::get_virt_dma(buffer);
 
-    double_base = VM::get_virt_dma(double_base);
-
-    fast_memset256(reinterpret_cast<void*>(double_base), static_cast<uint64_t>(fb.scanline) * fb.height, 0x0);
+    fast_memset256(buffer, buffer_pages * Arch::page_size, 0x0);
 }
 
 // FIXME: when array size set to uint32_max - program terminated 1 error
@@ -174,43 +196,34 @@ void TextOutput::print(const char* string, const size_t length) {
     for (size_t i = 0; i < length; ++i) print(string[i]);
 }
 
-__attribute__((target("avx2")))
 void TextOutput::print(const char c) {
-    if (c == '\0') return;
+    if (c == '\0') [[unlikely]] return;
+    if (c == '\b') [[unlikely]] {
+        move_cursor(0, -1);
+        draw(' ', cursor.row, cursor.col);
 
-    uint64_t curr_offset;
+        return;
+    }
 
-    if (c == '\n') {
-        if (cursor.row + 1 < rows) {
-            curr_offset = cursor.row * font.height * fb.scanline;
-            fast_blt(double_base + curr_offset, fb.base + curr_offset, font.width * cursor.col, font.height);
-        }
+    buffer[(cursor.row * cols) + cursor.col] = c;
 
-        if (max_writen_col < cursor.col) max_writen_col = cursor.col;
-
+    if (c == '\n') [[unlikely]] {
         move_cursor(1, 0);
         cursor.col = 0;
 
         return;
     }
 
-    if (c == '\b') {
-        move_cursor(0, -1);
-        curr_offset = calc_fb_offset();
+    draw(c, cursor.row, cursor.col);
+    move_cursor(0, 1);
+}
 
-        for (uint32_t y = 0; y < font.height; ++y) {
-            for (uint32_t x = 0; x < font.width; ++x) {
-                *(uint32_t*)(double_base + curr_offset + (x << 2)) = 0x00000000;
-            }
-
-            curr_offset += fb.scanline;
-        }
-
-        return;
-    }
+__attribute__((target("avx2")))
+void TextOutput::draw(const char c, const uint16_t row, const uint16_t col) {
+    uint64_t curr_offset;
 
     const uint32_t* glyph = font_texture + ((font.width * font.height) * c);
-    curr_offset = calc_fb_offset();
+    curr_offset = calc_fb_offset(row, col);
 
     const uint32_t color_arr[] = { curr_col, curr_col, curr_col, curr_col, curr_col, curr_col, curr_col, curr_col };
 
@@ -218,7 +231,7 @@ void TextOutput::print(const char c) {
     const uint32_t size = font.width * sizeof(uint32_t);
 
     for (auto y = 0u; y < font.height; ++y) {
-        const void* dst = reinterpret_cast<void*>(double_base + curr_offset);
+        const void* dst = reinterpret_cast<void*>(fb.base + curr_offset);
         const void* src = glyph;
 
         {
@@ -246,16 +259,16 @@ void TextOutput::print(const char c) {
 //
     //    curr_offset += fb.scanline;
     //}
-
-    move_cursor(0, 1);
 }
 
 void TextOutput::clear() {
     cursor.col = 0;
     cursor.row = 0;
 
-    const size_t fb_size = (static_cast<uint64_t>(fb.height) * fb.scanline);
+    const auto fb_size = static_cast<uint64_t>(fb.height) * fb.scanline;
+    const auto buffer_size = div_roundup(rows * cols, Arch::page_size) * Arch::page_size;
 
+    fast_memset256(buffer, buffer_size, 0);
     fast_memset256(reinterpret_cast<void*>(fb.base), fb_size, 0);
 }
 
