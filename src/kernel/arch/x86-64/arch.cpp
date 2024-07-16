@@ -92,10 +92,23 @@ void Arch_x86_64::preinit() {
     GDTR gdtr = get_gdtr();
     gdtr.base += dma_start;
     set_gdtr(gdtr);
+
+    // Enable AVX
+    asm volatile(
+        "mov %%cr4,%%rax \n"
+        "or $0x40600,%%rax \n"
+        "mov %%rax,%%cr4 \n"
+
+        "xor %%rcx,%%rcx \n"
+        "xgetbv \n"
+        "or $7,%%rax \n"
+        "xsetbv \n"
+        :::"rcx","rax","rdx"
+    );
 }
 
 uint32_t Arch_x86_64::get_cpu_idx() {
-    if (LAPIC::is_avail()) return LAPIC::get_id();
+    if (LAPIC::is_avail()) [[likely]] return LAPIC::get_id();
 
     uint32_t eax, ebx = 0, ecx, edx;
 
