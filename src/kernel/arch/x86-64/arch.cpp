@@ -64,7 +64,7 @@ enum CpuFeature {
     CPUID_FEAT_EDX_PBE          = CPUID_FEAT_EDX_BEGIN + (1u << 31), // Pend. Brk. EN. (wtf?)
 };
 
-static Spinlock init_lock = Spinlock(LOCK_LOCKED);
+static Spinlock init_lock = Spinlock(LOCK_UNLOCKED);
 
 [[noreturn]] static void wait_for_init() {
     init_lock.lock();
@@ -75,18 +75,38 @@ static Spinlock init_lock = Spinlock(LOCK_LOCKED);
 }
 
 void Arch_x86_64::preinit() {
-    auto idx = get_cpu_idx();
+    static bool is_initial_cpu = true;
 
-    if (idx != 0) wait_for_init();
+    init_lock.lock();
 
+    if (is_initial_cpu == false) wait_for_init();
+    else is_initial_cpu = false;
+
+    init_cpu(true);
+}
+
+uint32_t Arch_x86_64::get_cpu_idx() {
+    if (LAPIC::is_avail()) [[likely]] return LAPIC::get_id();
+
+    uint32_t eax, ebx = 0, ecx, edx;
+
+    __get_cpuid(CPUID_GET_FEATURE, &eax, &ebx, &ecx, &edx);
+
+    // Get logical core ID (31-24 bit)
+    return (ebx >> 24);
+}
+
+void Arch_x86_64::init_cpu(const bool is_initial_cpu) {
     EFER efer = get_efer();
     efer.noexec_enable = 1;
 
     set_efer(efer);
 
-    if (early_mmap_dma() == false) {
-        error("Failed to map DMA: no memory");
-        _kernel_break();
+    if (is_initial_cpu) [[unlikely]] {
+        if (early_mmap_dma() == false) {
+            error("Failed to map DMA: no memory");
+            _kernel_break();
+        }
     }
 
     GDTR gdtr = get_gdtr();
@@ -105,15 +125,4 @@ void Arch_x86_64::preinit() {
         "xsetbv \n"
         :::"rcx","rax","rdx"
     );
-}
-
-uint32_t Arch_x86_64::get_cpu_idx() {
-    if (LAPIC::is_avail()) [[likely]] return LAPIC::get_id();
-
-    uint32_t eax, ebx = 0, ecx, edx;
-
-    __get_cpuid(CPUID_GET_FEATURE, &eax, &ebx, &ecx, &edx);
-
-    // Get logical core ID (31-24 bit)
-    return (ebx >> 24);
 }

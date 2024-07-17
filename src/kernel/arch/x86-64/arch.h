@@ -63,6 +63,7 @@ public:
 
     using PageTable = PageTableEntry;
 private:
+    static void init_cpu(const bool is_initial_cpu = false);
     static bool early_mmap_dma();
     static bool remap_large(PageTableEntry* pte, const bool is_gb_page);
 public:
