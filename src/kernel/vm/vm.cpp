@@ -3,6 +3,7 @@
 #include "assert.h"
 #include "boot.h"
 #include "bpa.h"
+#include "uma.h"
 
 #include "utils/mem.h"
 
@@ -24,6 +25,7 @@ Status VM::init() {
     Boot::switch_to_dma();
 
     if (BPA::init() != KERNEL_OK) return KERNEL_ERROR;
+    if (UMA::init() != KERNEL_OK) return KERNEL_ERROR;
 
     return KERNEL_OK;
 }

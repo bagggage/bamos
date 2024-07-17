@@ -32,6 +32,8 @@ private:
     List<Bucket> buckets;
 
     using BucketNode = decltype(buckets)::Node;
+
+    friend class UMA;
 private:
     static constexpr uint32_t calc_bucket_capacity(const uint32_t pages_number, const uint32_t obj_size) {
         uint32_t capacity = ((pages_number * Arch::page_size) - sizeof(BucketNode)) / obj_size;
