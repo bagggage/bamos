@@ -171,7 +171,7 @@ uintptr_t BPA::alloc_pages(const unsigned rank) {
 }
 
 void BPA::free_pages(const uintptr_t base, const unsigned rank) {
-    kassert((base & 0xFFF) == 0 && rank < max_areas);
+    kassert((base % Arch::page_size) == 0 && rank < max_areas);
 
     uint32_t page_base = static_cast<uint32_t>(base / Arch::page_size);
 

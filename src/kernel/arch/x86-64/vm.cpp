@@ -230,7 +230,6 @@ bool Arch_x86_64::early_mmap_dma() {
         auto& pte = pt[p4_idx];
 
         pte = PageTableEntry(reinterpret_cast<uintptr_t>(pt3), VM::MMAP_WRITE);
-        uint64_t val = *reinterpret_cast<uint64_t*>(&pte);
     }
 
     PageTableEntry template_pte(static_cast<uintptr_t>(0), (VM::MMAP_GLOBAL | VM::MMAP_LARGE | VM::MMAP_WRITE));

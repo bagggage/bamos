@@ -8,11 +8,13 @@
 
 struct PhysPageFrame {
 public:
+    // Short base (index of physical page)
     uint32_t base;
+
+    // Number of pages
     uint16_t size;
 
     bool is_base;
-
 public:
     PhysPageFrame(uint32_t base, uint16_t size, bool is_base = true)
     : base(base), size(size), is_base(is_base)

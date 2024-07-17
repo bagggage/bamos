@@ -228,7 +228,6 @@ void TextOutput::draw(const char c, const uint16_t row, const uint16_t col) {
     const uint32_t color_arr[] = { curr_col, curr_col, curr_col, curr_col, curr_col, curr_col, curr_col, curr_col };
 
     const m256i color = *(const m256i*)reinterpret_cast<const void*>(&color_arr);
-    const uint32_t size = font.width * sizeof(uint32_t);
 
     for (auto y = 0u; y < font.height; ++y) {
         const void* dst = reinterpret_cast<void*>(fb.base + curr_offset);

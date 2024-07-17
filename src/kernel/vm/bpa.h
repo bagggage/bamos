@@ -59,6 +59,8 @@ private:
     }
 public:
     static constexpr uintptr_t alloc_fail = Arch::invalid_phys;
+    static constexpr auto max_rank = max_areas;
+    static constexpr auto max_alloc_pages = 1u << (max_rank - 1);
 public:
     static Status init();
 
