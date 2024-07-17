@@ -38,6 +38,8 @@ OMA::Bucket* OMA::new_bucket() {
 
     BucketNode* node = make_bucket(reinterpret_cast<void*>(VM::get_virt_dma(bucket_base)));
 
+    buckets.push_front(node);
+
     return &node->value;
 }
 
@@ -71,16 +73,19 @@ void* OMA::alloc() {
 }
 
 void OMA::free(void* const obj) {
-    kassert((reinterpret_cast<uintptr_t>(obj) % obj_size) == 0 && "Invalid address");
+    kassert(
+        (reinterpret_cast<uintptr_t>(obj) % obj_size) ==
+        ((reinterpret_cast<uintptr_t>(obj) & (~0xFFF)) % obj_size) && "Invalid address"
+    );
 
     for (auto iter = buckets.begin(); iter != buckets.end(); ++iter) {
         if (iter->is_containing_addr(obj) == false) continue;
 
-        debug(iter.get_node());
+        //debug(iter.get_node());
 
         const auto bit_idx = (reinterpret_cast<uintptr_t>(obj) - reinterpret_cast<uintptr_t>(iter->pool)) / obj_size;
 
-        debug(iter->pool, ' ', iter->bitmap.get_map(), ' ', iter->allocated_count, ' ', bit_idx);
+        //debug(iter->pool, ' ', iter->bitmap.get_map(), ' ', iter->allocated_count, ' ', bit_idx);
 
         iter->bitmap.clear(bit_idx);
         iter->allocated_count--;
