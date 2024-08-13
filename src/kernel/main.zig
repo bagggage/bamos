@@ -19,7 +19,4 @@ export fn main() noreturn {
     vm.init() catch |err| {
         log.err("Can't initialize VM module: {}", .{err});
     };
-
-    const ptr: *u32 = @ptrFromInt(0x1000);
-    log.info("{}", .{ptr.*});
 }

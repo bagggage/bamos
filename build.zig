@@ -5,6 +5,7 @@ const dest_path = "bin";
 
 pub fn build(b: *std.Build) void {
     const kernel_step = b.step("kernel", "Build the kernel");
+    const docs_step = b.step("docs", "Generate documentation");
 
     const target = b.resolveTargetQuery(.{
         .os_tag = .freestanding,
@@ -36,7 +37,7 @@ pub fn build(b: *std.Build) void {
     const dbg_maker = b.addExecutable(.{
         .name = "dbg-maker",
         .root_source_file = b.path(src_path++"/debug-maker/main.zig"),
-        .optimize = .Debug,
+        .optimize = .ReleaseFast,
         .target = b.host,
     });
 
@@ -72,5 +73,13 @@ pub fn build(b: *std.Build) void {
     const kernel_install = b.addInstallArtifact(kernel_exe, .{
         .dest_dir = .{ .override = .{ .custom = dest_path } }
     });
+
     kernel_step.dependOn(&kernel_install.step);
+
+    const docs_install = b.addInstallDirectory(.{
+        .source_dir = kernel_obj.getEmittedDocs(),
+        .install_dir = .{ .prefix = {} },
+        .install_subdir = "docs"
+    });
+    docs_step.dependOn(&docs_install.step);
 }

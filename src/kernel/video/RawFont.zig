@@ -1,6 +1,13 @@
+/// # Raw Font
+/// Responsible for loading and processing
+/// raw font data from PSF (PC Screen Font) files.
+/// It supports both PSF1 and PSF2 font formats,
+/// allowing for the extraction and use of glyphs in a text-rendering context.
+
 const std = @import("std");
 const assert = std.debug.assert;
 
+/// Embedded font data from an external PSF file.
 const font_data align(@alignOf(PSF2)) = @embedFile("fonts-bin/Uni2-VGA16.psf");
 
 const PSF1_MODE512 = 0x01;
@@ -9,6 +16,7 @@ const PSF2_MAGIC = 0x864ab572;
 
 const Self = @This();
 
+/// Structure representing the PSF1 font header.
 const PSF1 = packed struct {
     magic:  u16, // 0x0436
     flags:  u8,  // how many glyps and if unicode, etc.
@@ -17,6 +25,7 @@ const PSF1 = packed struct {
     glyphs: u8
 };
 
+/// Structure representing the PSF2 font header.
 const PSF2 = packed struct {
     magic:      u32, // 0x864ab572
     version:    u32,
@@ -31,12 +40,16 @@ const PSF2 = packed struct {
 
 width: u8,
 height: u8,
+/// Number of bytes for each character glyph.
 charsize: u32,
 
+/// Slice pointing to the glyph data in memory.
 glyphs: []const u8,
 
 pub const default_font = fromData(font_data);
 
+/// Initializes `RawFont` structure from the provided font data byte array,
+/// determining if it's PSF1 or PSF2 format.
 fn fromData(data: [*:0]const u8) Self {
     const psf1: *const PSF1 = @ptrCast(@alignCast(data));
     const psf2: *const PSF2 = @ptrCast(@alignCast(data));

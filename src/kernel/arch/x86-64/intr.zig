@@ -27,7 +27,11 @@ pub const Descriptor = packed struct {
     rsrvd: u32 = 0,
 
     pub fn init(isr: u64, stack: u8, attr: u8) @This() {
-        var result: @This() = .{ .ist = stack, .type_attrs = attr, .selector = regs.getCs() };
+        var result: @This() = .{
+            .ist = stack,
+            .type_attrs = attr,
+            .selector = regs.getCs()
+        };
 
         result.offset_1 = @truncate(isr);
         result.offset_2 = @truncate(isr >> 16);
@@ -57,7 +61,11 @@ fn initExceptHandlers() void {
     inline for (0..rsrvd_vec_num) |vec| {
         const Handler = ExcpHandler(vec);
 
-        base_idt[vec] = Descriptor.init(@intFromPtr(&Handler.isr), kernel_stack, trap_gate_flags);
+        base_idt[vec] = Descriptor.init(
+            @intFromPtr(&Handler.isr),
+            kernel_stack,
+            trap_gate_flags
+        );
         except_handlers[vec] = &commonExcpHandler;
     }
 }
@@ -87,7 +95,9 @@ export fn excpHandlerCaller() callconv(.Naked) noreturn {
 fn ExcpHandler(vec: comptime_int) type {
     return struct {
         fn hasErrorCode() bool {
-            const vec_with_errors = comptime [_]comptime_int{ 8, 10, 11, 12, 13, 14, 17, 21 };
+            const vec_with_errors = comptime [_]comptime_int{
+                8, 10, 11, 12, 13, 14, 17, 21
+            };
 
             for (vec_with_errors) |entry| {
                 if (vec == entry) return true;
@@ -125,7 +135,13 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
         \\r8: 0x{x}, r9: 0x{x}, r10: 0x{x}, r11: 0x{x}
         \\r12: 0x{x}, r13: 0x{x}, r14: 0x{x}, r15: 0x{x}
         \\cr2: 0x{x}, cr3: 0x{x}, cr4: 0x{x}
-    , .{ state.scratch.rax, state.scratch.rcx, state.scratch.rdx, state.callee.rbx, state.intr.rip, state.intr.rsp, state.callee.rbp, state.intr.rflags, state.scratch.r8, state.scratch.r9, state.scratch.r10, state.scratch.r11, state.callee.r12, state.callee.r13, state.callee.r14, state.callee.r15, regs.getCr2(), regs.getCr3(), regs.getCr4() });
+    , .{
+        state.scratch.rax, state.scratch.rcx, state.scratch.rdx, state.callee.rbx,
+        state.intr.rip, state.intr.rsp, state.callee.rbp, state.intr.rflags,
+        state.scratch.r8, state.scratch.r9, state.scratch.r10, state.scratch.r11,
+        state.callee.r12, state.callee.r13, state.callee.r14, state.callee.r15,
+        regs.getCr2(), regs.getCr3(), regs.getCr4()
+    });
 
     var it = std.debug.StackIterator.init(state.intr.rip, state.callee.rbp);
     panic.trace(&it);

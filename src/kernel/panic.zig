@@ -1,3 +1,6 @@
+/// # Panic
+/// Includes handling kernel panics and tracing stack frame.
+
 const std = @import("std");
 const builtin = @import("std").builtin;
 const dbg = @import("dbg-info");
@@ -8,21 +11,22 @@ const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 const video = @import("video.zig");
 
+/// Represents a symbol (function) from the kernel's debugging information.
 const Symbol = struct {
     addr: usize = undefined,
     name: []const u8 = undefined,
-
-    pub var unknown = Symbol{ .addr = 0 };
-
-    pub inline fn isUnknown(self: Symbol) bool {
-        return self.addr == 0;
-    }
 };
 
+/// Buffer used for formatting stack trace messages.
 var fmt_buffer: [256]u8 = undefined;
 
+/// External function to retrieve the debug symbols from the kernel.
+/// This function is generating by `debug-maker`, it makes possible to
+/// include generated debug information as `@embedFile` into the kernel executable.
 extern fn getDebugSyms() *const dbg.Header;
 
+/// Handles a kernel panic by printing a panic message and a stack trace.
+/// This function is marked as `noreturn` and will halt the system.
 pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
     @setCold(true);
 
@@ -40,14 +44,16 @@ pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
     utils.halt();
 }
 
+/// Traces the stack frames and prints the corresponding function names with offsets.
+/// This function is used to provide a detailed trace of the function calls leading up to a panic.
 pub fn trace(it: *std.debug.StackIterator) void {
     text_output.setColor(video.Color.lyellow);
     text_output.print("\n[TRACE]:\n");
 
     while (it.next()) |ret_addr| {
         const symbol = addrToSym(ret_addr);
-        const sym_name = if (symbol.isUnknown()) "UNKNOWN" else symbol.name;
-        const addr_offset = if (symbol.isUnknown()) 0 else ret_addr - symbol.addr;
+        const sym_name = if (symbol) |sym| sym.name else "UNKNOWN";
+        const addr_offset = if (symbol) |sym| ret_addr - sym.addr else 0;
 
         _ = std.fmt.bufPrint(&fmt_buffer, "0x{x}: {s}+0x{x}\n\x00", .{ ret_addr, sym_name, addr_offset }) catch unreachable;
 
@@ -55,7 +61,12 @@ pub fn trace(it: *std.debug.StackIterator) void {
     }
 }
 
-fn addrToSym(addr: usize) Symbol {
+/// Resolves a memory address to a symbol using the kernel's debugging information.
+/// This function searches through the symbol table
+/// to find the function or variable corresponding to the given address.
+/// 
+/// - `addr` The virtual return address.
+fn addrToSym(addr: usize) ?Symbol {
     @setRuntimeSafety(false);
 
     const header = getDebugSyms();
@@ -78,5 +89,5 @@ fn addrToSym(addr: usize) Symbol {
         }
     }
 
-    return Symbol.unknown;
+    return null;
 }

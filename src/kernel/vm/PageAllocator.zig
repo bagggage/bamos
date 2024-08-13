@@ -1,3 +1,8 @@
+/// # Page Allocator
+/// Implements a buddy page allocator for managing physical pages of memory.
+/// Provides functions for allocating and freeing pages, 
+/// and accessing the status of the free/used physical memory.
+
 const std = @import("std");
 
 const boot = @import("../boot.zig");
@@ -8,6 +13,8 @@ const logger = @import("../log.zig");
 
 const Spinlock = @import("../Spinlock.zig");
 
+/// Represents a free memory area in the buddy allocator. 
+/// It maintains a list of free nodes and a bitmap for tracking free pages.
 const FreeArea = struct {
     pub const List_t = utils.SList(void);
 
@@ -52,6 +59,10 @@ var lock = Spinlock.init(Spinlock.UNLOCKED);
 
 var is_init = false;
 
+/// Initializes the page allocator by setting up memory pools and free areas.
+/// Lookup the memory map from the `boot` module and initializes the free areas.
+/// 
+/// This function should be called only once.
 pub fn init() vm.Error!void {
     const mem_map = boot.getMemMap();
     const max_pages = mem_map.maxPage() + 1;
@@ -77,6 +88,10 @@ pub fn init() vm.Error!void {
     is_init = true;
 }
 
+/// Allocates a linear block of physical memory of the specified rank (size).
+/// 
+/// - `rank`: Determines the number of pages as `2^rank`.
+/// - Returns: the physical address of the allocated pages, or `null` if allocation fails.
 pub fn alloc(rank: u32) ?usize {
     std.debug.assert(rank < max_rank);
 
@@ -134,6 +149,11 @@ pub fn alloc(rank: u32) ?usize {
     return entGetPhys(entry);
 }
 
+/// Frees a physical memory of the specified rank (size).
+/// 
+/// - `base`: Physical address of the first page of a linear block returned from `alloc`.
+/// - `rank`: Determines the number of pages as `2^rank`,
+/// must be the same as in `alloc` call.
 pub fn free(base: usize, rank: u32) void {
     std.debug.assert((base % vm.page_size) == 0 and rank < max_rank);
 
@@ -184,24 +204,30 @@ pub fn free(base: usize, rank: u32) void {
     setPageBit(page_base, temp_rank);
 }
 
+/// Logs all free area lists.
 pub fn log() void {
     for (free_areas[0..]) |*area| {
         logger.warn("{}", .{area});
     }
 }
 
+/// Checks if the page allocator has been initialized.
 pub inline fn isInitialized() bool {
     return is_init;
 }
 
+/// Returns the total number of pages managed by the allocator.
 pub inline fn getTotalPages() usize {
     return total_pages;
 }
 
+/// Returns the number of pages currently allocated.
 pub inline fn getAllocatedPages() u32 {
     return allocated_pages;
 }
 
+/// Initializes the free areas and bitmap based on the memory map.
+/// Sets up the bitmaps and populates the free areas with initial free nodes.
 fn initAreas(bitmap_base: usize, bitmap_size: u32) void {
     const mem_map = boot.getMemMap();
 
@@ -223,6 +249,9 @@ fn initAreas(bitmap_base: usize, bitmap_size: u32) void {
     }
 }
 
+/// Adds a free memory entry to the appropriate free area list.
+/// Splits the memory if necessary to make all pages blocks aligned to
+/// it's size and updates the bitmap.
 fn pushFreeEntry(entry: *const boot.MemMap.Entry) void {
     total_pages += entry.pages;
 
@@ -249,10 +278,18 @@ fn pushFreeEntry(entry: *const boot.MemMap.Entry) void {
     }
 }
 
+/// Returns `FreeNode` related to the physical pages block located
+/// by physical base.
+/// 
+/// - `phys_base`: Index of the first physical page in a linear block.
 inline fn getNode(phys_base: u32) *FreeNode {
     return makeNode(phys_base);
 }
 
+/// Returns `FreeNode` related to the physical pages block located
+/// by physical base.
+/// 
+/// - `phys_base`: Index of the first physical page in a linear block.
 inline fn makeNode(phys_base: u32) *FreeNode {
     const phys_addr = @as(usize, phys_base) * vm.page_size;
     const node_addr = vm.getVirtDma(phys_addr);
@@ -261,10 +298,12 @@ inline fn makeNode(phys_base: u32) *FreeNode {
     return node;
 }
 
+/// Gets the base address of a free node.
 inline fn entGetBase(node: *FreeNode) u32 {
     return @truncate(entGetPhys(node) / vm.page_size);
 }
 
+/// Gets the physical address of a free node.
 inline fn entGetPhys(node: *FreeNode) usize {
     return vm.getPhysDma(@intFromPtr(node));
 }

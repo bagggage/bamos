@@ -1,4 +1,9 @@
-/// Object memory allocator.
+/// # Object Memory Allocator
+/// This file provides an implementation for a memory allocator that manages objects
+/// in a virtual memory system. It uses arenas to allocate and free memory for objects of 
+/// a specific size. The allocator ensures that memory is efficiently reused by utilizing a 
+/// free list for deallocated objects.
+
 const std = @import("std");
 
 const boot = @import("../boot.zig");
@@ -11,17 +16,30 @@ const ArenaList_t = utils.SList(Arena);
 const ArenaNode = ArenaList_t.Node;
 
 const Arena = struct {
+    /// Represents a physical page number of the memory pool from which objects are allocated.
     pool_base: u32 = undefined,
+    /// Number of allocations made from this arena.
     alloc_num: u32 = 0,
 
+    /// Pointer to the next available memory location in the pool.
     next_ptr: usize = undefined,
 
+    /// Free list for managing deallocated objects.
     free_list: FreeList_t = FreeList_t{},
 
+    /// Initializes an `Arena` structure.
+    /// 
+    /// - `phys_pool`: The physical memory address of the pool.
     pub fn init(phys_pool: usize) Arena {
         return Arena{ .pool_base = @truncate(phys_pool / vm.page_size), .next_ptr = vm.getVirtDma(phys_pool) };
     }
 
+    /// Allocates memory for an object of size `obj_size`.
+    /// First try to get free entry from the `free_list`, only then uses `next_ptr`.
+    /// 
+    /// - `self`: Pointer to the `Arena`.
+    /// - `obj_size`: The size of the object to allocate.
+    /// - Returns: The address of the allocated object.
     pub fn alloc(self: *Arena, obj_size: usize) usize {
         defer self.alloc_num += 1;
 
@@ -36,6 +54,13 @@ const Arena = struct {
         return result;
     }
 
+    /// Frees the memory of an object.
+    /// Usually puts new entry into `free_list`.
+    /// But if this object was the last allocated just decrements the `next_ptr`.
+    /// 
+    /// - `self`: Pointer to the `Arena`.
+    /// - `obj_addr`: The address of the object to free.
+    /// - `obj_size`: The size of the object to free.
     pub fn free(self: *Arena, obj_addr: usize, obj_size: usize) void {
         defer self.alloc_num -= 1;
 
@@ -47,6 +72,12 @@ const Arena = struct {
         }
     }
 
+    /// Checks if an address belongs to this `Arena`.
+    /// 
+    /// - `self`: Pointer to the `Arena`.
+    /// - `obj_addr`: The address to check.
+    /// - `pool_size`: The size of the memory pool.
+    /// - Returns: `true` if the address is within the arena's range, `false` otherwise.
     pub fn contains(self: *Arena, obj_addr: usize, pool_size: usize) bool {
         const begin = vm.getVirtDma(@as(usize, self.pool_base) * vm.page_size);
         const end = begin + pool_size;
@@ -59,12 +90,19 @@ const Self = @This();
 
 arenas: ArenaList_t = ArenaList_t{},
 arena_capacity: u32 = undefined,
+
+/// Rank (log2 of the number of pages) of the arenas.
 arena_rank: u32 = undefined,
 obj_size: usize = undefined,
 
+/// Target capacity of bucket for arena nodes allocator.
 const arenas_tar_capacity = 256;
+/// Allocator for managing arena nodes.
 var arenas_alloc: vm.BucketAllocator = undefined;
 
+/// Initializes the Object Memory Allocator (OMA) system.
+/// 
+/// - Returns: An error if the memory could not be allocated.
 pub fn initOmaSystem() vm.Error!void {
     const pool_size = arenas_tar_capacity * @sizeOf(ArenaNode);
     const pool_pages = std.math.divCeil(comptime_int, pool_size, vm.page_size) catch unreachable;
@@ -77,6 +115,9 @@ pub fn initOmaSystem() vm.Error!void {
     arenas_alloc = vm.BucketAllocator.initRaw(ArenaNode, virt_pool, pool_pages);
 }
 
+/// Initializes an allocator for a specific object type.
+/// 
+/// - `T`: The type of objects to allocate.
 pub fn init(comptime T: type) Self {
     if (@sizeOf(T) < @sizeOf(FreeNode)) {
         @compileError(std.fmt.comptimePrint("Object size must be at least {} bytes.", .{@sizeOf(FreeNode)}));
@@ -87,6 +128,10 @@ pub fn init(comptime T: type) Self {
     return initSized(@sizeOf(T), pages);
 }
 
+/// Initializes an allocator with a specified object size and number of pages per arena.
+/// 
+/// - `obj_size`: The size of the objects to allocate.
+/// - `pages`: The number of pages to allocate for the arena.
 pub fn initSized(obj_size: usize, pages: u32) Self {
     std.debug.assert(obj_size >= @sizeOf(FreeNode));
 
@@ -99,6 +144,12 @@ pub fn initSized(obj_size: usize, pages: u32) Self {
     return Self{ .arena_capacity = real_capacity, .arena_rank = rank, .obj_size = obj_size };
 }
 
+/// Initializes an allocator with a specified object size and physical memory pool.
+/// 
+/// - `obj_size`: The size of the object.
+/// - `pool_phys`: The physical memory address of the pool.
+/// - `pool_pages`: The number of pages in the pool.
+/// - Returns: A `Self` structure or an error if the allocation fails.
 pub fn initRaw(obj_size: usize, pool_phys: usize, pool_pages: u32) vm.Error!Self {
     var result = initSized(obj_size, pool_pages);
 
@@ -111,6 +162,11 @@ pub fn initRaw(obj_size: usize, pool_phys: usize, pool_pages: u32) vm.Error!Self
     return result;
 }
 
+/// Allocates memory for an object and cast it to pointer of type `T`.
+/// 
+/// - `self`: Pointer to the allocator.
+/// - `T`: The type of pointer.
+/// - Returns: A pointer to the allocated object, or `null` if allocation fails.
 pub fn alloc(self: *Self, comptime T: type) ?*T {
     var node = self.arenas.first;
 
@@ -130,6 +186,11 @@ pub fn alloc(self: *Self, comptime T: type) ?*T {
     return result;
 }
 
+/// Frees the memory of an object.
+/// Invalid object pointer causes UB.
+/// 
+/// - `self`: Pointer to the allocator.
+/// - `obj_ptr`: The pointer to the object to free.
 pub fn free(self: *Self, obj_ptr: anytype) void {
     comptime {
         const type_info = @typeInfo(@TypeOf(obj_ptr));
@@ -156,6 +217,10 @@ pub fn free(self: *Self, obj_ptr: anytype) void {
     unreachable;
 }
 
+/// Creates a new arena and initializes it with a given physical memory pool.
+/// 
+/// - `pool_phys`: The physical memory address of the pool.
+/// - Returns: A pointer to the newly created `ArenaNode`, or `null` if allocation fails.
 fn makeArena(pool_phys: usize) ?*ArenaNode {
     const node = arenas_alloc.alloc(ArenaNode) orelse return null;
     node.data = Arena.init(pool_phys);
@@ -163,6 +228,10 @@ fn makeArena(pool_phys: usize) ?*ArenaNode {
     return node;
 }
 
+/// Allocates and initializes a new arena for the allocator.
+/// 
+/// - `self`: Pointer to the allocator.
+/// - Returns: A pointer to the newly created `ArenaNode`, or `null` if allocation fails.
 fn newArena(self: *Self) ?*ArenaNode {
     const node = arenas_alloc.alloc(ArenaNode) orelse return null;
     const mem_pool = vm.PageAllocator.alloc(self.arena_rank);
@@ -178,6 +247,10 @@ fn newArena(self: *Self) ?*ArenaNode {
     return node;
 }
 
+/// Deletes an arena and frees its memory.
+/// 
+/// - `self`: Pointer to the allocator.
+/// - `arena`: Pointer to the `ArenaNode` to delete.
 fn deleteArena(self: *Self, arena: *ArenaNode) void {
     self.arenas.remove(arena);
     vm.PageAllocator.free(arena.data.pool_base * vm.page_size, self.arena_rank);

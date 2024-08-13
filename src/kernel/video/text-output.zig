@@ -1,3 +1,7 @@
+/// # Text Output Module
+/// Responsible for managing and rendering text output to the framebuffer,
+/// handling cursor position, and rendering characters using a `comptime` font.
+
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -13,6 +17,9 @@ const Cursor = struct {
     row: u16,
     col: u16,
 
+    /// Moves the cursor to the next row.
+    /// If the cursor is already on the last row,
+    /// it triggers a screen scroll.
     inline fn nextRow(self: *Cursor) void {
         if (self.row == rows - 1) {
             scroll();
@@ -28,17 +35,28 @@ var fb: Framebuffer = undefined;
 const font: RawFont = RawFont.default_font;
 
 var cursor: Cursor = Cursor{ .col = 0, .row = 0 };
+
+/// Number of columns on screen.
 var cols: u16 = undefined;
+/// Number of rows on screen.
 var rows: u16 = undefined;
 
+// Current color value used for rendering text.
 var curr_col: u32 = undefined;
 
+/// Texture buffer for rendering the font glyphs.
 var font_tex: []u32 = undefined;
+/// Buffer storing the ascii characters.
 var buffer: []u8 = undefined;
+/// Buffer storing the color of each character.
 var color_buf: []u32 = undefined;
 
 var is_initialized = false;
 
+/// Initializes the text output system,
+/// setting up the framebuffer, ascii buffers, and rendering the font.
+/// 
+/// This function should be called only once.
 pub fn init() void {
     @setCold(true);
 
@@ -71,23 +89,29 @@ pub fn init() void {
     is_initialized = true;
 }
 
+/// Checks if the text output system is initialized.
 pub inline fn isEnabled() bool {
     return is_initialized;
 }
 
+/// Sets the cursor position to the specified row and column.
 pub inline fn setCursor(row: u16, col: u16) void {
     cursor.row = row % rows;
     cursor.col = col % cols;
 }
 
+/// Sets the current color used for text rendering.
 pub inline fn setColor(color: Color) void {
     curr_col = color.pack(fb.format);
 }
 
+/// Returns the current color used for text rendering.
 pub inline fn getColor() Color {
     return Color.unpack(fb.format, curr_col);
 }
 
+/// Prints the given string to the framebuffer.
+/// Handles newline characters by moving to the next row.
 pub fn print(str: []const u8) void {
     for (str) |char| {
         if (char == 0) return;
@@ -109,6 +133,7 @@ pub fn print(str: []const u8) void {
     }
 }
 
+/// Draws a single character at the specified row and column using the current color.
 fn drawChar(char: u8, row: u16, col: u16) void {
     @setCold(false);
     @setRuntimeSafety(false);
@@ -133,6 +158,7 @@ fn drawChar(char: u8, row: u16, col: u16) void {
     }
 }
 
+/// Renders the font into a texture buffer for fast character drawing.
 fn renderFont(texture: []u32) void {
     @setCold(true);
 
@@ -156,6 +182,7 @@ fn renderFont(texture: []u32) void {
     }
 }
 
+/// Scrolls the text buffer up by one row, clearing the last row on the screen.
 fn scroll() void {
     @setRuntimeSafety(false);
 
@@ -202,6 +229,7 @@ fn scroll() void {
 const vec256_len = 256 / @sizeOf(u32);
 const Vec256 = @Vector(vec256_len, u32);
 
+/// Fast memory set operation using 256-bit vectorized instructions.
 fn fastMemset256(dest_addr: usize, size: usize, value: u32) void {
     const val_arr = .{value} ** vec256_len;
     const vec_val: Vec256 = val_arr;
