@@ -1,8 +1,8 @@
-/// # Object Memory Allocator
-/// This file provides an implementation for a memory allocator that manages objects
-/// in a virtual memory system. It uses arenas to allocate and free memory for objects of 
-/// a specific size. The allocator ensures that memory is efficiently reused by utilizing a 
-/// free list for deallocated objects.
+//! # Object Memory Allocator
+//! Provides an implementation for a memory allocator that manages objects
+//! in a virtual memory system. It uses arenas to allocate and free memory for objects of 
+//! a specific size. The allocator ensures that memory is efficiently reused by utilizing a 
+//! free list for deallocated objects.
 
 const std = @import("std");
 

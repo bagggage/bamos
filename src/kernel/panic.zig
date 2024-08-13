@@ -1,5 +1,5 @@
-/// # Panic
-/// Includes handling kernel panics and tracing stack frame.
+//! # Panic
+//! Includes handling kernel panics and tracing stack frame.
 
 const std = @import("std");
 const builtin = @import("std").builtin;

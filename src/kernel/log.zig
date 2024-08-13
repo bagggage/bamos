@@ -1,7 +1,7 @@
-/// # Logging
-/// Provides logging utilities for handling various types of log messages,
-/// including exceptions, informational messages, warnings, and errors.
-/// Manages thread-safe text output with color formatting.
+//! # Logging
+//! Provides logging utilities for handling various types of log messages,
+//! including exceptions, informational messages, warnings, and errors.
+//! Manages thread-safe text output with color formatting.
 
 const std = @import("std");
 
@@ -14,7 +14,7 @@ const Spinlock = @import("Spinlock.zig");
 
 /// Buffer used for formatting log messages before output.
 var buff: [1024]u8 = undefined;
-/// Spinlock to ensure that logging is thread-safe by preventing concurrent access to the `buff`.
+/// Spinlock to ensure that logging is thread-safe.
 var lock = Spinlock.init(Spinlock.UNLOCKED);
 
 /// Logs an exception message.

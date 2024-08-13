@@ -1,7 +1,7 @@
-/// # Virtual Memory Management
-/// This file provides an interface for virtual memory management in the system.
-/// It includes various memory allocators, page table management, and memory mapping
-/// utilities.
+//! # Virtual Memory Management
+//! Provides an interface for virtual memory management in the system.
+//! It includes various memory allocators, page table management, and memory mapping
+//! utilities.
 
 const std = @import("std");
 
@@ -92,7 +92,11 @@ pub fn init() Error!void {
     const mappings = try boot.getMappings();
 
     for (mappings[0..]) |map_entry| {
-        try mmap(map_entry.virt, map_entry.phys, map_entry.pages, map_entry.flags, root_pt);
+        try mmap(
+            map_entry.virt, map_entry.phys,
+            map_entry.pages, map_entry.flags,
+            root_pt
+        );
     }
 
     boot.freeMappings(mappings);
@@ -130,7 +134,6 @@ pub inline fn getPhysDma(address: anytype) @TypeOf(address) {
         else => @compileError(intPtrErrorStr),
     };
 }
-
 
 /// Retrieves the physical address associated with a virtual address by a specific page table.
 ///
@@ -179,7 +182,11 @@ pub inline fn mmio(phys: usize, pages: u32) Error!usize {
 
     const virt = heap.reserve(pages);
 
-    try mmap(virt, phys, pages, .{ .write = true, .global = true, .cache_disable = true }, root_pt);
+    try mmap(
+        virt, phys, pages,
+        .{ .write = true, .global = true, .cache_disable = true },
+        root_pt
+    );
 
     return virt;
 }

@@ -1,7 +1,7 @@
-/// # Page Allocator
-/// Implements a buddy page allocator for managing physical pages of memory.
-/// Provides functions for allocating and freeing pages, 
-/// and accessing the status of the free/used physical memory.
+//! # Page Allocator
+//! Implements a buddy page allocator for managing physical pages of memory.
+//! Provides functions for allocating and freeing pages, 
+//! and accessing the status of the free/used physical memory.
 
 const std = @import("std");
 

@@ -1,8 +1,8 @@
-/// # Spinlock
-/// Provides a basic spinlock implementation using atomic operations. 
-/// A spinlock is a synchronization primitive used to protect shared resources 
-/// from concurrent access by multiple threads in a multiprocessor environment.
-/// It "spins" in a loop, repeatedly checking if the lock is available.
+//! # Spinlock
+//! Provides a basic spinlock implementation using atomic operations. 
+//! A spinlock is a synchronization primitive used to protect shared resources 
+//! from concurrent access by multiple threads in a multiprocessor environment.
+//! It "spins" in a loop, repeatedly checking if the lock is available.
 
 const atomic = @import("std").atomic;
 const AtomicOrder = @import("std").builtin.AtomicOrder;

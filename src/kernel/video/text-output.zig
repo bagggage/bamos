@@ -1,6 +1,6 @@
-/// # Text Output Module
-/// Responsible for managing and rendering text output to the framebuffer,
-/// handling cursor position, and rendering characters using a `comptime` font.
+//! # Text Output Module
+//! Responsible for managing and rendering text output to the framebuffer,
+//! handling cursor position, and rendering characters using a `comptime` font.
 
 const std = @import("std");
 const builtin = @import("builtin");
