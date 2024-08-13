@@ -1,5 +1,11 @@
+//! # x86-64 Registers
+//! 
+//! Provides access to various x86-64 CPU registers, Global/Interrupt Descriptor Tables (GDT/IDT). 
+//! It includes functions for reading/writing MSRs and saving/restoring CPU state.
+
 const std = @import("std");
 
+// Model-Specific Register (MSR) addresses.
 pub const MSR_EFER = 0xC0000080;
 pub const MSR_STAR = 0xC0000081;
 pub const MSR_LSTAR = 0xC0000082;
@@ -10,10 +16,16 @@ pub const MSR_GS_BASE = 0xC0000101;
 pub const MSR_SWAPGS_BASE = 0xC0000102;
 pub const MSR_APIC_BASE = 0x1B;
 
-pub const IDTR = packed struct { limit: u16, base: u64 };
+/// Interrupt Descriptor Table Register.
+pub const IDTR = packed struct {
+    limit: u16 = undefined,
+    base: u64 = undefined
+};
 
+/// Global Descriptor Table Register.
 pub const GDTR = IDTR;
 
+/// Represents the Extended Feature Enable Register.
 pub const EFER = packed struct {
     syscall_ext: u1,
     reserved_1: u7,
@@ -40,15 +52,37 @@ pub const ScratchRegs = extern struct {
     r11: u64 = 0,
 };
 
-pub const CalleeRegs = extern struct { rbx: u64 = 0, rbp: u64 = 0, r12: u64 = 0, r13: u64 = 0, r14: u64 = 0, r15: u64 = 0 };
-pub const InterruptFrame = extern struct { rip: u64 = 0, cs: u64 = 0, rflags: u64 = 0, rsp: u64 = 0, ss: u64 = 0 };
+pub const CalleeRegs = extern struct {
+    rbx: u64 = 0,
+    rbp: u64 = 0,
+    r12: u64 = 0,
+    r13: u64 = 0,
+    r14: u64 = 0,
+    r15: u64 = 0
+};
 
+/// Stack frame that is automatically pushed
+/// when a hardware interrupt occurs.
+pub const InterruptFrame = extern struct {
+    rip: u64 = 0,
+    cs: u64 = 0,
+    rflags: u64 = 0,
+    rsp: u64 = 0,
+    ss: u64 = 0
+};
+
+/// Represents the full state of the CPU during an interrupt, including the 
+/// callee-saved registers, scratch registers, and the interrupt frame.
 pub const IntrState = extern struct {
     callee: CalleeRegs = .{},
     scratch: ScratchRegs = .{},
     intr: InterruptFrame = .{},
 };
 
+/// Read Model-Specific Register.
+/// 
+/// - `msr_addr`: The address of the MSR to read.
+/// - Returns: The value of the MSR.
 pub inline fn getMsr(msr_addr: u32) u64 {
     var value_l: u32 = undefined;
     var value_h: u32 = undefined;
@@ -62,6 +96,10 @@ pub inline fn getMsr(msr_addr: u32) u64 {
     return value_l | (@as(u64, value_h) >> 32);
 }
 
+/// Write Model-Specific Register.
+/// 
+/// - `msr_addr`: The address of the MSR to write.
+/// - `value`: The value to write to the MSR.
 pub inline fn setMsr(msr_addr: u32, value: u64) void {
     const ptr: [*]const u32 = @ptrCast(&value);
 

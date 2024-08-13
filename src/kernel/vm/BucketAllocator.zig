@@ -1,4 +1,10 @@
-/// Bucket object memory allocator.
+//! # Bucket object memory allocator
+//! 
+//! This module implements a simple, fast memory allocator using a bucket-based approach.
+//! Objects are allocated from fixed-size buckets, and each bucket manages memory for a specific object type or size.
+//! 
+//! This allocator is suitable for scenarios where objects of the same size are frequently allocated and freed,
+//! offering low fragmentation and quick allocations.
 
 const std = @import("std");
 
@@ -12,22 +18,38 @@ const Bucket = struct {
     bitmap: utils.Bitmap = undefined,
     alloc_num: usize = 0,
 
+    /// Initializes a new `Bucket`.
+    /// 
+    /// - `bitmap_addr`: The address of the bitmap used for tracking allocations.
+    /// - `capacity`: The number of objects that can be stored in this bucket.
+    /// - `pool_addr`: The virtual address of the memory pool.
     pub fn init(bitmap_addr: usize, capacity: usize, pool_addr: usize) Bucket {
         const bits: [*]u8 = @ptrFromInt(bitmap_addr);
         const bitmap_size = std.math.divCeil(usize, capacity, utils.byte_size) catch unreachable;
 
-        const result = Bucket{ .pool_addr = pool_addr, .bitmap = utils.Bitmap.init(bits[0..bitmap_size], false) };
+        const result = Bucket{
+            .pool_addr = pool_addr,
+            .bitmap = utils.Bitmap.init(bits[0..bitmap_size], false)
+        };
 
         bits[bitmap_size - 1] = @as(u8, 0xFF) << @truncate(capacity % utils.byte_size);
 
         return result;
     }
 
-    pub fn calc_capacity(pages: u32, obj_size: u32) u32 {
+    /// Calculates the maximum capacity of a bucket based on the number of pages and object size.
+    /// 
+    /// - `pages`: The number of pages allocated for the bucket.
+    /// - `obj_size`: The size of the objects to be stored in the bucket.
+    /// - Returns: The number of objects that can be stored in the bucket.
+    pub fn calcCapacity(pages: u32, obj_size: u32) u32 {
         var capacity: u32 = ((pages * vm.page_size) - @sizeOf(BucketNode)) / obj_size;
         var bitmap_size: u32 = std.math.divCeil(u32, capacity, utils.byte_size) catch unreachable;
 
-        while ((utils.calcAlign(u32, (capacity * obj_size) + bitmap_size, @alignOf(BucketNode)) + @sizeOf(BucketNode)) >
+        // Adjust the capacity to ensure the bucket fits within the allocated pages.
+        while ((utils.calcAlign(
+            u32, (capacity * obj_size) + bitmap_size,
+            @alignOf(BucketNode)) + @sizeOf(BucketNode)) >
             (pages * vm.page_size))
         {
             capacity -= 1;
@@ -37,7 +59,11 @@ const Bucket = struct {
         return capacity;
     }
 
-    pub inline fn is_containing_addr(self: *@This(), addr: usize) bool {
+    /// Checks if a given address falls within the memory managed by this bucket.
+    /// 
+    /// - `addr`: The address to check.
+    /// - Returns: `true` if the address is within this bucket's pool, `false` otherwise.
+    pub inline fn isContainingAddr(self: *@This(), addr: usize) bool {
         return (addr >= self.pool_addr and addr < @intFromPtr(self.bitmap.bits.ptr));
     }
 };
@@ -46,10 +72,17 @@ const BucketNode = utils.SList(Bucket).Node;
 const Order = enum { Direct, Reverse };
 
 obj_size: u32 = undefined,
+/// The maximum number of objects that can be stored in a bucket.
 bucket_capacity: u32 = undefined,
 buckets: utils.SList(Bucket) = undefined,
+/// The current allocation order (direct or reverse).
 curr_order: Order = .Direct,
 
+/// Initializes an allocator with a raw memory buffer.
+/// 
+/// - `T`: The type of the objects to be allocated.
+/// - `buf_addr`: The virtual address of the raw memory buffer.
+/// - `buf_pages`: The number of pages in the raw memory buffer.
 pub fn initRaw(comptime T: type, buf_addr: usize, buf_pages: u32) Self {
     var result = initSized(@sizeOf(T), buf_pages);
 
@@ -59,14 +92,29 @@ pub fn initRaw(comptime T: type, buf_addr: usize, buf_pages: u32) Self {
     return result;
 }
 
-pub fn initSized(obj_size: u32, pages_per_bucket: u32) Self {
-    return Self{ .obj_size = obj_size, .bucket_capacity = Bucket.calc_capacity(pages_per_bucket, obj_size) };
+/// Initializes an allocator with a specified object size and pages per bucket.
+/// 
+/// - `obj_size`: The size of the objects to be allocated.
+/// - `pages_per_bucket`: The number of pages to allocate per bucket.
+/// - Returns: An initialized bucket allocator.
+pub fn initSized(obj_size: u32, pages: u32) Self {
+    return Self{
+        .obj_size = obj_size,
+        .bucket_capacity = Bucket.calcCapacity(pages, obj_size)
+    };
 }
 
+/// Initializes an allocator for a specific type.
+/// 
+/// - `T`: The type of the objects to be allocated.
 pub inline fn init(comptime T: type) Self {
     return initSized(T, 1);
 }
 
+/// Initialize a new bucket node from a given pool address.
+/// 
+/// - `pool_addr`: The virtual address of the memory pool.
+/// - Returns: A pointer to the new bucket node.
 pub fn makeNode(self: *Self, pool_addr: usize) *BucketNode {
     const bitmap_size = std.math.divCeil(u32, self.bucket_capacity, utils.byte_size) catch unreachable;
     const bitmap_addr = pool_addr + (self.bucket_capacity * self.obj_size);
@@ -78,6 +126,9 @@ pub fn makeNode(self: *Self, pool_addr: usize) *BucketNode {
     return node;
 }
 
+/// Allocates a new bucket node and adds it to the allocator's list of buckets.
+/// 
+/// - Returns: A pointer to the new bucket node, or `null` if allocation fails.
 pub fn newBucket(self: *Self) ?*BucketNode {
     const pool_size =
         (self.obj_size * self.bucket_capacity) +
@@ -93,6 +144,10 @@ pub fn newBucket(self: *Self) ?*BucketNode {
     return node;
 }
 
+/// Allocates an object.
+/// 
+/// - `T`: The type of the pointer to be returned.
+/// - Returns: A pointer to the allocated object, or `null` if allocation fails.
 pub fn alloc(self: *Self, comptime T: type) ?*T {
     var bucket: ?*BucketNode = self.buckets.first;
 
@@ -121,6 +176,9 @@ pub fn alloc(self: *Self, comptime T: type) ?*T {
     return @ptrFromInt(buck.pool_addr + (obj_idx * self.obj_size));
 }
 
+/// Frees an object and returns it to the allocator.
+/// 
+/// - `obj_ptr`: A pointer to the object to be freed.
 pub fn free(self: *Self, obj_ptr: anytype) void {
     const obj_addr = @intFromPtr(obj_ptr);
 
@@ -132,7 +190,7 @@ pub fn free(self: *Self, obj_ptr: anytype) void {
     while (curr_node) |node| : (curr_node = node.next) {
         const bucket = &node.data;
 
-        if (!bucket.is_containing_addr(obj_addr)) continue;
+        if (!bucket.isContainingAddr(obj_addr)) continue;
 
         const obj_idx = (obj_addr - bucket.pool_addr) / self.obj_size;
 

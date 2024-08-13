@@ -1,3 +1,9 @@
+//! # Boot
+//! 
+//! Responsible for managing the early boot process of the system, 
+//! including memory mapping, framebuffer setup, and providing
+//! information from the bootloader to the kernel.
+
 const c = @cImport({
     @cInclude("stdint.h");
     @cInclude("bootboot.h");
@@ -21,10 +27,18 @@ pub extern "C" const initstack: u32;
 pub extern "C" const kernel_elf_start: u32;
 pub extern "C" const kernel_elf_end: u32;
 
+/// Represents the memory map provided by the bootloader.
+/// Contains memory regions that are categorized by type (`free`, `used`, or `dev` memory).
 pub const MemMap = struct {
     pub const Entry = struct {
-        const Type = enum(u8) { free, dev, used };
+        /// Memory region types.
+        const Type = enum(u8) {
+            free,
+            dev,
+            used
+        };
 
+        /// Base address of the memory region (in pages).
         base: u32,
         pages: u32,
         type: Type,
@@ -33,10 +47,12 @@ pub const MemMap = struct {
     entries: [*]Entry,
     len: u32,
 
+    /// Checks if the memory map is empty.
     pub inline fn isEmpty(self: *const @This()) bool {
         return self.len == 0;
     }
 
+    /// Returns the highest page number in the free memory regions.
     pub inline fn maxPage(self: *const @This()) u32 {
         var i = self.len;
 
@@ -50,6 +66,7 @@ pub const MemMap = struct {
         return 0;
     }
 
+    /// Removes a memory map entry at the specified index.
     pub fn remove(self: *@This(), idx: usize) void {
         self.len -= 1;
 
@@ -61,23 +78,30 @@ pub const MemMap = struct {
     }
 };
 
+/// Represents an entry in the virtual memory mapping table.
 const MappingEntry = struct {
     virt: usize = undefined,
     phys: usize = undefined,
     pages: u32 = undefined,
     flags: vm.MapFlags = undefined,
 
+    /// Initializes a new `MappingEntry`.
     pub fn init(virt: usize, phys: usize, size: usize, flags: vm.MapFlags) MappingEntry {
         const pages = std.math.divCeil(usize, size, vm.page_size) catch unreachable;
 
-        return MappingEntry{ .virt = virt, .phys = phys, .pages = @truncate(pages), .flags = flags };
+        return MappingEntry{
+            .virt = virt, .phys = phys,
+            .pages = @truncate(pages), .flags = flags
+        };
     }
 };
 
+/// A null mapping entry used as a placeholder.
 const mapNull = MappingEntry.init(0, 0, 0, .{});
 
 var mem_map: MemMap = undefined;
 
+/// Converts the BOOTBOOT color format to the internal framebuffer color format.
 fn makeColorFmt(bb_fmt: u8) Framebuffer.ColorFormat {
     return switch (bb_fmt) {
         c.FB_ABGR => .ABGR,
@@ -88,10 +112,21 @@ fn makeColorFmt(bb_fmt: u8) Framebuffer.ColorFormat {
     };
 }
 
+/// Populates the framebuffer structure with information provided by the bootloader.
 pub fn getFb(fb_ptr: *Framebuffer) void {
-    fb_ptr.* = .{ .base = @ptrCast(&fb), .width = bootboot.fb_width, .height = bootboot.fb_height, .scanline = bootboot.fb_scanline / @sizeOf(u32), .format = makeColorFmt(bootboot.fb_type) };
+    fb_ptr.* = .{
+        .base = @ptrCast(&fb),
+        .width = bootboot.fb_width,
+        .height = bootboot.fb_height,
+        .scanline = bootboot.fb_scanline / @sizeOf(u32),
+        .format = makeColorFmt(bootboot.fb_type)
+    };
 }
 
+/// Generates an array of `MappingEntry` structures representing the initial memory mappings.
+/// Use `freeMappings` to free resources after using mappings.
+/// 
+/// - Returns: array of `MappingEntry` or `vm.Error` if memory allocation fails.
 pub inline fn getMappings() vm.Error![]MappingEntry {
     const MMap = MappingEntry;
     const Order = enum { DMA, Fb, Boot, Kernel, Envir, Stack };
@@ -99,44 +134,73 @@ pub inline fn getMappings() vm.Error![]MappingEntry {
     const buffer = vm.PageAllocator.alloc(0) orelse return vm.Error.NoMemory;
     const mappings: [*]MMap = @ptrFromInt(vm.getVirtDma(buffer));
 
-    mappings[@intFromEnum(Order.DMA)] = MMap.init(vm.dma_start, 0x0, vm.dma_size, .{ .write = true, .global = true, .large = true });
-    mappings[@intFromEnum(Order.Fb)] = MMap.init(@intFromPtr(&fb), bootboot.fb_ptr, 16 * utils.mb_size, .{ .write = true, .global = true, .large = true, .cache_disable = true });
-    mappings[@intFromEnum(Order.Boot)] = MMap.init(@intFromPtr(&bootboot), @intFromPtr(vm.getPhys(&bootboot) orelse unreachable), vm.page_size, .{ .write = true, .global = true });
+    mappings[@intFromEnum(Order.DMA)] = MMap.init(
+        vm.dma_start, 0x0, vm.dma_size,
+        .{ .write = true, .global = true, .large = true }
+    );
+    mappings[@intFromEnum(Order.Fb)] = MMap.init(
+        @intFromPtr(&fb), bootboot.fb_ptr, 16 * utils.mb_size,
+        .{ .write = true, .global = true, .large = true, .cache_disable = true }
+    );
+    mappings[@intFromEnum(Order.Boot)] = MMap.init(
+        @intFromPtr(&bootboot), @intFromPtr(vm.getPhys(&bootboot) orelse unreachable),
+        vm.page_size, .{ .write = true, .global = true }
+    );
 
     const kernel_elf_size = @intFromPtr(&kernel_elf_end) - @intFromPtr(&kernel_elf_start);
 
-    mappings[@intFromEnum(Order.Kernel)] = MMap.init(@intFromPtr(&kernel_elf_start), @intFromPtr(vm.getPhys(&kernel_elf_start) orelse unreachable), kernel_elf_size, .{ .write = true, .global = true, .exec = true });
-    mappings[@intFromEnum(Order.Envir)] = MMap.init(@intFromPtr(&environment), @intFromPtr(vm.getPhys(&environment) orelse unreachable), vm.page_size, .{ .write = true, .global = true });
+    mappings[@intFromEnum(Order.Kernel)] = MMap.init(
+        @intFromPtr(&kernel_elf_start), @intFromPtr(vm.getPhys(&kernel_elf_start) orelse unreachable),
+        kernel_elf_size, .{ .write = true, .global = true, .exec = true }
+    );
+    mappings[@intFromEnum(Order.Envir)] = MMap.init(
+        @intFromPtr(&environment), @intFromPtr(vm.getPhys(&environment) orelse unreachable),
+        vm.page_size, .{ .write = true, .global = true }
+    );
 
     const stack_size = @intFromPtr(&initstack);
-    const stack_pages = std.math.divCeil(usize, bootboot.numcores * stack_size, vm.page_size) catch unreachable;
+    const stack_pages = std.math.divCeil(
+        usize, bootboot.numcores * stack_size, vm.page_size
+    ) catch unreachable;
     const stack_base = std.math.maxInt(usize) - vm.page_size + 1;
 
     for (0..stack_pages) |page_idx| {
         const base = stack_base - (page_idx * vm.page_size);
 
-        mappings[@intFromEnum(Order.Stack) + page_idx] = MMap.init(base, vm.getPhys(base) orelse unreachable, vm.page_size, .{ .write = true, .global = true });
+        mappings[@intFromEnum(Order.Stack) + page_idx] = MMap.init(
+            base, vm.getPhys(base) orelse unreachable,
+            vm.page_size, .{ .write = true, .global = true }
+        );
     }
 
     return mappings[0 .. @intFromEnum(Order.Stack) + stack_pages];
 }
 
+/// Frees the memory allocated for the mapping entries.
 pub inline fn freeMappings(mappings: []MappingEntry) void {
     vm.PageAllocator.free(@intFromPtr(vm.getPhysDma(mappings.ptr)), 0);
 }
 
+/// Returns a pointer to the memory map.
 pub inline fn getMemMap() *const MemMap {
     return &mem_map;
 }
 
+/// Returns the number of CPU cores detected by the bootloader.
 pub inline fn getCpusNum() u16 {
     return bootboot.numcores;
 }
 
+/// Returns a pointer to the architecture-specific data provided by the bootloader.
 pub inline fn getArchData() @TypeOf(&bootboot.arch) {
     return &bootboot.arch;
 }
 
+/// Allocates a block of physical memory of the specified size (in pages)
+/// from the memory map.
+/// 
+/// - `pages`: number of pages to allocate.
+/// - Returns: physical address of the memory block or `null` if allocation fails.
 pub fn alloc(pages: u32) ?usize {
     if (vm.PageAllocator.isInitialized()) {
         @panic(
@@ -164,12 +228,14 @@ pub fn alloc(pages: u32) ?usize {
     return null;
 }
 
+/// Converts the memory map pointers to DMA-capable virtual addresses.
 pub inline fn switchToDma() void {
     mem_map.entries = vm.getVirtDma(mem_map.entries);
 }
 
 var _debug_offset: u32 = 0;
 
+/// A simple debug function that fills the framebuffer with a white line.
 pub fn debug() void {
     const dest: [*]u32 = @ptrCast(&fb);
     const start = _debug_offset;
@@ -180,12 +246,15 @@ pub fn debug() void {
     @memset(dest[start..end], 0xFFFFFFFF);
 }
 
+/// Calculates the size of the memory map by determining the number of entries.
 inline fn calcMmapSize() usize {
     return (@as(usize, bootboot.size) -
         (@intFromPtr(&bootboot.mmap) -
         @intFromPtr(&bootboot))) / @sizeOf(c.MMapEnt);
 }
 
+
+/// Allocates memory early in the boot process before the full memory map is initialized.
 fn earlyAlloc(pages: u32) ?usize {
     const len = calcMmapSize();
     const entries: [*]c.MMapEnt = @ptrCast(&bootboot.mmap);
@@ -204,6 +273,7 @@ fn earlyAlloc(pages: u32) ?usize {
     return null;
 }
 
+/// Initializes the memory map by processing entries provided by the bootloader.
 fn initMemMap() void {
     mem_map.len = @truncate(calcMmapSize());
 

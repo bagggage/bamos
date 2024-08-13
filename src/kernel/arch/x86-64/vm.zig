@@ -130,12 +130,7 @@ pub inline fn logPt(pt: *const PageTable) void {
 
 const LogPt = struct {
     const prefixies = [_][]const u8{ "", "|---", "|---|---", "|---|---|---" };
-    const size_strs = [_][]const u8{
-        "",
-        "GB",
-        "MB",
-        "KB",
-    };
+    const size_strs = [_][]const u8{ "", "GB", "MB", "KB" };
     const size_steps = [_]usize{ 0, utils.gb_size, utils.mb_size * 2, utils.kb_size * 4 };
     const size_units = [_]u8{ 0, 1, 2, 4 };
 };
@@ -177,11 +172,21 @@ fn logPte(pte: *const PageTableEntry, len: u16, level: u3) void {
     const prefix = LogPt.prefixies[level];
 
     if (len > 1) {
-        log.warn("{s}P{} [{}-{}]: 0x{x}->0x{x} {} {s}", .{ prefix, 4 - level, pte_idx, pte_idx + len - 1, pte.getBase(), pte.getBase() + ((len - 1) * LogPt.size_steps[level]), LogPt.size_units[level] * len, LogPt.size_strs[level] });
+        log.warn("{s}P{} [{}-{}]: 0x{x}->0x{x} {} {s}", .{
+            prefix, 4 - level, pte_idx, pte_idx + len - 1,
+            pte.getBase(), pte.getBase() + ((len - 1) * LogPt.size_steps[level]),
+            LogPt.size_units[level] * len, LogPt.size_strs[level]
+        });
     } else if (level != 3 and pte.size == 0) {
-        log.warn("{s}P{} [{}]: 0x{x}->0x{x}", .{ prefix, 4 - level, pte_idx, vm.getPhysDma(@intFromPtr(pte)), pte.getBase() });
+        log.warn("{s}P{} [{}]: 0x{x}->0x{x}", .{
+            prefix, 4 - level, pte_idx,
+            vm.getPhysDma(@intFromPtr(pte)), pte.getBase()
+        });
     } else {
-        log.warn("{s}P{} [{}] -> 0x{x} {} {s}", .{ prefix, 4 - level, pte_idx, pte.getBase(), LogPt.size_units[level], LogPt.size_strs[level] });
+        log.warn("{s}P{} [{}] -> 0x{x} {} {s}", .{
+            prefix, 4 - level, pte_idx, pte.getBase(),
+            LogPt.size_units[level], LogPt.size_strs[level]
+        });
     }
 }
 
@@ -195,7 +200,10 @@ fn earlyMmapDma() void {
     const pte: *PageTableEntry = &pt[p4_idx];
     pte.* = PageTableEntry.init(@intFromPtr(pt3), vm.MapFlags{ .write = true });
 
-    var template_pte = PageTableEntry.init(0, vm.MapFlags{ .write = true, .global = true, .large = true });
+    var template_pte = PageTableEntry.init(
+        0,
+        vm.MapFlags{ .write = true, .global = true, .large = true }
+    );
     const len = dma_size / utils.gb_size;
     const gb_pages = utils.gb_size / vm.page_size;
 
@@ -345,7 +353,8 @@ fn correctMmapFlags(flags: vm.MapFlags, virt: usize, phys: usize, pages: u32) vm
 
     if (flags.large) {
         if (pages < pages_per_2mb or
-            (virt % (2 * utils.mb_size) != 0 or phys % (2 * utils.mb_size) != 0)) result.large = false;
+            (virt % (2 * utils.mb_size) != 0 or
+            phys % (2 * utils.mb_size) != 0)) result.large = false;
     }
 
     return result;

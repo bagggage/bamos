@@ -1,8 +1,14 @@
 //! # Object Memory Allocator
+//! 
 //! Provides an implementation for a memory allocator that manages objects
 //! in a virtual memory system. It uses arenas to allocate and free memory for objects of 
 //! a specific size. The allocator ensures that memory is efficiently reused by utilizing a 
 //! free list for deallocated objects.
+//! 
+//! This allocator is particularly fast and not prone to fragmentation.
+//! The additional memory overhead is practically nonexistent, except for allocating a few bytes per arena.
+//! 
+//! Best choise for allocating objects of the same size.
 
 const std = @import("std");
 
