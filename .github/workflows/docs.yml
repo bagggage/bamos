@@ -1,0 +1,25 @@
+name: Build and deploy documentation.
+on:
+  push:
+    branches:
+      - zig
+jobs:
+  deploy:
+    permissions:
+      pages: write
+      contents: write
+      id-token: write
+
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build docs
+        uses: goto-bus-stop/setup-zig@v2
+        run: zig build docs
+
+      - name: Deploy
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: docs

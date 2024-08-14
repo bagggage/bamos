@@ -76,10 +76,78 @@ pub fn build(b: *std.Build) void {
 
     kernel_step.dependOn(&kernel_install.step);
 
-    const docs_install = b.addInstallDirectory(.{
-        .source_dir = kernel_obj.getEmittedDocs(),
-        .install_dir = .{ .prefix = {} },
-        .install_subdir = "docs"
+    const docs_install = makeDocs(b);
+    docs_step.dependOn(docs_install);
+}
+
+fn makeDocs(b: *std.Build) *std.Build.Step {
+    const html_file = b.addInstallFileWithDir(
+        b.path(src_path++"/docs/index.html"),
+        .{ .custom = "../docs" },
+        "index.html"
+    );
+    const js_file = b.addInstallFileWithDir(
+        b.path(src_path++"/docs/main.js"),
+        .{ .custom = "../docs" },
+        "main.js"
+    );
+
+    const wasm = b.addExecutable(.{
+        .name = "main",
+        .root_source_file = b.path(src_path++"/docs/wasm/main.zig"),
+        .target = b.resolveTargetQuery(.{
+            .cpu_arch = .wasm32,
+            .os_tag = .freestanding,
+            .cpu_features_add = std.Target.wasm.featureSet(&.{
+                .atomics,
+                .bulk_memory,
+                // .extended_const, not supported by Safari
+                .multivalue,
+                .mutable_globals,
+                .nontrapping_fptoint,
+                .reference_types,
+                //.relaxed_simd, not supported by Firefox or Safari
+                .sign_ext,
+                // observed to cause Error occured during wast conversion :
+                // Unknown operator: 0xfd058 in Firefox 117
+                //.simd128,
+                // .tail_call, not supported by Safari
+            })
+        }),
+        .optimize = .ReleaseSmall,
+        .strip = false
     });
-    docs_step.dependOn(&docs_install.step);
+    wasm.rdynamic = true;
+    wasm.entry = std.Build.Step.Compile.Entry.disabled;
+
+    const wasm_install = b.addInstallArtifact(wasm, .{
+        .dest_dir = .{ .override = .{ .custom = "../docs" } },
+        .dest_sub_path = "main.wasm",
+    });
+
+    const tar_maker = b.addExecutable(.{
+        .name = "tar-maker",
+        .root_source_file = b.path(src_path++"/docs/tar/main.zig"),
+        .target = b.host,
+        .optimize = .ReleaseFast,
+        .strip = true
+    });
+    var tar_run = b.addRunArtifact(tar_maker);
+    tar_run.addArg("-o");
+    const tar_file = tar_run.addOutputFileArg("sources.tar");
+    tar_run.addArg("-src");
+    tar_run.addDirectoryArg(b.path(src_path++"/kernel"));
+    tar_run.addArgs(&.{"-n", "bamos"});
+
+    const tar_install = b.addInstallFileWithDir(
+        tar_file,
+        .{ .custom = "../docs" },
+        "sources.tar"
+    );
+
+    tar_install.step.dependOn(&wasm_install.step);
+    tar_install.step.dependOn(&js_file.step);
+    tar_install.step.dependOn(&html_file.step);
+
+    return &tar_install.step;
 }
