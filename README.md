@@ -1,14 +1,22 @@
 # BamOS
 
-BamOS is an open-source operating system project written in the Zig programming language. BamOS does not introduce new standards but strives for the best possible implementation of existing ones.
+It is an open-source operating system project written in the Zig programming language.
+
+BamOS does not introduce new standards but strives for the best possible implementation of existing ones.
 
 ## Overview
 
-The main feature and goal of this project is to develop a lightweight and extremely fast operating system with a well-documented, concise, and simple codebase, as much as possible. It aims to include native support for multiple system ABIs between the kernel and user space (GNU/Linux, Windows NT, etc.) simultaneously. This should significantly improve the user experience and simplify the work for software developers.
+The main feature and goal of this project is to develop a lightweight and extremely fast operating system with a well-documented, concise, and simple codebase, as much as possible.
+
+It aims to include native support for multiple system ABIs between the kernel and user space (GNU/Linux, Windows NT, etc.) simultaneously. This should significantly improve the user experience and simplify the work for software developers.
 
 ## Why Zig?
 
-Despite the familiar and established languages like C/C++ or the possibly safer Rust, our choice is Zig. Zig is simple enough to be more maintainable than Rust while offering a safer and more functional alternative to C/C++. Zig allows generating high-speed and optimized machine code, and one of its main advantages is the build system, which makes the compilation process seamless and incredibly simple. To create a kernel executable, all you need is the source code, the Zig compiler, and the command `zig build kernel`.
+Despite the familiar and established languages like C/C++ or the possibly safer Rust, our choice is Zig.
+
+Zig is simple enough to be more maintainable than Rust while offering a safer and more functional alternative to C/C++. Zig allows generating high-speed and optimized machine code, and one of its main advantages is the build system, which makes the compilation process seamless and incredibly simple.
+
+To create a kernel executable, all you need is the source code, the Zig compiler, and the command `zig build kernel`.
 
 ## Documentation
 
