@@ -76,10 +76,10 @@ var root_pt: *PageTable = undefined;
 var heap = Heap.init(heap_start);
 
 /// Initializes the virtual memory management system. Must be called only once.
-///
+/// 
 /// This function sets up the PageAllocator, ObjectAllocator's system and the architecture-specific
 /// virtual memory system. It also maps initial memory regions based on the kernel's memory mappings.
-///
+/// 
 /// - Returns: An error if the initialization fails.
 pub fn init() Error!void {
     try ObjectAllocator.initOmaSystem();
@@ -107,7 +107,7 @@ const intPtrErrorStr = "Only integer and pointer types are acceptable";
 
 /// Translates a physical address to a virtual (DMA) address.
 /// This is the fastest address transalition.
-///
+/// 
 /// - `address`: The physical address to translate.
 /// - Returns: The translated virtual address.
 pub inline fn getVirtDma(address: anytype) @TypeOf(address) {
@@ -122,7 +122,7 @@ pub inline fn getVirtDma(address: anytype) @TypeOf(address) {
 
 /// Translates a virtual address of the direct memory access (DMA) region to a physical.
 /// Can be used only with address returned from `getVirtDma`, UB otherwise.
-///
+/// 
 /// - `address`: The virtual address to translate.
 /// - Returns: The translated physical address.
 pub inline fn getPhysDma(address: anytype) @TypeOf(address) {
@@ -136,7 +136,7 @@ pub inline fn getPhysDma(address: anytype) @TypeOf(address) {
 }
 
 /// Retrieves the physical address associated with a virtual address by a specific page table.
-///
+/// 
 /// - `address`: The virtual address to translate.
 /// - `pt`: The page table to use for translation.
 /// - Returns: The corresponding physical address or `null` if the address isn't mapped.
@@ -164,7 +164,7 @@ pub inline fn getPhysPt(address: anytype, pt: *const PageTable) ?@TypeOf(address
 }
 
 /// Retrieves the physical address associated with a virtual address using the current page table.
-///
+/// 
 /// - `address`: The virtual address to translate.
 /// - Returns: The corresponding physical address or `null` if the address isn't mapped.
 pub inline fn getPhys(address: anytype) ?@TypeOf(address) {
@@ -173,7 +173,7 @@ pub inline fn getPhys(address: anytype) ?@TypeOf(address) {
 
 /// Maps a physical memory to a virtual address in the cache disabled MMIO (Memory-Mapped I/O) space.
 /// Should be used for memory mapped registers and other devices memory.
-///
+/// 
 /// - `phys`: The physical address to map.
 /// - `pages`: The number of pages to map.
 /// - Returns: The virtual address where the region is mapped or an error if the operation fails.
@@ -192,7 +192,7 @@ pub inline fn mmio(phys: usize, pages: u32) Error!usize {
 }
 
 /// Unmaps a previously mapped MMIO (Memory-Mapped I/O) region.
-///
+/// 
 /// - `virt`: The virtual address returned by `mmio`.
 /// - `pages`: The number of pages, must be the same as in `mmio` call.
 pub inline fn unmmio(virt: usize, pages: u32) void {
@@ -206,7 +206,7 @@ pub inline fn unmmio(virt: usize, pages: u32) void {
 
 /// Allocates new page table and maps all neccessary kernel units.
 /// Kernel mapping is optimized by coping a few entries from top level table of `root_pt`. 
-///
+/// 
 /// - Returns: A pointer to the new page table or `null` if allocation fails.
 pub inline fn newPt() ?*PageTable {
     const pt = allocPt() orelse return null;
