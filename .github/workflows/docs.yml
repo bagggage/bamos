@@ -2,7 +2,9 @@ name: Build and deploy documentation.
 on:
   push:
     branches:
-      - zig
+      - main
+    paths:
+      - 'src/**'
 
   workflow_dispatch:
 
