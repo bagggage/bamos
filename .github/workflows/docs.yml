@@ -15,8 +15,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build docs
+      - name: Install Zig
         uses: goto-bus-stop/setup-zig@v2
+
+      - name: Build documentation
         run: zig build docs
 
       - name: Deploy
