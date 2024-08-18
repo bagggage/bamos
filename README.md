@@ -1,12 +1,16 @@
-# BamOS
+<p align="center">
+  <a href="https://bagggage.github.io/bamos/" target="_blank" rel="noopener noreferrer"><img src="logo.svg" width="472" alt="BamOS Logo"></a>
+</p>
 
-It is an open-source operating system project written in the Zig programming language.
+---
 
-BamOS does not introduce new standards but strives for the best possible implementation of existing ones.
+It is an **open-source** operating system project written in the Zig programming language.
+
+BamOS does not introduce new standards but strives for the **best** possible implementation of existing ones.
 
 ## Overview
 
-The main feature and goal of this project is to develop a lightweight and extremely fast operating system with a well-documented, concise, and simple codebase, as much as possible.
+The main feature and goal of this project is to develop a **lightweight** and **extremely fast** operating system with a **well-documented**, **concise**, and **simple** codebase, as much as possible.
 
 It aims to include native support for multiple system ABIs between the kernel and user space (GNU/Linux, Windows NT, etc.) simultaneously. This should significantly improve the user experience and simplify the work for software developers.
 
