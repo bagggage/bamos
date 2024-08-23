@@ -10,6 +10,7 @@ const c = @cImport({
 });
 
 const std = @import("std");
+const builtin = @import("builtin");
 const log = @import("log.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
@@ -192,8 +193,20 @@ pub inline fn getCpusNum() u16 {
 }
 
 /// Returns a pointer to the architecture-specific data provided by the bootloader.
-pub inline fn getArchData() @TypeOf(&bootboot.arch) {
-    return &bootboot.arch;
+pub inline fn getArchData() ArchDataType() {
+    return switch (builtin.cpu.arch) {
+        .aarch64 => &bootboot.arch.aarch64,
+        .x86_64 => &bootboot.arch.x86_64,
+        else => unreachable
+    };
+}
+
+fn ArchDataType() type {
+    return switch (builtin.cpu.arch) {
+        .aarch64 => @TypeOf(&bootboot.arch.aarch64),
+        .x86_64 => @TypeOf(&bootboot.arch.x86_64),
+        else => unreachable
+    };
 }
 
 /// Allocates a block of physical memory of the specified size (in pages)

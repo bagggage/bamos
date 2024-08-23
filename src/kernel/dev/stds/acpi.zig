@@ -41,7 +41,7 @@ pub const XSDT = extern struct {
 var sdt: *XSDT = undefined;
 
 pub fn init() void {
-    sdt = @ptrFromInt(boot.getArchData().x86_64.acpi_ptr);
+    sdt = @ptrFromInt(boot.getArchData().acpi_ptr);
     sdt = vm.getVirtDma(sdt);
 }
 
