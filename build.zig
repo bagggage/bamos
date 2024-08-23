@@ -7,6 +7,14 @@ pub fn build(b: *std.Build) void {
     const kernel_step = b.step("kernel", "Build the kernel");
     const docs_step = b.step("docs", "Generate documentation");
 
+    const kernel_install = makeKernel(b);
+    kernel_step.dependOn(kernel_install);
+
+    const docs_install = makeDocs(b);
+    docs_step.dependOn(docs_install);
+}
+
+fn makeKernel(b: *std.Build) *std.Build.Step {
     const target = b.resolveTargetQuery(.{
         .os_tag = .freestanding,
         .cpu_arch = .x86_64,
@@ -74,10 +82,7 @@ pub fn build(b: *std.Build) void {
         .dest_dir = .{ .override = .{ .custom = dest_path } }
     });
 
-    kernel_step.dependOn(&kernel_install.step);
-
-    const docs_install = makeDocs(b);
-    docs_step.dependOn(docs_install);
+    return &kernel_install.step;
 }
 
 fn makeDocs(b: *std.Build) *std.Build.Step {
