@@ -8,12 +8,19 @@
         font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
         font-size: medium;
         color: #000000;
+        margin: auto;
+        max-width: 90%;
+        width: 70vmax;
       }
       .hidden {
         display: none;
       }
       a {
         color: #2A6286;
+        text-decoration: none;
+        line-height: 1.7em;
+        font-size: 1.0em;
+        font-weight: 500;
       }
       pre{
         font-family: "Source Code Pro",monospace;
@@ -25,6 +32,8 @@
         border-radius: 0.3em;
         display: list-item;
         white-space: pre-wrap;
+        border-style: solid;
+        border-width: 1px;
       }
       code {
         font-family:"Source Code Pro",monospace;
@@ -133,6 +142,7 @@
         display: block;
         color: #000;
         text-align: center;
+        line-height: normal;
         padding: .5em .8em;
         text-decoration: none;
       }
@@ -249,23 +259,14 @@
         body {
           background-color: #1C1D1F;
           color: #d2dbde;
-          margin: auto;
-          max-width: 90%;
-          width: 70vmax;
         }
         pre {
           background-color: #17191a;
           border-color: #38393b;
-          border-style: solid;
-          border-width: 1px;
           color: #d2dbde;
         }
         a {
           color: #209eff;
-          text-decoration: none;
-          line-height: 1.7em;
-          font-size: 1.0em;
-          font-weight: 500;
         }
         code a {
           color: #ccc;
@@ -280,7 +281,6 @@
           background-color: #333;
         }
         #listNav li a {
-          line-height: normal;
           color: #fff;
         }
         #listNav li a:hover {
@@ -302,34 +302,34 @@
           text-decoration: underline;
         }
         #listFields code a, #listParams code a, #fnProto code a {
-            color: #34ceaf;
+          color: #34ceaf;
         }
         dl > div {
           border-color: #373737;
         }
         .tok-kw {
-            color: #398dd3;
+          color: #398dd3;
         }
         .tok-str {
-            color: #d9966a;
+          color: #d9966a;
         }
         .tok-builtin {
-            color: #ff9c6a;
+          color: #ff9c6a;
         }
         .tok-comment {
-            color: #6A9955;
+          color: #6A9955;
         }
         .tok-fn {
-            color: #dcdc8f;
+          color: #dcdc8f;
         }
         .tok-null {
-            color: #ff8080;
+          color: #ff8080;
         }
         .tok-number {
-            color: #9ecb86;
+          color: #9ecb86;
         }
         .tok-type {
-            color: #34ceaf;
+          color: #34ceaf;
         }
       }
     </style>
