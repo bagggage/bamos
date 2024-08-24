@@ -64,6 +64,8 @@ const Arena = struct {
     /// Usually puts new entry into `free_list`.
     /// But if this object was the last allocated just decrements the `next_ptr`.
     /// 
+    /// This function should not be used externally, see `freeRaw` instead.
+    /// 
     /// - `self`: Pointer to the `Arena`.
     /// - `obj_addr`: The address of the object to free.
     /// - `obj_size`: The size of the object to free.
@@ -207,20 +209,43 @@ pub fn free(self: *Self, obj_ptr: anytype) void {
     }
 
     const obj_addr = @intFromPtr(obj_ptr);
-    const arena_size: usize = (@as(u32, 1) << @truncate(self.arena_rank)) * vm.page_size;
+    const arena = self.contains(obj_addr) orelse unreachable;
 
+    self.freeRaw(arena, obj_addr);
+}
+
+/// Frees object in arena without additional checks.
+/// This function provides implementation-dependent API to free objects
+/// and should be used instead of `Arena.free` in pair with `contains`.
+/// 
+/// - `arena`: Arena node that belongs to the allocator instance.
+/// - `obj_addr`: Address of the object, managed by the arena, to free.
+pub inline fn freeRaw(self: *Self, arena: *ArenaNode, obj_addr: usize) void {
+    arena.data.free(obj_addr, self.obj_size);
+
+    if (arena.data.alloc_num == 0) self.deleteArena(arena);
+}
+
+/// Find allocator's arena that manage the address.
+/// 
+/// - `addr`: The address of the object.
+/// - Returns: Pointer to the arena if the address is managed by the allocator, `null` otherwise.
+pub inline fn contains(self: *const Self, addr: usize) ?*ArenaNode {
     var node = self.arenas.first;
+    const arena_size = self.getArenaSize();
 
     while (node) |arena| : (node = arena.next) {
-        if (arena.data.contains(obj_addr, arena_size)) {
-            arena.data.free(obj_addr, self.obj_size);
-
-            if (arena.data.alloc_num == 0) self.deleteArena(arena);
-            return;
+        if (arena.data.contains(addr, arena_size)) {
+            return arena;
         }
     }
 
-    unreachable;
+    return null;
+}
+
+/// Returns the arena size in bytes for the current allocator.
+inline fn getArenaSize(self: *const Self) usize {
+    return (@as(u32, 1) << @truncate(self.arena_rank)) * vm.page_size;
 }
 
 /// Creates a new arena and initializes it with a given physical memory pool.
