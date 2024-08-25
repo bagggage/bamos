@@ -23,7 +23,7 @@ fn default_cmp_fn(comptime T: type) utils.CmpFnType(T) {
 /// Binary tree data structure for managing elements of type `T`.
 /// The binary tree uses a comparison function to maintain its order and provides
 /// various operations for inserting, removing, and searching for elements.
-///
+/// 
 /// - `T`: The type of data stored in the binary tree nodes.
 /// - `cmp_func`: An optional comparison function for ordering the elements in the tree. 
 ///   If `null`, a default comparison function is used.
@@ -107,7 +107,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
 
             /// Removes this node from the tree. The tree structure is maintained by
             /// promoting a child node to replace the removed node if necessary.
-            ///
+            /// 
             /// - `parent`: The parent of this node, or `null` if this node is the root.
             /// - Returns: The removed node.
             pub fn remove(self: *Node, parent: ?*Node) *Node {
@@ -140,7 +140,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
         root: ?*Node = null,
 
         /// Inserts a new node into the binary tree, maintaining the tree's order.
-        ///
+        /// 
         /// - `node`: A pointer to the node to insert.
         pub fn insert(self: *Self, node: *Node) void {
             if (self.root) |root| {
@@ -229,7 +229,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
         }
 
         /// Removes a node with a value equal to `val` from the tree.
-        ///
+        /// 
         /// - `val`: The value of the node to remove (can be a raw value or a pointer).
         /// - Returns: The removed node, or `null` if no node with the specified value was found.
         pub inline fn remove(self: *Self, val: anytype) ?*Node {
@@ -256,7 +256,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
         }
 
         /// Finds a node with a value equal to `val` in the tree.
-        ///
+        /// 
         /// - `val`: The value to search for (can be a raw value or a pointer).
         /// - Returns: A pointer to the found node, or `null` if no node with the specified value was found.
         pub inline fn find(self: *const Self, val: anytype) ?*Node {
@@ -264,7 +264,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
         }
 
         /// Finds the node with the maximum value in the entire tree.
-        ///
+        /// 
         /// - Returns: A pointer to the node with the maximum value, or `null` if the tree is empty.
         pub inline fn findMax(self: *const Self) ?*Node {
             const root = self.root orelse return null;
@@ -272,7 +272,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
         }
 
         /// Finds the node with the minimum value in the entire tree.
-        ///
+        /// 
         /// - Returns: A pointer to the node with the minimum value, or `null` if the tree is empty.
         pub inline fn findMin(self: *const Self) ?*Node {
             const root = self.root orelse return null;

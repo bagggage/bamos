@@ -43,7 +43,6 @@ const Arena = struct {
     /// Allocates memory for an object of size `obj_size`.
     /// First try to get free entry from the `free_list`, only then uses `next_ptr`.
     /// 
-    /// - `self`: Pointer to the `Arena`.
     /// - `obj_size`: The size of the object to allocate.
     /// - Returns: The address of the allocated object.
     pub fn alloc(self: *Arena, obj_size: usize) usize {
@@ -66,7 +65,6 @@ const Arena = struct {
     /// 
     /// This function should not be used externally, see `freeRaw` instead.
     /// 
-    /// - `self`: Pointer to the `Arena`.
     /// - `obj_addr`: The address of the object to free.
     /// - `obj_size`: The size of the object to free.
     pub fn free(self: *Arena, obj_addr: usize, obj_size: usize) void {
@@ -82,7 +80,6 @@ const Arena = struct {
 
     /// Checks if an address belongs to this `Arena`.
     /// 
-    /// - `self`: Pointer to the `Arena`.
     /// - `obj_addr`: The address to check.
     /// - `pool_size`: The size of the memory pool.
     /// - Returns: `true` if the address is within the arena's range, `false` otherwise.
@@ -172,7 +169,6 @@ pub fn initRaw(obj_size: usize, pool_phys: usize, pool_pages: u32) vm.Error!Self
 
 /// Allocates memory for an object and cast it to pointer of type `T`.
 /// 
-/// - `self`: Pointer to the allocator.
 /// - `T`: The type of pointer.
 /// - Returns: A pointer to the allocated object, or `null` if allocation fails.
 pub fn alloc(self: *Self, comptime T: type) ?*T {
@@ -197,8 +193,7 @@ pub fn alloc(self: *Self, comptime T: type) ?*T {
 /// Frees the memory of an object.
 /// Invalid object pointer causes UB.
 /// 
-/// - `self`: Pointer to the allocator.
-/// - `obj_ptr`: The pointer to the object to free.
+/// - `obj_ptr`: Pointer to the object to free.
 pub fn free(self: *Self, obj_ptr: anytype) void {
     comptime {
         const type_info = @typeInfo(@TypeOf(obj_ptr));
@@ -229,7 +224,7 @@ pub inline fn freeRaw(self: *Self, arena: *ArenaNode, obj_addr: usize) void {
 /// Find allocator's arena that manage the address.
 /// 
 /// - `addr`: The address of the object.
-/// - Returns: Pointer to the arena if the address is managed by the allocator, `null` otherwise.
+/// - Returns: A pointer to the arena if the address is managed by the allocator, `null` otherwise.
 pub inline fn contains(self: *const Self, addr: usize) ?*ArenaNode {
     var node = self.arenas.first;
     const arena_size = self.getArenaSize();
@@ -261,7 +256,6 @@ fn makeArena(pool_phys: usize) ?*ArenaNode {
 
 /// Allocates and initializes a new arena for the allocator.
 /// 
-/// - `self`: Pointer to the allocator.
 /// - Returns: A pointer to the newly created `ArenaNode`, or `null` if allocation fails.
 fn newArena(self: *Self) ?*ArenaNode {
     const node = arenas_alloc.alloc(ArenaNode) orelse return null;
@@ -280,7 +274,6 @@ fn newArena(self: *Self) ?*ArenaNode {
 
 /// Deletes an arena and frees its memory.
 /// 
-/// - `self`: Pointer to the allocator.
 /// - `arena`: Pointer to the `ArenaNode` to delete.
 fn deleteArena(self: *Self, arena: *ArenaNode) void {
     self.arenas.remove(arena);

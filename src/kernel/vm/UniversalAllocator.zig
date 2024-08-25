@@ -89,7 +89,7 @@ pub inline fn alloc(size: usize) ?*void {
 }
 
 /// Frees a previously allocated block of memory pointed to by `mem`.
-///
+/// 
 /// - `mem`: A pointer to the memory block to free, or `null` (which is ignored).
 pub inline fn free(mem: ?*void) void {
     if (mem == null) return;
@@ -124,7 +124,7 @@ pub inline fn free(mem: ?*void) void {
 
 /// Allocates a small block of memory of the specified `size` using the appropriate object 
 /// allocator from the `oma_pool`.
-///
+/// 
 /// - `size`: The size of the small memory block to allocate.
 /// - Returns: A pointer to the allocated memory block, or `null` if the allocation fails.
 fn allocSmall(size: u32) ?*void {
@@ -137,7 +137,7 @@ fn allocSmall(size: u32) ?*void {
 /// 
 /// This involves allocating memory pages and managing the allocation
 /// within the `huge_alloc_tree`.
-///
+/// 
 /// - `size`: The size of the large memory block to allocate.
 /// - Returns: A pointer to the allocated memory block, or `null` if the allocation fails.
 fn allocHuge(size: u32) ?*void {
@@ -168,9 +168,9 @@ fn allocHuge(size: u32) ?*void {
 
 /// Initializes the pool of small object allocators (`oma_pool`) based on the size range 
 /// from `min_size` to `max_small_size`.
-///
+/// 
 /// This function is called only once in compile time.
-///
+/// 
 /// - Returns: A fixed-size array of initialized `vm.ObjectAllocator` instances.
 fn init_oma_pool() [oma_pool_len]vm.ObjectAllocator {
     var result: [oma_pool_len]vm.ObjectAllocator = undefined;

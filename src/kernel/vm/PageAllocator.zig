@@ -91,7 +91,7 @@ pub fn init() vm.Error!void {
 /// Allocates a linear block of physical memory of the specified rank (size).
 /// 
 /// - `rank`: Determines the number of pages as `2^rank`.
-/// - Returns: the physical address of the allocated pages, or `null` if allocation fails.
+/// - Returns: The physical address of the allocated pages, or `null` if allocation fails.
 pub fn alloc(rank: u32) ?usize {
     std.debug.assert(rank < max_rank);
 
