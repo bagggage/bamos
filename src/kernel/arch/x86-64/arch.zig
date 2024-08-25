@@ -8,9 +8,11 @@ const log = @import("../../log.zig");
 const lapic = @import("lapic.zig");
 const regs = @import("regs.zig");
 const intr = @import("intr.zig");
+const utils = @import("../../utils.zig");
 
 const Spinlock = @import("../../Spinlock.zig");
 
+pub const io = @import("io.zig");
 pub const vm = @import("vm.zig");
 
 pub const CPUID_GET_FEATURE = 1;
@@ -74,7 +76,8 @@ fn initCpu(is_initial: bool) void {
         \\xgetbv
         \\or $7,%%rax
         \\xsetbv
-        ::: "rcx", "rax", "rdx");
+        ::: "rcx", "rax", "rdx"
+    );
 
     if (is_initial) {
         vm.preinit();
@@ -85,6 +88,6 @@ fn initCpu(is_initial: bool) void {
     }
 
     var gdtr: regs.GDTR = regs.getGdtr();
-    gdtr.base += vm.dma_start;
+    gdtr.base += vm.lma_start;
     regs.setGdtr(gdtr);
 }

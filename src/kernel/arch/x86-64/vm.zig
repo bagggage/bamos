@@ -12,11 +12,14 @@ pub const page_table_size = 512;
 pub const invalid_phys = 0xF000000000000000;
 pub const invalid_virt = invalid_phys;
 
-pub const dma_start = 0xFFFF800000000000;
-pub const dma_size = utils.gb_size * 256;
-pub const dma_end = dma_start + dma_size;
+/// Linear Memory Access (LMA) region start address.
+pub const lma_start = 0xFFFF800000000000;
+/// Linear Memory Access (LMA) region size address.
+pub const lma_size = utils.gb_size * 256;
+/// Linear Memory Access (LMA) region end address.
+pub const lma_end = lma_start + lma_size;
 
-pub const heap_start = dma_end + utils.gb_size;
+pub const heap_start = lma_end + utils.gb_size;
 
 const pt_pool_pages = 512;
 const pages_per_2mb = (utils.mb_size * 2) / page_size;
@@ -108,14 +111,14 @@ pub inline fn getPt() *PageTable {
 }
 
 pub inline fn setPt(pt: *const PageTable) void {
-    const pt_phys = vm.getPhysDma(@intFromPtr(pt));
+    const pt_phys = vm.getPhysLma(@intFromPtr(pt));
     const cr3 = pt_phys | (regs.getCr3() & @as(u64, 0xFFF));
 
     regs.setCr3(cr3);
 }
 
 pub inline fn clonePt(src_pt: *const PageTable, dest_pt: *PageTable) void {
-    const dma_pte_idx = comptime getPxeIdx(3, dma_start);
+    const dma_pte_idx = comptime getPxeIdx(3, lma_start);
     const heap_pte_idx = comptime getPxeIdx(3, heap_start);
     const kernel_pte_idx = comptime getPxeIdx(3, @intFromPtr(&clonePt));
 
@@ -180,7 +183,7 @@ fn logPte(pte: *const PageTableEntry, len: u16, level: u3) void {
     } else if (level != 3 and pte.size == 0) {
         log.warn("{s}P{} [{}]: 0x{x}->0x{x}", .{
             prefix, 4 - level, pte_idx,
-            vm.getPhysDma(@intFromPtr(pte)), pte.getBase()
+            vm.getPhysLma(@intFromPtr(pte)), pte.getBase()
         });
     } else {
         log.warn("{s}P{} [{}] -> 0x{x} {} {s}", .{
@@ -191,8 +194,8 @@ fn logPte(pte: *const PageTableEntry, len: u16, level: u3) void {
 }
 
 fn earlyMmapDma() void {
-    const pt = vm.getPhysDma(getPt());
-    const p4_idx = getPxeIdx(3, dma_start);
+    const pt = vm.getPhysLma(getPt());
+    const p4_idx = getPxeIdx(3, lma_start);
 
     const pt3: *PageTable = @ptrFromInt(boot.alloc(1).?);
     @memset(@as(*[page_table_size]u64, @ptrCast(pt3))[0..page_table_size], 0);
@@ -204,7 +207,7 @@ fn earlyMmapDma() void {
         0,
         vm.MapFlags{ .write = true, .global = true, .large = true }
     );
-    const len = dma_size / utils.gb_size;
+    const len = lma_size / utils.gb_size;
     const gb_pages = utils.gb_size / vm.page_size;
 
     for (pt3[0..len]) |*entry| {
@@ -266,7 +269,7 @@ pub fn mmap(virt: usize, phys: usize, pages: u32, flags: vm.MapFlags, page_table
                 pte[0] = template_pte;
                 pte[0].size = 0;
                 pte[0].global = 0;
-                pte[0].base = @truncate(@intFromPtr(vm.getPhysDma(new_pt)) / page_size);
+                pte[0].base = @truncate(@intFromPtr(vm.getPhysLma(new_pt)) / page_size);
             } else if (pte[0].size == 1) {
                 // Remap large page
                 try remapLarge(&pte[0], pt_idx == 1);
@@ -366,7 +369,7 @@ fn remapLarge(pte: *PageTableEntry, is_gb_page: bool) vm.Error!void {
 
     const pt = allocPt() orelse return vm.Error.NoMemory;
 
-    pte.base = @truncate(@intFromPtr(vm.getPhysDma(pt)) / page_size);
+    pte.base = @truncate(@intFromPtr(vm.getPhysLma(pt)) / page_size);
     pte.size = 0;
     pte.global = 0;
 

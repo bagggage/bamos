@@ -305,7 +305,7 @@ inline fn entGetBase(node: *FreeNode) u32 {
 
 /// Gets the physical address of a free node.
 inline fn entGetPhys(node: *FreeNode) usize {
-    return vm.getPhysDma(@intFromPtr(node));
+    return vm.getPhysLma(@intFromPtr(node));
 }
 
 inline fn clearPageBit(base: u32, rank: u32) void {

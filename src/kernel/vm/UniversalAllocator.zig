@@ -95,7 +95,7 @@ pub inline fn free(mem: ?*void) void {
     if (mem == null) return;
 
     const addr: usize = @intFromPtr(mem.?);
-    const phys = vm.getPhysDma(addr);
+    const phys = vm.getPhysLma(addr);
 
     // Try to dealloc as huge region
     if ((phys % vm.page_size) == 0) {

@@ -136,7 +136,7 @@ pub inline fn getMappings() vm.Error![]MappingEntry {
     const mappings: [*]MMap = @ptrFromInt(vm.getVirtDma(buffer));
 
     mappings[@intFromEnum(Order.DMA)] = MMap.init(
-        vm.dma_start, 0x0, vm.dma_size,
+        vm.lma_start, 0x0, vm.lma_size,
         .{ .write = true, .global = true, .large = true }
     );
     mappings[@intFromEnum(Order.Fb)] = MMap.init(
@@ -179,7 +179,7 @@ pub inline fn getMappings() vm.Error![]MappingEntry {
 
 /// Frees the memory allocated for the mapping entries.
 pub inline fn freeMappings(mappings: []MappingEntry) void {
-    vm.PageAllocator.free(@intFromPtr(vm.getPhysDma(mappings.ptr)), 0);
+    vm.PageAllocator.free(@intFromPtr(vm.getPhysLma(mappings.ptr)), 0);
 }
 
 /// Returns a pointer to the memory map.

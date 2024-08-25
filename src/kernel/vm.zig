@@ -1,4 +1,5 @@
 //! # Virtual Memory Management
+//! 
 //! Provides an interface for virtual memory management in the system.
 //! It includes various memory allocators, page table management, and memory mapping
 //! utilities.
@@ -15,9 +16,9 @@ const log = @import("log.zig");
 pub const page_size = arch.vm.page_size;
 /// The start virtual address of the kernel in memory.
 pub const kernel_start = &boot.kernel_elf_start;
-pub const dma_start = arch.vm.dma_start;
-pub const dma_size = arch.vm.dma_size;
-pub const dma_end = arch.vm.dma_end;
+pub const lma_start = arch.vm.lma_start;
+pub const lma_size = arch.vm.lma_size;
+pub const lma_end = arch.vm.lma_end;
 /// The start address of the kernel heap.
 pub const heap_start = arch.vm.heap_start;
 
@@ -77,7 +78,7 @@ var heap = Heap.init(heap_start);
 
 /// Initializes the virtual memory management system. Must be called only once.
 /// 
-/// This function sets up the PageAllocator, ObjectAllocator's system and the architecture-specific
+/// This function sets up the `PageAllocator`, `ObjectAllocator's` system and the architecture-specific
 /// virtual memory system. It also maps initial memory regions based on the kernel's memory mappings.
 /// 
 /// - Returns: An error if the initialization fails.
@@ -105,32 +106,32 @@ pub fn init() Error!void {
 
 const intPtrErrorStr = "Only integer and pointer types are acceptable";
 
-/// Translates a physical address to a virtual (DMA) address.
+/// Translates a physical address to a virtual (LMA) address.
 /// This is the fastest address transalition.
 /// 
 /// - `address`: The physical address to translate.
 /// - Returns: The translated virtual address.
-pub inline fn getVirtDma(address: anytype) @TypeOf(address) {
+pub inline fn getVirtLma(address: anytype) @TypeOf(address) {
     const typeInfo = @typeInfo(@TypeOf(address));
 
     return switch (typeInfo) {
-        .Int, .ComptimeInt => address + arch.vm.dma_start,
-        .Pointer => @ptrFromInt(@intFromPtr(address) + arch.vm.dma_start),
+        .Int, .ComptimeInt => address + lma_start,
+        .Pointer => @ptrFromInt(@intFromPtr(address) + lma_start),
         else => @compileError(intPtrErrorStr),
     };
 }
 
-/// Translates a virtual address of the direct memory access (DMA) region to a physical.
-/// Can be used only with address returned from `getVirtDma`, UB otherwise.
+/// Translates a virtual address of the linear memory access (LMA) region to a physical.
+/// Can be used only with address returned from `getVirtLma`, UB otherwise.
 /// 
 /// - `address`: The virtual address to translate.
 /// - Returns: The translated physical address.
-pub inline fn getPhysDma(address: anytype) @TypeOf(address) {
+pub inline fn getPhysLma(address: anytype) @TypeOf(address) {
     const type_info = @typeInfo(@TypeOf(address));
 
     return switch (type_info) {
-        .Int, .ComptimeInt => address - dma_start,
-        .Pointer => @ptrFromInt(@intFromPtr(address) - dma_start),
+        .Int, .ComptimeInt => address - lma_start,
+        .Pointer => @ptrFromInt(@intFromPtr(address) - lma_start),
         else => @compileError(intPtrErrorStr),
     };
 }
@@ -153,7 +154,7 @@ pub inline fn getPhysPt(address: anytype, pt: *const PageTable) ?@TypeOf(address
         else => address,
     };
 
-    if (virt >= dma_start and virt < dma_end) return getPhysDma(address);
+    if (virt >= lma_start and virt < lma_end) return getPhysLma(address);
 
     const phys = arch.vm.getPhys(virt, pt) orelse return null;
 
