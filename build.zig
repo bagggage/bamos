@@ -15,12 +15,15 @@ pub fn build(b: *std.Build) void {
 }
 
 fn makeKernel(b: *std.Build) *std.Build.Step {
+    const arch = b.option(std.Target.Cpu.Arch, "arch", "The target CPU architecture");
+    const optimize = b.standardOptimizeOption(.{});
+    const emitAsm = b.option(bool, "emit-asm", "Generate assembler code file");
+
     const target = b.resolveTargetQuery(.{
         .os_tag = .freestanding,
-        .cpu_arch = .x86_64,
+        .cpu_arch = arch orelse .x86_64,
         .ofmt = .elf
     });
-    const optimize = b.standardOptimizeOption(.{});
 
     const dbg_module = b.addModule("dbg-info", .{
         .root_source_file = b.path(src_path++"/debug-maker/dbg.zig"),
@@ -37,8 +40,8 @@ fn makeKernel(b: *std.Build) *std.Build.Step {
         .target = target,
         .code_model = .kernel,
         .pic = true,
+        .error_tracing = false,
     });
-
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
     kernel_obj.addIncludePath(b.path("third-party/boot"));
 
@@ -72,6 +75,7 @@ fn makeKernel(b: *std.Build) *std.Build.Step {
         .optimize = optimize,
         .target = target,
         .code_model = .kernel,
+        .strip = false,
         .pic = true,
     });
     kernel_exe.addObject(kernel_obj);
@@ -81,6 +85,13 @@ fn makeKernel(b: *std.Build) *std.Build.Step {
     const kernel_install = b.addInstallArtifact(kernel_exe, .{
         .dest_dir = .{ .override = .{ .custom = dest_path } }
     });
+
+    if (emitAsm) |value| {
+        if (value) {
+            const asm_install = b.addInstallFile(kernel_obj.getEmittedAsm(), "kernel.asm");
+            kernel_install.step.dependOn(&asm_install.step);
+        }
+    }
 
     return &kernel_install.step;
 }
