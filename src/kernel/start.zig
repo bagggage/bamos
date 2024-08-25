@@ -1,5 +1,6 @@
-//! Entry Point for the kernel.
+//! Low-level entry point for the kernel.
 
+/// High-level entry point for the kernel.
 extern fn main() noreturn;
 
 /// The `_start` function delegates to the `startImpl` function, defined in the architecture-specific 

@@ -1,4 +1,5 @@
 //! # Logging
+//! 
 //! Provides logging utilities for handling various types of log messages,
 //! including exceptions, informational messages, warnings, and errors.
 //! Manages thread-safe text output with color formatting.
@@ -48,13 +49,13 @@ pub fn rawLog(comptime fmt: []const u8, args: anytype, color: video.Color) void 
     defer lock.unlock();
 
     const formated = std.fmt.bufPrint(&buff, fmt ++ "\n\x00", args) catch |erro| {
+        const error_name = @errorName(erro);
+        const error_str = error_name[0..];
+
         text_output.setColor(video.Color.orange);
         text_output.print("[LOGGER]: ");
         text_output.setColor(video.Color.lred);
         text_output.print("Formating failed: ");
-
-        const error_name = @errorName(erro);
-        const error_str = error_name[0..];
 
         text_output.print(error_str);
         text_output.print("\n");
