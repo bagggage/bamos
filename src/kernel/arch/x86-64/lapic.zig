@@ -37,7 +37,7 @@ pub inline fn init() void {
     }
 
     base = @ptrFromInt(@as(usize, madt.lapic_base));
-    base = vm.getVirtDma(base);
+    base = vm.getVirtLma(base);
 
     // Set enabled APIC in MSR
     regs.setMsr(regs.MSR_APIC_BASE, regs.getMsr(regs.MSR_APIC_BASE) | APIC_ENABLED);

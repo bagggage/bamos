@@ -71,7 +71,7 @@ pub fn init() vm.Error!void {
     const bitmap_pages = math.divCeil(u32, bitmap_size, vm.page_size) catch unreachable;
 
     const mem_pool = boot.alloc(bitmap_pages) orelse return vm.Error.NoMemory;
-    const virt_pool = vm.getVirtDma(mem_pool);
+    const virt_pool = vm.getVirtLma(mem_pool);
 
     logger.warn("BPA: mem pool size: {} KB", .{@as(usize, bitmap_pages) * (vm.page_size / utils.kb_size)});
 
@@ -292,7 +292,7 @@ inline fn getNode(phys_base: u32) *FreeNode {
 /// - `phys_base`: Index of the first physical page in a linear block.
 inline fn makeNode(phys_base: u32) *FreeNode {
     const phys_addr = @as(usize, phys_base) * vm.page_size;
-    const node_addr = vm.getVirtDma(phys_addr);
+    const node_addr = vm.getVirtLma(phys_addr);
     const node: *FreeNode = @ptrFromInt(node_addr);
 
     return node;

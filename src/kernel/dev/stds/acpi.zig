@@ -42,7 +42,7 @@ var sdt: *XSDT = undefined;
 
 pub fn init() void {
     sdt = @ptrFromInt(boot.getArchData().acpi_ptr);
-    sdt = vm.getVirtDma(sdt);
+    sdt = vm.getVirtLma(sdt);
 }
 
 pub fn findEntry(signature: *const [4:0]u8) ?*SDTHeader {

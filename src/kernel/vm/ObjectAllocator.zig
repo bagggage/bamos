@@ -37,7 +37,7 @@ const Arena = struct {
     /// 
     /// - `phys_pool`: The physical memory address of the pool.
     pub fn init(phys_pool: usize) Arena {
-        return Arena{ .pool_base = @truncate(phys_pool / vm.page_size), .next_ptr = vm.getVirtDma(phys_pool) };
+        return Arena{ .pool_base = @truncate(phys_pool / vm.page_size), .next_ptr = vm.getVirtLma(phys_pool) };
     }
 
     /// Allocates memory for an object of size `obj_size`.
@@ -115,7 +115,7 @@ pub fn initOmaSystem() vm.Error!void {
     comptime std.debug.assert(std.math.isPowerOfTwo(pool_pages));
 
     const mem_pool = boot.alloc(pool_pages) orelse return vm.Error.NoMemory;
-    const virt_pool = vm.getVirtDma(mem_pool);
+    const virt_pool = vm.getVirtLma(mem_pool);
 
     arenas_alloc = vm.BucketAllocator.initRaw(ArenaNode, virt_pool, pool_pages);
 }

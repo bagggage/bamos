@@ -67,7 +67,7 @@ const PageTableEntry = packed struct {
     }
 
     pub inline fn nextPt(self: *const @This()) *PageTable {
-        return @ptrFromInt(vm.getVirtDma(@as(usize, self.base) * page_size));
+        return @ptrFromInt(vm.getVirtLma(@as(usize, self.base) * page_size));
     }
 
     pub fn prioritizeFlags(self: *@This(), flags: vm.MapFlags) void {
@@ -84,7 +84,7 @@ var pt_oma: vm.ObjectAllocator = undefined;
 
 pub fn preinit() void {
     earlyMmapDma();
-    boot.switchToDma();
+    boot.switchToLma();
 }
 
 pub fn init() vm.Error!void {
@@ -107,7 +107,7 @@ pub inline fn freePt(pt: *PageTable) void {
 
 pub inline fn getPt() *PageTable {
     const pt: *PageTable = @ptrFromInt(regs.getCr3() & (~@as(usize, 0xFFF)));
-    return vm.getVirtDma(pt);
+    return vm.getVirtLma(pt);
 }
 
 pub inline fn setPt(pt: *const PageTable) void {

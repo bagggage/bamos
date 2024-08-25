@@ -133,7 +133,7 @@ pub inline fn getMappings() vm.Error![]MappingEntry {
     const Order = enum { DMA, Fb, Boot, Kernel, Envir, Stack };
 
     const buffer = vm.PageAllocator.alloc(0) orelse return vm.Error.NoMemory;
-    const mappings: [*]MMap = @ptrFromInt(vm.getVirtDma(buffer));
+    const mappings: [*]MMap = @ptrFromInt(vm.getVirtLma(buffer));
 
     mappings[@intFromEnum(Order.DMA)] = MMap.init(
         vm.lma_start, 0x0, vm.lma_size,
@@ -242,8 +242,8 @@ pub fn alloc(pages: u32) ?usize {
 }
 
 /// Converts the memory map pointers to DMA-capable virtual addresses.
-pub inline fn switchToDma() void {
-    mem_map.entries = vm.getVirtDma(mem_map.entries);
+pub inline fn switchToLma() void {
+    mem_map.entries = vm.getVirtLma(mem_map.entries);
 }
 
 var _debug_offset: u32 = 0;
