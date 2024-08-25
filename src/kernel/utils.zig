@@ -7,6 +7,18 @@ pub const arch = switch (builtin.cpu.arch) {
 };
 
 pub const Bitmap = @import("utils/Bitmap.zig");
+pub const BinaryTree = @import("utils/binary-tree.zig").BinaryTree;
+
+pub const CmpResult = enum {
+    less,
+    equals,
+    great
+};
+
+pub fn CmpFnType(comptime T: type) type {
+    return fn(*const T, *const T) CmpResult;
+}
+
 pub const List = std.DoublyLinkedList;
 pub const SList = std.SinglyLinkedList;
 pub const Heap = @import("utils/Heap.zig");
