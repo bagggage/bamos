@@ -19,7 +19,7 @@ pub inline fn outl(dword: u32, port: u16) void {
 pub inline fn inb(port: u16) u8 {
     var res: u8 = undefined;
 
-    asm("inb %[p],%[d]":[r]"={al}"(res):[p]"{dx}"(port));
+    asm("inb %[p],%[r]":[r]"={al}"(res):[p]"{dx}"(port));
     return res;
 }
 
@@ -27,7 +27,7 @@ pub inline fn inb(port: u16) u8 {
 pub inline fn inw(port: u32) u16 {
     var res: u16 = undefined;
 
-    asm("inw %[p],%[d]":[r]"={ax}"(res):[p]"{dx}"(port));
+    asm("inw %[p],%[r]":[r]"={ax}"(res):[p]"{dx}"(port));
     return res;
 }
 
@@ -35,6 +35,6 @@ pub inline fn inw(port: u32) u16 {
 pub inline fn inl(port: u32) u32 {
     var res: u32 = undefined;
 
-    asm("inl %[p],%[d]":[r]"={eax}"(res):[p]"{dx}"(port));
+    asm("inl %[p],%[r]":[r]"={eax}"(res):[p]"{dx}"(port));
     return res;
 }

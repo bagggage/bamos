@@ -39,7 +39,7 @@ pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
 
     var it = std.debug.StackIterator.init(@returnAddress(), @frameAddress());
 
-    if (it.next() != null) trace(&it);
+    trace(&it);
 
     utils.halt();
 }
@@ -50,12 +50,18 @@ pub fn trace(it: *std.debug.StackIterator) void {
     text_output.setColor(video.Color.lyellow);
     text_output.print("\n[TRACE]:\n");
 
-    while (it.next()) |ret_addr| {
+    var i: usize = 1;
+
+    while (it.next()) |ret_addr| : (i += 1) {
         const symbol = addrToSym(ret_addr);
-        const sym_name = if (symbol) |sym| sym.name else "UNKNOWN";
+        const sym_name = if (symbol) |sym| sym.name else "<unknown>";
         const addr_offset = if (symbol) |sym| ret_addr - sym.addr else 0;
 
-        _ = std.fmt.bufPrint(&fmt_buffer, "0x{x}: {s}+0x{x}\n\x00", .{ ret_addr, sym_name, addr_offset }) catch unreachable;
+        _ = std.fmt.bufPrint(
+            &fmt_buffer,
+            "{:2}. 0x{x:0<16}: {s}+0x{x}\n\x00",
+            .{ i, ret_addr, sym_name, addr_offset }
+        ) catch unreachable;
 
         text_output.print(&fmt_buffer);
     }

@@ -34,7 +34,7 @@ pub inline fn startImpl() noreturn {}
 /// 
 /// - Code execution continues on only one CPU core.
 /// - Early handling of hardware exceptions is enabled for the current core.
-/// - The DMA region is accessible, and `boot.switchToDma()` has been called.
+/// - The LMA region is accessible, and `boot.switchToLma()` has been called.
 /// - The I/O subsystem functions are available.
 /// - The core functions of the `arch` module are available.
 /// - Everything necessary is configured and ready for further initialization

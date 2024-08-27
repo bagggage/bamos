@@ -20,6 +20,7 @@ pub const CPUID_GET_FEATURE = 1;
 var init_lock = Spinlock.init(Spinlock.UNLOCKED);
 var is_initial_cpu = true;
 
+/// `_start` implementation
 pub inline fn startImpl() void {
     asm volatile (
         \\push 0x0
@@ -28,8 +29,8 @@ pub inline fn startImpl() void {
 }
 
 /// Ensure that only one CPU is performing the initialization at a time.
-/// If the CPU is the initial one, it will proceed to initialization. If not, it waits until 
-/// the initialization lock is available.
+/// If the CPU is the initial one, it will proceed to initialization.
+/// If not, it waits until the initialization lock is available.
 pub fn preinit() void {
     init_lock.lock();
 
@@ -51,23 +52,47 @@ pub inline fn getCpuIdx() u32 {
 }
 
 /// Wait for initialization to complete.
-fn waitForInit() void {
+inline fn waitForInit() void {
     init_lock.lock();
     init_lock.unlock();
+
+    initCpu(false);
 }
 
 /// This function initializes the CPU's essential features and settings, such as enabling the 
-/// No-Execute (NX) bit, system call extensions, and AVX (Advanced Vector Extensions).
+/// No-Execute bit, system call extensions, and AVX.
 /// 
-/// If the CPU is the initial CPU, it also performs additional system-wide initialization, 
-/// including preinitializing the virtual memory (VM) system, the interrupt system, and etc.
-fn initCpu(is_initial: bool) void {
+/// If the CPU is the initial CPU, it also performs additional
+/// preinitializing the virtual memory system, the interrupt system, and etc.
+fn initCpu(comptime is_initial: bool) void {
+    enableExtentions();
+    enableAvx();
+
+    if (is_initial) initPrimaryCpu();
+
+    gdtSwitchToLma();
+}
+
+inline fn initPrimaryCpu() void {
+    vm.preinit();
+    intr.preinit();
+
+    acpi.init();
+    lapic.init();
+}
+
+/// Enables kernel needed CPUs extentions
+/// - syscall/sysret
+/// - non-executable pages
+inline fn enableExtentions() void {
     var efer = regs.getEfer();
     efer.noexec_enable = 1;
     efer.syscall_ext = 1;
     regs.setEfer(efer);
-
-    // Enable AVX
+}
+ 
+/// Enable AVX
+inline fn enableAvx() void {
     asm volatile (
         \\mov %%cr4,%%rax
         \\or $0x40600,%%rax
@@ -78,15 +103,10 @@ fn initCpu(is_initial: bool) void {
         \\xsetbv
         ::: "rcx", "rax", "rdx"
     );
+}
 
-    if (is_initial) {
-        vm.preinit();
-        intr.preinit();
-
-        acpi.init();
-        lapic.init();
-    }
-
+/// Translate GDT base in GDTR to LMA virtual address
+inline fn gdtSwitchToLma() void {
     var gdtr: regs.GDTR = regs.getGdtr();
     gdtr.base += vm.lma_start;
     regs.setGdtr(gdtr);
