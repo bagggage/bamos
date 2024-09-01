@@ -91,7 +91,7 @@ pub inline fn alloc(size: usize) ?*void {
 /// Frees a previously allocated block of memory pointed to by `mem`.
 /// 
 /// - `mem`: A pointer to the memory block to free, or `null` (which is ignored).
-pub inline fn free(mem: ?*void) void {
+pub fn free(mem: ?*void) void {
     if (mem == null) return;
 
     const addr: usize = @intFromPtr(mem.?);
