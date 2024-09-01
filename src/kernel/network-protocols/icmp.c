@@ -161,8 +161,8 @@ void icmpv4_handle_packet(const NetworkDevice* const network_device, const IcmpV
     }
 }
 
-bool_t icmpv4_send_echo_request(const NetworkDevice* const network_device, const uint8_t* const data,
-                            const uint8_t data_size, const uint8_t destination_ip[IPV4_ADDRESS_SIZE]) {
+bool_t icmpv4_send_echo_request(const NetworkDevice* const network_device, const uint8_t destination_ip[IPV4_ADDRESS_SIZE],
+                                const uint8_t data_size, const uint8_t* const data) {
     kassert(network_device != NULL && data != NULL);
 
     if (allocate_icmpv4() == FALSE) return FALSE;
@@ -203,7 +203,7 @@ bool_t icmpv4_send_timestamp_request(const NetworkDevice* const network_device, 
 
     global_icmpv4_packet->checksum = 0;
     global_icmpv4_packet->checksum = flip_short(calculate_internet_checksum(global_icmpv4_packet,
-                                                sizeof(global_icmpv4_packet) + 3 * TIMESTAMP_SIZE));
+        sizeof(global_icmpv4_packet) + 3 * TIMESTAMP_SIZE));
 
     bool_t status = ipv4_send_packet(network_device, IpProtocolIcmpType, destination_ip,
                                      sizeof(global_icmpv4_packet) + 3 * TIMESTAMP_SIZE, global_icmpv4_packet);
