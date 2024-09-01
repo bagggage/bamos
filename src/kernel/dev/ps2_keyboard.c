@@ -2,11 +2,11 @@
 
 #include "logger.h"
 #include "mem.h"
+#include "utils.h"
 
 #include "cpu/io.h"
 
 #include "dev/keyboard.h"
-#include "dev/timer.h"
 
 // for more info see PS/2 commands
 typedef enum Commands {
@@ -254,19 +254,6 @@ typedef enum PS2ScanCode {
     PS2_SCAN_CODE_PAUSE = 0xE1,
     PS2_SCAN_CODE_NONE = 0xFA
 } PS2ScanCode;
-
-static void wait(uint64_t delay_ms) {
-    TimerDevice* timer = (TimerDevice*)dev_find_by_type(NULL, DEV_TIMER);
-
-    if (timer == NULL) return;
-
-    uint64_t begin_time_ms = (timer->interface.get_clock_counter(timer) * timer->min_clock_time) * PS_TO_MS;
-    uint64_t curr_time_ms = begin_time_ms;
-
-    do {
-        curr_time_ms = (timer->interface.get_clock_counter(timer) * timer->min_clock_time) * PS_TO_MS;
-    } while ((curr_time_ms - begin_time_ms) < delay_ms);  
-}
 
 Status init_ps2_keyboard(KeyboardDevice* keyboard_device) {
     if (keyboard_device == NULL) return KERNEL_ERROR;
