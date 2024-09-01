@@ -91,6 +91,7 @@ pub fn init() Error!void {
     root_pt = allocPt() orelse return Error.NoMemory;
 
     const mappings = try boot.getMappings();
+    defer boot.freeMappings(mappings);
 
     for (mappings[0..]) |map_entry| {
         try mmap(
@@ -100,7 +101,6 @@ pub fn init() Error!void {
         );
     }
 
-    boot.freeMappings(mappings);
     setPt(root_pt);
 }
 

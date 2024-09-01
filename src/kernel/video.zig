@@ -1,4 +1,5 @@
 //! # Video Module
+//! 
 //! This module provides functionality related to video output, including text drawing.
 
 pub const text_output = @import("video/text-output.zig");

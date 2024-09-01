@@ -7,6 +7,7 @@ const builtin = @import("builtin");
 
 const boot = @import("../boot.zig");
 const log = @import("../log.zig");
+const serial = @import("../dev/serial.zig");
 const vm = @import("../vm.zig");
 
 const Framebuffer = @import("Framebuffer.zig");
@@ -71,19 +72,19 @@ pub fn init() void {
 
     const buf_pages = std.math.divCeil(usize, buffer.len, vm.page_size) catch unreachable;
     const buf_addr = boot.alloc(@truncate(buf_pages)) orelse unreachable;
-    buffer.ptr = @ptrFromInt(vm.getVirtDma(buf_addr));
+    buffer.ptr = @ptrFromInt(vm.getVirtLma(buf_addr));
     @memset(buffer, 0);
 
     const color_buf_pages = std.math.divCeil(usize, color_buf.len * @sizeOf(u32), vm.page_size) catch unreachable;
     const color_buf_addr = boot.alloc(@truncate(color_buf_pages)) orelse unreachable;
-    color_buf.ptr = @ptrFromInt(vm.getVirtDma(color_buf_addr));
+    color_buf.ptr = @ptrFromInt(vm.getVirtLma(color_buf_addr));
     @memset(color_buf, curr_col);
 
     font_tex.len = (font.glyphs.len / font.charsize) * (font.height * font.width);
     const texture_pages = std.math.divCeil(usize, font_tex.len * @sizeOf(u32), vm.page_size) catch unreachable;
     const texture_addr = boot.alloc(@truncate(texture_pages)) orelse unreachable;
 
-    font_tex.ptr = @ptrFromInt(vm.getVirtDma(texture_addr));
+    font_tex.ptr = @ptrFromInt(vm.getVirtLma(texture_addr));
     renderFont(font_tex);
 
     is_initialized = true;
@@ -122,9 +123,13 @@ pub fn print(str: []const u8) void {
         buffer[idx] = char;
 
         if (char == '\n') {
+            serial.write("\r\n");
+
             cursor.nextRow();
             continue;
         }
+
+        serial.put(char);
 
         drawChar(char, cursor.row, cursor.col);
 
