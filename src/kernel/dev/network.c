@@ -1,6 +1,6 @@
 #include "network.h"
 
-uint8_t client_ipv4[IPV4_ADDRESS_SIZE] = { 192, 168, 0, 121 };
+uint8_t client_ipv4[IPV4_ADDRESS_SIZE] = { 0, 0, 0, 0 };
 
 uint8_t** dns_servers_ipv4 = NULL;
 size_t dns_servers_count = 0;
