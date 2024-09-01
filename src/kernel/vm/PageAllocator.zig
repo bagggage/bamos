@@ -11,7 +11,7 @@ const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 const logger = @import("../log.zig");
 
-const Spinlock = @import("../Spinlock.zig");
+const Spinlock = utils.Spinlock;
 
 /// Represents a free memory area in the buddy allocator. 
 /// It maintains a list of free nodes and a bitmap for tracking free pages.

@@ -11,7 +11,7 @@ const text_output = video.text_output;
 const utils = @import("utils.zig");
 const video = @import("video.zig");
 
-const Spinlock = @import("Spinlock.zig");
+const Spinlock = utils.Spinlock;
 
 /// Buffer used for formatting log messages before output.
 var buff: [1024]u8 = undefined;

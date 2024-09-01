@@ -10,7 +10,7 @@ const regs = @import("regs.zig");
 const intr = @import("intr.zig");
 const utils = @import("../../utils.zig");
 
-const Spinlock = @import("../../Spinlock.zig");
+const Spinlock = utils.Spinlock;
 
 pub const io = @import("io.zig");
 pub const vm = @import("vm.zig");
