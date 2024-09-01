@@ -51,8 +51,13 @@ typedef enum StorageControllerSubclass {
     SATA_CONTROLLER,
     SERIAL_ATTACHED_SCSI_CONTROLLER,
     NVME_CONTROLLER,
-    OTHER_SUBCLASS = 0x80
+    STORAGE_OTHER_SUBCLASS = 0x80
 } StorageControllerSubclass;
+
+typedef enum NetworkControllerSubclass {
+    ETHERNET_CONTROLLER = 0,
+    NETWORK_OTHER_SUBCLASS = 0x80
+} NetworkControllerSubclass;
 
 typedef enum PciExtCapabityID {
     PCI_ECAP_NULL = 0,
@@ -379,9 +384,9 @@ typedef struct PciBus {
     MCFG* mcfg;
 } PciBus;
 
-typedef uint8_t  (*PciConfigReadB_t)(const PciDevice* pci_dev, const uint8_t offset);
-typedef uint16_t (*PciConfigReadW_t)(const PciDevice* pci_dev, const uint8_t offset);
-typedef uint32_t (*PciConfigReadL_t)(const PciDevice* pci_dev, const uint8_t offset);
+typedef uint8_t (*PciConfigReadB_t)(const PciDevice* pci_dev, const uint8_t offset);
+typedef uint16_t(*PciConfigReadW_t)(const PciDevice* pci_dev, const uint8_t offset);
+typedef uint32_t(*PciConfigReadL_t)(const PciDevice* pci_dev, const uint8_t offset);
 
 typedef void (*PciConfigWriteW_t)(const PciDevice* pci_dev, const uint8_t offset, const uint16_t value);
 typedef void (*PciConfigWriteL_t)(const PciDevice* pci_dev, const uint8_t offset, const uint32_t value);

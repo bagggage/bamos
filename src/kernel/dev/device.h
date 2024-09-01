@@ -27,6 +27,7 @@ typedef enum DeviceType {
     DEV_STORAGE,
     DEV_TIMER,
     DEV_CLOCK,
+    DEV_NETWORK,
     DEV_USB_BUS,
     DEV_PCI_BUS
 } DeviceType;
@@ -60,7 +61,7 @@ typedef struct DevicePool {
     Device common;  \
     ListHead nodes; \
     uint64_t size
-    
+
 /*
 Create and push new device structure into 'dev_pool'. Device structure initialized with valid id
 and type fields, other fields initialized with zeroes.
@@ -73,7 +74,7 @@ Remove device from 'dev_pool', all pointers to that device becomes invalid.
 */
 void dev_remove(Device* dev);
 
-typedef bool_t (*DevPredicat_t)(const Device* const dev);
+typedef bool_t(*DevPredicat_t)(const Device* const dev);
 
 Device* dev_find(Device* begin, DevPredicat_t predicat);
 Device* dev_find_by_type(Device* begin, const DeviceType type);
