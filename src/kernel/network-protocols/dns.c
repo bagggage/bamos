@@ -91,6 +91,7 @@ static char* const get_domain_name(const uint8_t* const packet, const size_t off
     return domain;
 
 }
+
 void dns_handle_packet(const NetworkDevice* const network_device, const DnsHeader* const dns_header) {
     kassert(network_device != NULL && dns_header != NULL);
 
