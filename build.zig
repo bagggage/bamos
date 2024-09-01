@@ -40,7 +40,7 @@ fn makeKernel(b: *std.Build) *std.Build.Step {
         .target = target,
         .code_model = .kernel,
         .pic = true,
-        .error_tracing = false,
+        .error_tracing = false
     });
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
     kernel_obj.addIncludePath(b.path("third-party/boot"));
@@ -149,21 +149,12 @@ fn makeDocs(b: *std.Build) *std.Build.Step {
         .strip = true
     });
     var tar_run = b.addRunArtifact(tar_maker);
-    tar_run.addArg("-o");
-    const tar_file = tar_run.addOutputFileArg("sources.tar");
-    tar_run.addArg("-src");
-    tar_run.addDirectoryArg(b.path(src_path++"/kernel"));
-    tar_run.addArgs(&.{"-n", "bamos"});
+    tar_run.setCwd(b.path(""));
+    tar_run.addArgs(&.{"-o", "docs/sources.tar", "-src", "src/kernel", "-n", "bamos"});
 
-    const tar_install = b.addInstallFileWithDir(
-        tar_file,
-        .{ .custom = "../docs" },
-        "sources.tar"
-    );
+    wasm_install.step.dependOn(&tar_run.step);
+    wasm_install.step.dependOn(&js_file.step);
+    wasm_install.step.dependOn(&html_file.step);
 
-    tar_install.step.dependOn(&wasm_install.step);
-    tar_install.step.dependOn(&js_file.step);
-    tar_install.step.dependOn(&html_file.step);
-
-    return &tar_install.step;
+    return &wasm_install.step;
 }
