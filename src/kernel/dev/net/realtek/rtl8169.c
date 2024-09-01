@@ -12,6 +12,8 @@
 
 #include "intr/intr.h"
 
+#include "network-protocols/ethernet.h"
+
 #define LOG_PREFIX "RTL8169: "
 
 #define OWN SET_BIT(31) // If set, card own this descriptor
@@ -134,6 +136,10 @@ static void rtl8169_receive_packet(NetworkDevice* const network_device) {
                 flag = TRUE;
                 break;
             }
+        }
+
+        if (flag) {
+            ethernet_handle_frame(network_device, buffer, buffer_size);
         }
     }
 }
