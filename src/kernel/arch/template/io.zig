@@ -32,11 +32,11 @@ pub inline fn inb(port: u16) u8 {
 }
 
 /// Read a word from I\O port.
-pub inline fn inw(port: u32) u16 {
+pub inline fn inw(port: u16) u16 {
     _ = port;
 }
 
 /// Read a double word from I\O port.
-pub inline fn inl(port: u32) u32 {
+pub inline fn inl(port: u16) u32 {
     _ = port;
 }

@@ -24,7 +24,7 @@ pub inline fn inb(port: u16) u8 {
 }
 
 /// Read a word from I\O port.
-pub inline fn inw(port: u32) u16 {
+pub inline fn inw(port: u16) u16 {
     var res: u16 = undefined;
 
     asm("inw %[p],%[r]":[r]"={ax}"(res):[p]"{dx}"(port));
@@ -32,7 +32,7 @@ pub inline fn inw(port: u32) u16 {
 }
 
 /// Read a double word from I\O port.
-pub inline fn inl(port: u32) u32 {
+pub inline fn inl(port: u16) u32 {
     var res: u32 = undefined;
 
     asm("inl %[p],%[r]":[r]"={eax}"(res):[p]"{dx}"(port));
