@@ -9,7 +9,7 @@ const boot = @import("../boot.zig");
 const math = std.math;
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
-const logger = @import("../log.zig");
+const log = @import("../log.zig");
 
 const Spinlock = utils.Spinlock;
 
@@ -73,16 +73,20 @@ pub fn init() vm.Error!void {
     const mem_pool = boot.alloc(bitmap_pages) orelse return vm.Error.NoMemory;
     const virt_pool = vm.getVirtLma(mem_pool);
 
-    logger.warn("BPA: mem pool size: {} KB", .{@as(usize, bitmap_pages) * (vm.page_size / utils.kb_size)});
+    log.warn("BPA: mem pool size: {} KB", .{@as(usize, bitmap_pages) * (vm.page_size / utils.kb_size)});
 
     initAreas(virt_pool, bitmap_size);
 
     allocated_pages += bitmap_pages;
+    allocated_pages += @truncate(
+        (@intFromPtr(vm.kernel_end) - @intFromPtr(vm.kernel_start)) /
+        vm.page_size
+    );
     total_pages += allocated_pages;
 
     {
         const total_kb = total_pages * vm.page_size / utils.kb_size;
-        logger.warn("BPA: total mem: {} KB ({} MB)", .{ total_kb, total_kb / utils.kb_size });
+        log.warn("BPA: total mem: {} KB ({} MB)", .{ total_kb, total_kb / utils.kb_size });
     }
 
     is_init = true;
@@ -202,13 +206,6 @@ pub fn free(base: usize, rank: u32) void {
     free_areas[temp_rank].list.prepend(new_node);
 
     setPageBit(page_base, temp_rank);
-}
-
-/// Logs all free area lists.
-pub fn log() void {
-    for (free_areas[0..]) |*area| {
-        logger.warn("{}", .{area});
-    }
 }
 
 /// Checks if the page allocator has been initialized.
