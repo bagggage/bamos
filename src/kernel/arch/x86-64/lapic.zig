@@ -12,7 +12,7 @@ pub const APIC_ENABLED = 0x800;
 const MADT = extern struct {
     const Entry = extern struct { type: u8, length: u8 };
 
-    header: acpi.SDTHeader,
+    header: acpi.SdtHeader,
     lapic_base: u32,
     flags: u32,
     _entries: Entry,

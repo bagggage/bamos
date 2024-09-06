@@ -4,7 +4,7 @@ const log = @import("../../log.zig");
 const boot = @import("../../boot.zig");
 const vm = @import("../../vm.zig");
 
-pub const SDTHeader = extern struct {
+pub const SdtHeader = extern struct {
     signature: [4]u8,
     length: u32,
     revision: u8,
@@ -19,34 +19,48 @@ pub const SDTHeader = extern struct {
         std.debug.assert(@sizeOf(@This()) == 36);
         std.debug.assert(@alignOf(@This()) == @alignOf(u32));
     }
+
+    pub fn checkSum(self: *const SdtHeader) bool {
+        if (self.length == 0) return false;
+
+        const ptr: [*]const u8 = @ptrCast(self);
+
+        var sum: u8 = 0;
+
+        for (0..self.length) |i| { sum +%= ptr[i]; }
+
+        return sum == 0;
+    }
 };
 
-pub const XSDT = extern struct {
-    header: SDTHeader,
-    _entries: *SDTHeader align(4),
+pub const Xsdt = extern struct {
+    header: SdtHeader,
+    _entries: *SdtHeader align(4),
 
     comptime {
-        std.debug.assert(@sizeOf(@This()) == @sizeOf(SDTHeader) + @sizeOf(*SDTHeader));
+        std.debug.assert(@sizeOf(@This()) == @sizeOf(SdtHeader) + @sizeOf(*SdtHeader));
     }
 
-    pub inline fn len(self: *const XSDT) usize {
-        return (self.header.length - @sizeOf(SDTHeader)) / @sizeOf(@TypeOf(self._entries));
+    pub inline fn len(self: *const Xsdt) usize {
+        return (self.header.length - @sizeOf(SdtHeader)) / @sizeOf(@TypeOf(self._entries));
     }
 
-    pub inline fn entries(self: *XSDT) [*]align(4) *SDTHeader {
+    pub inline fn entries(self: *Xsdt) [*]align(4) *SdtHeader {
         return @ptrCast(&self._entries);
     }
 };
 
-var sdt: *XSDT = undefined;
+var sdt: *Xsdt = undefined;
 
 pub fn init() void {
     sdt = @ptrFromInt(boot.getArchData().acpi_ptr);
     sdt = vm.getVirtLma(sdt);
 }
 
-pub fn findEntry(signature: *const [4:0]u8) ?*SDTHeader {
-    for (sdt.entries()[0..sdt.len()]) |entry| {
+pub fn findEntry(signature: *const [4:0]u8) ?*SdtHeader {
+    for (sdt.entries()[0..sdt.len()]) |ent| {
+        const entry: *SdtHeader = vm.getVirtLma(ent);
+
         if (!std.mem.eql(u8, &entry.signature, signature)) continue;
 
         return entry;

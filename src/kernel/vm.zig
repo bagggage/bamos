@@ -9,13 +9,13 @@ const std = @import("std");
 const arch = @import("utils.zig").arch;
 const boot = @import("boot.zig");
 const utils = @import("utils.zig");
-const text_output = @import("video.zig").text_output;
 const log = @import("log.zig");
 
 /// The size of a memory page, specific to the architecture.
 pub const page_size = arch.vm.page_size;
 /// The start virtual address of the kernel in memory.
 pub const kernel_start = &boot.kernel_elf_start;
+pub const kernel_end = &boot.kernel_elf_end;
 pub const lma_start = arch.vm.lma_start;
 pub const lma_size = arch.vm.lma_size;
 pub const lma_end = arch.vm.lma_end;
