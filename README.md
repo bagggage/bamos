@@ -55,13 +55,23 @@ By default, the build result will be located in the `.zig-out` directory. To spe
 
 ## Creating an Image
 
-Currently, the OS relies on the third-party [BOOTBOOT](https://gitlab.com/bztsrc/bootboot) bootloader, and the `mkbootimg` utility is used to create the image. In the future, this stage is planned to be simplified and made more cross-platform. However, for now, to create an image, you need to:
+Currently, the OS relies on the third-party [BOOTBOOT](https://gitlab.com/bztsrc/bootboot) bootloader, and the `bootboot/mkbootimg` utility is used to create the image. In the future, this stage is planned to be simplified and made more cross-platform. However, for now, to create an image, you need to:
 
-- Obtain the [BOOTBOOT](https://gitlab.com/bztsrc/bootboot) binaries.
-- Specify the path to the `bootboot/dist` directory by setting the `BOOTBOOT` variable in `env.sh`.
+- Obtain precompiled [BOOTBOOT](https://github.com/bagggage/bootboot-bin) binaries. And unzip `mkbootimg` for your host OS.
+- Specify the path to the `bootboot-bin` directory by setting the `BOOTBOOT` variable in `env.sh`.
 - Run `iso.sh`.
 
 By default, the image will be placed in the `dist` directory.
+
+## Running
+
+For quick OS testing and launch, it is recommended to use the [QEMU](https://www.qemu.org) emulator.  
+On **Windows**, you should also add the `qemu` directory in the `PATH` environment variable beforehand.
+
+In the project's root directory, there are the `qemu.sh` and `debug.sh` scripts:
+
+- `qemu.sh` runs a pre-built system image (by default `dist/bamos.iso`) in the emulator.
+- `debug.sh` compiles, creates the image, and runs the system in the emulator.
 
 ## Details
 
