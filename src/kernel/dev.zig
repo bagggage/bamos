@@ -90,9 +90,7 @@ pub const Bus = struct {
         self.lock.lock();
         defer self.lock.unlock();
 
-        if (dev.driver) |driver| {
-            if (driver.bus_type != self.type) return error.InvalidDriverOrBus;
-
+        if (dev.driver != null) {
             self.matched.append(node);
         }
         else {
@@ -282,6 +280,8 @@ pub fn init() !void {
         .match = platformBusMatch,
         .remove = platformBusRemove
     });
+
+    try pci.init();
 }
 
 pub fn registerBus(
