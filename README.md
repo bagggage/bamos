@@ -84,12 +84,12 @@ BamOS is at an early stage of development, and many things are not yet implement
 - Implementations of fast and efficient allocators: physical pages, objects, and a universal allocator are present.
 - Logging system and text output to the screen.
 - Handling of hardware exceptions.
+- Device management system.
+- PCI bus driver.
 
 ## Planned Features
 
-- Development of device management architecture in the system.
 - Implementation of an interrupt handling system.
-- PCI bus device driver.
 - Porting the NVMe driver from the `draft-c` branch.
 - Implementation of drivers for other solid-state storage standards.
 - Development and implementation of a virtual file system architecture.
