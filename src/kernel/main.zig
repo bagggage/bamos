@@ -2,6 +2,7 @@ const std = @import("std");
 
 const arch = utils.arch;
 const boot = @import("boot.zig");
+const dev = @import("dev.zig");
 const log = @import("log.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
@@ -23,7 +24,18 @@ export fn main() noreturn {
     log.info("Kernel startup at CPU: {}", .{arch.getCpuIdx()});
     log.info("CPUs detected: {}", .{boot.getCpusNum()});
 
-    vm.init() catch |err| {
-        log.err("Can't initialize VM module: {}", .{err});
+    init(vm);
+
+    log.warn("Used memory: {} KB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / utils.kb_size});
+
+    init(dev);
+}
+
+fn init(comptime Module: type) void {
+    Module.init() catch |err| {
+        log.err("Can't initialize `" ++ @typeName(Module) ++ "` module: {s}", .{@errorName(err)});
+        utils.halt();
+
+        unreachable;
     };
 }
