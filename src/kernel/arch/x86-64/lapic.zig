@@ -1,8 +1,6 @@
 const std = @import("std");
 
 const acpi = @import("../../dev/stds/acpi.zig");
-const boot = @import("../../boot.zig");
-const log = @import("../../log.zig");
 const regs = @import("regs.zig");
 const vm = @import("../../vm.zig");
 
@@ -27,7 +25,7 @@ const MADT = extern struct {
 };
 
 var madt: *MADT = undefined;
-var base: [*]u32 = undefined;
+var base: [*]volatile u32 = undefined;
 
 pub inline fn init() void {
     if (acpi.findEntry("APIC")) |entry| {

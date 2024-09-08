@@ -21,7 +21,7 @@ const Region = packed struct {
 const RegionList = utils.SList(Region);
 const RegionNode = RegionList.Node;
 
-var lock = utils.Spinlock.init(utils.Spinlock.UNLOCKED);
+var lock = utils.Spinlock.init(.unlocked);
 var region_oma = vm.ObjectAllocator.init(RegionNode);
 
 var ports_list = RegionList{};
@@ -122,4 +122,23 @@ pub fn release(base: usize, comptime io_type: Type) void {
     }
 
     unreachable;
+}
+
+pub fn isAvail(base: usize, size: usize, comptime io_type: Type) bool {
+    const end = base + size;
+
+    lock.lock();
+    defer lock.unlock();
+
+    var temp = getList(io_type).first;
+
+    while (temp) |node| : (temp = node.next) {
+        const region = &node.data;
+
+        if (region.end <= base or region.base >= end) continue;
+
+        return false;
+    }
+
+    return true;
 }
