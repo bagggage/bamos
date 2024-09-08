@@ -6,6 +6,18 @@ pub const arch = switch (builtin.cpu.arch) {
     else => @compileError("Unsupported architecture"),
 };
 
+pub const AnyData = struct {
+    ptr: ?*anyopaque = null,
+
+    pub inline fn set(self: *AnyData, ptr: ?*anyopaque) void {
+        self.ptr = ptr;
+    }
+
+    pub inline fn as(self: *const AnyData, comptime T: type) ?*T {
+        return if (self.ptr) |val| @as(*T, @ptrCast(@alignCast(val))) else null;
+    }
+};
+
 pub const Bitmap = @import("utils/Bitmap.zig");
 pub const BinaryTree = @import("utils/binary-tree.zig").BinaryTree;
 
