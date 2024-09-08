@@ -9,31 +9,37 @@ const std = @import("std");
 const atomic = std.atomic;
 const AtomicOrder = std.builtin.AtomicOrder;
 
-exclusion: atomic.Value(u8) = atomic.Value(u8).init(UNLOCKED),
+exclusion: atomic.Value(u8) = atomic.Value(u8).init(@intFromEnum(State.unlocked)),
 
-/// Represents the lock state for when the spinlock is locked.
-pub const LOCKED = 1;
-/// Represents the lock state for when the spinlock is unlocked.
-pub const UNLOCKED = 0;
+/// Represents the lock state
+pub const State = enum(u1) {
+    unlocked = 0,
+    locked = 1,
+};
 
 const Self = @This();
 
 /// Initializes a new spinlock with the specified initial state.
 ///
-/// - `initial_state`: The initial state of the lock (either `LOCKED` or `UNLOCKED`).
-pub inline fn init(initial_state: comptime_int) Self {
-    return Self{ .exclusion = atomic.Value(u8).init(initial_state) };
+/// - `initial_state`: The initial state of the lock (either `locked` or `unlocked`).
+pub inline fn init(initial_state: State) Self {
+    return Self{
+        .exclusion = atomic.Value(u8).init(@intFromEnum(initial_state))
+    };
 }
 
 /// Attempts to acquire the lock. 
 /// This function will spin in a loop until the lock is successfully acquired.
 pub inline fn lock(self: *Self) void {
-    while (self.exclusion.cmpxchgWeak(UNLOCKED, LOCKED, .acquire, .monotonic) != null) {}
+    while (self.exclusion.cmpxchgWeak(
+        @intFromEnum(State.unlocked), @intFromEnum(State.locked),
+        .acquire, .monotonic
+    ) != null) {}
 }
 
 /// Releases the lock, making it available for others threads to acquire.
 pub inline fn unlock(self: *Self) void {
-    self.exclusion.store(UNLOCKED, .release);
+    self.exclusion.store(@intFromEnum(State.unlocked), .release);
 }
 
 /// Checks if the spinlock is currently locked.

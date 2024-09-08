@@ -16,7 +16,7 @@ const Spinlock = utils.Spinlock;
 /// Buffer used for formatting log messages before output.
 var buff: [1024]u8 = undefined;
 /// Spinlock to ensure that logging is thread-safe.
-var lock = Spinlock.init(Spinlock.UNLOCKED);
+var lock = Spinlock.init(.unlocked);
 
 /// Logs an exception message.
 ///

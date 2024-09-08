@@ -55,7 +55,7 @@ var free_areas: [max_areas]FreeArea = .{FreeArea{}} ** max_areas;
 var allocated_pages: u32 = 0;
 var total_pages: usize = 0;
 
-var lock = Spinlock.init(Spinlock.UNLOCKED);
+var lock = Spinlock.init(.unlocked);
 
 var is_init = false;
 

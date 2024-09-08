@@ -4,7 +4,6 @@
 //! Setup of control registers, enabling specific CPU features.
 
 const acpi = @import("../../dev/stds/acpi.zig");
-const log = @import("../../log.zig");
 const lapic = @import("lapic.zig");
 const regs = @import("regs.zig");
 const intr = @import("intr.zig");
@@ -12,12 +11,19 @@ const utils = @import("../../utils.zig");
 
 const Spinlock = utils.Spinlock;
 
+const CpuId = packed struct {
+    a: u32,
+    b: u32,
+    c: u32, 
+    d: u32
+};
+
 pub const io = @import("io.zig");
 pub const vm = @import("vm.zig");
 
-pub const CPUID_GET_FEATURE = 1;
+pub const cpuid_features = 1;
 
-var init_lock = Spinlock.init(Spinlock.UNLOCKED);
+var init_lock = Spinlock.init(.unlocked);
 var is_initial_cpu = true;
 
 /// `_start` implementation
@@ -65,8 +71,9 @@ inline fn waitForInit() void {
 /// If the CPU is the initial CPU, it also performs additional
 /// preinitializing the virtual memory system, the interrupt system, and etc.
 fn initCpu(comptime is_initial: bool) void {
+    @setRuntimeSafety(false);
+
     enableExtentions();
-    enableAvx();
 
     if (is_initial) initPrimaryCpu();
 
@@ -90,7 +97,7 @@ inline fn enableExtentions() void {
     efer.syscall_ext = 1;
     regs.setEfer(efer);
 }
- 
+
 /// Enable AVX
 inline fn enableAvx() void {
     asm volatile (
@@ -110,4 +117,21 @@ inline fn gdtSwitchToLma() void {
     var gdtr: regs.GDTR = regs.getGdtr();
     gdtr.base += vm.lma_start;
     regs.setGdtr(gdtr);
+}
+
+pub inline fn cpuid(leaf: u32) CpuId {
+    @setRuntimeSafety(false);
+
+    var a: u32 = undefined;
+    var b: u32 = undefined;
+    var c: u32 = undefined;
+    var d: u32 = undefined;
+
+    asm volatile(
+        \\cpuid
+        : [a]"={eax}"(a),[b]"={ebx}"(b),[c]"={ecx}"(c),[d]"={edx}"(d)
+        : [id]"{eax}"(leaf)
+    );
+
+    return .{ .a = a, .b = b, .c = c, .d = d };
 }
