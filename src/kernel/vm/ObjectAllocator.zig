@@ -84,7 +84,7 @@ const Arena = struct {
     /// - `pool_size`: The size of the memory pool.
     /// - Returns: `true` if the address is within the arena's range, `false` otherwise.
     pub fn contains(self: *Arena, obj_addr: usize, pool_size: usize) bool {
-        const begin = vm.getVirtDma(@as(usize, self.pool_base) * vm.page_size);
+        const begin = vm.getVirtLma(@as(usize, self.pool_base) * vm.page_size);
         const end = begin + pool_size;
 
         return obj_addr >= begin and obj_addr < end;
