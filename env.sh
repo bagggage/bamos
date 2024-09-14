@@ -11,6 +11,9 @@ export TOOLCHAIN=~/opt/cross/bin
 export BOOTBOOT=~/opt/bootboot/dist
 
 export BOOT_DIR=${DIST_DIR}/boot
-export BOOT_SYS_DIR=${BOOT_DIR}/bamos
-export KERNEL_TAR=${BOOT_SYS_DIR}/kernel64
-export KERNEL_BIN=build/bin/bamos.kernel
+export BOOT_SYS=bamos
+export BOOT_SYS_DIR=${BOOT_DIR}/${BOOT_SYS}
+
+export KERNEL_BASENAME=bamos.elf
+export KERNEL_TAR=${BOOT_SYS_DIR}/${KERNEL_BASENAME}
+export KERNEL_BIN=build/bin/${KERNEL_BASENAME}

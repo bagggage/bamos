@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
 }
 
 fn makeKernel(b: *std.Build) *std.Build.Step {
+    const name = b.option([]const u8, "exe-name", "Name of the kernel executable");
     const arch = b.option(std.Target.Cpu.Arch, "arch", "The target CPU architecture");
     const optimize = b.standardOptimizeOption(.{});
     const emitAsm = b.option(bool, "emit-asm", "Generate assembler code file");
@@ -35,7 +36,7 @@ fn makeKernel(b: *std.Build) *std.Build.Step {
     const kernel_obj = b.addObject(.{
         .name = "bamos",
         .root_source_file = b.path(src_path++"/kernel/main.zig"),
-        .omit_frame_pointer = false,
+        .omit_frame_pointer = null,
         .optimize = optimize,
         .target = target,
         .code_model = .kernel,
@@ -69,7 +70,7 @@ fn makeKernel(b: *std.Build) *std.Build.Step {
     dbg_obj.root_module.addImport("dbg-info", dbg_module);
 
     const kernel_exe = b.addExecutable(.{
-        .name = "bamos.kernel",
+        .name = name orelse "bamos.elf",
         .root_source_file = b.path(src_path++"/kernel/start.zig"),
         .omit_frame_pointer = false,
         .optimize = optimize,
