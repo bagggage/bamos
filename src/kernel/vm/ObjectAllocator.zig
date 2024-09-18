@@ -128,9 +128,19 @@ pub fn init(comptime T: type) Self {
         @compileError(std.fmt.comptimePrint("Object size must be at least {} bytes.", .{@sizeOf(FreeNode)}));
     }
 
-    const pages = std.math.divCeil(comptime_int, @sizeOf(T) * 128, vm.page_size) catch unreachable;
+    return initCapacity(@sizeOf(T), 128);
+}
 
-    return initSized(@sizeOf(T), pages);
+/// Initializes an allocator with a specified object size and capacity per arena.
+/// 
+/// - `obj_size`: The size of the objects to allocate.
+/// - `capacity`: The number of the objects per arena.
+pub fn initCapacity(obj_size: usize, capacity: usize) Self {
+    std.debug.assert(obj_size >= @sizeOf(FreeNode));
+
+    const pages = std.math.divCeil(comptime_int, obj_size * capacity, vm.page_size) catch unreachable;
+
+    return initSized(obj_size, pages);
 }
 
 /// Initializes an allocator with a specified object size and number of pages per arena.
