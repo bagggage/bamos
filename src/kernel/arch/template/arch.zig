@@ -15,7 +15,6 @@ pub const io = @import("io.zig");
 /// This function just should call the `main` function
 /// located in the `main.zig` file, must be `inline`,
 /// use `naked` calling convention and don't return.
-///
 /// 
 /// The `main` function don't take any input arguments, marked as `noreturn`
 /// and uses **System V ABI** calling convention. The only reason of using architecture
@@ -47,3 +46,9 @@ pub fn preinit() void {}
 /// May be marked as `inline` if possible.
 pub fn getCpuIdx() u32 {}
 
+/// This function is responsible for initialization
+/// of architecture dependent devices and drivers in the
+/// `dev` subsystem.
+/// 
+/// It's called when the platform bus is registered and ready for use.
+pub fn devInit() !void {}
