@@ -1,7 +1,8 @@
 const std = @import("std");
 
-const log = @import("../../log.zig");
 const boot = @import("../../boot.zig");
+const io = @import("../io.zig");
+const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");
 
 pub const SdtHeader = extern struct {
@@ -50,10 +51,16 @@ pub const Xsdt = extern struct {
     }
 };
 
+const mmio_size = 512 * utils.kb_size;
+
 var sdt: *Xsdt = undefined;
 
-pub fn init() void {
-    sdt = @ptrFromInt(boot.getArchData().acpi_ptr);
+pub fn init() !void {
+    const phys = boot.getArchData().acpi_ptr;
+
+    _ = io.request("ACPI Tables", phys, mmio_size, .mmio) orelse return error.MmioBusy;
+
+    sdt = @ptrFromInt(phys);
     sdt = vm.getVirtLma(sdt);
 }
 
