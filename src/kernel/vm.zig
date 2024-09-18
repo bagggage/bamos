@@ -30,6 +30,37 @@ pub const BucketAllocator = @import("vm/BucketAllocator.zig");
 pub const UniversalAllocator = @import("vm/UniversalAllocator.zig");
 pub const Heap = utils.Heap;
 
+/// Thread-safe Object memory allocator wrapper.
+/// Combination of the `ObjectAllocator` and `Spinlock`.
+pub fn SafeOma(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        oma: ObjectAllocator = ObjectAllocator.init(T),
+        lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
+
+        pub inline fn alloc(self: *Self) ?*T {
+            self.lock.lock();
+            defer self.lock.unlock();
+
+            return self.oma.alloc(T);
+        }
+
+        pub inline fn free(self: *Self, obj_ptr: *anyopaque) void {
+            self.lock.lock();
+            defer self.lock.unlock();
+
+            self.oma.free(obj_ptr);
+        }
+
+        pub inline fn init(comptime capacity: usize) Self {
+            return .{
+                .oma = ObjectAllocator.initCapacity(@sizeOf(T), capacity)
+            };
+        }
+    };
+}
+
 /// Allocates a new page table and zeroing all entries.
 pub const allocPt = arch.vm.allocPt;
 /// Frees a page table.
