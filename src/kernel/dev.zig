@@ -6,6 +6,7 @@ const log = @import("log.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
+pub const acpi = @import("dev/stds/acpi.zig");
 pub const regs = @import("dev/regs.zig");
 pub const io = @import("dev/io.zig");
 pub const pci = @import("dev/stds/pci.zig");
@@ -280,6 +281,9 @@ pub fn init() !void {
         .match = platformBusMatch,
         .remove = platformBusRemove
     });
+
+    try acpi.init();
+    try utils.arch.devInit();
 
     try pci.init();
 }

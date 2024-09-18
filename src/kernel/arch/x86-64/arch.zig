@@ -3,8 +3,8 @@
 //! This module handles the initialization and management of the x86-64 CPU, 
 //! Setup of control registers, enabling specific CPU features.
 
-const acpi = @import("../../dev/stds/acpi.zig");
 const lapic = @import("lapic.zig");
+const log = @import("../../log.zig");
 const regs = @import("regs.zig");
 const intr = @import("intr.zig");
 const utils = @import("../../utils.zig");
@@ -57,6 +57,28 @@ pub inline fn getCpuIdx() u32 {
     return lapic.getId();
 }
 
+/// Initialize architecture dependent devices.
+pub fn devInit() !void {
+    lapic.init() catch |err| log.info("APIC not initialized: {}", .{err});
+}
+
+pub inline fn cpuid(leaf: u32) CpuId {
+    @setRuntimeSafety(false);
+
+    var a: u32 = undefined;
+    var b: u32 = undefined;
+    var c: u32 = undefined;
+    var d: u32 = undefined;
+
+    asm volatile(
+        \\cpuid
+        : [a]"={eax}"(a),[b]"={ebx}"(b),[c]"={ecx}"(c),[d]"={edx}"(d)
+        : [id]"{eax}"(leaf)
+    );
+
+    return .{ .a = a, .b = b, .c = c, .d = d };
+}
+
 /// Wait for initialization to complete.
 inline fn waitForInit() void {
     init_lock.lock();
@@ -83,9 +105,6 @@ fn initCpu(comptime is_initial: bool) void {
 inline fn initPrimaryCpu() void {
     vm.preinit();
     intr.preinit();
-
-    acpi.init();
-    lapic.init();
 }
 
 /// Enables kernel needed CPUs extentions
@@ -117,21 +136,4 @@ inline fn gdtSwitchToLma() void {
     var gdtr: regs.GDTR = regs.getGdtr();
     gdtr.base += vm.lma_start;
     regs.setGdtr(gdtr);
-}
-
-pub inline fn cpuid(leaf: u32) CpuId {
-    @setRuntimeSafety(false);
-
-    var a: u32 = undefined;
-    var b: u32 = undefined;
-    var c: u32 = undefined;
-    var d: u32 = undefined;
-
-    asm volatile(
-        \\cpuid
-        : [a]"={eax}"(a),[b]"={ebx}"(b),[c]"={ecx}"(c),[d]"={edx}"(d)
-        : [id]"{eax}"(leaf)
-    );
-
-    return .{ .a = a, .b = b, .c = c, .d = d };
 }

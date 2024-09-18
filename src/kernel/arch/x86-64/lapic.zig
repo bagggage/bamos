@@ -27,12 +27,8 @@ const MADT = extern struct {
 var madt: *MADT = undefined;
 var base: [*]volatile u32 = undefined;
 
-pub inline fn init() void {
-    if (acpi.findEntry("APIC")) |entry| {
-        madt = @ptrCast(entry);
-    } else {
-        @panic("Can't found LAPIC MADT entry within ACPI");
-    }
+pub fn init() !void {
+    madt = @ptrCast(acpi.findEntry("APIC") orelse return error.NoApic);
 
     base = @ptrFromInt(@as(usize, madt.lapic_base));
     base = vm.getVirtLma(base);
