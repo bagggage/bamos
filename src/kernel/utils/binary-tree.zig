@@ -7,7 +7,7 @@ const utils = @import("../utils.zig");
 /// Provides a default comparison function for the binary tree nodes.
 /// This function compares two values of type `T` and returns a `utils.CmpResult`
 /// indicating the relative order of the values.
-fn default_cmp_fn(comptime T: type) utils.CmpFnType(T) {
+fn defaultCmpFn(comptime T: type) utils.CmpFnType(T) {
     const Anon = struct {
         pub fn cmp(lhs: *const T, rhs: *const T) utils.CmpResult {
             if (lhs.* < rhs.*) { return .less; }
@@ -29,7 +29,7 @@ fn default_cmp_fn(comptime T: type) utils.CmpFnType(T) {
 ///   If `null`, a default comparison function is used.
 /// - Returns: A binary tree type.
 pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type {
-    const cmp_fn = cmp_func orelse default_cmp_fn(T);
+    const cmpFn = cmp_func orelse defaultCmpFn(T);
 
     return struct {
         const Self = @This();
@@ -96,10 +96,10 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
             /// no such node with the `data` equals to `val`.
             pub inline fn findChild(self: *const Node, val: *const T) ?*Node {
                 if (self.lhs) |lhs| {
-                    if (cmp_fn(&lhs.data, val) == .equals) return lhs;
+                    if (cmpFn(&lhs.data, val) == .equals) return lhs;
                 }
                 if (self.rhs) |rhs| {
-                    if (cmp_fn(&rhs.data, val) == .equals) return rhs;
+                    if (cmpFn(&rhs.data, val) == .equals) return rhs;
                 }
 
                 return null;
@@ -147,7 +147,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
                 var it = root;
 
                 while (true) {
-                    if (cmp_fn(&it.data, &node.data) == .less) {
+                    if (cmpFn(&it.data, &node.data) == .less) {
                         // Right branch
                         if (it.rhs) |rhs| {
                             it = rhs;
@@ -202,7 +202,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
         /// Internal function to remove a node with a value equal to `val` from the tree.
         fn removeImpl(self: *Self, val: *const T) ?*Node {
             if (self.root) |root| {
-                if (cmp_fn(&root.data, val) == .equals) {
+                if (cmpFn(&root.data, val) == .equals) {
                     // Remove root
                     const result = root.remove(null);
                     if (result == root) self.root = null;
@@ -216,7 +216,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
                     if (node.findChild(val)) |child| {
                         return child.remove(node);
                     }
-                    else if (cmp_fn(&node.data, val) == .less) {
+                    else if (cmpFn(&node.data, val) == .less) {
                         it = node.rhs;
                     }
                     else {
@@ -241,7 +241,7 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
             var it: ?*Node = self.root;
 
             while (it) |node| {
-                const cmp = cmp_fn(&node.data, val);
+                const cmp = cmpFn(&node.data, val);
 
                 if (cmp == .equals) { return node; }
                 else if (cmp == .less) {

@@ -48,7 +48,7 @@ pub fn find(self: *Self, comptime is_setted: bool) ?usize {
     return null;
 }
 
-pub inline fn rfind(self: *Self, comptime is_setted: bool) ?usize {
+pub fn rfind(self: *Self, comptime is_setted: bool) ?usize {
     const byte_val = if (is_setted) 0x00 else 0xFF;
     var byte_idx = self.bits.len;
 

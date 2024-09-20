@@ -91,7 +91,7 @@ pub inline fn alloc(size: usize) ?*void {
 /// Frees a previously allocated block of memory pointed to by `mem`.
 /// 
 /// - `mem`: A pointer to the memory block to free, or `null` (which is ignored).
-pub fn free(mem: ?*void) void {
+pub fn free(mem: ?*anyopaque) void {
     if (mem == null) return;
 
     const addr: usize = @intFromPtr(mem.?);
@@ -146,24 +146,20 @@ fn allocHuge(size: u32) ?*void {
     if (pages > vm.PageAllocator.max_alloc_pages) return null;
 
     const rank = std.math.log2_int_ceil(u32, pages);
-    const phys_addr = vm.PageAllocator.alloc(rank);
+    const phys = vm.PageAllocator.alloc(rank) orelse return null;
 
-    if (phys_addr) |addr| {
-        const node = huge_oma.alloc(HugeNode) orelse {
-            vm.PageAllocator.free(phys_addr, rank);
-            return null;
-        };
-        node.* = HugeNode.init(.{
-            .base = @truncate(addr / vm.page_size),
-            .rank = rank
-        });
+    const node = huge_oma.alloc(HugeNode) orelse {
+        vm.PageAllocator.free(phys, rank);
+        return null;
+    };
+    node.* = HugeNode.init(.{
+        .base = @truncate(phys / vm.page_size),
+        .rank = rank
+    });
 
-        huge_alloc_tree.insert(node);
+    huge_alloc_tree.insert(node);
 
-        return @as(*void, @ptrFromInt(vm.getVirtDma(addr)));
-    }
-
-    return null;
+    return @as(*void, @ptrFromInt(vm.getVirtLma(phys)));
 }
 
 /// Initializes the pool of small object allocators (`oma_pool`) based on the size range 

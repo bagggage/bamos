@@ -21,14 +21,14 @@ export fn main() noreturn {
 
     arch.preinit();
 
-    log.info("Kernel startup at CPU: {}", .{arch.getCpuIdx()});
-    log.info("CPUs detected: {}", .{boot.getCpusNum()});
-
     init(vm);
 
     log.warn("Used memory: {} KB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / utils.kb_size});
 
     init(dev);
+
+    log.info("Kernel startup at CPU: {}", .{arch.getCpuIdx()});
+    log.info("CPUs detected: {}", .{boot.getCpusNum()});
 }
 
 fn init(comptime Module: type) void {

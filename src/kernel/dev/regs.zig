@@ -4,11 +4,24 @@ const std = @import("std");
 const Type = std.builtin.Type;
 
 const io = @import("io.zig");
+const vm = @import("../vm.zig");
 
 const RegInfo = struct {
     name: [:0]const u8,
     offset: comptime_int,
-    struct_t: type = void
+    struct_t: type = void,
+
+    pub fn init(
+        comptime name: [:0]const u8,
+        comptime offset: comptime_int,
+        comptime T: ?type
+    ) RegInfo {
+        return .{
+            .name = name,
+            .offset = offset,
+            .struct_t = T orelse void
+        };
+    }
 };
 
 pub const BusWidth = enum(u2) {
@@ -48,10 +61,10 @@ pub fn RegsGroup(
     comptime regs: []const RegInfo
 ) type {
     var fields: []const std.builtin.Type.EnumField = &.{};
-    inline for (regs[0..]) |r| {
+    inline for (regs[0..], 0..) |r, i| {
         fields = fields ++ [_]std.builtin.Type.EnumField{.{
             .name = r.name,
-            .value = r.offset
+            .value = i
         }};
     }
 
@@ -72,10 +85,16 @@ pub fn RegsGroup(
 
         base: usize,
 
-        pub fn init(base_addr: usize) ?Self {
-            _ = io.request(name, base_addr, getGroupSize(), io_type) orelse return null;
+        pub fn init(base_addr: usize) !Self {
+            _ = io.request(name, base_addr, getGroupSize(), io_type) orelse return switch (io_type) {
+                .io_ports => error.IoPortsBusy,
+                .mmio => error.MmioBusy
+            };
 
-            return .{ .base = base_addr };
+            return switch (io_type) {
+                .io_ports => .{ .base = base_addr },
+                .mmio => .{ .base = vm.getVirtLma(base_addr) }
+            };
         }
 
         const BusT = switch (bus_width) {
