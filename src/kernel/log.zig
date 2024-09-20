@@ -5,6 +5,7 @@
 //! Manages thread-safe text output with color formatting.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const arch = utils.arch;
 const text_output = video.text_output;
@@ -65,6 +66,16 @@ pub fn rawLog(comptime fmt: []const u8, args: anytype, color: video.Color) void 
 
     text_output.setColor(color);
     text_output.print(formated);
+}
+
+/// Logs an debug message. Only works in `RelaseSafe` and `Debug` mode.
+///
+/// - `fmt`: The format string for the message.
+/// - `args`: The arguments to format into the message.
+pub inline fn debug(comptime fmt: []const u8, args: anytype) void {
+    if (builtin.mode != .ReleaseSafe and builtin.mode != .Debug) return;
+
+    rawLog("[DEBUG]:" ++ fmt, args, video.Color.gray);
 }
 
 /// Logs an informational message.
