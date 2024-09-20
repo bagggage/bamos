@@ -3,6 +3,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const log = @import("../log.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
@@ -17,6 +18,10 @@ const Region = packed struct {
     name: [*:0]const u8,
     base: usize,
     end: usize,
+
+    pub fn format(self: *const Region, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s}: 0x{x}-0x{x}", .{self.name, self.base, self.end - 1});
+    }
 };
 const RegionList = utils.SList(Region);
 const RegionNode = RegionList.Node;
@@ -79,25 +84,29 @@ pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime i
 
     const list = getList(io_type);
 
-    lock.lock();
-    defer lock.unlock();
+    {
+        lock.lock();
+        defer lock.unlock();
 
-    var temp = list.first;
+        var temp = list.first;
 
-    while (temp) |node| : (temp = node.next) {
-        const region = &node.data;
+        while (temp) |node| : (temp = node.next) {
+            const region = &node.data;
 
-        if (region.end <= base or region.base >= end) continue;
+            if (region.end <= base or region.base >= end) continue;
 
-        return null;
+            return null;
+        }
+
+        const new_region = region_oma.alloc(RegionNode) orelse return null;
+        new_region.* = RegionNode{
+            .data = .{ .base = base, .end = end, .name = name }
+        };
+
+        list.prepend(new_region);
     }
 
-    const new_region = region_oma.alloc(RegionNode) orelse return null;
-    new_region.* = RegionNode{
-        .data = .{ .base = base, .end = end, .name = name }
-    };
-
-    list.prepend(new_region);
+    log.debug("{s: <8}: {s: <12} 0x{x}-0x{x}", .{@tagName(io_type), name, base, base + size - 1});
 
     return base;
 }

@@ -106,7 +106,7 @@ fn enumDevice(seg_idx: u16, bus_idx: u8, dev_idx: u8, func_idx: u8) !void {
 
     _ = try dev.registerDevice(bus, null, pci_dev);
 
-    log.info("PCI {:0>2}.{:0>2}.{}: 0x{x:0>4} : 0x{x:0>4}", .{
+    log.debug("PCI {:0>2}.{:0>2}.{}: 0x{x:0>4} : 0x{x:0>4}", .{
         bus_idx, dev_idx, func_idx, vendor_id, pci_dev.id.device_id
     });
 }
