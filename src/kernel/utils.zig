@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const algorithm = @import("utils/algorithm.zig");
+
 pub const arch = switch (builtin.cpu.arch) {
     .x86_64 => @import("arch/x86-64/arch.zig"),
     else => @compileError("Unsupported architecture"),
