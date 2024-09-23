@@ -12,46 +12,33 @@ pub const io = @import("dev/io.zig");
 pub const intr = @import("dev/intr.zig");
 pub const pci = @import("dev/stds/pci.zig");
 
-pub const BusOps = struct {
-    pub const MatchT = *const fn (*const Driver, *const Device) bool;
-    pub const RemoveT = *const fn (*Device) void;
+pub const Bus = struct {
+    pub const Operations = struct {
+        pub const MatchFn = *const fn (*const Driver, *const Device) bool;
+        pub const RemoveFn = *const fn (*Device) void;
 
-    match: MatchT,
-    remove: RemoveT
-};
-
-pub const DriverOps = struct {
-    pub const ProbeResult = enum {
-        missmatch,
-        success
+        match: MatchFn,
+        remove: RemoveFn
     };
 
-    pub const ProbeT = *const fn (*Device) ProbeResult;
-    pub const RemoveT = *const fn (*Device) void;
-
-    probe: ProbeT,
-    remove: RemoveT
-};
-
-pub const Bus = struct {
-    const List = utils.List(Device);
-    const Node = List.Node;
+    const DeviceList = utils.List(Device);
+    const DeviceNode = DeviceList.Node;
 
     name: []const u8,
     type: u32,
 
-    matched: List = .{},
-    unmatched: List = .{},
+    matched: DeviceList = .{},
+    unmatched: DeviceList = .{},
 
     lock: utils.Spinlock = .{},
 
-    ops: BusOps,
+    ops: Operations,
 
     pub const nameHash = std.hash.Crc32.hash;
 
     pub fn init(
         comptime name: []const u8,
-        ops: BusOps
+        ops: Operations
     ) Bus {
         comptime var lower_name: [name.len]u8 = undefined;
         _ = comptime std.ascii.lowerString(&lower_name, name);
@@ -85,7 +72,7 @@ pub const Bus = struct {
         }
     }
 
-    pub fn addDevice(self: *Bus, node: *Node) !void {
+    pub fn addDevice(self: *Bus, node: *DeviceNode) !void {
         const dev = &node.data;
         dev.bus = self;
 
@@ -101,7 +88,7 @@ pub const Bus = struct {
     }
 
     pub fn removeDevice(self: *Bus, dev: *Device) void {
-        const node: *Node = @ptrFromInt(@intFromPtr(dev) - @offsetOf(Node, "data"));
+        const node: *DeviceNode = @ptrFromInt(@intFromPtr(dev) - @offsetOf(DeviceNode, "data"));
 
         self.lock.lock();
         defer self.lock.unlock();
@@ -137,14 +124,16 @@ pub const Bus = struct {
         }
     }
 
-    fn matchDevice(self: *Bus, dev: *Node) void {
+    fn matchDevice(self: *Bus, dev: *DeviceNode) void {
         const match_impl = self.ops.match;
 
         var node = DriverReg.reg[DeviceReg.getBusIdx(self)].first;
 
         while (node) |driver| : (node = driver.next) {
-            if (match_impl(&driver.data, &dev.data) == false) continue;
-            if (driver.data.probe(&dev.data) == .missmatch) continue; 
+            if (
+                match_impl(&driver.data, &dev.data) == false or
+                driver.data.probe(&dev.data) == .missmatch
+            ) continue;
 
             dev.data.driver = &driver.data;
             self.matched.append(dev);
@@ -165,13 +154,26 @@ pub const Device = struct {
 };
 
 pub const Driver = struct {
+    pub const Operations = struct {
+        pub const ProbeResult = enum {
+            missmatch,
+            success
+        };
+
+        pub const ProbeFn = *const fn (*Device) ProbeResult;
+        pub const RemoveFn = *const fn (*Device) void;
+
+        probe: ProbeFn,
+        remove: RemoveFn
+    };
+
     name: []const u8,
     bus: *Bus,
-    ops: DriverOps,
+    ops: Operations,
 
     impl_data: utils.AnyData,
 
-    pub inline fn probe(self: *const Driver, device: *Device) DriverOps.ProbeResult {
+    pub inline fn probe(self: *const Driver, device: *Device) Operations.ProbeResult {
         return self.ops.probe(device);
     }
 
@@ -183,19 +185,19 @@ pub const Driver = struct {
 const max_buses = 16;
 
 const DriverReg = struct {
-    const List = utils.SList(Driver);
-    pub const Node = List.Node;
+    const DriverList = utils.SList(Driver);
+    pub const DriverNode = DriverList.Node;
 
-    pub var reg: [max_buses]List = .{ List{} } ** max_buses;
+    pub var reg: [max_buses]DriverList = .{ DriverList{} } ** max_buses;
 
     var lock = utils.Spinlock.init(.unlocked);
-    var oma = vm.ObjectAllocator.init(Node);
+    var oma = vm.ObjectAllocator.init(DriverNode);
 
-    pub fn register(comptime name: []const u8, bus: *Bus, ops: DriverOps) !*Driver {
+    pub fn register(comptime name: []const u8, bus: *Bus, ops: Driver.Operations) !*Driver {
         lock.lock();
         defer lock.unlock();
 
-        const node = oma.alloc(Node) orelse return error.NoMemory;
+        const node = oma.alloc(DriverNode) orelse return error.NoMemory;
 
         node.data.name = name;
         node.data.bus = bus;
@@ -209,7 +211,7 @@ const DriverReg = struct {
     }
 
     pub fn remove(driver: *Driver) void {
-        const node: *Node = @ptrFromInt(@intFromPtr(driver) - @offsetOf(Node, "data"));
+        const node: *DriverNode = @ptrFromInt(@intFromPtr(driver) - @offsetOf(DriverNode, "data"));
 
         {
             const bus_idx = DeviceReg.getBusIdx(driver.bus);
@@ -233,7 +235,7 @@ const DeviceReg = struct {
     var buses: [max_buses]Bus = undefined;
 
     var lock = utils.Spinlock.init(.unlocked);
-    var oma = vm.ObjectAllocator.init(Bus.Node);
+    var oma = vm.ObjectAllocator.init(Bus.DeviceNode);
 
     pub var reg: []Bus = buses[0..0];
 
@@ -243,21 +245,21 @@ const DeviceReg = struct {
         return (@intFromPtr(bus) - base) / @sizeOf(Bus);
     }
 
-    pub inline fn alloc() ?*Bus.Node {
+    pub inline fn alloc() ?*Bus.DeviceNode {
         lock.lock();
         defer lock.unlock();
 
-        return oma.alloc(Bus.Node);
+        return oma.alloc(Bus.DeviceNode);
     }
 
-    pub inline fn free(node: *Bus.Node) void {
+    pub inline fn free(node: *Bus.DeviceNode) void {
         lock.lock();
         defer lock.unlock();
 
         oma.free(node);
     }
 
-    pub fn registerBus(comptime name: []const u8, ops: BusOps) !*Bus {
+    pub fn registerBus(comptime name: []const u8, ops: Bus.Operations) !*Bus {
         lock.lock();
         defer lock.unlock();
 
@@ -291,9 +293,9 @@ pub fn init() !void {
     try pci.init();
 }
 
-pub fn registerBus(
+pub inline fn registerBus(
     comptime name: []const u8,
-    ops: BusOps
+    ops: Bus.Operations
 ) !*Bus {
     return DeviceReg.registerBus(name, ops);
 }
@@ -316,7 +318,7 @@ pub fn registerDevice(
 pub inline fn registerDriver(
     comptime name: []const u8,
     bus: *const Bus,
-    ops: DriverOps
+    ops: Driver.Operations
 ) !*Driver {
     return DriverReg.register(name, bus, ops);
 }
