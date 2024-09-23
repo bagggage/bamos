@@ -3,10 +3,9 @@
 //! This module handles the initialization and management of the x86-64 CPU, 
 //! Setup of control registers, enabling specific CPU features.
 
-const lapic = @import("lapic.zig");
+const lapic = @import("intr/lapic.zig");
 const log = @import("../../log.zig");
 const regs = @import("regs.zig");
-const intr = @import("intr.zig");
 const utils = @import("../../utils.zig");
 
 const Spinlock = utils.Spinlock;
@@ -19,6 +18,7 @@ const CpuId = packed struct {
 };
 
 pub const io = @import("io.zig");
+pub const intr = @import("intr.zig");
 pub const vm = @import("vm.zig");
 
 pub const cpuid_features = 1;
@@ -59,7 +59,6 @@ pub inline fn getCpuIdx() u32 {
 
 /// Initialize architecture dependent devices.
 pub fn devInit() !void {
-    lapic.init() catch |err| log.info("APIC not initialized: {}", .{err});
 }
 
 pub inline fn cpuid(leaf: u32) CpuId {

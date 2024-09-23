@@ -1,9 +1,11 @@
 const std = @import("std");
 
-const text_output = @import("../../video.zig").text_output;
+const apic = @import("intr/apic.zig");
 const log = @import("../../log.zig");
-const regs = @import("regs.zig");
 const panic = @import("../../panic.zig");
+const pic = @import("intr/pic.zig");
+const intr = @import("../../dev/intr.zig");
+const regs = @import("regs.zig");
 const utils = @import("../../utils.zig");
 
 pub const table_len = 256;
@@ -11,10 +13,14 @@ pub const table_len = 256;
 pub const trap_gate_flags = 0x8F;
 pub const intr_gate_flags = 0x8E;
 
-pub const any_cpu = 0xFF;
-
 pub const kernel_stack = 0;
 pub const user_stack = 2;
+
+pub const reserved_vectors = 32;
+pub const max_vectors = 256;
+pub const avail_vectors = max_vectors - reserved_vectors;
+
+pub const irq_base_vec = reserved_vectors;
 
 const rsrvd_vec_num = 32;
 
@@ -49,6 +55,19 @@ var except_handlers: [rsrvd_vec_num]ExceptISR = undefined;
 pub fn preinit() void {
     initExceptHandlers();
     useIdt(&base_idt);
+}
+
+pub fn init() !intr.Chip {
+    pic.init() catch return error.PicIoBusy;
+
+    return blk: {
+        apic.init() catch |err| {
+            log.warn("APIC initialization failed: {}; using PIC", .{err});
+            break :blk pic.chip();
+        };
+
+        break :blk apic.chip();  
+    };
 }
 
 pub inline fn useIdt(idt: *DescTable) void {
@@ -118,7 +137,7 @@ fn ExcpHandler(vec: comptime_int) type {
             asm volatile (std.fmt.comptimePrint(
                     \\movq %[vec],-{}(%%rsp)
                     \\jmp excpHandlerCaller
-                , .{size + 8})
+                , .{size + @sizeOf(u64)})
                 :
                 : [vec] "i" (vec),
             );

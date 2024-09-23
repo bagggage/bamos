@@ -9,6 +9,7 @@ const vm = @import("vm.zig");
 pub const acpi = @import("dev/stds/acpi.zig");
 pub const regs = @import("dev/regs.zig");
 pub const io = @import("dev/io.zig");
+pub const intr = @import("dev/intr.zig");
 pub const pci = @import("dev/stds/pci.zig");
 
 pub const BusOps = struct {
@@ -99,7 +100,7 @@ pub const Bus = struct {
         }
     }
 
-    pub fn removeDevice(self: *Bus, dev: *Device) *Node {
+    pub fn removeDevice(self: *Bus, dev: *Device) void {
         const node: *Node = @ptrFromInt(@intFromPtr(dev) - @offsetOf(Node, "data"));
 
         self.lock.lock();
@@ -283,6 +284,8 @@ pub fn init() !void {
     });
 
     try acpi.init();
+    try intr.init();
+
     try utils.arch.devInit();
 
     try pci.init();
