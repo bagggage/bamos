@@ -7,7 +7,7 @@ const builtin = @import("builtin");
 
 const boot = @import("../boot.zig");
 const log = @import("../log.zig");
-const serial = @import("../dev/serial.zig");
+const serial = @import("../dev/drivers/uart.zig");
 const vm = @import("../vm.zig");
 
 const Framebuffer = @import("Framebuffer.zig");
