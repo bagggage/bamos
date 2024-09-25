@@ -9,6 +9,7 @@ const vm = @import("../vm.zig");
 const RegInfo = struct {
     name: [:0]const u8,
     offset: comptime_int,
+    access: AccessMode = .rw,
     struct_t: type = void,
 
     pub fn init(
@@ -31,13 +32,21 @@ pub const BusWidth = enum(u2) {
     qword,
 };
 
+pub const AccessMode = enum(u2) {
+    rw,
+    ro,
+    wo
+};
+
 pub inline fn reg(
     comptime name: [:0]const u8,
-    comptime offset: comptime_int
+    comptime offset: comptime_int,
+    comptime access: AccessMode,
 ) RegInfo {
     return RegInfo{
         .name = name,
         .offset = offset,
+        .access = access,
         .struct_t = void
     };
 }
@@ -45,11 +54,13 @@ pub inline fn reg(
 pub inline fn regS(
     comptime name: [:0]const u8,
     comptime offset: comptime_int,
+    comptime access: AccessMode,
     comptime StructT: type
 ) RegInfo {
     return RegInfo{
         .name = name,
         .offset = offset,
+        .access = access,
         .struct_t = StructT
     };
 }
@@ -86,15 +97,17 @@ pub fn RegsGroup(
         base: usize,
 
         pub fn init(base_addr: usize) !Self {
+            const result = switch (io_type) {
+                .io_ports => .{ .base = base_addr },
+                .mmio => .{ .base = vm.getVirtLma(base_addr) }
+            };
+
             _ = io.request(name, base_addr, getGroupSize(), io_type) orelse return switch (io_type) {
                 .io_ports => error.IoPortsBusy,
                 .mmio => error.MmioBusy
             };
 
-            return switch (io_type) {
-                .io_ports => .{ .base = base_addr },
-                .mmio => .{ .base = vm.getVirtLma(base_addr) }
-            };
+            return result;
         }
 
         const BusT = switch (bus_width) {
@@ -170,7 +183,17 @@ pub fn RegsGroup(
         }
 
         pub inline fn write(self: *const Self, comptime register: RegNames, value: BusT) void {
-            const offset = getReg(register).offset;
+            @setRuntimeSafety(false);
+
+            const reg_info = comptime getReg(register);
+            if (comptime reg_info.access == .ro) {
+                @compileError(std.fmt.comptimePrint(
+                    "Register '{s}' for the '{s}' group is read only",
+                    .{@tagName(register), name}
+                ));
+            }
+
+            const offset = reg_info.offset;
 
             switch (io_type) {
                 .io_ports => io_write(value, self.getBase() + offset),
@@ -179,7 +202,17 @@ pub fn RegsGroup(
         }
 
         pub inline fn read(self: *const Self, comptime register: RegNames) BusT {
-            const offset = getReg(register).offset;
+            @setRuntimeSafety(false);
+
+            const reg_info = comptime getReg(register);
+            if (comptime reg_info.access == .wo) {
+                @compileError(std.fmt.comptimePrint(
+                    "Register '{s}' of the '{s}' group is write only",
+                    .{@tagName(register), name}
+                ));
+            }
+
+            const offset = reg_info.offset;
 
             return switch (io_type) {
                 .io_ports => return io_read(self.getBase() + offset),
@@ -188,7 +221,7 @@ pub fn RegsGroup(
         }
 
         pub inline fn set(self: *const Self, comptime register: RegNames, value: anytype) void {
-            const reg_info = getReg(register);
+            const reg_info = comptime getReg(register);
 
             if (reg_info.struct_t == void) @compileError("This register don't have a representation as user-defined struct");
             if (@TypeOf(value) != reg_info.struct_t) {
@@ -198,6 +231,8 @@ pub fn RegsGroup(
                 );
             }
 
+            @setRuntimeSafety(false);
+
             const val = @as(BusT, @bitCast(value));
             self.write(register, val);
         }
@@ -206,6 +241,8 @@ pub fn RegsGroup(
             const reg_info = getReg(register);
 
             if (reg_info.struct_t == void) @compileError("This register don't have a representation as user-defined struct");
+
+            @setRuntimeSafety(false);
 
             const val = self.read(register);
             return @as(reg_info.struct_t,  @bitCast(val));
