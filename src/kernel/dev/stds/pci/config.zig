@@ -418,7 +418,7 @@ fn initMmio(mcfg_hdr: *const acpi.SdtHeader) !void {
     max_seg = entries.len;
 
     for (entries) |entry| {
-        const config_space_size = (@as(usize, entry.end_bus) + 1) * 4096;
+        const config_space_size = (@as(usize, entry.end_bus - entry.start_bus) + 1) * 4096 * max_dev * max_func;
 
         _ = io.request("PCI Config mmio", entry.base, config_space_size, .mmio) orelse
             return error.IoRegionBusy;
