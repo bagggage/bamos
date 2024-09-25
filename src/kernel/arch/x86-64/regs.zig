@@ -19,7 +19,11 @@ pub const MSR_APIC_BASE = 0x1B;
 /// Interrupt Descriptor Table Register.
 pub const IDTR = packed struct {
     limit: u16 = undefined,
-    base: u64 = undefined
+    base: u64 = undefined,
+
+    pub fn format(self: *const IDTR, _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("base = 0x{x}, limit = {}", .{self.base,self.limit});
+    }
 };
 
 /// Global Descriptor Table Register.
@@ -77,6 +81,14 @@ pub const IntrState = extern struct {
     callee: CalleeRegs = .{},
     scratch: ScratchRegs = .{},
     intr: InterruptFrame = .{},
+};
+
+/// Represents the saved state of the CPU during an IRQ interrupt.
+pub const IrqIntrState = extern struct {
+    scratch: ScratchRegs,
+
+    irq_pin: u64, 
+    intr: InterruptFrame,
 };
 
 /// Read Model-Specific Register.
@@ -244,9 +256,32 @@ pub inline fn restoreState() void {
     restoreScratchRegs();
 }
 
+pub inline fn getIdtr() IDTR {
+    var idtr: IDTR = undefined;
+    asm volatile ("sidt %[reg]"
+        : [reg] "=memory" (idtr)
+    );
+
+    return idtr;
+}
+
 pub inline fn setIdtr(idtr: IDTR) void {
     asm volatile ("lidt %[reg]"
         :
         : [reg] "memory" (idtr),
+    );
+}
+
+pub inline fn stackAlloc(comptime items_num: comptime_int) void {
+    asm volatile (
+        "sub %[size],%rsp"
+        ::[size] "i" (items_num * @sizeOf(usize))
+    );
+}
+
+pub inline fn stackFree(comptime items_num: comptime_int) void {
+    asm volatile (
+        "add %[size],%rsp"
+        ::[size] "i" (items_num * @sizeOf(usize))
     );
 }
