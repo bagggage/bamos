@@ -54,7 +54,7 @@ pub fn preinit() void {
 /// 
 /// - Returns: The Local APIC ID.
 pub inline fn getCpuIdx() u32 {
-    return lapic.getId();
+    return if (lapic.isInitialized()) lapic.getId() else @truncate(cpuid(cpuid_features).b >> 24);
 }
 
 /// Initialize architecture dependent devices.
@@ -99,6 +99,8 @@ fn initCpu(comptime is_initial: bool) void {
     if (is_initial) initPrimaryCpu();
 
     gdtSwitchToLma();
+
+    intr.useIdt(intr.getIdtForCpu(@truncate(getCpuIdx())));
 }
 
 inline fn initPrimaryCpu() void {
