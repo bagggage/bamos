@@ -12,11 +12,43 @@ const vm = @import("../vm.zig");
 
 pub const Chip = struct {
     pub const Operations = struct {
+        const IrqFn = *const fn(*const Irq) void;
+
+        pub const EoiFn = *const fn() void;
+        pub const BindIrqFn = IrqFn;
+        pub const UnbindIrqFn = IrqFn;
+        pub const MaskIrqFn = IrqFn;
+        pub const UnmaksIrqFn = IrqFn;
+
+        eoi: EoiFn,
+        bindIrq: BindIrqFn,
+        unbindIrq: UnbindIrqFn,
+        maskIrq: MaskIrqFn,
+        unmaskIrq: UnmaksIrqFn
     };
 
     name: []const u8,
+    ops: Operations,
 
-    ops: Operations
+    pub inline fn eoi(self: *const Chip) void {
+        self.ops.eoi();
+    }
+
+    pub inline fn bindIrq(self: *const Chip, irq: *const Irq) void {
+        self.ops.bindIrq(irq);
+    }
+
+    pub inline fn unbindIrq(self: *const Chip, irq: *const Irq) void {
+        self.ops.unbindIrq(irq);
+    }
+
+    pub inline fn maskIrq(self: *const Chip, irq: *const Irq) void {
+        self.ops.maskIrq(irq);
+    }
+
+    pub inline fn unmaskIrq(self: *const Chip, irq: *const Irq) void {
+        self.ops.unmaskIrq(irq);
+    }
 };
 
 pub const Error = error {
@@ -44,16 +76,18 @@ pub const Irq = struct {
     vector: Vector,
     pin: u8,
     trigger_mode: TriggerMode,
+    shared: bool,
     pending: std.atomic.Value(bool) = .{.raw = false},
 
     handlers: HandlerList = .{},
     handlers_lock: utils.Spinlock = .{},
 
-    pub fn init(pin: u8, vector: Vector, trigger_mode: TriggerMode) Irq {
+    pub fn init(pin: u8, vector: Vector, trigger_mode: TriggerMode, shared: bool) Irq {
         return .{
             .pin = pin,
             .vector = vector,
-            .trigger_mode = trigger_mode
+            .trigger_mode = trigger_mode,
+            .shared = shared
         };
     }
 
@@ -62,9 +96,11 @@ pub const Irq = struct {
     }
 
     pub fn addHandler(self: *Irq, func: Handler.Fn, device: *dev.Device) Error!void {
+        if (!self.shared and self.handlers.len > 0) return error.IrqBusy;
+
         self.waitWhilePending();
 
-        const node: *HandlerNode = @ptrCast(vm.kmalloc(@sizeOf(HandlerNode)) orelse return Error.NoMemory);
+        const node: *HandlerNode = @ptrCast(vm.kmalloc(@sizeOf(HandlerNode)) orelse return error.NoMemory);
 
         node.data.* = .{
             .device = device,
@@ -75,6 +111,8 @@ pub const Irq = struct {
         defer self.handlers_lock.unlock();
 
         self.handlers.append(node);
+
+        if (self.handlers.len == 1) chip.unmaskIrq(self);
     }
 
     pub fn removeHandler(self: *Irq, device: *const dev.Device) void {
@@ -85,6 +123,8 @@ pub const Irq = struct {
 
         while (node) |handler| : (node = handler.next) {
             if (handler.data.device == device) {
+                if (self.handlers.len == 1) chip.maskIrq(self);
+
                 self.waitWhilePending();
 
                 self.handlers.remove(handler);
@@ -98,20 +138,20 @@ pub const Irq = struct {
     }
 
     pub fn handle(self: *Irq) bool {
-        self.pending.store(true, .acquire);
+        self.pending.store(true, .release);
         defer self.pending.store(false, .release);
 
         var node = self.handlers.first;
 
         while (node) |handler| : (node = handler.next) {
-            if (handler.data.handler(self, handler.data.device)) return true;
+            if (handler.data.func(self, handler.data.device)) return true;
         }
 
         return false;
     }
 
     inline fn waitWhilePending(self: *const Irq) void {
-        while (self.pending.load(.unordered)) {}
+        while (self.pending.load(.acquire)) {}
     }
 };
 
@@ -156,8 +196,9 @@ const Cpu = struct {
     }
 };
 
+pub const max_irqs = 128;
+
 const max_cpus = 128;
-const max_irqs = 128;
 
 const OrderArray = std.BoundedArray(*Cpu, max_cpus);
 const CpuArray = std.BoundedArray(Cpu, max_cpus);
@@ -167,8 +208,7 @@ var cpus_order = OrderArray.init(0) catch unreachable;
 var cpus = CpuArray.init(0) catch unreachable;
 var cpus_lock = utils.Spinlock.init(.unlocked);
 
-var irqs = std.BoundedArray(Irq, max_irqs).init(0) catch unreachable;
-var irqs_lock = utils.Spinlock.init(.unlocked);
+var irqs = std.BoundedArray(?Irq, max_irqs).init(max_irqs) catch unreachable;
 
 var chip: Chip = undefined;
 
@@ -202,47 +242,36 @@ pub fn deinit() void {
 }
 
 pub fn requestIrq(pin: u8, device: *dev.Device, handler: Irq.Handler.Fn, tigger_mode: Irq.TriggerMode, shared: bool) Error!void {
-    irqs_lock.lock();
-    defer irqs_lock.unlock();
+    const irq_item = &irqs.buffer[pin];
 
-    const irq_item = utils.algorithm.find(
-        Irq, irqs.slice(), pin,
-        Irq.eql
-    );
-
-    const irq = if (irq_item) |irq_ent| blk: {
+    const irq = if (irq_item.*) |*irq_ent| blk: {
         if (!shared or irq_ent.trigger_mode != tigger_mode) return error.IrqBusy;
-        break :blk @constCast(irq_ent);
+        break :blk irq_ent;
     }
     else blk: {
         const vector = allocVector(null) catch return error.NoVector;
-        const new_irq = irqs.addOne() catch return error.NoMemory;
-        
-        new_irq.* = Irq.init(pin, vector);
+        irq_item.* = Irq.init(pin, vector, tigger_mode, shared);
 
-        break :blk new_irq;
+        const ptr = &irq_item.*.?;
+
+        chip.bindIrq(ptr);
+        break :blk ptr;
     };
 
     try irq.addHandler(device, handler);
-
-    return irq;
 }
 
 pub fn releaseIrq(pin: u8, device: *const dev.Device) void {
-    const irq = utils.algorithm.find(
-        Irq, irqs.slice(), pin,
-        Irq.eql
-    ) orelse unreachable;
+    const irq = &irqs.buffer[pin].?;
 
     irq.removeHandler(device);
 
     if (irq.handlers.len > 0) return;
 
-    const idx = (@intFromPtr(irq) - @intFromPtr(irqs)) / @sizeOf(Irq);
+    irqs.buffer[pin] = null;
 
+    chip.unbindIrq(irq);
     freeVector(irq.vector);
-
-    irqs.swapRemove(idx);
 }
 
 pub fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
@@ -268,7 +297,13 @@ pub fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
     reorderCpus(cpu_idx, .forward);
 }
 
-pub fn allocVector(cpu_idx: ?u16) ?Vector {
+pub fn handleIrq(pin: u8) void {
+    _ = irqs.buffer[pin].?.handle();
+
+    chip.eoi();
+}
+
+fn allocVector(cpu_idx: ?u16) ?Vector {
     cpus_lock.lock();
     defer cpus_lock.unlock();
 
@@ -285,7 +320,7 @@ pub fn allocVector(cpu_idx: ?u16) ?Vector {
     };
 }
 
-pub fn freeVector(vec: Vector) void {
+fn freeVector(vec: Vector) void {
     std.debug.assert(vec.cpu_idx < cpus.len and vec.vec < arch.intr.max_vectors);
 
     cpus_lock.lock();
