@@ -12,6 +12,52 @@ pub const io = @import("dev/io.zig");
 pub const intr = @import("dev/intr.zig");
 pub const pci = @import("dev/stds/pci.zig");
 
+pub const Name = struct {
+    ptr: [*]const u8,
+    len: u16,
+
+    allocated: bool = false,
+
+    comptime { std.debug.assert(@sizeOf(Name) == @sizeOf(usize) * 2); }
+
+    pub inline fn str(self: *const Name) []const u8 {
+        return self.ptr[0..self.len];
+    }
+
+    pub fn print(comptime fmt: []const u8, args: anytype) !Name {
+        const len: u16 = @truncate(std.fmt.count(fmt, args));
+        const buffer: [*]u8 = @ptrCast(vm.kmalloc(len) orelse return error.NoMemory);
+
+        _ = try std.fmt.bufPrint(buffer[0..len], fmt, args);
+
+        return .{
+            .ptr = buffer,
+            .len = len,
+            .allocated = true
+        };
+    }
+
+    pub inline fn init(val: []const u8) Name {
+        return .{
+            .ptr = val.ptr,
+            .len = @truncate(val.len)
+        };
+    }
+
+    pub inline fn deinit(self: *Name) void {
+        if (self.allocated) vm.kfree(self.ptr);
+
+        self.len = 0;
+    }
+
+    pub fn format(self: *const Name, _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("{s}", .{ self.str() });
+    }
+};
+
+pub const nameFmt = Name.print;
+pub const nameOf = Name.init;
+
 pub const Bus = struct {
     pub const Operations = struct {
         pub const MatchFn = *const fn (*const Driver, *const Device) bool;
@@ -146,10 +192,10 @@ pub const Bus = struct {
 };
 
 pub const Device = struct {
-    name: []const u8,
+    name: Name,
     bus: *Bus,
 
-    driver: ?*Driver,
+    driver: ?*const Driver,
     driver_data: utils.AnyData,
 };
 
@@ -161,9 +207,12 @@ pub const Driver = struct {
         };
 
         pub const ProbeFn = *const fn (*Device) ProbeResult;
+        pub const PlatformProbeFn = *const fn (*const Driver) ProbeResult;
         pub const RemoveFn = *const fn (*Device) void;
 
-        probe: ProbeFn,
+        const Probe = union { f: ProbeFn, platform: PlatformProbeFn };
+
+        probe: Probe,
         remove: RemoveFn
     };
 
@@ -174,11 +223,19 @@ pub const Driver = struct {
     impl_data: utils.AnyData,
 
     pub inline fn probe(self: *const Driver, device: *Device) Operations.ProbeResult {
-        return self.ops.probe(device);
+        return self.ops.probe.f(device);
+    }
+
+    pub inline fn platformProbe(self: *const Driver) Operations.ProbeResult {
+        return self.ops.probe.platform(self);
     }
 
     pub inline fn remove(self: *const Driver, device: *Device) void {
         return self.ops.remove(device);
+    }
+
+    pub inline fn addDevice(self: *const Driver, name: Name, data: ?*anyopaque) !*Device {
+        return registerDevice(name, self.bus, self, data);
     }
 };
 
@@ -193,7 +250,7 @@ const DriverReg = struct {
     var lock = utils.Spinlock.init(.unlocked);
     var oma = vm.ObjectAllocator.init(DriverNode);
 
-    pub fn register(comptime name: []const u8, bus: *Bus, ops: Driver.Operations) !*Driver {
+    pub fn register(comptime name: []const u8, bus: *Bus, comptime ops: Driver.Operations) !*Driver {
         lock.lock();
         defer lock.unlock();
 
@@ -203,9 +260,19 @@ const DriverReg = struct {
         node.data.bus = bus;
         node.data.ops = ops;
 
-        reg[DeviceReg.getBusIdx(bus)].prepend(node);
+        const bus_idx = DeviceReg.getBusIdx(bus);
 
-        bus.matchDriver(&node.data);
+        if (bus == platform_bus) {
+            if (node.data.platformProbe() == .missmatch) {
+                oma.free(node);
+                return error.NoPlatformDevice;
+            }
+
+            reg[bus_idx].prepend(node);
+        } else {
+            reg[bus_idx].prepend(node);
+            bus.matchDriver(&node.data);
+        }
 
         return &node.data;
     }
@@ -274,6 +341,13 @@ const DeviceReg = struct {
     }
 };
 
+const AutoInit = struct {
+    const modules = .{
+        @import("dev/drivers/uart.zig"),
+        pci
+    };
+};
+
 fn platformBusRemove(_: *Device) void {}
 fn platformBusMatch(_: *const Driver, _: *const Device) bool { return true; }
 
@@ -290,7 +364,13 @@ pub fn init() !void {
 
     try utils.arch.devInit();
 
-    try pci.init();
+    inline for (AutoInit.modules) |Module| {
+        Module.init() catch |err| {
+            log.warn(@typeName(Module)++": was not initialized: {s}", .{@errorName(err)});
+        };
+
+        log.info(@typeName(Module)++": initialized", .{});
+    }
 }
 
 pub inline fn registerBus(
@@ -301,12 +381,14 @@ pub inline fn registerBus(
 }
 
 pub fn registerDevice(
+    name: Name,
     bus: *Bus,
-    driver: ?*Driver,
+    driver: ?*const Driver,
     data: ?*anyopaque
 ) !*Device {
     const node = DeviceReg.alloc() orelse return error.NoMemory;
 
+    node.data.name = name;
     node.data.driver = driver;
     node.data.driver_data.set(data);
 
@@ -317,8 +399,8 @@ pub fn registerDevice(
 
 pub inline fn registerDriver(
     comptime name: []const u8,
-    bus: *const Bus,
-    ops: Driver.Operations
+    bus: *Bus,
+    comptime ops: Driver.Operations
 ) !*Driver {
     return DriverReg.register(name, bus, ops);
 }
