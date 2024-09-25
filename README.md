@@ -77,7 +77,7 @@ In the project's root directory, there are the `qemu.sh` and `debug.sh` scripts:
 
 BamOS is at an early stage of development, and many things are not yet implemented. Moreover, writing the implementation and developing the operating system architecture requires an iterative approach to find the best solutions, so some details may change, but this is all for the better.
 
-## Current Status
+## Current State
 
 - The operating system supports the x86-64 architecture.
 - A virtual memory management system is implemented.
@@ -86,10 +86,10 @@ BamOS is at an early stage of development, and many things are not yet implement
 - Handling of hardware exceptions.
 - Device management system.
 - PCI bus driver.
+- Implementation of an interrupt handling system.
 
 ## Planned Features
 
-- Implementation of an interrupt handling system.
 - Porting the NVMe driver from the `draft-c` branch.
 - Implementation of drivers for other solid-state storage standards.
 - Development and implementation of a virtual file system architecture.
