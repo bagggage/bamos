@@ -41,41 +41,49 @@ inline fn getList(comptime io_type: Type) *RegionList {
 
 /// Write byte into mmio memory.
 pub inline fn writeb(ptr: *volatile u8, data: u8) void {
+    @setRuntimeSafety(false);
     ptr.* = data;
 }
 
 /// Write word into mmio memory.
 pub inline fn writew(ptr: *volatile u16, data: u16) void {
+    @setRuntimeSafety(false);
     ptr.* = std.mem.nativeToLittle(u16, data);
 }
 
 /// Write double word into mmio memory.
 pub inline fn writel(ptr: *volatile u32, data: u32) void {
+    @setRuntimeSafety(false);
     ptr.* = std.mem.nativeToLittle(u32, data);
 }
 
 /// Write quad word into mmio memory.
 pub inline fn writeq(ptr: *volatile u64, data: u64) void {
+    @setRuntimeSafety(false);
     ptr.* = std.mem.nativeToLittle(u16, data);
 }
 
 /// Read byte from mmio memory.
 pub inline fn readb(ptr: *const volatile u8) u8 {
+    @setRuntimeSafety(false);
     return ptr.*;
 }
 
 /// Read word from mmio memory.
 pub inline fn readw(ptr: *const volatile u16) u16 {
+    @setRuntimeSafety(false);
     return std.mem.littleToNative(u16, ptr.*);
 }
 
 /// Read double word from mmio memory.
 pub inline fn readl(ptr: *const volatile u32) u32 {
+    @setRuntimeSafety(false);
     return std.mem.littleToNative(u32, ptr.*);
 }
 
 /// Read quad word from mmio memory.
 pub inline fn readq(ptr: *const volatile u64) u64 {
+    @setRuntimeSafety(false);
     return std.mem.littleToNative(u32, ptr.*);
 }
 
