@@ -32,7 +32,7 @@ var region_oma = vm.ObjectAllocator.init(RegionNode);
 var ports_list = RegionList{};
 var mmio_list = RegionList{};
 
-inline fn getList(comptime io_type: Type) *RegionList {
+inline fn getIoList(comptime io_type: Type) *RegionList {
     return switch (io_type) {
         .io_ports => &ports_list,
         .mmio => &mmio_list
@@ -90,7 +90,7 @@ pub inline fn readq(ptr: *const volatile u64) u64 {
 pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime io_type: Type) ?usize {
     const end = base + size;
 
-    const list = getList(io_type);
+    const list = getIoList(io_type);
 
     {
         lock.lock();
@@ -120,7 +120,7 @@ pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime i
 }
 
 pub fn release(base: usize, comptime io_type: Type) void {
-    const list = getList(io_type);
+    const list = getIoList(io_type);
 
     lock.lock();
     defer lock.unlock();
@@ -147,7 +147,7 @@ pub fn isAvail(base: usize, size: usize, comptime io_type: Type) bool {
     lock.lock();
     defer lock.unlock();
 
-    var temp = getList(io_type).first;
+    var temp = getIoList(io_type).first;
 
     while (temp) |node| : (temp = node.next) {
         const region = &node.data;

@@ -365,11 +365,11 @@ pub fn init() !void {
     try utils.arch.devInit();
 
     inline for (AutoInit.modules) |Module| {
-        Module.init() catch |err| {
+        if (Module.init()) {
+            log.info(@typeName(Module)++": initialized", .{});
+        } else |err| {
             log.warn(@typeName(Module)++": was not initialized: {s}", .{@errorName(err)});
-        };
-
-        log.info(@typeName(Module)++": initialized", .{});
+        }
     }
 }
 

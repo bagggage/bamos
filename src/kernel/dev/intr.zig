@@ -100,9 +100,9 @@ pub const Irq = struct {
 
         self.waitWhilePending();
 
-        const node: *HandlerNode = @ptrCast(vm.kmalloc(@sizeOf(HandlerNode)) orelse return error.NoMemory);
+        const node: *HandlerNode = @alignCast(@ptrCast(vm.kmalloc(@sizeOf(HandlerNode)) orelse return error.NoMemory));
 
-        node.data.* = .{
+        node.data = .{
             .device = device,
             .func = func
         };
@@ -156,12 +156,7 @@ pub const Irq = struct {
 };
 
 pub const Vector = struct {
-    pub const Cpu = union {
-        specific: u16,
-        all: void
-    };
-
-    cpu: Vector.Cpu,
+    cpu: u16,
     vec: u16,
 };
 
@@ -210,7 +205,7 @@ var cpus_lock = utils.Spinlock.init(.unlocked);
 
 var irqs = std.BoundedArray(?Irq, max_irqs).init(max_irqs) catch unreachable;
 
-var chip: Chip = undefined;
+pub var chip: Chip = undefined;
 
 pub fn init() !void {
     const cpus_num = boot.getCpusNum();
@@ -249,7 +244,7 @@ pub fn requestIrq(pin: u8, device: *dev.Device, handler: Irq.Handler.Fn, tigger_
         break :blk irq_ent;
     }
     else blk: {
-        const vector = allocVector(null) catch return error.NoVector;
+        const vector = allocVector(null) orelse return error.NoVector;
         irq_item.* = Irq.init(pin, vector, tigger_mode, shared);
 
         const ptr = &irq_item.*.?;
@@ -258,7 +253,7 @@ pub fn requestIrq(pin: u8, device: *dev.Device, handler: Irq.Handler.Fn, tigger_
         break :blk ptr;
     };
 
-    try irq.addHandler(device, handler);
+    try irq.addHandler(handler, device);
 }
 
 pub fn releaseIrq(pin: u8, device: *const dev.Device) void {
@@ -298,6 +293,8 @@ pub fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
 }
 
 pub fn handleIrq(pin: u8) void {
+    @setRuntimeSafety(false);
+
     _ = irqs.buffer[pin].?.handle();
 
     chip.eoi();
@@ -315,7 +312,7 @@ fn allocVector(cpu_idx: ?u16) ?Vector {
     reorderCpus(idx, .forward);
 
     return .{
-        .cpu = .{ .specific = idx },
+        .cpu = idx,
         .vec = vec
     };
 }

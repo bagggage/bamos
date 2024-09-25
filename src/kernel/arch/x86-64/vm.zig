@@ -120,7 +120,7 @@ pub inline fn setPt(pt: *const PageTable) void {
 pub inline fn clonePt(src_pt: *const PageTable, dest_pt: *PageTable) void {
     const dma_pte_idx = comptime getPxeIdx(3, lma_start);
     const heap_pte_idx = comptime getPxeIdx(3, heap_start);
-    const kernel_pte_idx = comptime getPxeIdx(3, @intFromPtr(&clonePt));
+    const kernel_pte_idx = getPxeIdx(3, @intFromPtr(&init));
 
     dest_pt[dma_pte_idx] = src_pt[dma_pte_idx];
     dest_pt[heap_pte_idx] = src_pt[heap_pte_idx];

@@ -246,3 +246,7 @@ pub inline fn newPt() ?*PageTable {
 
     return pt;
 }
+
+pub inline fn getRootPt() *PageTable {
+    return root_pt;
+}

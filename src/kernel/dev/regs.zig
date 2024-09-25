@@ -254,8 +254,8 @@ test "type generating" {
     const Regs = RegsGroup(
         .mmio, .dword,
         &.{
-            reg("foo", 0),
-            reg("bar", 8)
+            reg("foo", 0, .rw),
+            reg("bar", 8, .rw)
         },
     );
 
@@ -269,12 +269,12 @@ test "read mmio" {
     const Regs = RegsGroup(
         .mmio, .dword,
         &.{
-            reg("foo", 0),
-            reg("bar", @sizeOf(u32))
+            reg("foo", 0, .rw),
+            reg("bar", @sizeOf(u32), .rw)
         },
     );
     const example_mmio = [_]u32{ 0xdeadbeef, 0xdeadc0de };
-    const regs = Regs.init(@intFromPtr(&example_mmio));
+    const regs = Regs{ .base = @intFromPtr(&example_mmio) };
 
     try std.testing.expect(regs.read(.foo) == example_mmio[0]);
     try std.testing.expect(regs.read(.bar) == example_mmio[1]);
@@ -284,13 +284,13 @@ test "write mmio" {
     const Regs = RegsGroup(
         .mmio, .dword,
         &.{
-            reg("foo", 0),
-            reg("bar", @sizeOf(u32))
+            reg("foo", 0, .rw),
+            reg("bar", @sizeOf(u32), .rw)
         },
     );
 
     var example_mmio = [_]u32{ 0xdeadbeef, 0xdeadc0de };
-    const regs = Regs.init(@intFromPtr(&example_mmio));
+    const regs = Regs{ .base = @intFromPtr(&example_mmio) };
 
     try std.testing.expect(example_mmio[0] == 0xdeadbeef);
     try std.testing.expect(example_mmio[1] == 0xdeadc0de);
