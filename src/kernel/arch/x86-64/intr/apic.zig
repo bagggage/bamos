@@ -82,7 +82,13 @@ pub fn init() !void {
 pub fn chip() intr.Chip {
     return .{
         .name = "APIC",
-        .ops = undefined
+        .ops = .{
+            .eoi = @ptrCast(&eoi),
+            .bindIrq = &bindIrq,
+            .unbindIrq = &unbindIrq,
+            .maskIrq = &maskIrq,
+            .unmaskIrq = &unmaskIrq,
+        }
     };
 }
 
@@ -92,4 +98,45 @@ pub inline fn getMadt() *Madt {
 
 inline fn isAvail() bool {
     return (arch.cpuid(arch.cpuid_features).d & c.bit_APIC) != 0;
+}
+
+fn bindIrq(irq: *const intr.Irq) void {
+    arch.intr.setupIsr(
+        irq.vector,
+        arch.intr.lowLevelIrqHandler(irq.pin),
+        .kernel,
+        0x8F
+    );
+
+    const entry = ioapic.getRedirEntry(irq.pin);
+
+    entry.set(.{
+        .vector = @truncate(irq.vector.vec),
+        .delv_mode = .fixed,
+        .delv_status = .relaxed,
+        .dest_mode = .physical,
+        .dest = @truncate(irq.vector.cpu.specific),
+        .pin_polarity = .active_high,
+        .trig_mode = switch(irq.trigger_mode) {
+            .edge => .edge,
+            .level => .level
+        },
+        .mask = 1,
+    });
+}
+
+fn unbindIrq(irq: *const intr.Irq) void {
+    _ = irq;
+}
+
+fn maskIrq(irq: *const intr.Irq) void {
+    ioapic.mask(irq.pin, true);
+}
+
+fn unmaskIrq(irq: *const intr.Irq) void {
+    ioapic.mask(irq.pin, false);
+}
+
+fn eoi() void {
+    lapic.set(.eoi, 0);
 }

@@ -14,8 +14,8 @@ const vm = @import("../../../vm.zig");
 const Ioapic = struct {
     const InternalRegs = dev.regs.RegsGroup(
         "IOAPIC", .mmio, .dword, &.{
-            dev.regs.reg("IOREGSEL", 0x0),
-            dev.regs.reg("IOREGWIN", 0x10)
+            dev.regs.reg("IOREGSEL", 0x0, .wo),
+            dev.regs.reg("IOREGWIN", 0x10, .rw)
     });
 
     pub const Regs = enum(u8) {
@@ -106,11 +106,11 @@ const RedirEntry = struct {
         dest_mode: DestinationMode,
         delv_status: DeliveryStatus,
         pin_polarity: Polarity,
-        remote_irr: u1,
+        remote_irr: u1 = 0,
         trig_mode: TriggerMode,
         mask: u1,
 
-        _: u39,
+        _: u39 = 0,
 
         dest: u8,
 

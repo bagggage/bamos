@@ -39,6 +39,7 @@ pub const Regs = enum(u16) {
 
 const APIC_ENABLED = 0x800;
 
+var is_initialized = false;
 var base: usize = undefined;
 
 pub fn init() !void {
@@ -52,6 +53,12 @@ pub fn init() !void {
 
     // Set the Spurious Interrupt Vector Register bit 8
     set(.spurious_intr_vec, get(.spurious_intr_vec) | 0x100);
+
+    is_initialized = true;
+}
+
+pub inline fn isInitialized() bool {
+    return is_initialized;
 }
 
 pub inline fn get(reg: Regs) u32 {
@@ -63,10 +70,12 @@ pub inline fn set(reg: Regs, value: u32) void {
 }
 
 pub inline fn read(offset: u16) u32 {
+    @setRuntimeSafety(false);
     return io.readl(@ptrFromInt(base + offset));
 }
 
 pub inline fn write(offset: u16, value: u32) void {
+    @setRuntimeSafety(false);
     io.writel(@ptrFromInt(base + offset), value);
 }
 

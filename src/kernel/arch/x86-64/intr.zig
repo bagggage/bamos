@@ -1,14 +1,17 @@
 const std = @import("std");
 
 const apic = @import("intr/apic.zig");
+const arch = @import("arch.zig");
+const boot = @import("../../boot.zig");
+const intr = @import("../../dev/intr.zig");
 const log = @import("../../log.zig");
 const panic = @import("../../panic.zig");
 const pic = @import("intr/pic.zig");
-const intr = @import("../../dev/intr.zig");
 const regs = @import("regs.zig");
 const utils = @import("../../utils.zig");
+const vm = @import("../../vm.zig");
 
-pub const table_len = 256;
+pub const table_len = max_vectors;
 
 pub const trap_gate_flags = 0x8F;
 pub const intr_gate_flags = 0x8E;
@@ -16,8 +19,8 @@ pub const intr_gate_flags = 0x8E;
 pub const kernel_stack = 0;
 pub const user_stack = 2;
 
-pub const reserved_vectors = 32;
 pub const max_vectors = 256;
+pub const reserved_vectors = 32;
 pub const avail_vectors = max_vectors - reserved_vectors;
 
 pub const irq_base_vec = reserved_vectors;
@@ -28,14 +31,14 @@ pub const Descriptor = packed struct {
     offset_1: u16 = 0,
     selector: u16 = 0,
     ist: u8 = 0,
-    type_attrs: u8 = 0,
+    type_attr: u8 = 0,
     offset_2: u48 = 0,
     rsrvd: u32 = 0,
 
     pub fn init(isr: u64, stack: u8, attr: u8) @This() {
         var result: @This() = .{
             .ist = stack,
-            .type_attrs = attr,
+            .type_attr = attr,
             .selector = regs.getCs()
         };
 
@@ -47,17 +50,30 @@ pub const Descriptor = packed struct {
 };
 
 pub const DescTable = [table_len]Descriptor;
-const ExceptISR = @TypeOf(&commonExcpHandler);
 
-var base_idt: DescTable = .{Descriptor{}} ** table_len;
-var except_handlers: [rsrvd_vec_num]ExceptISR = undefined;
+const IsrFn = *const fn() callconv(.Naked) noreturn;
+const ExceptionIsrFn = @TypeOf(&commonExcpHandler);
+
+var except_handlers: [rsrvd_vec_num]ExceptionIsrFn = undefined;
+
+var idts: []DescTable = &.{};
 
 pub fn preinit() void {
+    const cpus_num = boot.getCpusNum();
+    const idts_pages = std.math.divCeil(u32, @as(u32, cpus_num) * @sizeOf(DescTable), vm.page_size) catch unreachable;
+
+    const base = boot.alloc(idts_pages) orelse @panic("No memory to allocate IDTs per each cpu");
+
+    idts.ptr = @ptrFromInt(vm.getVirtLma(base));
+    idts.len = cpus_num;
+
     initExceptHandlers();
-    useIdt(&base_idt);
+    useIdt(&idts[arch.getCpuIdx()]);
 }
 
 pub fn init() !intr.Chip {
+    try initIdts();
+
     pic.init() catch return error.PicIoBusy;
 
     return blk: {
@@ -70,17 +86,42 @@ pub fn init() !intr.Chip {
     };
 }
 
+pub fn setupIsr(vec: intr.Vector, isr: IsrFn, stack: enum{kernel,user}, type_attr: u8) void {
+    idts[vec.cpu.specific][vec.vec] = Descriptor.init(
+        @intFromPtr(isr),
+        switch (stack) {
+            .kernel => 0,
+            .user => 2
+        },
+        type_attr
+    );
+}
+
+pub inline fn getIdtForCpu(cpu_idx: u16) *DescTable {
+    return &idts[cpu_idx];
+}
+
 pub inline fn useIdt(idt: *DescTable) void {
     const idtr: regs.IDTR = .{ .base = @intFromPtr(idt), .limit = @sizeOf(DescTable) - 1 };
 
     regs.setIdtr(idtr);
 }
 
+fn initIdts() !void {
+    for (idts[1..idts.len]) |*idt| {
+        for (0..rsrvd_vec_num) |vec| {
+            idt[vec] = idts[0][vec];
+        }
+
+        @memset(idt[rsrvd_vec_num..max_vectors], std.mem.zeroes(Descriptor));
+    }
+}
+
 fn initExceptHandlers() void {
     inline for (0..rsrvd_vec_num) |vec| {
         const Handler = ExcpHandler(vec);
 
-        base_idt[vec] = Descriptor.init(
+        idts[0][vec] = Descriptor.init(
             @intFromPtr(&Handler.isr),
             kernel_stack,
             trap_gate_flags
@@ -93,17 +134,17 @@ export fn excpHandlerCaller() callconv(.Naked) noreturn {
     @setRuntimeSafety(false);
     regs.saveState();
 
-    asm volatile (
+    asm volatile(
         \\mov %rsp,%rdi
         \\mov -0x8(%rsp),%rdx
         \\mov -0x10(%rsp),%rsi
     );
 
     if (comptime (@sizeOf(regs.IntrState) % 0x10) == 0) {
-        asm volatile ("sub $0x8,%rsp");
+        asm volatile("sub $0x8,%rsp");
     }
 
-    asm volatile (
+    asm volatile(
         \\mov %[table],%rcx
         \\jmp *(%rcx,%rsi,8)
         :
@@ -129,12 +170,12 @@ fn ExcpHandler(vec: comptime_int) type {
             const size = comptime @sizeOf(regs.CalleeRegs) + @sizeOf(regs.ScratchRegs) + @sizeOf(u64);
 
             if (comptime hasErrorCode()) {
-                asm volatile (std.fmt.comptimePrint("pop -{}(%%rsp)", .{size}));
+                asm volatile(std.fmt.comptimePrint("pop -{}(%%rsp)", .{size}));
             } else {
-                asm volatile (std.fmt.comptimePrint("movq $0,-{}(%%rsp)", .{size}));
+                asm volatile(std.fmt.comptimePrint("movq $0,-{}(%%rsp)", .{size}));
             }
 
-            asm volatile (std.fmt.comptimePrint(
+            asm volatile(std.fmt.comptimePrint(
                     \\movq %[vec],-{}(%%rsp)
                     \\jmp excpHandlerCaller
                 , .{size + @sizeOf(u64)})
@@ -166,4 +207,62 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
     panic.trace(&it);
 
     utils.halt();
+}
+
+pub fn lowLevelIrqHandler(pin: u8) *const fn() callconv(.Naked) noreturn {
+    const Anon = struct {
+        fn getIsr(comptime idx: u8) *const fn() callconv(.Naked) noreturn {
+            return &struct {
+                pub fn isr() callconv(.Naked) noreturn {
+                    asm volatile(std.fmt.comptimePrint(
+                        \\push ${}
+                        \\jmp commonIrqHandler
+                        , .{idx}
+                    ));
+                }
+
+                comptime {
+                    @export(isr, .{ .name = std.fmt.comptimePrint("irq{x}_isr", .{idx}) });
+                }
+            }.isr;
+        }
+
+        pub const isr_table = blk: {
+            var table: []const IsrFn = &.{};
+
+            for (0..intr.max_irqs) |i| {
+                table = table ++ .{ getIsr(i) };
+            }
+
+            break :blk table;
+        };
+    };
+
+    return Anon.isr_table[pin];
+}
+
+/// Needed just for switch from naked calling convention to C.
+export fn irqHandlerCaller(pin: u8) callconv(.C) void {
+    intr.handleIrq(pin);
+}
+
+export fn commonIrqHandler() callconv(.Naked) noreturn {
+    regs.saveScratchRegs();
+
+    // Call `irqHandlerCaller` and pass `pin` number.
+    asm volatile(std.fmt.comptimePrint(
+        \\mov %rdi, -{}(%%rsp)
+        \\call irqHandlerCaller
+        , .{@sizeOf(regs.ScratchRegs)}
+    ));
+
+    regs.restoreScratchRegs();
+    // Pop `pin` number from stack;
+    regs.stackFree(1);
+
+    iret();
+}
+
+inline fn iret() void {
+    asm volatile("iret");
 }
