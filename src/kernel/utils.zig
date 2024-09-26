@@ -48,5 +48,5 @@ pub inline fn calcAlign(comptime T: type, value: T, alignment: T) T {
 }
 
 pub inline fn halt() noreturn {
-    while (true) {}
+    while (true) arch.halt();
 }
