@@ -38,6 +38,14 @@ pub const Madt = extern struct {
         gsi_base: u32,
     };
 
+    pub const IntrSourceOverride = extern struct {
+        header: Entry,
+        bus: u8,
+        irq: u8,
+        gsi: u32 align(1),
+        flags: u16 align(1), 
+    };
+
     header: acpi.SdtHeader,
     lapic_base: u32,
     flags: u32,
@@ -83,7 +91,7 @@ pub fn chip() intr.Chip {
     return .{
         .name = "APIC",
         .ops = .{
-            .eoi = @ptrCast(&eoi),
+            .eoi = &eoi,
             .bindIrq = &bindIrq,
             .unbindIrq = &unbindIrq,
             .maskIrq = &maskIrq,
@@ -105,7 +113,7 @@ fn bindIrq(irq: *const intr.Irq) void {
         irq.vector,
         arch.intr.lowLevelIrqHandler(irq.pin),
         .kernel,
-        0x8F
+        arch.intr.intr_gate_flags,
     );
 
     const entry = ioapic.getRedirEntry(irq.pin);
@@ -115,7 +123,7 @@ fn bindIrq(irq: *const intr.Irq) void {
         .delv_mode = .fixed,
         .delv_status = .relaxed,
         .dest_mode = .physical,
-        .dest = @truncate(irq.vector.cpu.specific),
+        .dest = @truncate(irq.vector.cpu),
         .pin_polarity = .active_high,
         .trig_mode = switch(irq.trigger_mode) {
             .edge => .edge,

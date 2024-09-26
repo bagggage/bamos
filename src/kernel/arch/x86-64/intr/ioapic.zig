@@ -194,15 +194,35 @@ pub inline fn getMaxIrqs() u16 {
 pub fn getRedirEntry(irq: u8) RedirEntry {
     std.debug.assert(irq < max_irqs);
 
-    const io_idx = irq / irqs_per_ioapic;
-    const io_irq_idx = irq % irqs_per_ioapic;
+    const gsi = if (irq < 16) irqToGsi(irq) else irq;
 
-    return .{
-        .io = &ioapics.buffer[io_idx],
-        .offset = Ioapic.Regs.redir_tbl_base + (io_irq_idx * 2)
-    };
+    for (ioapics.slice()) |*ioapic| {
+        const begin = ioapic.madt_ent.gsi_base;
+        const end = begin + ioapic.max_redirs;
+
+        if (gsi < begin or gsi >= end) continue;
+
+        return .{
+            .io = ioapic,
+            .offset = @truncate((gsi - begin) * 2 + Ioapic.Regs.redir_tbl_base)
+        };
+    }
+
+    unreachable;
 }
 
 pub inline fn mask(irq: u8, disable: bool) void {
     getRedirEntry(irq).mask(disable);
+}
+
+fn irqToGsi(irq: u8) u8 {
+    var entry: ?*Madt.Entry = null;
+
+    while (apic.getMadt().findByType(entry, .ioapic_intr_src_overr)) |ent| : (entry = ent) {
+        const override: *Madt.IntrSourceOverride = @ptrCast(ent);
+
+        if (override.irq == irq) return @truncate(override.gsi);
+    }
+
+    return irq;
 }
