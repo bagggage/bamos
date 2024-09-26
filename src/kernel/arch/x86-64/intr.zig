@@ -3,6 +3,7 @@ const std = @import("std");
 const apic = @import("intr/apic.zig");
 const arch = @import("arch.zig");
 const boot = @import("../../boot.zig");
+const gdt = @import("gdt.zig");
 const intr = @import("../../dev/intr.zig");
 const log = @import("../../log.zig");
 const panic = @import("../../panic.zig");
@@ -16,9 +17,6 @@ pub const table_len = max_vectors;
 pub const trap_gate_flags = 0x8F;
 pub const intr_gate_flags = 0x8E;
 
-pub const kernel_stack = 0;
-pub const user_stack = 2;
-
 pub const max_vectors = 256;
 pub const reserved_vectors = 32;
 pub const avail_vectors = max_vectors - reserved_vectors;
@@ -26,16 +24,20 @@ pub const avail_vectors = max_vectors - reserved_vectors;
 pub const irq_base_vec = reserved_vectors;
 
 const rsrvd_vec_num = 32;
+const irq_stack_size = vm.page_size / 2;
 
 pub const Descriptor = packed struct {
     offset_1: u16 = 0,
     selector: u16 = 0,
-    ist: u8 = 0,
+    ist: u3 = 0,
+    rsrvd: u5 = 0,
+
     type_attr: u8 = 0,
     offset_2: u48 = 0,
-    rsrvd: u32 = 0,
 
-    pub fn init(isr: u64, stack: u8, attr: u8) @This() {
+    rsrvd_1: u32 = 0,
+
+    pub fn init(isr: u64, stack: u3, attr: u8) @This() {
         var result: @This() = .{
             .ist = stack,
             .type_attr = attr,
@@ -51,27 +53,66 @@ pub const Descriptor = packed struct {
 
 pub const DescTable = [table_len]Descriptor;
 
+pub const TaskStateSegment = extern struct {
+    rsrvd: u32 = 0,
+
+    rsps: [3]u64 align(@alignOf(u32)),
+    rsrvd_1: u64 align(@alignOf(u32)) = 0,
+
+    ists: [7]u64 align(@alignOf(u32)),
+    rsrvd_2: u64 align(@alignOf(u32)) = 0,
+
+    rsrvd_3: u16 = 0,
+    io_map_base: u16,
+
+    comptime {
+        std.debug.assert(@sizeOf(TaskStateSegment) == 0x68);
+    }
+};
+
 const IsrFn = *const fn() callconv(.Naked) noreturn;
 const ExceptionIsrFn = @TypeOf(&commonExcpHandler);
+
+const IrqStack = [irq_stack_size / @sizeOf(u64)]u64;
 
 var except_handlers: [rsrvd_vec_num]ExceptionIsrFn = undefined;
 
 var idts: []DescTable = &.{};
+var tss_pool: []TaskStateSegment = &.{};
+var irq_stacks: []IrqStack = &.{};
 
 pub fn preinit() void {
     const cpus_num = boot.getCpusNum();
-    const idts_pages = std.math.divCeil(u32, @as(u32, cpus_num) * @sizeOf(DescTable), vm.page_size) catch unreachable;
+    const idts_pages = std.math.divCeil(
+        u32, @as(u32, cpus_num) * @sizeOf(DescTable),
+        vm.page_size
+    ) catch unreachable;
 
-    const base = boot.alloc(idts_pages) orelse @panic("No memory to allocate IDTs per each cpu");
+    const tss_pages = std.math.divCeil(
+        u32, cpus_num * @sizeOf(TaskStateSegment),
+        vm.page_size
+    ) catch unreachable;
+
+    const base = boot.alloc(idts_pages + tss_pages) orelse @panic("No memory to allocate IDTs per each cpu");
+    const tss_base = base + (vm.page_size * idts_pages);
 
     idts.ptr = @ptrFromInt(vm.getVirtLma(base));
     idts.len = cpus_num;
 
+    tss_pool.ptr = @ptrFromInt(vm.getVirtLma(tss_base));
+    tss_pool.len = cpus_num;
+
+    @memset(tss_pool, std.mem.zeroes(TaskStateSegment));
+
+    for (tss_pool) |*tss| {
+        gdt.addTss(tss) catch @panic("Failed to add TSS to GDT: Overflow");
+    }
+
     initExceptHandlers();
-    useIdt(&idts[arch.getCpuIdx()]);
 }
 
 pub fn init() !intr.Chip {
+    try initTss();
     try initIdts();
 
     pic.init() catch return error.PicIoBusy;
@@ -86,19 +127,20 @@ pub fn init() !intr.Chip {
     };
 }
 
+pub inline fn setupCpu(cpu_idx: u8) void {
+    useIdt(&idts[cpu_idx]);
+    regs.setTss(gdt.getTssOffset(cpu_idx));
+}
+
 pub fn setupIsr(vec: intr.Vector, isr: IsrFn, stack: enum{kernel,user}, type_attr: u8) void {
-    idts[vec.cpu.specific][vec.vec] = Descriptor.init(
+    idts[vec.cpu][vec.vec] = Descriptor.init(
         @intFromPtr(isr),
         switch (stack) {
-            .kernel => 0,
+            .kernel => 1,
             .user => 2
         },
         type_attr
     );
-}
-
-pub inline fn getIdtForCpu(cpu_idx: u16) *DescTable {
-    return &idts[cpu_idx];
 }
 
 pub inline fn useIdt(idt: *DescTable) void {
@@ -106,6 +148,17 @@ pub inline fn useIdt(idt: *DescTable) void {
 
     regs.setIdtr(idtr);
 }
+
+pub inline fn enable() void {
+    @setRuntimeSafety(false);
+    asm volatile("sti");
+}
+
+pub inline fn disable() void {
+    @setRuntimeSafety(false);
+    asm volatile("cli");
+}
+
 
 fn initIdts() !void {
     for (idts[1..idts.len]) |*idt| {
@@ -117,14 +170,37 @@ fn initIdts() !void {
     }
 }
 
+fn initTss() !void {
+    const cpus_num = boot.getCpusNum();
+    const stacks_pages = std.math.divCeil(
+        u32,
+        cpus_num * irq_stack_size,
+        vm.page_size
+    ) catch unreachable;
+    const rank = std.math.log2_int_ceil(u32, stacks_pages);
+
+    const base = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
+
+    irq_stacks.ptr = @ptrFromInt(vm.getVirtLma(base));
+    irq_stacks.len = cpus_num;
+
+    for (irq_stacks, tss_pool) |*stack, *tss| {
+        inline for (tss.ists[0..]) |*ist| {
+            ist.* = @intFromPtr(stack);
+        }
+        inline for (tss.rsps[0..]) |*rsp| {
+            rsp.* = @intFromPtr(stack);
+        }
+    }
+}
+
 fn initExceptHandlers() void {
     inline for (0..rsrvd_vec_num) |vec| {
         const Handler = ExcpHandler(vec);
 
         idts[0][vec] = Descriptor.init(
             @intFromPtr(&Handler.isr),
-            kernel_stack,
-            trap_gate_flags
+            0, trap_gate_flags
         );
         except_handlers[vec] = &commonExcpHandler;
     }
@@ -249,17 +325,29 @@ export fn irqHandlerCaller(pin: u8) callconv(.C) void {
 export fn commonIrqHandler() callconv(.Naked) noreturn {
     regs.saveScratchRegs();
 
-    // Call `irqHandlerCaller` and pass `pin` number.
-    asm volatile(std.fmt.comptimePrint(
-        \\mov %rdi, -{}(%%rsp)
-        \\call irqHandlerCaller
-        , .{@sizeOf(regs.ScratchRegs)}
-    ));
+    comptime var offset = @sizeOf(regs.ScratchRegs);
+    const need_to_align = comptime (@sizeOf(regs.IrqIntrState) % 0x10) == 0;
+
+    {
+        if (need_to_align) {
+            offset += @sizeOf(u64);
+            regs.stackAlloc(1);
+        }
+
+        // Call `irqHandlerCaller` and pass `pin` number.
+        asm volatile(std.fmt.comptimePrint(
+            \\mov -{}(%rsp),%rdi
+            \\call irqHandlerCaller
+            , .{offset}
+        ));
+
+        if (need_to_align) regs.stackFree(1);
+    }
 
     regs.restoreScratchRegs();
+
     // Pop `pin` number from stack;
     regs.stackFree(1);
-
     iret();
 }
 

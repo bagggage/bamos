@@ -28,6 +28,8 @@ export fn main() noreturn {
 
     log.warn("Used memory: {} KB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / utils.kb_size});
 
+    arch.smpInit();
+
     init(dev);
 }
 

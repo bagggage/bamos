@@ -258,17 +258,25 @@ pub inline fn restoreState() void {
 
 pub inline fn getIdtr() IDTR {
     var idtr: IDTR = undefined;
-    asm volatile ("sidt %[reg]"
-        : [reg] "=memory" (idtr)
+    asm volatile (
+        "sidt %[reg]"
+        :[reg] "=memory" (idtr)
     );
 
     return idtr;
 }
 
 pub inline fn setIdtr(idtr: IDTR) void {
-    asm volatile ("lidt %[reg]"
-        :
-        : [reg] "memory" (idtr),
+    asm volatile (
+        "lidt %[reg]"
+        ::[reg] "memory" (idtr),
+    );
+}
+
+pub inline fn setTss(tss: u16) void {
+    asm volatile (
+        "ltr %[seg]"
+        ::[seg] "r" (tss)
     );
 }
 

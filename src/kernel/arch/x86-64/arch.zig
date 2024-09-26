@@ -3,6 +3,8 @@
 //! This module handles the initialization and management of the x86-64 CPU, 
 //! Setup of control registers, enabling specific CPU features.
 
+const gdt = @import("gdt.zig");
+const hlvl_vm = @import("../../vm.zig");
 const lapic = @import("intr/lapic.zig");
 const log = @import("../../log.zig");
 const regs = @import("regs.zig");
@@ -57,8 +59,12 @@ pub inline fn getCpuIdx() u32 {
     return if (lapic.isInitialized()) lapic.getId() else @truncate(cpuid(cpuid_features).b >> 24);
 }
 
+pub inline fn smpInit() void {
+    init_lock.unlock();
+}
+
 /// Initialize architecture dependent devices.
-pub fn devInit() !void {
+pub inline fn devInit() !void {
 }
 
 pub inline fn cpuid(leaf: u32) CpuId {
@@ -78,12 +84,18 @@ pub inline fn cpuid(leaf: u32) CpuId {
     return .{ .a = a, .b = b, .c = c, .d = d };
 }
 
+pub inline fn halt() void {
+    asm volatile("hlt");
+}
+
 /// Wait for initialization to complete.
 inline fn waitForInit() void {
-    init_lock.lock();
+    initCpu(false);
+
     init_lock.unlock();
 
-    initCpu(false);
+    log.warn("CPU {} initialized", .{getCpuIdx()});
+    utils.halt();
 }
 
 /// This function initializes the CPU's essential features and settings, such as enabling the 
@@ -91,21 +103,32 @@ inline fn waitForInit() void {
 /// 
 /// If the CPU is the initial CPU, it also performs additional
 /// preinitializing the virtual memory system, the interrupt system, and etc.
-fn initCpu(comptime is_initial: bool) void {
+fn initCpu(comptime is_primary: bool) void {
     @setRuntimeSafety(false);
-
     enableExtentions();
 
-    if (is_initial) initPrimaryCpu();
+    if (is_primary) {
+        vm.preinit();
 
-    gdtSwitchToLma();
+        gdt.init();
+        intr.preinit();
+    } else {
+        vm.setPt(hlvl_vm.getRootPt());
 
-    intr.useIdt(intr.getIdtForCpu(@truncate(getCpuIdx())));
-}
+        const pt = hlvl_vm.newPt() orelse {
+            log.err("Not enough memory to allocate page table per each cpu", .{});
+            utils.halt();
+        };
 
-inline fn initPrimaryCpu() void {
-    vm.preinit();
-    intr.preinit();
+        vm.setPt(pt);
+    }
+
+    const cpu_idx: u8 = @truncate(getCpuIdx());
+
+    gdt.setupCpu();
+
+    intr.setupCpu(cpu_idx);
+    intr.enable();
 }
 
 /// Enables kernel needed CPUs extentions
@@ -130,11 +153,4 @@ inline fn enableAvx() void {
         \\xsetbv
         ::: "rcx", "rax", "rdx"
     );
-}
-
-/// Translate GDT base in GDTR to LMA virtual address
-inline fn gdtSwitchToLma() void {
-    var gdtr: regs.GDTR = regs.getGdtr();
-    gdtr.base += vm.lma_start;
-    regs.setGdtr(gdtr);
 }
