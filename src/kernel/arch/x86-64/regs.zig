@@ -89,6 +89,10 @@ pub const IrqIntrState = extern struct {
 
     irq_pin: u64, 
     intr: InterruptFrame,
+
+    comptime {
+        std.debug.assert(@sizeOf(@This()) == (@sizeOf(ScratchRegs) + @sizeOf(InterruptFrame) + 0x8));
+    }
 };
 
 /// Read Model-Specific Register.

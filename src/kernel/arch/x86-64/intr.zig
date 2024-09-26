@@ -185,11 +185,14 @@ fn initTss() !void {
     irq_stacks.len = cpus_num;
 
     for (irq_stacks, tss_pool) |*stack, *tss| {
+        const stack_ptr: u64 = @intFromPtr(stack);
+        const aligned_ptr = if ((stack_ptr % 0x10) == 0) stack_ptr else stack_ptr + @sizeOf(u64);
+
         inline for (tss.ists[0..]) |*ist| {
-            ist.* = @intFromPtr(stack);
+            ist.* = aligned_ptr;
         }
         inline for (tss.rsps[0..]) |*rsp| {
-            rsp.* = @intFromPtr(stack);
+            rsp.* = aligned_ptr;
         }
     }
 }
@@ -263,6 +266,32 @@ fn ExcpHandler(vec: comptime_int) type {
 }
 
 fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv(.C) noreturn {
+    const CodeDump = struct {
+        code: []const u8,
+
+        pub fn init(addr: usize) @This() {
+            return .{ .code = @as([*]const u8, @ptrFromInt(addr))[0..10] };
+        }
+
+        pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            for (self.code) |byte| { try writer.print("{x:0>2} ", .{byte}); }
+        }
+    };
+
+    const StackDump = struct {
+        stack: []const usize,
+
+        pub fn init(addr: usize) @This() {
+            return .{ .stack = @as([*]const usize, @ptrFromInt(addr))[0..10] };
+        }
+
+        pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            try writer.print("<{s}>\n", .{ if (@intFromPtr(self.stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned" });
+
+            for (self.stack, 0..) |entry, i| { try writer.print("+0x{x:0>2}: 0x{x}\n", .{i * @sizeOf(usize),entry}); }
+        }
+    };
+
     log.excp(vec, error_code);
     log.warn(
         \\Regs:
@@ -271,12 +300,17 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
         \\r8: 0x{x}, r9: 0x{x}, r10: 0x{x}, r11: 0x{x}
         \\r12: 0x{x}, r13: 0x{x}, r14: 0x{x}, r15: 0x{x}
         \\cr2: 0x{x}, cr3: 0x{x}, cr4: 0x{x}
+        \\
+        \\cs: 0x{x}
+        \\code: {}
+        \\stack: {}
     , .{
         state.scratch.rax, state.scratch.rcx, state.scratch.rdx, state.callee.rbx,
         state.intr.rip, state.intr.rsp, state.callee.rbp, state.intr.rflags,
         state.scratch.r8, state.scratch.r9, state.scratch.r10, state.scratch.r11,
         state.callee.r12, state.callee.r13, state.callee.r14, state.callee.r15,
-        regs.getCr2(), regs.getCr3(), regs.getCr4()
+        regs.getCr2(), regs.getCr3(), regs.getCr4(), state.intr.cs,
+        CodeDump.init(state.intr.rip), StackDump.init(state.intr.rsp)
     });
 
     var it = std.debug.StackIterator.init(state.intr.rip, state.callee.rbp);
@@ -325,25 +359,19 @@ export fn irqHandlerCaller(pin: u8) callconv(.C) void {
 export fn commonIrqHandler() callconv(.Naked) noreturn {
     regs.saveScratchRegs();
 
-    comptime var offset = @sizeOf(regs.ScratchRegs);
-    const need_to_align = comptime (@sizeOf(regs.IrqIntrState) % 0x10) == 0;
+    // Load pin number to arg0 
+    asm volatile(std.fmt.comptimePrint(
+        \\mov {}(%rsp),%rdi
+        , .{@sizeOf(regs.ScratchRegs)}
+    ));
 
-    {
-        if (need_to_align) {
-            offset += @sizeOf(u64);
-            regs.stackAlloc(1);
-        }
+    const is_stack_aligned = comptime (@sizeOf(regs.IrqIntrState) % 0x10) == 0;
+    if (comptime !is_stack_aligned) regs.stackAlloc(1);
 
-        // Call `irqHandlerCaller` and pass `pin` number.
-        asm volatile(std.fmt.comptimePrint(
-            \\mov -{}(%rsp),%rdi
-            \\call irqHandlerCaller
-            , .{offset}
-        ));
+    // Call `irqHandlerCaller`
+    asm volatile("call irqHandlerCaller");
 
-        if (need_to_align) regs.stackFree(1);
-    }
-
+    if (!is_stack_aligned) regs.stackFree(1);
     regs.restoreScratchRegs();
 
     // Pop `pin` number from stack;
@@ -352,5 +380,5 @@ export fn commonIrqHandler() callconv(.Naked) noreturn {
 }
 
 inline fn iret() void {
-    asm volatile("iret");
+    asm volatile("iretq");
 }

@@ -33,6 +33,8 @@ pub fn excp(vec: u32, error_code: u64) void {
 
     text_output.setColor(video.Color.lred);
     text_output.print(&buff);
+
+    if (lock.isLocked()) lock.unlock();
 }
 
 /// Logs a raw formatted message with the specified color.
