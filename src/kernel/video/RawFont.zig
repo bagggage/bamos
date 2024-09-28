@@ -8,7 +8,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 /// Embedded font data from an external PSF file.
-const font_data align(@alignOf(PSF2)) = @embedFile("fonts-bin/Uni2-VGA16.psf");
+const font_data align(@alignOf(PSF2)) = @embedFile("fonts-bin/uni2-vga-8x16.psf");
 
 const PSF1_MODE512 = 0x01;
 const PSF1_MAGIC = 0x0436;
