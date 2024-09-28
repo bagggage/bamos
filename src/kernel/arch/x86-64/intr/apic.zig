@@ -65,6 +65,9 @@ pub const Madt = extern struct {
 
         while (@intFromPtr(entry) < end_addr)
         : (entry = @ptrFromInt(@intFromPtr(entry) + entry.length)) {
+            // Don`t trust hardware, avoid infinity loop
+            if (entry.length == 0) break;
+
             if (entry.type == ent_type) return entry;
         }
 
@@ -105,7 +108,7 @@ pub inline fn getMadt() *Madt {
 }
 
 inline fn isAvail() bool {
-    return (arch.cpuid(arch.cpuid_features).d & c.bit_APIC) != 0;
+    return (arch.cpuid(arch.cpuid_features, undefined, undefined, undefined).d & c.bit_APIC) != 0;
 }
 
 fn bindIrq(irq: *const intr.Irq) void {
