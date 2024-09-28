@@ -14,6 +14,9 @@ const Framebuffer = @import("Framebuffer.zig");
 const Color = Framebuffer.Color;
 const RawFont = @import("RawFont.zig");
 
+const use_texture = true;
+const use_buffers = true;
+
 const Cursor = struct {
     row: u16,
     col: u16,
@@ -23,7 +26,7 @@ const Cursor = struct {
     /// it triggers a screen scroll.
     inline fn nextRow(self: *Cursor) void {
         if (self.row == rows - 1) {
-            scroll();
+            if (comptime use_buffers) scroll();
         } else {
             self.row += 1;
         }
@@ -32,9 +35,9 @@ const Cursor = struct {
     }
 };
 
-var fb: Framebuffer = undefined;
 const font: RawFont = RawFont.default_font;
 
+var fb: Framebuffer = undefined;
 var cursor: Cursor = Cursor{ .col = 0, .row = 0 };
 
 /// Number of columns on screen.
@@ -48,9 +51,9 @@ var curr_col: u32 = undefined;
 /// Texture buffer for rendering the font glyphs.
 var font_tex: []u32 = undefined;
 /// Buffer storing the ascii characters.
-var buffer: []u8 = undefined;
+var char_buffer: []u8 = undefined;
 /// Buffer storing the color of each character.
-var color_buf: []u32 = undefined;
+var color_buffer: []u32 = undefined;
 
 var is_initialized = false;
 
@@ -67,25 +70,29 @@ pub fn init() void {
     rows = @truncate(fb.height / font.height);
     curr_col = Color.lgray.pack(fb.format);
 
-    buffer.len = cols * rows;
-    color_buf.len = buffer.len;
+    if (comptime use_buffers) {
+        char_buffer.len = cols * rows;
+        color_buffer.len = char_buffer.len;
 
-    const buf_pages = std.math.divCeil(usize, buffer.len, vm.page_size) catch unreachable;
-    const buf_addr = boot.alloc(@truncate(buf_pages)) orelse unreachable;
-    buffer.ptr = @ptrFromInt(vm.getVirtLma(buf_addr));
-    @memset(buffer, 0);
+        const buf_pages = std.math.divCeil(usize, char_buffer.len, vm.page_size) catch unreachable;
+        const buf_addr = boot.alloc(@truncate(buf_pages)) orelse unreachable;
+        char_buffer.ptr = @ptrFromInt(vm.getVirtLma(buf_addr));
+        @memset(char_buffer, 0);
 
-    const color_buf_pages = std.math.divCeil(usize, color_buf.len * @sizeOf(u32), vm.page_size) catch unreachable;
-    const color_buf_addr = boot.alloc(@truncate(color_buf_pages)) orelse unreachable;
-    color_buf.ptr = @ptrFromInt(vm.getVirtLma(color_buf_addr));
-    @memset(color_buf, curr_col);
+        const color_buf_pages = std.math.divCeil(usize, color_buffer.len * @sizeOf(u32), vm.page_size) catch unreachable;
+        const color_buf_addr = boot.alloc(@truncate(color_buf_pages)) orelse unreachable;
+        color_buffer.ptr = @ptrFromInt(vm.getVirtLma(color_buf_addr));
+        @memset(color_buffer, curr_col);
+    }
 
-    font_tex.len = (font.glyphs.len / font.charsize) * (font.height * font.width);
-    const texture_pages = std.math.divCeil(usize, font_tex.len * @sizeOf(u32), vm.page_size) catch unreachable;
-    const texture_addr = boot.alloc(@truncate(texture_pages)) orelse unreachable;
+    if (comptime use_texture) {
+        font_tex.len = (font.glyphs.len / font.charsize) * (font.height * font.width);
+        const texture_pages = std.math.divCeil(usize, font_tex.len * @sizeOf(u32), vm.page_size) catch unreachable;
+        const texture_addr = boot.alloc(@truncate(texture_pages)) orelse unreachable;
 
-    font_tex.ptr = @ptrFromInt(vm.getVirtLma(texture_addr));
-    renderFont(font_tex);
+        font_tex.ptr = @ptrFromInt(vm.getVirtLma(texture_addr));
+        renderFont(font_tex);
+    }
 
     is_initialized = true;
 }
@@ -119,8 +126,10 @@ pub fn print(str: []const u8) void {
 
         const idx = (cursor.row * cols) + cursor.col;
 
-        color_buf[idx] = curr_col;
-        buffer[idx] = char;
+        if (comptime use_buffers) {
+            color_buffer[idx] = curr_col;
+            char_buffer[idx] = char;
+        }
 
         if (char == '\n') {
             serial.write("\r\n");
@@ -139,7 +148,9 @@ pub fn print(str: []const u8) void {
 }
 
 /// Draws a single character at the specified row and column using the current color.
-fn drawChar(char: u8, row: u16, col: u16) void {
+const drawChar: fn(u8, u16, u16) void = if (use_texture) drawCharTextured else drawCharRendered;
+
+fn drawCharTextured(char: u8, row: u16, col: u16) void {
     @setCold(false);
     @setRuntimeSafety(false);
 
@@ -163,6 +174,17 @@ fn drawChar(char: u8, row: u16, col: u16) void {
     }
 }
 
+fn drawCharRendered(char: u8, row: u16, col: u16) void {
+    @setCold(false);
+    @setRuntimeSafety(false);
+
+    if (char == 0) return;
+
+    const offset = (row * fb.scanline * font.height) + (col * font.width);
+
+    renderChar(char, fb.base[offset..], curr_col, fb.scanline);
+}
+
 /// Renders the font into a texture buffer for fast character drawing.
 fn renderFont(texture: []u32) void {
     @setCold(true);
@@ -171,19 +193,28 @@ fn renderFont(texture: []u32) void {
     const char_num = font.glyphs.len / font.charsize;
 
     for (0..char_num) |c| {
-        const glyph_ptr: [*]const u8 = @ptrCast(&font.glyphs[c * font.charsize]);
-        const glyph: []const u8 = glyph_ptr[0..font.charsize];
+        renderChar(@truncate(c), texture[offset..].ptr, 0xFFFFFFFF, font.width);
+        offset += font.width * font.height;
+    }
+}
 
-        for (0..font.height) |y| {
-            var bitmask: u8 = @as(u8, 1) << @truncate(font.width - 1);
+fn renderChar(char: u16, buffer: [*]u32, color: u32, v_step: u32) void {
+    @setRuntimeSafety(false);
 
-            for (0..font.width) |x| {
-                texture[offset + x] = if ((glyph[y] & bitmask) != 0) 0xFFFFFFFF else 0;
-                bitmask >>= 1;
-            }
+    var offset: u32 = 0;
 
-            offset += font.width;
+    const glyph_ptr: [*]const u8 = @ptrCast(&font.glyphs[char * font.charsize]);
+    const glyph: []const u8 = glyph_ptr[0..font.charsize];
+
+    for (0..font.height) |y| {
+        var bitmask: u8 = @as(u8, 1) << @truncate(font.width - 1);
+
+        for (0..font.width) |x| {
+            buffer[offset + x] = if ((glyph[y] & bitmask) != 0) color else 0;
+            bitmask >>= 1;
         }
+
+        offset += v_step;
     }
 }
 
@@ -203,26 +234,26 @@ fn scroll() void {
 
         while (col < cols) : (col += 1) {
             const prev_offset = buf_offset - cols;
-            const c = buffer[buf_offset + col];
+            const c = char_buffer[buf_offset + col];
 
             if (c == '\n' or c == 0) {
-                var prev_c = buffer[prev_offset + col];
+                var prev_c = char_buffer[prev_offset + col];
 
                 while (prev_c != 0 and prev_c != '\n' and col < cols) {
                     drawChar(' ', @truncate(row - 1), @truncate(col));
-                    buffer[prev_offset + col] = 0;
+                    char_buffer[prev_offset + col] = 0;
 
                     col += 1;
-                    prev_c = buffer[prev_offset + col];
+                    prev_c = char_buffer[prev_offset + col];
                 }
 
                 break;
             }
 
-            curr_col = color_buf[buf_offset + col];
+            curr_col = color_buffer[buf_offset + col];
 
-            buffer[prev_offset + col] = c;
-            color_buf[prev_offset + col] = curr_col;
+            char_buffer[prev_offset + col] = c;
+            color_buffer[prev_offset + col] = curr_col;
 
             drawChar(c, @truncate(row - 1), @truncate(col));
         }
