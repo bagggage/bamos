@@ -3,6 +3,9 @@
 //! This module handles the initialization and management of the x86-64 CPU, 
 //! Setup of control registers, enabling specific CPU features.
 
+const std = @import("std");
+
+const boot = @import("../../boot.zig");
 const gdt = @import("gdt.zig");
 const hlvl_vm = @import("../../vm.zig");
 const lapic = @import("intr/lapic.zig");
@@ -19,6 +22,12 @@ const CpuId = packed struct {
     d: u32
 };
 
+const CpuVendor = enum {
+    unknown,
+    Intel,
+    AMD
+};
+
 pub const io = @import("io.zig");
 pub const intr = @import("intr.zig");
 pub const vm = @import("vm.zig");
@@ -27,6 +36,10 @@ pub const cpuid_features = 1;
 
 var init_lock = Spinlock.init(.unlocked);
 var is_initial_cpu = true;
+
+var cpu_vendor: CpuVendor = undefined;
+var cpu_idx_bitmask: u32 = undefined;
+var cpu_idx_shift: u3 = 0;
 
 /// `_start` implementation
 pub inline fn startImpl() void {
@@ -56,7 +69,13 @@ pub fn preinit() void {
 /// 
 /// - Returns: The Local APIC ID.
 pub inline fn getCpuIdx() u32 {
-    return if (lapic.isInitialized()) lapic.getId() else @truncate(cpuid(cpuid_features).b >> 24);
+    const lapic_id =
+    if (lapic.isInitialized())
+        lapic.getId()
+    else
+        cpuid(cpuid_features, undefined, undefined, undefined).b >> 24;
+
+    return (lapic_id >> cpu_idx_shift) & cpu_idx_bitmask;
 }
 
 pub inline fn smpInit() void {
@@ -67,18 +86,18 @@ pub inline fn smpInit() void {
 pub inline fn devInit() !void {
 }
 
-pub inline fn cpuid(leaf: u32) CpuId {
+pub inline fn cpuid(eax: u32, ebx: u32, ecx: u32, edx: u32) CpuId {
     @setRuntimeSafety(false);
 
-    var a: u32 = undefined;
-    var b: u32 = undefined;
-    var c: u32 = undefined;
-    var d: u32 = undefined;
+    var a: u32 = eax;
+    var b: u32 = ebx;
+    var c: u32 = ecx;
+    var d: u32 = edx;
 
     asm volatile(
         \\cpuid
         : [a]"={eax}"(a),[b]"={ebx}"(b),[c]"={ecx}"(c),[d]"={edx}"(d)
-        : [id]"{eax}"(leaf)
+        : [id]"{eax}"(a),[i_b]"{ebx}"(b),[i_c]"{ecx}"(c),[i_d]"{edx}"(d)
     );
 
     return .{ .a = a, .b = b, .c = c, .d = d };
@@ -86,6 +105,10 @@ pub inline fn cpuid(leaf: u32) CpuId {
 
 pub inline fn halt() void {
     asm volatile("hlt");
+}
+
+pub inline fn getCpuVendor() []const u8 {
+    return @tagName(cpu_vendor);
 }
 
 /// Wait for initialization to complete.
@@ -108,6 +131,8 @@ fn initCpu(comptime is_primary: bool) void {
     enableExtentions();
 
     if (is_primary) {
+        initCpuIdx();
+
         vm.preinit();
 
         gdt.init();
@@ -153,4 +178,36 @@ inline fn enableAvx() void {
         \\xsetbv
         ::: "rcx", "rax", "rdx"
     );
+}
+
+fn initCpuIdx() void {
+    const amd_ecx = 0x444d4163; // "cAMD"
+    const intel_ecx = 0x6c65746e; // "ntel"
+
+    const cpuid0_ecx = cpuid(0, undefined, 0, undefined).c;
+
+    switch (cpuid0_ecx) {
+        amd_ecx => cpu_vendor = .AMD,    
+        intel_ecx => cpu_vendor = .Intel,
+        else => cpu_vendor = .unknown
+    }
+
+    const bits_number = switch (cpu_vendor) {
+        .AMD => blk: {
+            const temp = cpuid(0x80000008, undefined, undefined, undefined).c;
+
+            break :blk if ((temp & 0xF000) != 0) ((temp >> 12) & 0xF) else {
+                const cores_num = (temp & 0xF) + 1;
+                break :blk std.math.log2_int_ceil(u32, cores_num);
+            };
+        },
+        .Intel => blk: {
+            cpu_idx_shift = @truncate(cpuid(0x0B, undefined, 0, undefined).a);
+
+            break :blk std.math.log2_int_ceil(u32, boot.getCpusNum());
+        },
+        else => @bitSizeOf(u32)
+    };
+
+    cpu_idx_bitmask = (@as(u32, 1) << @truncate(bits_number)) - 1;
 }
