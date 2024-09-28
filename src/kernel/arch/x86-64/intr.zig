@@ -294,11 +294,11 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
     log.excp(vec, error_code);
     log.warn(
         \\Regs:
-        \\rax: 0x{x}, rcx: 0x{x}, rdx: 0x{x}, rbx: 0x{x}
-        \\rip: 0x{x}, rsp: 0x{x}, rbp: 0x{x}, rflags: 0x{x}
-        \\r8: 0x{x}, r9: 0x{x}, r10: 0x{x}, r11: 0x{x}
-        \\r12: 0x{x}, r13: 0x{x}, r14: 0x{x}, r15: 0x{x}
-        \\cr2: 0x{x}, cr3: 0x{x}, cr4: 0x{x}
+        \\rax: 0x{x:.>16}, rcx: 0x{x:.>16}, rdx: 0x{x:.>16}, rbx: 0x{x:.>16}
+        \\rip: 0x{x:.>16}, rsp: 0x{x:.>16}, rbp: 0x{x:.>16}, rflags: 0x{x:.>8}
+        \\r8:  0x{x:.>16}, r9:  0x{x:.>16}, r10: 0x{x:.>16}, r11: 0x{x:.>16}
+        \\r12: 0x{x:.>16}, r13: 0x{x:.>16}, r14: 0x{x:.>16}, r15: 0x{x:.>16}
+        \\cr2: 0x{x:.>16}, cr3: 0x{x:.>16}, cr4: 0x{x:.>16}
         \\
         \\cs: 0x{x}
         \\code: {}
@@ -312,7 +312,7 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
         CodeDump.init(state.intr.rip), StackDump.init(state.intr.rsp)
     });
 
-    var it = std.debug.StackIterator.init(state.intr.rip, state.callee.rbp);
+    var it = std.debug.StackIterator.init(null, state.callee.rbp);
     panic.trace(&it);
 
     utils.halt();
