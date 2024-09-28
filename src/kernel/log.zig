@@ -77,7 +77,7 @@ pub fn rawLog(comptime fmt: []const u8, args: anytype, color: video.Color) void 
 pub inline fn debug(comptime fmt: []const u8, args: anytype) void {
     if (builtin.mode != .ReleaseSafe and builtin.mode != .Debug) return;
 
-    rawLog("[DEBUG]:" ++ fmt, args, video.Color.gray);
+    rawLog("<DEBUG> " ++ fmt, args, video.Color.gray);
 }
 
 /// Logs an informational message.

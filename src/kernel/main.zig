@@ -22,7 +22,7 @@ export fn main() noreturn {
     arch.preinit();
 
     log.info("Kernel startup at CPU: {}", .{arch.getCpuIdx()});
-    log.info("CPUs detected: {}", .{boot.getCpusNum()});
+    log.info("CPUs detected: {}, vendor: {s}", .{boot.getCpusNum(),arch.getCpuVendor()});
 
     init(vm);
 

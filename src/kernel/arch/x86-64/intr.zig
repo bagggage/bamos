@@ -159,7 +159,6 @@ pub inline fn disable() void {
     asm volatile("cli");
 }
 
-
 fn initIdts() !void {
     for (idts[1..idts.len]) |*idt| {
         for (0..rsrvd_vec_num) |vec| {

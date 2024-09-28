@@ -91,6 +91,19 @@ pub const Irq = struct {
         };
     }
 
+    pub fn deinit(self: *Irq) void {
+        self.waitWhilePending();
+
+        var node = self.handlers.first;
+
+        while (node) |handler| {
+            node = handler.next;
+            vm.kfree(handler);
+        }
+
+        self.handlers = HandlerList{};
+    }
+
     pub inline fn eql(self: *const Irq, pin: u8) bool {
         return self.pin == pin;
     }
@@ -161,11 +174,12 @@ pub const Vector = struct {
 };
 
 const Cpu = struct {
-    pub const IrqList = utils.SList(Irq);
-    pub const IrqNode = IrqList.Node;
-
-    bitmap: utils.Bitmap,
+    bitmap: utils.Bitmap = .{},
     allocated: u16 = 0,
+
+    pub fn init(bits: []u8) Cpu {
+        return .{ .bitmap = utils.Bitmap.init(bits, false) };
+    }
 
     pub fn allocVector(self: *Cpu) ?u16 {
         if (self.allocated == arch.intr.avail_vectors) return null;
@@ -211,17 +225,18 @@ pub fn init() !void {
     const cpus_num = boot.getCpusNum();
 
     cpus = try CpuArray.init(cpus_num);
+    errdefer cpus.resize(0) catch unreachable;
+
     cpus_order = try OrderArray.init(cpus_num);
+    errdefer cpus_order.resize(0) catch unreachable;
 
     const bytes_per_bm = std.math.divCeil(comptime_int, arch.intr.avail_vectors, utils.byte_size) catch unreachable;
     const bitmap_pool: [*]u8 = @ptrCast(vm.kmalloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
 
-    for (cpus.buffer[0..cpus.len], 0..) |*cpu, i| {
+    for (cpus.slice(), 0..) |*cpu, i| {
         const bm_offset = i * bytes_per_bm;
 
-        cpu.* = .{
-            .bitmap = utils.Bitmap.init(bitmap_pool[bm_offset..bm_offset + bytes_per_bm], false),
-        };
+        cpu.* = Cpu.init(bitmap_pool[bm_offset..bm_offset + bytes_per_bm]);
         cpus_order.set(i, cpu);
     }
 
@@ -231,9 +246,19 @@ pub fn init() !void {
 }
 
 pub fn deinit() void {
-    const pool = cpus.get(0).bitmap.bits.ptr;
+    const pool = cpus.slice()[0].bitmap.bits.ptr;
+
+    cpus.resize(0) catch unreachable;
+    cpus_order.resize(0) catch unreachable;
 
     vm.kfree(pool);
+
+    for (irqs.constSlice()) |*irq_ent| {
+        if (irq_ent.*) |irq| {
+            chip.unbindIrq(&irq);
+            irq.deinit();
+        }
+    }
 }
 
 pub fn requestIrq(pin: u8, device: *dev.Device, handler: Irq.Handler.Fn, tigger_mode: Irq.TriggerMode, shared: bool) Error!void {

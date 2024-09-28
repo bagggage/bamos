@@ -5,7 +5,7 @@ const utils = @import("../utils.zig");
 
 const Self = @This();
 
-bits: []u8,
+bits: []u8 = &.{},
 
 pub inline fn init(bits: []u8, comptime is_setted: bool) Self {
     @memset(bits, if (is_setted) 0xFF else 0);

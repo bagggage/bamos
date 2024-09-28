@@ -151,6 +151,7 @@ pub const Bus = struct {
             self.unmatched.remove(node);
         }
 
+        node.data.deinit();
         DeviceReg.free(node);
     }
 
@@ -197,6 +198,10 @@ pub const Device = struct {
 
     driver: ?*const Driver,
     driver_data: utils.AnyData,
+
+    pub fn deinit(self: *Device) void {
+        self.name.deinit();
+    }
 };
 
 pub const Driver = struct {
@@ -210,7 +215,7 @@ pub const Driver = struct {
         pub const PlatformProbeFn = *const fn (*const Driver) ProbeResult;
         pub const RemoveFn = *const fn (*Device) void;
 
-        const Probe = union { f: ProbeFn, platform: PlatformProbeFn };
+        const Probe = union { universal: ProbeFn, platform: PlatformProbeFn };
 
         probe: Probe,
         remove: RemoveFn
@@ -223,7 +228,7 @@ pub const Driver = struct {
     impl_data: utils.AnyData,
 
     pub inline fn probe(self: *const Driver, device: *Device) Operations.ProbeResult {
-        return self.ops.probe.f(device);
+        return self.ops.probe.universal(device);
     }
 
     pub inline fn platformProbe(self: *const Driver) Operations.ProbeResult {
