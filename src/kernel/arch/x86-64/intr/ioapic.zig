@@ -12,10 +12,10 @@ const log = @import("../../../log.zig");
 const vm = @import("../../../vm.zig");
 
 const Ioapic = struct {
-    const InternalRegs = dev.regs.RegsGroup(
-        "IOAPIC", .mmio, .dword, &.{
-            dev.regs.reg("IOREGSEL", 0x0, .wo),
-            dev.regs.reg("IOREGWIN", 0x10, .rw)
+    const InternalRegs = dev.regs.Group(
+        io.MmioMechanism("IOAPIC", .dword), null, 0x1000, &.{
+            dev.regs.reg("IOREGSEL", 0x0, null, .write),
+            dev.regs.reg("IOREGWIN", 0x10, null, .rw)
     });
 
     pub const Regs = enum(u8) {
@@ -29,7 +29,6 @@ const Ioapic = struct {
     id: u8,
     version: u8,
     max_redirs: u8,
-    
 
     madt_ent: *Madt.Ioapic,
     internal_regs: InternalRegs,
@@ -42,7 +41,7 @@ const Ioapic = struct {
             .max_redirs = undefined,
 
             .madt_ent = madt_ent,
-            .internal_regs = try InternalRegs.init(madt_ent.address),
+            .internal_regs = try InternalRegs.initBase(madt_ent.address),
         };
 
         const ver = result.get(.ver);

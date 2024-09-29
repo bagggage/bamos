@@ -71,12 +71,12 @@ pub inline fn set(reg: Regs, value: u32) void {
 
 pub inline fn read(offset: u16) u32 {
     @setRuntimeSafety(false);
-    return io.readl(@ptrFromInt(base + offset));
+    return io.readl(base + offset);
 }
 
 pub inline fn write(offset: u16, value: u32) void {
     @setRuntimeSafety(false);
-    io.writel(@ptrFromInt(base + offset), value);
+    io.writel(base + offset, value);
 }
 
 pub inline fn getId() u32 {

@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const dev = @import("../../dev.zig");
+const log = @import("../../log.zig");
 
 const reg = dev.regs.reg;
 
@@ -17,28 +18,28 @@ const IntrEnReg = packed struct {
     reserved: u2 = 0,
 };
 
-const UartRegs = dev.regs.RegsGroup(
-    "uart 8250/16450/16550",
-    .io_ports, .byte,
+const UartRegs = dev.regs.Group(
+    dev.io.IoPortsMechanism("uart 8250/16450/16550", .byte),
+    null, null,
     &.{
         // DLAB == 0
-        reg("data",         0x0, .rw),
-        reg("intr_enable",  0x1, .rw),
+        reg("data",         0x0, null, .rw),
+        reg("intr_enable",  0x1, null, .rw),
 
         // DLAB == 1
-        reg("div_lo",       0x0, .rw),
-        reg("div_hi",       0x1, .rw),
+        reg("div_lo",       0x0, null, .rw),
+        reg("div_hi",       0x1, null, .rw),
 
-        reg("intr_id",      0x2, .ro),
+        reg("intr_id",      0x2, null, .read),
 
-        reg("fifo_ctrl",    0x2, .wo),
-        reg("line_ctrl",    0x3, .rw),
-        reg("modem_ctrl",   0x4, .rw),
+        reg("fifo_ctrl",    0x2, null, .write),
+        reg("line_ctrl",    0x3, null, .rw),
+        reg("modem_ctrl",   0x4, null, .rw),
 
-        reg("line_status",  0x5, .ro),
-        reg("modem_status", 0x6, .ro),
+        reg("line_status",  0x5, null, .read),
+        reg("modem_status", 0x6, null, .read),
 
-        reg("scratch",      0x7, .rw),
+        reg("scratch",      0x7, null, .rw),
     }
 );
 
@@ -48,7 +49,7 @@ const regs_base = switch (builtin.cpu.arch) {
     else => @compileError("UART registers base address is undefined for target architecture")
 };
 
-const regs = UartRegs{ .base = regs_base };
+const regs = UartRegs{ .dyn_base = regs_base };
 
 var driver: *dev.Driver = undefined;
 var device: *dev.Device = undefined;
@@ -97,9 +98,7 @@ fn testPort() bool {
 }
 
 fn probe(self: *const dev.Driver) dev.Driver.Operations.ProbeResult {
-    _ = dev.io.request(
-        UartRegs.name, regs_base, 2, .io_ports
-    ) orelse return .missmatch;
+    _ = UartRegs.initBase(regs_base) catch return .missmatch;
 
     initPort();
 

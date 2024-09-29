@@ -1,17 +1,17 @@
 //! # Input-output subsystem implementation
 
 /// Write a byte into a I\O port.
-pub inline fn outb(byte: u8, port: u16) void {
+pub inline fn outb(port: u16, byte: u8) void {
     asm volatile("outb %[d],%[p]"::[d]"{al}"(byte),[p]"{dx}"(port));
 }
 
 /// Write a word into a I\O port.
-pub inline fn outw(word: u16, port: u16) void {
+pub inline fn outw(port: u16, word: u16) void {
     asm volatile("outw %[d],%[p]"::[d]"{ax}"(word),[p]"{dx}"(port));
 }
 
 /// Write a double word into a I\O port.
-pub inline fn outl(dword: u32, port: u16) void {
+pub inline fn outl(port: u16, dword: u32) void {
     asm volatile("outl %[d],%[p]"::[d]"{eax}"(dword),[p]"{dx}"(port));
 }
 
