@@ -1,77 +1,57 @@
 //! # Registers compile time abstraction
 
 const std = @import("std");
-const Type = std.builtin.Type;
 
+const log = @import("../log.zig");
 const io = @import("io.zig");
-const vm = @import("../vm.zig");
 
-const RegInfo = struct {
+pub const Register = struct {
+    pub const Access = enum {
+        read,
+        write,
+        rw
+    };
+
     name: [:0]const u8,
     offset: comptime_int,
-    access: AccessMode = .rw,
-    struct_t: type = void,
+    Type: ?type = null,
+    access: Access = .rw,
 
-    pub fn init(
+    pub inline fn init(
         comptime name: [:0]const u8,
         comptime offset: comptime_int,
-        comptime T: ?type
-    ) RegInfo {
-        return .{
-            .name = name,
-            .offset = offset,
-            .struct_t = T orelse void
-        };
+        comptime Type: ?type, 
+        comptime access: Access,
+    ) Register {
+        comptime {
+            if (Type) |T| {
+                const info = @typeInfo(T);
+
+                if (info != .Int and info != .Struct)
+                    @compileError("Register type can only be an integer or a structure, found: "++@typeName(Type.?));
+            }
+        }
+
+        return .{ .name = name, .offset = offset, .Type = Type, .access = access };
+    }
+
+    pub inline fn getSize(self: Register) ?comptime_int {
+        return if (self.Type) |T| @sizeOf(T) else null;
     }
 };
 
-pub const BusWidth = enum(u2) {
-    byte,
-    word,
-    dword,
-    qword,
-};
-
-pub const AccessMode = enum(u2) {
-    rw,
-    ro,
-    wo
-};
-
-pub inline fn reg(
-    comptime name: [:0]const u8,
-    comptime offset: comptime_int,
-    comptime access: AccessMode,
-) RegInfo {
-    return RegInfo{
-        .name = name,
-        .offset = offset,
-        .access = access,
-        .struct_t = void
-    };
-}
-
-pub inline fn regS(
-    comptime name: [:0]const u8,
-    comptime offset: comptime_int,
-    comptime access: AccessMode,
-    comptime StructT: type
-) RegInfo {
-    return RegInfo{
-        .name = name,
-        .offset = offset,
-        .access = access,
-        .struct_t = StructT
-    };
-}
-
-pub fn RegsGroup(
-    comptime group_name: [:0]const u8,
-    comptime io_type: io.Type,
-    comptime bus_width: BusWidth,
-    comptime regs: []const RegInfo
+pub fn Group(
+    comptime IoMechanism: type,
+    comptime base: ?comptime_int,
+    comptime size: ?comptime_int,
+    comptime regs: []const Register
 ) type {
-    var fields: []const std.builtin.Type.EnumField = &.{};
+    if (base) |val| {
+        std.debug.assert(val % @sizeOf(IoMechanism.Address) == 0);
+    }
+
+    comptime var fields: []const std.builtin.Type.EnumField = &.{};
+
     inline for (regs[0..], 0..) |r, i| {
         fields = fields ++ [_]std.builtin.Type.EnumField{.{
             .name = r.name,
@@ -87,217 +67,235 @@ pub fn RegsGroup(
             .is_exhaustive = false
         }
     };
+    const NamesType: type = @Type(reg_names);
 
     return struct {
+        pub const AddressType: type = IoMechanism.Address;
+        pub const DataType: type = IoMechanism.Data;
+
+        pub const Names = NamesType;
+
+        pub const byte_size: comptime_int = if (size) |val| val else calcSize();
+
         const Self = @This();
+        const BaseType = if (base != null) void else AddressType; 
 
-        pub const RegNames = @Type(reg_names);
-        pub const name = group_name;
+        dyn_base: BaseType = undefined,
 
-        base: usize,
+        comptime members: []const Register = regs,
 
-        pub fn init(base_addr: usize) !Self {
-            const result = switch (io_type) {
-                .io_ports => .{ .base = base_addr },
-                .mmio => .{ .base = vm.getVirtLma(base_addr) }
-            };
-
-            _ = io.request(name, base_addr, getGroupSize(), io_type) orelse return switch (io_type) {
-                .io_ports => error.IoPortsBusy,
-                .mmio => error.MmioBusy
-            };
-
-            return result;
+        fn getRegInfo(comptime member: Names) Register {
+            return regs[@intFromEnum(member)];
         }
 
-        const BusT = switch (bus_width) {
-            .byte => u8,
-            .word => u16,
-            .dword => u32,
-            .qword => u64
-        };
-        const Base = switch (io_type) {
-            .io_ports => u16,
-            .mmio => [*]BusT
-        };
-
-        const io_read = switch (io_type) {
-            .io_ports => switch (bus_width) {
-                .byte => io.inb,
-                .word => io.inw,
-                .dword => io.inl,
-                .qword => @compileError("64-bit bus width unsupported with I/O ports")
-            },
-            .mmio => switch (bus_width) {
-                .byte => io.readb,
-                .word => io.readw,
-                .dword => io.readl,
-                .qword => io.readq
-            }
-        };
-        const io_write = switch (io_type) {
-            .io_ports => switch (bus_width) {
-                .byte => io.outb,
-                .word => io.outw,
-                .dword => io.outl,
-                .qword => @compileError("64-bit bus width unsupported with I/O ports")
-            },
-            .mmio => switch (bus_width) {
-                .byte => io.writeb,
-                .word => io.writew,
-                .dword => io.writel,
-                .qword => io.writeq
-            }
-        };
-
-        fn RegStruct(comptime register: RegNames) type {
-            return getReg(register).struct_t;
-        }
-
-        inline fn getGroupSize() usize {
+        fn calcSize() comptime_int {
             comptime var max_offset = 0;
 
-            inline for (regs) |r| {
+            for (regs) |r| {
                 if (r.offset > max_offset) max_offset = r.offset;
             }
 
-            return switch (io_type) {
-                .io_ports => max_offset + 1,
-                .mmio => max_offset + @sizeOf(BusT)
-            };
+            return max_offset + @sizeOf(DataType);
         }
 
-        inline fn getBase(self: *const Self) Base {
-            return switch (io_type) {
-                .io_ports => @as(Base, @truncate(self.base)),
-                .mmio => @as(Base, @ptrFromInt(self.base))
-            };
+        inline fn getBase(self: Self) AddressType {
+            return if (base) |val| val else self.dyn_base;
         }
 
-        inline fn getIdx(comptime offset: comptime_int) comptime_int {
-            return offset / @sizeOf(BusT);
+        fn RegIntType(comptime member: Names) type {
+            const Type = getRegInfo(member).Type orelse return DataType;
+            const info = @typeInfo(Type);
+
+            if (info == .Int) return Type;
+
+            return std.meta.Int(.unsigned, @bitSizeOf(Type));
         }
 
-        inline fn getReg(comptime register: RegNames) RegInfo {
-            return regs[@intFromEnum(register)];
+        fn ReferenceGroupEx(comptime offset: AddressType, comptime T: type) type {
+            const new_base = if (base) |val| (val + offset) else null;
+            return Group(IoMechanism, new_base, null, from(T));
         }
 
-        pub inline fn write(self: *const Self, comptime register: RegNames, value: BusT) void {
+        fn ReferenceGroup(comptime member: Names, comptime T: type) type {
+            return ReferenceGroupEx(getRegInfo(member).offset, T);
+        }
+
+        pub fn init() !Self {
+            if (IoMechanism.init) |initFn| {
+                _ = try initFn(base.?, byte_size);
+            }
+
+            return .{};
+        }
+
+        pub fn initBase(base_addr: AddressType) !Self {
+            if (IoMechanism.init) |initFn| {
+                return .{ .dyn_base = try initFn(base_addr, byte_size) };
+            }
+
+            return .{ .dyn_base = base_addr };
+        }
+
+        pub inline fn read(self: Self, comptime member: Names) RegIntType(member) {
             @setRuntimeSafety(false);
 
-            const reg_info = comptime getReg(register);
-            if (comptime reg_info.access == .ro) {
-                @compileError(std.fmt.comptimePrint(
-                    "Register '{s}' for the '{s}' group is read only",
-                    .{@tagName(register), name}
-                ));
+            const r = comptime getRegInfo(member);
+            const r_size = comptime r.getSize() orelse @sizeOf(DataType);
+
+            comptime {
+                if (r.access == .write) @compileError("Register '" ++ r.name ++ "' is write-only.");
             }
 
-            const offset = reg_info.offset;
-
-            switch (io_type) {
-                .io_ports => io_write(value, self.getBase() + offset),
-                .mmio => io_write(@ptrCast(&self.getBase()[getIdx(offset)]), value)
-            }
-        }
-
-        pub inline fn read(self: *const Self, comptime register: RegNames) BusT {
-            @setRuntimeSafety(false);
-
-            const reg_info = comptime getReg(register);
-            if (comptime reg_info.access == .wo) {
-                @compileError(std.fmt.comptimePrint(
-                    "Register '{s}' of the '{s}' group is write only",
-                    .{@tagName(register), name}
-                ));
-            }
-
-            const offset = reg_info.offset;
-
-            return switch (io_type) {
-                .io_ports => return io_read(self.getBase() + offset),
-                .mmio => return io_read(@ptrCast(&self.getBase()[getIdx(offset)]))
-            };
-        }
-
-        pub inline fn set(self: *const Self, comptime register: RegNames, value: anytype) void {
-            const reg_info = comptime getReg(register);
-
-            if (reg_info.struct_t == void) @compileError("This register don't have a representation as user-defined struct");
-            if (@TypeOf(value) != reg_info.struct_t) {
-                @compileError(
-                    "Value type must be: \"" ++ @typeName(reg_info.struct_t) ++
-                    "\", found: \"" ++ @typeName(@TypeOf(value)) ++ "\""
+            if (comptime (r.offset % @sizeOf(DataType)) != 0 or r_size != @sizeOf(DataType)) {
+                return IoMechanism.readNonUniform(
+                    RegIntType(member),
+                    self.getBase(),
+                    comptime r.offset * std.mem.byte_size_in_bits,
                 );
             }
-
-            @setRuntimeSafety(false);
-
-            const val = @as(BusT, @bitCast(value));
-            self.write(register, val);
+            else {
+                return @truncate(IoMechanism.read(self.getBase() +% r.offset));
+            }
         }
 
-        pub inline fn get(self: *const Self, comptime register: RegNames) RegStruct(register) {
-            const reg_info = getReg(register);
-
-            if (reg_info.struct_t == void) @compileError("This register don't have a representation as user-defined struct");
-
+        pub inline fn write(self: Self, comptime member: Names, data: RegIntType(member)) void {
             @setRuntimeSafety(false);
 
-            const val = self.read(register);
-            return @as(reg_info.struct_t,  @bitCast(val));
+            const r = comptime getRegInfo(member);
+            const r_size = comptime r.getSize() orelse @sizeOf(DataType);
+
+            comptime {
+                if (r.access == .read) @compileError("Register '" ++ r.name ++ "' is read-only.");
+            }
+
+            if (comptime (r.offset % @sizeOf(DataType)) != 0 or r_size != @sizeOf(DataType)) {
+                IoMechanism.writeNonUniform(
+                    self.getBase(),
+                    comptime r.offset * std.mem.byte_size_in_bits,
+                    data
+                );
+            }
+            else {
+                IoMechanism.write(self.getBase() +% r.offset, data);
+            }
+        }
+
+        pub inline fn get(self: Self, comptime T: type, comptime member: Names) T {
+            return @bitCast(self.read(member));
+        }
+
+        pub inline fn set(self: Self, comptime member: Names, data: anytype) void {
+            self.write(member, @bitCast(data));
+        }
+
+        pub inline fn referenceAs(self: Self, comptime T: type, comptime member: Names) ReferenceGroup(member, T) {
+            return self.referenceAsOffset(T, getRegInfo(member).offset);
+        }
+
+        pub inline fn referenceAsOffset(self: Self, comptime T: type, comptime offset: AddressType) ReferenceGroupEx(offset, T) {
+            if (comptime base != null) {
+                return .{};
+            } else {
+                return .{ .dyn_base = self.dyn_base + offset };
+            }
         }
     };
 }
 
-test "type generating" {
-    const Regs = RegsGroup(
-        .mmio, .dword,
-        &.{
-            reg("foo", 0, .rw),
-            reg("bar", 8, .rw)
-        },
-    );
-
-    try std.testing.expect(@sizeOf(Regs) == @sizeOf(usize));
-
-    try std.testing.expect(@hasField(Regs.RegNames, "foo"));
-    try std.testing.expect(@hasField(Regs.RegNames, "bar"));
+/// Read-only modifier for register field in struct layout.
+/// 
+/// For `extern`/`packed` structs use postfixies: `E`/`P`.
+pub fn ReadOnly(comptime IntType: type) type {
+    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    return struct {
+        pub const access = Register.Access.read;
+        value: IntType
+    };
 }
 
-test "read mmio" {
-    const Regs = RegsGroup(
-        .mmio, .dword,
-        &.{
-            reg("foo", 0, .rw),
-            reg("bar", @sizeOf(u32), .rw)
-        },
-    );
-    const example_mmio = [_]u32{ 0xdeadbeef, 0xdeadc0de };
-    const regs = Regs{ .base = @intFromPtr(&example_mmio) };
-
-    try std.testing.expect(regs.read(.foo) == example_mmio[0]);
-    try std.testing.expect(regs.read(.bar) == example_mmio[1]);
+/// Write-only modifier for register field in struct layout.
+/// 
+/// For `extern`/`packed` structs use postfixies: `E`/`P`.
+pub fn WriteOnly(comptime IntType: type) type {
+    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    return struct {
+        pub const access = Register.Access.write;
+        value: IntType
+    };
 }
 
-test "write mmio" {
-    const Regs = RegsGroup(
-        .mmio, .dword,
-        &.{
-            reg("foo", 0, .rw),
-            reg("bar", @sizeOf(u32), .rw)
+/// Read-only modifier for register field in **`extern`** struct layout.
+pub fn ReadOnlyE(comptime IntType: type) type {
+    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    return extern struct {
+        pub const access = Register.Access.read;
+        value: IntType
+    };
+}
+
+/// Write-only modifier for register field in **`extern`** struct layout.
+pub fn WriteOnlyE(comptime IntType: type) type {
+    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    return extern struct {
+        pub const access = Register.Access.write;
+        value: IntType
+    };
+}
+
+/// Read-only modifier for register field in **`packed`** struct layout.
+pub fn ReadOnlyP(comptime IntType: type) type {
+    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    return packed struct {
+        pub const access = Register.Access.read;
+        value: IntType
+    };
+}
+
+/// Write-only modifier for register field in **`packed`** struct layout.
+pub fn WriteOnlyP(comptime IntType: type) type {
+    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    return packed struct {
+        pub const access = Register.Access.write;
+        value: IntType
+    };
+}
+
+pub const reg = Register.init;
+
+pub fn from(comptime Layout: type) []const Register {
+    comptime var result: []const Register = &.{};
+    const layout_info = @typeInfo(Layout);
+
+    switch (layout_info) {
+        .Struct => |info| {
+            inline for (info.fields) |field| {
+                if (field.name[0] == '_') continue;
+
+                result = result ++ .{
+                    Register.init(
+                        field.name,
+                        @offsetOf(Layout, field.name),
+                        field.type,
+                        getTypeAccess(field.type)
+                    )
+                };
+            }
         },
-    );
+        .Union => |info| {
+            inline for (info.fields) |field| {
+                result = result ++ from(field.type);
+            }
+        },
+        else => @compileError("Layout must be a struct or union, found '" ++ @typeName(Layout) ++ "'")
+    }
 
-    var example_mmio = [_]u32{ 0xdeadbeef, 0xdeadc0de };
-    const regs = Regs{ .base = @intFromPtr(&example_mmio) };
+    return result;
+}
 
-    try std.testing.expect(example_mmio[0] == 0xdeadbeef);
-    try std.testing.expect(example_mmio[1] == 0xdeadc0de);
+fn getTypeAccess(comptime Type: type) Register.Access {
+    if (@typeInfo(Type) != .Struct) return .rw;
+    if (@hasDecl(Type, "access") == false) return .rw;
+    if (@TypeOf(Type.access) != Register.Access) return .rw;
 
-    regs.write(.foo, 0x1102);
-    regs.write(.bar, 0x65565);
-
-    try std.testing.expect(example_mmio[0] == 0x1102);
-    try std.testing.expect(example_mmio[1] == 0x65565);
+    return Type.access;
 }
