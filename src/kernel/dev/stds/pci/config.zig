@@ -20,6 +20,8 @@ const max_bus = 256;
 pub const max_dev = 32;
 pub const max_func = 8;
 
+pub const ecam_enabled = true;
+
 const PortsIo = struct {
     /// I/O Ports addresses used for accessing
     /// PCI config. space on x86/x86-64 when
@@ -31,14 +33,27 @@ const PortsIo = struct {
 
     const config_size = 256;
 
+    const Ports = regs.Group(
+        io.IoPortsMechanism("PCI config I/O ports", .dword),
+        x86_io_addr, null, &.{
+            regs.reg("CONFIG_ADDR", 0x0, null, .write),
+            regs.reg("CONFIG_DATA", 0x4, null, .rw),
+    });
+
+    const ports = Ports{};
+
     pub fn read(offset: usize) u32 {
-        io.outl(@truncate(offset), x86_io_addr);
-        return io.inl(x86_io_data);
+        @setRuntimeSafety(false);
+
+        ports.write(.CONFIG_ADDR, @truncate(offset));
+        return ports.read(.CONFIG_DATA);
     }
 
-    pub fn write(data: u32, offset: usize) void {
-        io.outl(@truncate(offset), x86_io_addr);
-        io.outl(data, x86_io_data);
+    pub fn write(offset: usize, data: u32) void {
+        @setRuntimeSafety(false);
+
+        ports.write(.CONFIG_ADDR, @truncate(offset));
+        ports.write(.CONFIG_DATA, data);
     }
 
     pub fn getBase(_: u16, bus: u8, dev: u8, func: u8) usize {
@@ -50,11 +65,13 @@ const MmioIo = struct {
     pub const config_size = 4096; 
 
     pub fn read(offset: usize) u32 {
-        return io.readl(@ptrFromInt(offset));
+        @setRuntimeSafety(false);
+        return io.readl(offset);
     }
 
-    pub fn write(data: u32, offset: usize) void {
-        io.writel(@ptrFromInt(offset), data);
+    pub fn write(offset: usize, data: u32) void {
+        @setRuntimeSafety(false);
+        io.writel(offset, data);
     }
 
     pub fn getBase(seg: u16, bus: u8, dev: u8, func: u8) usize {
@@ -67,7 +84,7 @@ const MmioIo = struct {
 
 const AnyIo = struct {
     read: *const fn (offset: usize) u32 = undefined,
-    write: *const fn (data: u32, offset: usize) void = undefined,
+    write: *const fn (offset: usize, data: u32) void = undefined,
 
     getBase: *const fn (seg: u16, bus: u8, dev: u8, func: u8) usize = undefined,
 };
@@ -112,10 +129,9 @@ pub fn init() !void {
 
     if (IoType == AnyIo) {
         // Always reserve I/O ports region to prevent access even with MMIO.
-        _ = io.request("PCI Config I/O ports", PortsIo.x86_io_addr, 8, .io_ports) orelse
-            return error.IoRegionsBusy;
+        _ = try PortsIo.Ports.init();
 
-        if (entry != null and entry.?.checkSum()) {
+        if (ecam_enabled and entry != null and entry.?.checkSum()) {
             cfg_io.read = MmioIo.read;
             cfg_io.write = MmioIo.write;
             cfg_io.getBase = MmioIo.getBase;
@@ -148,11 +164,11 @@ pub inline fn read(offset: usize) u32 {
     return cfg_io.read(offset);
 }
 
-pub inline fn write(data: u32, offset: usize) void {
-    cfg_io.write(data, offset);
+pub inline fn write(offset: usize, data: u32) void {
+    cfg_io.write(offset, data);
 }
 
-const CommonHdr = extern struct {
+const CommonHeader = extern struct {
     vendor_id: u16,
     device_id: u16,
 
@@ -170,8 +186,8 @@ const CommonHdr = extern struct {
     bist: u8,
 };
 
-const DeviceHdr = extern struct {
-    _header: CommonHdr,
+const DeviceConfig = extern struct {
+    _header: CommonHeader,
 
     bar0: u32,
     bar1: u32,
@@ -198,8 +214,16 @@ const DeviceHdr = extern struct {
     max_latency: u8,
 };
 
-const Pci2PciHdr = extern struct {
-    _header: CommonHdr,
+const DeviceConfig64 = extern struct {
+    _header: CommonHeader,
+
+    bar0_64: u64,
+    bar1_64: u64,
+    bar2_64: u64,
+};
+
+const Pci2PciConfig = extern struct {
+    _header: CommonHeader,
     _0: [2]u32,
 
     prim_bus_num: u8,
@@ -229,10 +253,127 @@ const Pci2PciHdr = extern struct {
     bridge_ctrl: u16
 };
 
-const ConfigSpaceHeader = extern union {
-    common: CommonHdr,
-    device: DeviceHdr,
-    p2p:    Pci2PciHdr,
+pub const Capability = struct {
+    pub const Id = enum(u8) {
+        none = 0,
+        power_mngmt_interface = 1,
+        agp = 2,
+        vpd = 3,
+        slot_id = 4,
+        msi = 5,
+        comp_pci_hot_swap = 6,
+        pci_x = 7,
+        hyper_transport = 8,
+        venodor_specific = 9,
+        debug_port = 10,
+        cmp_pci_central_res_ctrl = 11,
+        hot_plug = 12,
+        bridge_subsys_ven_id = 13,
+        agp_8x = 14,
+        secure_device = 15,
+        pci_express = 16,
+        msi_x = 17,
+        sata_data_idx_conf = 18,
+        advanced_feat = 19,
+        enhanced_alloc = 20,
+        flattening_portal_bridge = 21
+    };
+
+    /// MSI layouts namespace
+    pub const Msi = struct {
+        /// Message control register layout
+        pub const MessageControl = packed struct {
+            enable: u1,
+            multi_msg: u3,
+            multi_msg_enable: u3,
+            x64_addr: u1,
+            per_vec_mask: u1,
+
+            _rsrvd: u7
+        };
+
+        /// MSI layout with 32-bit message address
+        pub const x32 = packed struct {
+            _header: Header,
+
+            msg_ctrl: u16,
+            msg_addr: u32,
+
+            msg_data: u16,
+            _rsrvd: u16,
+
+            mask_bits: u32,
+            pending_bits: regs.ReadOnlyP(u32)
+        };
+        /// MSI layout with 64-bit message address
+        pub const x64 = packed struct {
+            _header: Header,
+
+            msg_ctrl: u16,
+            msg_addr: u64,
+
+            msg_data: u16,
+            _rsrvd: u16,
+
+            mask_bits: u32,
+            pending_bits: regs.ReadOnlyP(u32)
+        };
+    };
+
+    /// MSI-X layout
+    pub const MsiX = packed struct {
+        /// Message control register layout
+        pub const MessageControl = packed struct {
+            table_size: u11,
+            _rsrvd: u3,
+
+            func_mask: u1,
+            enable: u1
+        };
+
+        _header: Header,
+        msg_ctrl: u32,
+
+        table_offset: regs.ReadOnlyP(u32),
+        pba_offset: regs.ReadOnlyP(u32)
+    };
+
+    const Header = packed struct {
+        id: Id,
+        next_offset: u8,
+    };
+
+    header: Header,
+    offset: u8,
+    base: usize,
+
+    pub fn init(base: usize, offset: u8) Capability {
+        const temp = cfg_io.read(base + offset);
+        const header: Capability.Header = @bitCast(@as(u16, @truncate(temp)));
+
+        return .{
+            .header = header,
+            .offset = offset,
+            .base = base
+        };
+    }
+
+    pub inline fn next(self: *const Capability) ?Capability {
+        if (self.header.next_offset == 0) return null;
+
+        return Capability.init(self.base, self.header.next_offset);
+    }
+
+    pub inline fn as(self: *const Capability, comptime T: type) ConfigRegsFrom(T) {
+        return .{ .dyn_base = self.base + self.offset };
+    } 
+};
+
+const ConfigSpaceLayout = extern union {
+    common: CommonHeader,
+    device: DeviceConfig,
+    device64: DeviceConfig64,
+    p2p:    Pci2PciConfig,
 };
 
 const Fields = enum {
@@ -272,7 +413,7 @@ const Fields = enum {
 
     expans_rom_base,
 
-    cap_offset,
+    cap_ptr,
 
     intr_line,
     intr_pin,
@@ -306,12 +447,7 @@ const Fields = enum {
 
 fn FieldMember(comptime field: Fields) type {
     const field_name = @tagName(field);
-
-    if (comptime std.mem.endsWith(u8, field_name, "_64")) {
-        return DeviceHdr;
-    }
-
-    const info = @typeInfo(ConfigSpaceHeader);
+    const info = @typeInfo(ConfigSpaceLayout);
 
     for (info.Union.fields) |member| {
         if (@hasField(member.type, field_name)) {
@@ -319,7 +455,7 @@ fn FieldMember(comptime field: Fields) type {
         }
     }
 
-    @compileError("Invalid field");
+    @compileError("Invalid configuration space field");
 }
 
 fn FieldType(comptime field: Fields) type {
@@ -336,68 +472,53 @@ fn FieldType(comptime field: Fields) type {
 
 const Self = @This();
 
+const ConfigIoMechanism = io.Mechanism(
+    usize, u32,
+    read,
+    write,
+    null
+);
+
+fn ConfigRegsFrom(comptime T: type) type {
+    return regs.Group(ConfigIoMechanism, null, null, regs.from(T));
+}
+
+pub const ConfigSpaceGroup = regs.Group(
+    ConfigIoMechanism, null, null,
+    regs.from(ConfigSpaceLayout)
+);
+
 pub const ConfigSpace = struct {
-    base: usize,
+    internal: ConfigSpaceGroup,
 
     pub inline fn init(seg: u16, bus: u8, dev: u8, func: u8) ConfigSpace {
-        return .{ .base = cfg_io.getBase(seg, bus, dev, func) };
+        return .{ .internal = ConfigSpaceGroup.initBase(cfg_io.getBase(seg, bus, dev, func)) catch unreachable };
     }
 
-    pub inline fn get(self: *const ConfigSpace, comptime field: Fields) FieldType(field) {
-        return Self.get(self.base, field);
+    pub inline fn read(self: *const ConfigSpace, offset: usize) u32 {
+        return cfg_io.read(self.internal.dyn_base + offset);
     }
 
-    pub inline fn set(self: *ConfigSpace, comptime field: Fields, value: FieldType(field)) void {
-        return Self.set(self.base, field, value);
+    pub inline fn write(self: *const ConfigSpace, offset: usize, data: u32) void {
+        return cfg_io.write(self.internal.dyn_base + offset, data);
+    }
+
+    pub inline fn get(self: *const ConfigSpace, comptime field: anytype) FieldType(field) {
+        return self.internal.read(field);
+    }
+
+    pub inline fn set(self: *ConfigSpace, comptime field: anytype, value: FieldType(field)) void {
+        self.internal.write(field, value);
+    }
+
+    pub fn getCapabilities(self: *const ConfigSpace) ?Capability {
+        if ((self.get(.status) & 0b10000) == 0) return null;
+
+        const cap_ptr = self.get(.cap_ptr);
+
+        return Capability.init(self.internal.dyn_base, cap_ptr);
     }
 };
-
-pub inline fn get(base: usize, comptime field: Fields) FieldType(field) {
-    const Member = FieldMember(field);
-    const field_name = @tagName(field);
-
-    if (comptime std.mem.endsWith(u8, field_name, "_64")) {
-        // Read BAR*_64
-        const bar_idx = field_name[3] - '0';
-
-        const base_offset = @offsetOf(Member, "bar0");
-        const offset = base_offset + (@sizeOf(u64) * bar_idx);
-
-        return @as(u64, read(offset)) | (@as(u64, read(offset + @sizeOf(u32))) << @bitSizeOf(u32));
-    }
-    else {
-        const offset = @offsetOf(Member, field_name);
-
-        const inner_offset = offset % @sizeOf(u32);
-        const aligned_offset = offset - inner_offset;
-
-        const value = read(base | aligned_offset);
-
-        return @truncate(value >> (inner_offset * utils.byte_size));
-    }
-}
-
-pub inline fn set(base: usize, comptime field: Fields, value: FieldType(field)) void {
-    const Member = FieldMember(field);
-    const Type = FieldType(field);
-
-    const offset = @offsetOf(Member, @tagName(field));
-
-    if (Type == u32) {
-        write(value, base | offset);
-    }
-    else {
-        const inner_offset = offset % @sizeOf(u32);
-        const aligned_offset = offset - inner_offset;
-
-        const data = (
-            read(base | aligned_offset) |
-            @as(u32, value) << (inner_offset * utils.byte_size)
-        );
-
-        write(data, base | aligned_offset);
-    }
-}
 
 pub inline fn getMaxBus(seg: usize) usize {
     if (IoType == AnyIo) {
@@ -420,7 +541,7 @@ fn initMmio(mcfg_hdr: *const acpi.SdtHeader) !void {
     for (entries) |entry| {
         const config_space_size = (@as(usize, entry.end_bus - entry.start_bus) + 1) * 4096 * max_dev * max_func;
 
-        _ = io.request("PCI Config mmio", entry.base, config_space_size, .mmio) orelse
+        _ = io.request("PCI config mmio", entry.base, config_space_size, .mmio) orelse
             return error.IoRegionBusy;
     }
 
