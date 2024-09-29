@@ -79,21 +79,20 @@ BamOS is at an early stage of development, and many things are not yet implement
 
 ## Current State
 
-- The operating system supports the x86-64 architecture.
-- A virtual memory management system is implemented.
-- Implementations of fast and efficient allocators: physical pages, objects, and a universal allocator are present.
+- x86-64 architecture support.
+- Virtual memory management system.
 - Logging system and text output to the screen.
 - Handling of hardware exceptions.
 - Device management system.
 - PCI bus driver.
-- Implementation of an interrupt handling system.
+- Interrupt handling system.
 
 ## Planned Features
 
 - Porting the NVMe driver from the `draft-c` branch.
-- Implementation of drivers for other solid-state storage standards.
-- Development and implementation of a virtual file system architecture.
-- Implementation of various file system drivers (ext2..4, NTFS, FAT32, etc.).
-- Development and implementation of process architecture, scheduling.
-- Development and implementation of system call architecture and kernel-process interaction with support for various ABIs.
+- Drivers for other solid-state storage standards.
+- Virtual file system.
+- Various file system drivers (ext2..4, NTFS, FAT32, etc.).
+- Processes architecture, scheduling.
+- System calls architecture and kernel-process interaction with support for various ABIs.
 - And much more...
