@@ -9,9 +9,6 @@ const utils = @import("../../utils.zig");
 pub const page_size = 4096;
 pub const page_table_size = 512;
 
-pub const invalid_phys = 0xF000000000000000;
-pub const invalid_virt = invalid_phys;
-
 /// Linear Memory Access (LMA) region start address.
 pub const lma_start = 0xFFFF800000000000;
 /// Linear Memory Access (LMA) region size address.

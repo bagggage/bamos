@@ -77,16 +77,21 @@ fn remove(device: *dev.Device) void {
 }
 
 fn enumerate() !void {
-    for (0..config.getMaxSeg()) |seg_idx| {
-        bus_loop: for (0..config.getMaxBus(seg_idx)) |bus_idx| {
-            dev_loop: for (0..config.max_dev) |dev_idx| {
-                for (0..config.max_func) |func_idx| {
+    for (0..config.getMaxSeg()) |seg_idx|
+    {
+        bus_loop: for (0..config.getMaxBus(seg_idx)) |bus_idx|
+        {
+            dev_loop: for (0..config.max_dev) |dev_idx|
+            {
+                for (0..config.max_func) |func_idx|
+                {
                     if (try enumDevice(
                         @truncate(seg_idx),
                         @truncate(bus_idx),
                         @truncate(dev_idx),
                         @truncate(func_idx)
-                    ) == false and func_idx == 0) {
+                    ) == false and func_idx == 0)
+                    {
                         if (dev_idx == 0)
                             { continue :bus_loop; }
                         else
@@ -113,13 +118,13 @@ fn enumDevice(seg_idx: u16, bus_idx: u8, dev_idx: u8, func_idx: u8) !bool {
 
     const device = try dev.registerDevice(
         try dev.nameFmt(
-            "PCI:{x:0>4}:{x:0>2}:{x:0>2}.{}",
+            "{x:0>4}:{x:0>2}:{x:0>2}.{}",
             .{seg_idx,bus_idx,dev_idx,func_idx}
         ),
         bus, null, pci_dev
     );
 
-    log.debug("{}: 0x{x:0>4} : 0x{x:0>4}", .{
+    log.debug("PCI:{}: 0x{x:0>4} : 0x{x:0>4}", .{
         device.name, vendor_id, pci_dev.id.device_id
     });
 
