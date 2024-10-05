@@ -11,6 +11,8 @@ const intr = @import("../intr.zig");
 const log = @import("../../../log.zig");
 const vm = @import("../../../vm.zig");
 
+const Interrupt = apic.Interrupt;
+
 const Ioapic = struct {
     const InternalRegs = dev.regs.Group(
         io.MmioMechanism("IOAPIC", .dword), null, 0x1000, &.{
@@ -73,40 +75,13 @@ const Ioapic = struct {
 
 const RedirEntry = struct {
     const Struct = packed struct {
-        const DeliveryMode = enum(u3) {
-            fixed = 0,
-            lowest_priority = 1,
-            smi = 2,
-
-            nmi = 4,
-            init = 5,
-
-            ext_init = 7
-        };
-        const DestinationMode = enum(u1) {
-            physical = 0,
-            logical = 1
-        };
-        const DeliveryStatus = enum(u1) {
-            relaxed = 0,
-            waiting = 1
-        };
-        const Polarity = enum(u1) {
-            active_high = 0,
-            active_low = 1
-        };
-        const TriggerMode = enum(u1) {
-            edge = 0,
-            level = 1
-        };
-
         vector: u8,
-        delv_mode: DeliveryMode,
-        dest_mode: DestinationMode,
-        delv_status: DeliveryStatus,
-        pin_polarity: Polarity,
+        delv_mode: Interrupt.DeliveryMode,
+        dest_mode: Interrupt.DestinationMode,
+        delv_status: Interrupt.DeliveryStatus,
+        pin_polarity: Interrupt.Polarity,
         remote_irr: u1 = 0,
-        trig_mode: TriggerMode,
+        trig_mode: Interrupt.TriggerMode,
         mask: u1,
 
         _: u39 = 0,
@@ -154,7 +129,6 @@ const RedirEntry = struct {
 const Madt = apic.Madt;
 const IoapicArray = std.BoundedArray(Ioapic, max_ioapics);
 
-const irqs_per_ioapic = 24;
 const max_ioapics = 4;
 
 var ioapics = IoapicArray.init(0) catch unreachable;
@@ -166,7 +140,7 @@ pub fn init() !void {
     var entry: ?*Madt.Entry = null;
 
     while (madt.findByType(entry, .ioapic)) |ent| : (entry = ent) {
-        const ioapic_ent: *Madt.Ioapic = @alignCast(@ptrCast(ent));
+        const ioapic_ent: *align(2) Madt.Ioapic = @alignCast(@ptrCast(ent));
         const ioapic = Ioapic.init(ioapic_ent) catch |err| {
             log.err("Failed to initialize IOAPIC-{}: {}", .{ioapic_ent.id,err});
             continue;

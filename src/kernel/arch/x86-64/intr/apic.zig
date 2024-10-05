@@ -7,6 +7,7 @@ const arch = @import("../arch.zig");
 const dev = @import("../../../dev.zig");
 const intr = dev.intr;
 const ioapic = @import("ioapic.zig");
+const smp = @import("../../../smp.zig");
 const lapic = @import("lapic.zig");
 const pic = @import("pic.zig");
 
@@ -30,12 +31,19 @@ pub const Madt = extern struct {
         length: u8
     };
 
+    pub const ProcLapic = extern struct {
+        header: Entry,
+        acpi_proc_id: u8,
+        apic_id: u8,
+        flags: u32 align(1)
+    };
+
     pub const Ioapic = extern struct {
         header: Entry,
         id: u8,
         reserved: u8,
-        address: u32,
-        gsi_base: u32,
+        address: u32 align(1),
+        gsi_base: u32 align(1),
     };
 
     pub const IntrSourceOverride = extern struct {
@@ -75,6 +83,61 @@ pub const Madt = extern struct {
     }
 };
 
+pub const Interrupt = struct {
+    pub const DeliveryMode = enum(u3) {
+        fixed = 0,
+        lowest_priority = 1,
+        smi = 2,
+
+        nmi = 4,
+        init = 5,
+
+        ext_init = 7
+    };
+    pub const DestinationMode = enum(u1) {
+        physical = 0,
+        logical = 1
+    };
+    pub const DeliveryStatus = enum(u1) {
+        relaxed = 0,
+        waiting = 1
+    };
+    pub const Polarity = enum(u1) {
+        active_high = 0,
+        active_low = 1
+    };
+    pub const TriggerMode = enum(u1) {
+        edge = 0,
+        level = 1
+    };
+};
+
+const Msi = struct {
+    pub const Address = packed struct {
+        rsrvd: u2 = 0,
+
+        dest_mode: Interrupt.DestinationMode,
+        redir_hint: u1,
+
+        rsrvd_1: u8 = 0,
+
+        dest_id: u8,
+        magic: u12 = 0xFEE,
+    };
+
+    pub const Data = packed struct {
+        vector: u8,
+        delv_mode: Interrupt.DeliveryMode,
+
+        rsrvd: u3 = 0,
+
+        pin_polarity: Interrupt.Polarity,
+        trig_mode: Interrupt.TriggerMode,
+
+        rsrvd_1: u16 = 0
+    };
+};
+
 var madt: *Madt = undefined;
 
 pub fn init() !void {
@@ -99,12 +162,17 @@ pub fn chip() intr.Chip {
             .unbindIrq = &unbindIrq,
             .maskIrq = &maskIrq,
             .unmaskIrq = &unmaskIrq,
+            //.configureMsi = &configureMsi,
         }
     };
 }
 
 pub inline fn getMadt() *Madt {
     return madt;
+}
+
+pub inline fn cpuIdxToApicId(cpu_idx: u16) u8 {
+    return smp.getCpuData(cpu_idx).arch_specific.apic_id;
 }
 
 inline fn isAvail() bool {
@@ -126,7 +194,7 @@ fn bindIrq(irq: *const intr.Irq) void {
         .delv_mode = .fixed,
         .delv_status = .relaxed,
         .dest_mode = .physical,
-        .dest = @truncate(irq.vector.cpu),
+        .dest = cpuIdxToApicId(irq.vector.cpu),
         .pin_polarity = .active_high,
         .trig_mode = switch(irq.trigger_mode) {
             .edge => .edge,
@@ -141,13 +209,35 @@ fn unbindIrq(irq: *const intr.Irq) void {
 }
 
 fn maskIrq(irq: *const intr.Irq) void {
+    @setRuntimeSafety(false);
     ioapic.mask(irq.pin, true);
 }
 
 fn unmaskIrq(irq: *const intr.Irq) void {
+    @setRuntimeSafety(false);
     ioapic.mask(irq.pin, false);
 }
 
 fn eoi() void {
+    @setRuntimeSafety(false);
     lapic.set(.eoi, 0);
+}
+
+fn configureMsi(msi: *const intr.Msi) !intr.Msi.Message {
+    const address = Msi.Address{
+        .dest_id = msi.vector.cpu,
+        .dest_mode = .physical,
+        .redir_hint = 0
+    };
+    const data = Msi.Data{
+        .vector = cpuIdxToApicId(msi.vector.cpu),
+        .delv_mode = .fixed,
+        .pin_polarity = .active_high,
+        .trig_mode = .edge
+    };
+
+    return .{
+        .address = @as(u32, @bitCast(address)),
+        .data = @bitCast(data)
+    };
 }

@@ -97,6 +97,6 @@ fn waitForInit() noreturn {
 
     init_lock.unlock();
 
-    log.warn("CPU {} initialized: {}", .{getIdx(), arch.getCpuLocalData()});
+    log.warn("CPU {} initialized", .{getIdx()});
     utils.halt();
 }

@@ -7,6 +7,7 @@ const boot = @import("../boot.zig");
 const dev = @import("../dev.zig");
 const io = dev.io;
 const log = @import("../log.zig");
+const smp = @import("../smp.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
@@ -54,8 +55,13 @@ pub const Chip = struct {
 pub const Error = error {
     NoMemory,
     NoVector,
-    IrqBusy,
+    IntrBusy,
     AlreadyUsed,
+};
+
+pub const TriggerMode = enum(u1) {
+    edge,
+    level
 };
 
 pub const Irq = struct {
@@ -64,10 +70,6 @@ pub const Irq = struct {
 
         device: *dev.Device,
         func: Fn,
-    };
-    pub const TriggerMode = enum(u1) {
-        edge,
-        level
     };
 
     const HandlerList = utils.List(Handler);
@@ -109,7 +111,7 @@ pub const Irq = struct {
     }
 
     pub fn addHandler(self: *Irq, func: Handler.Fn, device: *dev.Device) Error!void {
-        if (!self.shared and self.handlers.len > 0) return error.IrqBusy;
+        if (!self.shared and self.handlers.len > 0) return error.IntrBusy;
 
         self.waitWhilePending();
 
@@ -168,6 +170,16 @@ pub const Irq = struct {
     }
 };
 
+pub const Msi = struct {
+    pub const Message = struct {
+        address: usize,
+        data: u32
+    };
+
+    vector: Vector,
+    trigger_mode: TriggerMode,
+};
+
 pub const Vector = struct {
     cpu: u16,
     vec: u16,
@@ -222,7 +234,7 @@ var irqs = std.BoundedArray(?Irq, max_irqs).init(max_irqs) catch unreachable;
 pub var chip: Chip = undefined;
 
 pub fn init() !void {
-    const cpus_num = boot.getCpusNum();
+    const cpus_num = smp.getNum();
 
     cpus = try CpuArray.init(cpus_num);
     errdefer cpus.resize(0) catch unreachable;
@@ -265,7 +277,7 @@ pub fn requestIrq(pin: u8, device: *dev.Device, handler: Irq.Handler.Fn, tigger_
     const irq_item = &irqs.buffer[pin];
 
     const irq = if (irq_item.*) |*irq_ent| blk: {
-        if (!shared or irq_ent.trigger_mode != tigger_mode) return error.IrqBusy;
+        if (!shared or irq_ent.trigger_mode != tigger_mode) return error.IntrBusy;
         break :blk irq_ent;
     }
     else blk: {
