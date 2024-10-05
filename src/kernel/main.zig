@@ -4,6 +4,7 @@ const arch = utils.arch;
 const boot = @import("boot.zig");
 const dev = @import("dev.zig");
 const log = @import("log.zig");
+const smp = @import("smp.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
@@ -19,16 +20,18 @@ pub const panic = @import("panic.zig").panic;
 export fn main() noreturn {
     defer @panic("reached end of the main");
 
+    smp.preinit();
     arch.preinit();
 
-    log.info("Kernel startup at CPU: {}", .{arch.getCpuIdx()});
-    log.info("CPUs detected: {}, vendor: {s}", .{boot.getCpusNum(),arch.getCpuVendor()});
+    init(smp);
+
+    smp.initCpu();
+    log.info("CPUs detected: {}, vendor: {s}", .{smp.getNum(),arch.getCpuVendor()});
 
     init(vm);
-
     log.warn("Used memory: {} KB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / utils.kb_size});
 
-    arch.smpInit();
+    smp.initAll();
 
     init(dev);
 }

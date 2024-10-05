@@ -200,6 +200,12 @@ pub inline fn getCs() u16 {
     return cs;
 }
 
+pub inline fn setGs(selector: u16) void {
+    asm volatile ("mov %[res],%%gs"
+        :: [res] "r" (selector),
+    );
+}
+
 pub inline fn saveCallerRegs() void {
     asm volatile (
         \\push %r15

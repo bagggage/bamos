@@ -9,6 +9,7 @@ const log = @import("../../log.zig");
 const panic = @import("../../panic.zig");
 const pic = @import("intr/pic.zig");
 const regs = @import("regs.zig");
+const smp = @import("../../smp.zig");
 const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");
 
@@ -82,7 +83,7 @@ var tss_pool: []TaskStateSegment = &.{};
 var irq_stacks: []IrqStack = &.{};
 
 pub fn preinit() void {
-    const cpus_num = boot.getCpusNum();
+    const cpus_num = smp.getNum();
     const idts_pages = std.math.divCeil(
         u32, @as(u32, cpus_num) * @sizeOf(DescTable),
         vm.page_size
@@ -149,12 +150,12 @@ pub inline fn useIdt(idt: *DescTable) void {
     regs.setIdtr(idtr);
 }
 
-pub inline fn enable() void {
+pub inline fn enableCpu() void {
     @setRuntimeSafety(false);
     asm volatile("sti");
 }
 
-pub inline fn disable() void {
+pub inline fn disableCpu() void {
     @setRuntimeSafety(false);
     asm volatile("cli");
 }
@@ -170,7 +171,7 @@ fn initIdts() !void {
 }
 
 fn initTss() !void {
-    const cpus_num = boot.getCpusNum();
+    const cpus_num = smp.getNum();
     const stacks_pages = std.math.divCeil(
         u32,
         cpus_num * irq_stack_size,
