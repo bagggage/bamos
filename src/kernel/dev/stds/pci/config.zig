@@ -253,6 +253,24 @@ const Pci2PciConfig = extern struct {
     bridge_ctrl: u16
 };
 
+pub const Regs = struct {
+    const Command = packed struct {
+        io_space: u1,
+        mem_space: u1,
+        bus_master: u1,
+        spec_cycles: u1,
+        mem_write_inval: u1,
+        vga_palette_snoop: u1,
+        parity_error: u1,
+        rsrvd: u1,
+        serr_enable: u1,
+        fast_btb: u1,
+        intr_disable: u1,
+
+        rsrvd_1: u5
+    };
+};
+
 pub const Capability = struct {
     pub const Id = enum(u8) {
         none = 0,
@@ -507,8 +525,16 @@ pub const ConfigSpace = struct {
         return self.internal.read(field);
     }
 
+    pub inline fn getAs(self: *const ConfigSpace, comptime T: type, comptime field: anytype) T {
+        return  self.internal.get(T, field);
+    }
+
     pub inline fn set(self: *ConfigSpace, comptime field: anytype, value: FieldType(field)) void {
         self.internal.write(field, value);
+    }
+
+    pub inline fn setAs(self: *ConfigSpace, comptime field: anytype, value: anytype) void {
+        self.internal.set(field, value);
     }
 
     pub fn getCapabilities(self: *const ConfigSpace) ?Capability {
@@ -517,6 +543,20 @@ pub const ConfigSpace = struct {
         const cap_ptr = self.get(.cap_ptr);
 
         return Capability.init(self.internal.dyn_base, cap_ptr);
+    }
+
+    pub fn readBar(self: *ConfigSpace, bar_idx: u3) usize {
+        const base = @offsetOf(DeviceConfig, "bar0") + (bar_idx * @sizeOf(u32));
+        const bar_l = self.read(base);
+
+        // Is 64-bit ?
+        if ((bar_l & 0x7) == 0b100) {
+            const bar_h = self.read(base + @sizeOf(u32));
+            return (@as(u64, bar_h) << @bitSizeOf(u32)) | (bar_l & 0xFFFF_FFF0);
+        }
+        else {
+            return bar_l & 0xFFFF_FFFC;
+        }
     }
 };
 
