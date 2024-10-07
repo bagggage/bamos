@@ -20,12 +20,14 @@ pub const Chip = struct {
         pub const UnbindIrqFn = IrqFn;
         pub const MaskIrqFn = IrqFn;
         pub const UnmaksIrqFn = IrqFn;
+        pub const ConfigMsiFn = *const fn(*Msi, u8, TriggerMode) Msi.Message;
 
         eoi: EoiFn,
         bindIrq: BindIrqFn,
         unbindIrq: UnbindIrqFn,
         maskIrq: MaskIrqFn,
-        unmaskIrq: UnmaksIrqFn
+        unmaskIrq: UnmaksIrqFn,
+        configMsi: ConfigMsiFn,
     };
 
     name: []const u8,
@@ -50,6 +52,10 @@ pub const Chip = struct {
     pub inline fn unmaskIrq(self: *const Chip, irq: *const Irq) void {
         self.ops.unmaskIrq(irq);
     }
+
+    pub inline fn configMsi(self: *const Chip, msi: *Msi, idx: u8, trigger_mode: TriggerMode) void {
+        return self.ops.configMsi(msi, idx, trigger_mode);
+    }
 };
 
 pub const Error = error {
@@ -59,19 +65,20 @@ pub const Error = error {
     AlreadyUsed,
 };
 
-pub const TriggerMode = enum(u1) {
+pub const TriggerMode = enum(u2) {
     edge,
-    level
+    level_high,
+    level_low
+};
+
+pub const Handler = struct {
+    pub const Fn = *const fn(*dev.Device) bool;
+
+    device: *dev.Device,
+    func: Fn,
 };
 
 pub const Irq = struct {
-    pub const Handler = struct {
-        pub const Fn = *const fn(*const Irq, *dev.Device) bool;
-
-        device: *dev.Device,
-        func: Fn,
-    };
-
     const HandlerList = utils.List(Handler);
     const HandlerNode = HandlerList.Node;
 
@@ -159,7 +166,7 @@ pub const Irq = struct {
         var node = self.handlers.first;
 
         while (node) |handler| : (node = handler.next) {
-            if (handler.data.func(self, handler.data.device)) return true;
+            if (handler.data.func(handler.data.device)) return true;
         }
 
         return false;
@@ -176,8 +183,11 @@ pub const Msi = struct {
         data: u32
     };
 
+    in_use: bool = false,
+
     vector: Vector,
-    trigger_mode: TriggerMode,
+    handler: Handler,
+    message: Message,
 };
 
 pub const Vector = struct {
@@ -217,19 +227,24 @@ const Cpu = struct {
     }
 };
 
-pub const max_irqs = 128;
+pub const max_intr = 128;
 
 const max_cpus = 128;
 
 const OrderArray = std.BoundedArray(*Cpu, max_cpus);
 const CpuArray = std.BoundedArray(Cpu, max_cpus);
-const IrqArray = std.BoundedArray(Irq, max_irqs);
+
+const IrqArray = std.BoundedArray(Irq, max_intr);
+const MsiArray = std.BoundedArray(Msi, max_intr);
 
 var cpus_order = OrderArray.init(0) catch unreachable;
 var cpus = CpuArray.init(0) catch unreachable;
 var cpus_lock = utils.Spinlock.init(.unlocked);
+var msis_lock = utils.Spinlock.init(.unlocked);
 
-var irqs = std.BoundedArray(?Irq, max_irqs).init(max_irqs) catch unreachable;
+var irqs = std.BoundedArray(?Irq, max_intr).init(max_intr) catch unreachable;
+var msis = MsiArray.init(max_intr) catch unreachable;
+var msis_used: u8 = 0;
 
 pub var chip: Chip = undefined;
 
@@ -273,15 +288,15 @@ pub fn deinit() void {
     }
 }
 
-pub fn requestIrq(pin: u8, device: *dev.Device, handler: Irq.Handler.Fn, tigger_mode: Irq.TriggerMode, shared: bool) Error!void {
+pub fn requestIrq(pin: u8, device: *dev.Device, handler: Handler.Fn, tigger_mode: TriggerMode, shared: bool) Error!void {
     const irq_item = &irqs.buffer[pin];
 
     const irq = if (irq_item.*) |*irq_ent| blk: {
-        if (!shared or irq_ent.trigger_mode != tigger_mode) return error.IntrBusy;
+        if (!shared or irq_ent.trigger_mode != tigger_mode) return Error.IntrBusy;
         break :blk irq_ent;
     }
     else blk: {
-        const vector = allocVector(null) orelse return error.NoVector;
+        const vector = allocVector(null) orelse return Error.NoVector;
         irq_item.* = Irq.init(pin, vector, tigger_mode, shared);
 
         const ptr = &irq_item.*.?;
@@ -335,6 +350,53 @@ pub fn handleIrq(pin: u8) void {
     _ = irqs.buffer[pin].?.handle();
 
     chip.eoi();
+}
+
+pub fn handleMsi(idx: u8) void {
+    @setRuntimeSafety(false);
+
+    const handler = &msis.buffer[idx].handler;
+    _ = handler.func(handler.device);
+
+    chip.eoi();
+}
+
+pub fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: TriggerMode) Error!u8 {
+    msis_lock.lock();
+    defer msis_lock.unlock();
+
+    if (msis_used == max_intr) return Error.NoMemory;
+
+    var idx = @intFromPtr(handler) % msis.len;
+    while (msis.buffer[idx].in_use) {
+        idx = (idx +% 1) % msis.len;
+    }
+
+    const msi = &msis.buffer[idx];
+
+    const vec = allocVector(null) orelse return Error.NoVector;
+
+    msi.* = .{
+        .in_use = true,
+        .vector = vec,
+        .handler = .{ .func = handler, .device = device },
+    };
+
+    chip.configMsi(msi, trigger_mode);
+    msis_used += 1;
+
+    return idx;
+}
+
+pub fn getMsiMessage(idx: u8) Msi.Message {
+    msis_lock.lock();
+    defer msis_lock.unlock();
+
+    const msi = &msis.buffer[idx];
+
+    std.debug.assert(msi.in_use);
+
+    return msi.message;
 }
 
 fn allocVector(cpu_idx: ?u16) ?Vector {

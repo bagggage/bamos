@@ -6,14 +6,16 @@ const acpi = dev.acpi;
 const arch = @import("../arch.zig");
 const dev = @import("../../../dev.zig");
 const intr = dev.intr;
-const ioapic = @import("ioapic.zig");
 const smp = @import("../../../smp.zig");
-const lapic = @import("lapic.zig");
+const log = @import("../../../log.zig");
 const pic = @import("pic.zig");
 
 const c = @cImport(
     @cInclude("cpuid.h")
 );
+
+pub const ioapic = @import("ioapic.zig");
+pub const lapic = @import("lapic.zig");
 
 pub const Madt = extern struct {
     pub const Entry = extern struct {
@@ -162,7 +164,7 @@ pub fn chip() intr.Chip {
             .unbindIrq = &unbindIrq,
             .maskIrq = &maskIrq,
             .unmaskIrq = &unmaskIrq,
-            //.configureMsi = &configureMsi,
+            .configMsi = &configMsi,
         }
     };
 }
@@ -182,7 +184,7 @@ inline fn isAvail() bool {
 fn bindIrq(irq: *const intr.Irq) void {
     arch.intr.setupIsr(
         irq.vector,
-        arch.intr.lowLevelIrqHandler(irq.pin),
+        arch.intr.lowLevelIntrHandler(irq.pin, "commonIrqHandler"),
         .kernel,
         arch.intr.intr_gate_flags,
     );
@@ -195,10 +197,13 @@ fn bindIrq(irq: *const intr.Irq) void {
         .delv_status = .relaxed,
         .dest_mode = .physical,
         .dest = cpuIdxToApicId(irq.vector.cpu),
-        .pin_polarity = .active_high,
+        .pin_polarity = switch (irq.trigger_mode) {
+            .level_low => .active_low,
+            else => .active_high
+        },
         .trig_mode = switch(irq.trigger_mode) {
             .edge => .edge,
-            .level => .level
+            else => .level
         },
         .mask = 1,
     });
@@ -223,18 +228,31 @@ fn eoi() void {
     lapic.set(.eoi, 0);
 }
 
-fn configureMsi(msi: *const intr.Msi) !intr.Msi.Message {
+fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) intr.Msi.Message {
     const address = Msi.Address{
-        .dest_id = msi.vector.cpu,
+        .dest_id = @truncate(msi.vector.cpu),
         .dest_mode = .physical,
         .redir_hint = 0
     };
     const data = Msi.Data{
         .vector = cpuIdxToApicId(msi.vector.cpu),
         .delv_mode = .fixed,
-        .pin_polarity = .active_high,
-        .trig_mode = .edge
+        .pin_polarity = switch (trigger_mode) {
+            .level_low => .active_low,
+            else => .active_high
+        },
+        .trig_mode = switch (trigger_mode) {
+            .edge => .edge,
+            else => .level
+        }
     };
+
+    arch.intr.setupIsr(
+        msi.vector,
+        arch.intr.lowLevelIntrHandler(idx, "commonMsiHandler"),
+        .kernel,
+        arch.intr.intr_gate_flags,
+    );
 
     return .{
         .address = @as(u32, @bitCast(address)),

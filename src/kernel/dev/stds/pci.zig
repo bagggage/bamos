@@ -3,9 +3,11 @@
 const dev = @import("../../dev.zig");
 const log = @import("../../log.zig");
 const utils = @import("../../utils.zig");
+const regs = dev.regs;
 const vm = @import("../../vm.zig");
 
 pub const config = @import("pci/config.zig");
+pub const intr = @import("pci/intr.zig");
 
 pub const Id = struct {
     pub const any = 0xffff;
@@ -19,6 +21,7 @@ pub const Id = struct {
 pub const Device = struct {
     id: Id,
     config: config.ConfigSpace,
+    intr_ctrl: intr.Control,
     data: utils.AnyData = .{},
 
     pub fn init(cfg: config.ConfigSpace) Device {
@@ -29,8 +32,13 @@ pub const Device = struct {
                 .device_id = cfg.get(.device_id),
                 .class_code = cfg.get(.class_code),
                 .subclass = cfg.get(.subclass)
-            }
+            },
+            .intr_ctrl = intr.Control.init(cfg)
         };
+    }
+
+    pub inline fn requestInterrupt(self: *Device, min: u8, max: u8, handler: *anyopaque, comptime types: intr.Types) !u8 {
+        return self.intr_ctrl.request(min, max, handler, types);
     }
 };
 
