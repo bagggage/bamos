@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const dbg = @import("dbg.zig");
 
 pub const Config = struct {
@@ -73,6 +74,17 @@ fn makeDebugScript(path: []const u8, allocator: std.mem.Allocator) !void {
     defer allocator.free(script_path);
 
     const out_file = try std.fs.createFileAbsolute(script_path, .{});
+    var correct_path = path;
+
+    if (builtin.os.tag == .windows) {
+        const add_size = std.mem.count(u8, script_path, "\\");
+        const new_path = try allocator.alloc(u8, path.len + add_size);
+
+        _ = std.mem.replace(u8, path, "\\", "\\\\", new_path);
+
+        correct_path = new_path;
+    }
+    defer if (builtin.os.tag == .windows) allocator.free(correct_path);
 
     try std.fmt.format(
         out_file.writer(),
@@ -83,7 +95,7 @@ fn makeDebugScript(path: []const u8, allocator: std.mem.Allocator) !void {
         \\export fn getDebugSyms() *const dbg.Header {{
         \\    return @ptrCast(@alignCast(debug_syms));
         \\}}
-        , .{path}
+        , .{correct_path}
     );
 }
 
