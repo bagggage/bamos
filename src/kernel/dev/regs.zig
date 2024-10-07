@@ -120,6 +120,8 @@ pub fn Group(
             return ReferenceGroupEx(getRegInfo(member).offset, T);
         }
 
+        pub fn Ref(comptime T: type) type { return ReferenceGroupEx(0, T); }
+
         pub fn init() !Self {
             if (IoMechanism.init) |initFn| {
                 _ = try initFn(base.?, byte_size);
@@ -192,7 +194,7 @@ pub fn Group(
             return self.referenceAsOffset(T, getRegInfo(member).offset);
         }
 
-        pub inline fn referenceAsOffset(self: Self, comptime T: type, comptime offset: AddressType) ReferenceGroupEx(offset, T) {
+        pub inline fn referenceAsOffset(self: Self, comptime T: type, offset: AddressType) ReferenceGroupEx(0, T) {
             if (comptime base != null) {
                 return .{};
             } else {
