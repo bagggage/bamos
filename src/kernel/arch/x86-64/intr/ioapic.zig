@@ -115,7 +115,7 @@ const RedirEntry = struct {
         const raw_val: u64 = @bitCast(value);
 
         self.io.write(self.offset, @truncate(raw_val));
-        self.io.write(self.offset + 1, @truncate(raw_val << 32));
+        self.io.write(self.offset + 1, @truncate(raw_val >> 32));
     }
 
     pub inline fn mask(self: *const RedirEntry, disable: bool) void {

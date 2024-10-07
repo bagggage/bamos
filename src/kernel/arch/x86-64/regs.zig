@@ -84,10 +84,10 @@ pub const IntrState = extern struct {
 };
 
 /// Represents the saved state of the CPU during an IRQ interrupt.
-pub const IrqIntrState = extern struct {
+pub const LowLevelIntrState = extern struct {
     scratch: ScratchRegs,
 
-    irq_pin: u64, 
+    idx: u64, 
     intr: InterruptFrame,
 
     comptime {
