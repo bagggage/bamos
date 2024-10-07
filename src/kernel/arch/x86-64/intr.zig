@@ -288,12 +288,12 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
         pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
             try writer.print("<{s}>\n", .{ if (@intFromPtr(self.stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned" });
 
-            for (self.stack, 0..) |entry, i| { try writer.print("+0x{x:0>2}: 0x{x}\n", .{i * @sizeOf(usize),entry}); }
+            for (self.stack, 0..) |entry, i| { try writer.print("+0x{x:0>2}: 0x{x:.>16}\n", .{i * @sizeOf(usize),entry}); }
         }
     };
 
     log.excp(vec, error_code);
-    log.warn(
+    log.rawLog(
         \\Regs:
         \\rax: 0x{x:.>16}, rcx: 0x{x:.>16}, rdx: 0x{x:.>16}, rbx: 0x{x:.>16}
         \\rip: 0x{x:.>16}, rsp: 0x{x:.>16}, rbp: 0x{x:.>16}, rflags: 0x{x:.>8}
@@ -301,54 +301,96 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
         \\r12: 0x{x:.>16}, r13: 0x{x:.>16}, r14: 0x{x:.>16}, r15: 0x{x:.>16}
         \\cr2: 0x{x:.>16}, cr3: 0x{x:.>16}, cr4: 0x{x:.>16}
         \\
-        \\cs: 0x{x}
+        \\cs: 0x{x}, ss: 0x{x}, lapic id: {}
         \\code: {}
         \\stack: {}
     , .{
-        state.scratch.rax, state.scratch.rcx, state.scratch.rdx, state.callee.rbx,
-        state.intr.rip, state.intr.rsp, state.callee.rbp, state.intr.rflags,
-        state.scratch.r8, state.scratch.r9, state.scratch.r10, state.scratch.r11,
-        state.callee.r12, state.callee.r13, state.callee.r14, state.callee.r15,
-        regs.getCr2(), regs.getCr3(), regs.getCr4(), state.intr.cs,
-        CodeDump.init(state.intr.rip), StackDump.init(state.intr.rsp)
-    });
+            state.scratch.rax, state.scratch.rcx, state.scratch.rdx, state.callee.rbx,
+            state.intr.rip, state.intr.rsp, state.callee.rbp, state.intr.rflags,
+            state.scratch.r8, state.scratch.r9, state.scratch.r10, state.scratch.r11,
+            state.callee.r12, state.callee.r13, state.callee.r14, state.callee.r15,
+            regs.getCr2(), regs.getCr3(), regs.getCr4(),
+            state.intr.cs, state.intr.ss, apic.lapic.getId(),
+            CodeDump.init(state.intr.rip), StackDump.init(state.intr.rsp)
+        },
+        @import("../../video/Framebuffer.zig").Color.lyellow,
+        false
+    );
 
     var it = std.debug.StackIterator.init(null, state.callee.rbp);
     panic.trace(&it);
 
+    log.excpEnd();
     utils.halt();
 }
 
-pub fn lowLevelIrqHandler(pin: u8) *const fn() callconv(.Naked) noreturn {
+pub fn lowLevelIntrHandler(
+    idx: u8,
+    comptime handler: []const u8
+) *const fn() callconv(.Naked) noreturn {
     const Anon = struct {
-        fn getIsr(comptime idx: u8) *const fn() callconv(.Naked) noreturn {
-            return &struct {
-                pub fn isr() callconv(.Naked) noreturn {
+        fn getIsr(comptime n: comptime_int) *const fn() callconv(.Naked) noreturn {
+            return struct {
+                fn isr() callconv(.Naked) noreturn {
                     asm volatile(std.fmt.comptimePrint(
                         \\push ${}
-                        \\jmp commonIrqHandler
-                        , .{idx}
+                        \\jmp {s}
+                        , .{n, handler}
                     ));
-                }
 
-                comptime {
-                    @export(isr, .{ .name = std.fmt.comptimePrint("irq{x}_isr", .{idx}) });
+                    comptime {
+                        @export(isr, .{
+                            .name = std.fmt.comptimePrint(
+                                "isr{x}_{x}",
+                                .{n, std.hash.crc.Crc16Arc.hash(handler)}
+                            )
+                        });
+                    }
                 }
             }.isr;
         }
 
-        pub const isr_table = blk: {
-            var table: []const IsrFn = &.{};
+        pub const table = blk: {
+            var result: []const *const fn() callconv(.Naked) noreturn = &.{};
 
-            for (0..intr.max_irqs) |i| {
-                table = table ++ .{ getIsr(i) };
+            for (0..intr.max_intr) |i| {
+                result = result ++ .{ getIsr(i) };
             }
 
-            break :blk table;
+            break :blk result;
         };
     };
 
-    return Anon.isr_table[pin];
+    return Anon.table[idx];
+}
+
+fn CommonIntrHandler(comptime handlerCaller: []const u8) type {
+    return struct {
+        pub fn handler() callconv(.Naked) noreturn {
+            regs.saveScratchRegs();
+
+            // Load index to arg0 
+            asm volatile(std.fmt.comptimePrint(
+                \\mov {}(%rsp),%rdi
+                , .{@sizeOf(regs.ScratchRegs)})
+            );
+
+            const is_stack_aligned = comptime (@sizeOf(regs.LowLevelIntrState) % 0x10) == 0;
+            if (comptime !is_stack_aligned) regs.stackAlloc(1);
+
+            // Call `handlerCaller`
+            asm volatile(std.fmt.comptimePrint(
+                "call {s}", .{handlerCaller}
+            ));
+
+            if (!is_stack_aligned) regs.stackFree(1);
+            regs.restoreScratchRegs();
+
+            // Pop `pin` number from stack;
+            regs.stackFree(1);
+            iret();
+        }
+    };
 }
 
 /// Needed just for switch from naked calling convention to C.
@@ -356,27 +398,14 @@ export fn irqHandlerCaller(pin: u8) callconv(.C) void {
     intr.handleIrq(pin);
 }
 
-export fn commonIrqHandler() callconv(.Naked) noreturn {
-    regs.saveScratchRegs();
+/// Needed just for switch from naked calling convention to C.
+export fn msiHandlerCaller(idx: u8) callconv(.C) void {
+    intr.handleMsi(idx);
+}
 
-    // Load pin number to arg0 
-    asm volatile(std.fmt.comptimePrint(
-        \\mov {}(%rsp),%rdi
-        , .{@sizeOf(regs.ScratchRegs)}
-    ));
-
-    const is_stack_aligned = comptime (@sizeOf(regs.IrqIntrState) % 0x10) == 0;
-    if (comptime !is_stack_aligned) regs.stackAlloc(1);
-
-    // Call `irqHandlerCaller`
-    asm volatile("call irqHandlerCaller");
-
-    if (!is_stack_aligned) regs.stackFree(1);
-    regs.restoreScratchRegs();
-
-    // Pop `pin` number from stack;
-    regs.stackFree(1);
-    iret();
+comptime{
+    @export(CommonIntrHandler("irqHandlerCaller").handler, .{ .name = "commonIrqHandler" });
+    @export(CommonIntrHandler("msiHandlerCaller").handler, .{ .name = "commonMsiHandler" });
 }
 
 inline fn iret() void {
