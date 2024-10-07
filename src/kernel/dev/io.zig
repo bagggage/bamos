@@ -46,9 +46,15 @@ pub fn Mechanism(
         pub const Data = DataType;
 
         pub const init = initFn;
-        pub const read = readFn;
-        pub const write = writeFn;
 
+        pub inline fn read(address: Address) Data {
+            return readFn(address);
+        }
+
+        pub inline fn write(address: Address, data: Data) void {
+            return writeFn(address, data);
+        }
+ 
         pub inline fn readNonUniform(comptime IntType: type, base: AddrType, comptime bit_offset: u16) IntType {
             @setRuntimeSafety(false);
 
