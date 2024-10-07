@@ -61,11 +61,18 @@ pub inline fn excpEnd() void {
 pub fn rawLog(comptime fmt: []const u8, args: anytype, color: video.Color, comptime use_lock: bool) void {
     if (text_output.isEnabled() == false) text_output.init();
 
+    var was_locked = false;
+
     if (use_lock) {
-        lock.lock();
-        lock_owner = smp.getIdx();
+        const cpu_idx = smp.getIdx();
+        
+        if (!lock.isLocked() or lock_owner != cpu_idx) {
+            lock.lock();
+            lock_owner = cpu_idx;
+            was_locked = true;
+        }
     }
-    defer if (use_lock) lock.unlock();
+    defer if (use_lock and was_locked) lock.unlock();
 
     const formated = std.fmt.bufPrint(&buff, fmt ++ "\n\x00", args) catch |erro| {
         const error_name = @errorName(erro);
