@@ -36,6 +36,7 @@ pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
     text_output.print("[KERNEL PANIC]: ");
     text_output.setColor(video.Color.lred);
     text_output.print(msg);
+    text_output.print("\n");
 
     var it = std.debug.StackIterator.init(@returnAddress(), @frameAddress());
 
@@ -48,7 +49,7 @@ pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
 /// This function is used to provide a detailed trace of the function calls leading up to a panic.
 pub fn trace(it: *std.debug.StackIterator) void {
     text_output.setColor(video.Color.lyellow);
-    text_output.print("\n[TRACE]:\n");
+    text_output.print("[TRACE]:\n");
 
     var i: usize = 1;
 

@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 
 const arch = utils.arch;
 const text_output = video.text_output;
+const smp = @import("smp.zig");
 const utils = @import("utils.zig");
 const video = @import("video.zig");
 
@@ -18,6 +19,7 @@ const Spinlock = utils.Spinlock;
 var buff: [1024]u8 = undefined;
 /// Spinlock to ensure that logging is thread-safe.
 var lock = Spinlock.init(.unlocked);
+var lock_owner: u16 = undefined;
 
 /// Logs an exception message.
 ///
@@ -29,12 +31,23 @@ var lock = Spinlock.init(.unlocked);
 pub fn excp(vec: u32, error_code: u64) void {
     if (text_output.isEnabled() == false) text_output.init();
 
-    _ = std.fmt.bufPrint(&buff, "[EXCEPTION]: #{}: error: 0x{x}\n\x00", .{ vec, error_code }) catch unreachable;
+    const cpu_idx = smp.getIdx();
+
+    _ = std.fmt.bufPrint(&buff, "[EXCEPTION]: #{}: error: 0x{x}: CPU: {}\n\x00", .{ vec, error_code, cpu_idx }) catch unreachable;
+
+    if (lock.isLocked() and lock_owner == cpu_idx) {
+        lock.unlock();
+    }
+
+    lock.lock();
+    lock_owner = cpu_idx;
 
     text_output.setColor(video.Color.lred);
     text_output.print(&buff);
+}
 
-    if (lock.isLocked()) lock.unlock();
+pub inline fn excpEnd() void {
+    lock.unlock();
 }
 
 /// Logs a raw formatted message with the specified color.
@@ -45,11 +58,14 @@ pub fn excp(vec: u32, error_code: u64) void {
 ///
 /// This function initializes the text output system if it is not already enabled,
 /// acquires the spinlock to ensure thread safety, formats the message, and prints it in the specified color.
-pub fn rawLog(comptime fmt: []const u8, args: anytype, color: video.Color) void {
+pub fn rawLog(comptime fmt: []const u8, args: anytype, color: video.Color, comptime use_lock: bool) void {
     if (text_output.isEnabled() == false) text_output.init();
 
-    lock.lock();
-    defer lock.unlock();
+    if (use_lock) {
+        lock.lock();
+        lock_owner = smp.getIdx();
+    }
+    defer if (use_lock) lock.unlock();
 
     const formated = std.fmt.bufPrint(&buff, fmt ++ "\n\x00", args) catch |erro| {
         const error_name = @errorName(erro);
@@ -77,7 +93,7 @@ pub fn rawLog(comptime fmt: []const u8, args: anytype, color: video.Color) void 
 pub inline fn debug(comptime fmt: []const u8, args: anytype) void {
     if (builtin.mode != .ReleaseSafe and builtin.mode != .Debug) return;
 
-    rawLog("<DEBUG> " ++ fmt, args, video.Color.gray);
+    rawLog("<DEBUG> " ++ fmt, args, video.Color.gray, true);
 }
 
 /// Logs an informational message.
@@ -85,7 +101,7 @@ pub inline fn debug(comptime fmt: []const u8, args: anytype) void {
 /// - `fmt`: The format string for the message.
 /// - `args`: The arguments to format into the message.
 pub inline fn info(comptime fmt: []const u8, args: anytype) void {
-    rawLog("[INFO]: " ++ fmt, args, video.Color.lgray);
+    rawLog("[INFO]: " ++ fmt, args, video.Color.lgray, true);
 }
 
 /// Logs a warning message.
@@ -93,7 +109,7 @@ pub inline fn info(comptime fmt: []const u8, args: anytype) void {
 /// - `fmt`: The format string for the message.
 /// - `args`: The arguments to format into the message.
 pub inline fn warn(comptime fmt: []const u8, args: anytype) void {
-    rawLog("[WARN]: " ++ fmt, args, video.Color.lyellow);
+    rawLog("[WARN]: " ++ fmt, args, video.Color.lyellow, true);
 }
 
 /// Logs an error message.
@@ -101,7 +117,7 @@ pub inline fn warn(comptime fmt: []const u8, args: anytype) void {
 /// - `fmt`: The format string for the message.
 /// - `args`: The arguments to format into the message.
 pub inline fn err(comptime fmt: []const u8, args: anytype) void {
-    rawLog("[ERROR]:" ++ fmt, args, video.Color.lred);
+    rawLog("[ERROR]:" ++ fmt, args, video.Color.lred, true);
 }
 
 /// Logs a warning message and then halts the system.
