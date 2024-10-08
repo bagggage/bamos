@@ -130,9 +130,15 @@ const Madt = apic.Madt;
 const IoapicArray = std.BoundedArray(Ioapic, max_ioapics);
 
 const max_ioapics = 4;
+const max_overrides = 16;
 
 var ioapics = IoapicArray.init(0) catch unreachable;
 var max_irqs: u16 = 0;
+var irq_overrides: [max_overrides]u8 = blk: {
+    var temp: [max_overrides]u8 = undefined;
+    for (0..max_overrides) |i| { temp[i] = @truncate(i); }
+    break :blk temp;
+};
 
 pub fn init() !void {
     const madt = apic.getMadt();
@@ -158,6 +164,16 @@ pub fn init() !void {
             break;
         }
     }
+
+    entry = null;
+
+    while (madt.findByType(entry, .ioapic_intr_src_overr)) |ent| : (entry = ent) {
+        const override: *Madt.IntrSourceOverride = @ptrCast(ent);
+
+        irq_overrides[override.irq] = @truncate(override.gsi);
+
+        log.debug("IRQ override: {}->{}", .{override.irq, override.gsi});
+    }
 }
 
 pub inline fn getMaxIrqs() u16 {
@@ -167,7 +183,7 @@ pub inline fn getMaxIrqs() u16 {
 pub fn getRedirEntry(irq: u8) RedirEntry {
     std.debug.assert(irq < max_irqs);
 
-    const gsi = if (irq < 16) irqToGsi(irq) else irq;
+    const gsi = if (irq < max_overrides) irqToGsi(irq) else irq;
 
     for (ioapics.slice()) |*ioapic| {
         const begin = ioapic.madt_ent.gsi_base;
@@ -188,14 +204,6 @@ pub inline fn mask(irq: u8, disable: bool) void {
     getRedirEntry(irq).mask(disable);
 }
 
-fn irqToGsi(irq: u8) u8 {
-    var entry: ?*Madt.Entry = null;
-
-    while (apic.getMadt().findByType(entry, .ioapic_intr_src_overr)) |ent| : (entry = ent) {
-        const override: *Madt.IntrSourceOverride = @ptrCast(ent);
-
-        if (override.irq == irq) return @truncate(override.gsi);
-    }
-
-    return irq;
+pub inline fn irqToGsi(irq: u8) u8 {
+    return irq_overrides[irq];
 }
