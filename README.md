@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://bagggage.github.io/bamos/" target="_blank" rel="noopener noreferrer"><img src="logo.svg" width="472" alt="BamOS Logo"></a>
+  <a href="https://github.com/bagggage/bamos/wiki" target="_blank" rel="noopener noreferrer"><img src="logo.svg" width="472" alt="BamOS Logo"></a>
 </p>
 
 ---
@@ -24,7 +24,10 @@ To create a kernel executable, all you need is the source code, the Zig compiler
 
 ## Documentation
 
-The kernel documentation is available on [this page](https://bagggage.github.io/bamos/). If you want to generate the documentation locally, run the following command:
+The **OS** documentation is available on [this page](https://github.com/bagggage/bamos/wiki).
+
+The **kernel** documentation base on code is available on [this page](https://bagggage.github.io/bamos/).
+If you want to generate the documentation locally, run the following command:
 
 ```bash
 zig build docs
