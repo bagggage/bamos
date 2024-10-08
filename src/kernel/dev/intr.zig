@@ -82,10 +82,14 @@ pub const Irq = struct {
     const HandlerList = utils.List(Handler);
     const HandlerNode = HandlerList.Node;
 
+    in_use: bool = false,
+
     vector: Vector,
     pin: u8,
+
     trigger_mode: TriggerMode,
     shared: bool,
+
     pending: std.atomic.Value(bool) = .{.raw = false},
 
     handlers: HandlerList = .{},
@@ -93,10 +97,11 @@ pub const Irq = struct {
 
     pub fn init(pin: u8, vector: Vector, trigger_mode: TriggerMode, shared: bool) Irq {
         return .{
+            .in_use = true,
             .pin = pin,
             .vector = vector,
             .trigger_mode = trigger_mode,
-            .shared = shared
+            .shared = shared,
         };
     }
 
@@ -141,22 +146,14 @@ pub const Irq = struct {
         self.handlers_lock.lock();
         defer self.handlers_lock.unlock();
 
-        var node = self.handlers.first;
+        const handler = self.findHandlerByDevice(device);
 
-        while (node) |handler| : (node = handler.next) {
-            if (handler.data.device == device) {
-                if (self.handlers.len == 1) chip.maskIrq(self);
+        if (self.handlers.len == 1) chip.maskIrq(self);
 
-                self.waitWhilePending();
+        self.waitWhilePending();
 
-                self.handlers.remove(handler);
-                vm.kfree(handler);
-
-                return;
-            }
-        }
-
-        unreachable;
+        self.handlers.remove(handler);
+        vm.kfree(handler);
     }
 
     pub fn handle(self: *Irq) bool {
@@ -174,6 +171,16 @@ pub const Irq = struct {
 
     inline fn waitWhilePending(self: *const Irq) void {
         while (self.pending.load(.acquire)) {}
+    }
+
+    fn findHandlerByDevice(self: *const Irq, device: *const dev.Device) *HandlerNode {
+        var node = self.handlers.first;
+
+        while (node) |handler| : (node = handler.next) {
+            if (handler.data.device == device) return handler;
+        }
+
+        unreachable;
     }
 };
 
@@ -242,7 +249,7 @@ var cpus = CpuArray.init(0) catch unreachable;
 var cpus_lock = utils.Spinlock.init(.unlocked);
 var msis_lock = utils.Spinlock.init(.unlocked);
 
-var irqs = std.BoundedArray(?Irq, max_intr).init(max_intr) catch unreachable;
+var irqs = IrqArray.init(max_intr) catch unreachable;
 var msis = MsiArray.init(max_intr) catch unreachable;
 var msis_used: u8 = 0;
 
@@ -289,27 +296,22 @@ pub fn deinit() void {
 }
 
 pub fn requestIrq(pin: u8, device: *dev.Device, handler: Handler.Fn, tigger_mode: TriggerMode, shared: bool) Error!void {
-    const irq_item = &irqs.buffer[pin];
+    const irq = &irqs.buffer[pin];
 
-    const irq = if (irq_item.*) |*irq_ent| blk: {
-        if (!shared or irq_ent.trigger_mode != tigger_mode) return Error.IntrBusy;
-        break :blk irq_ent;
-    }
-    else blk: {
+    if (irq.in_use) {
+        if (!shared or irq.trigger_mode != tigger_mode) return Error.IntrBusy;
+    } else {
         const vector = allocVector(null) orelse return Error.NoVector;
-        irq_item.* = Irq.init(pin, vector, tigger_mode, shared);
+        irq.* = Irq.init(pin, vector, tigger_mode, shared);
 
-        const ptr = &irq_item.*.?;
-
-        chip.bindIrq(ptr);
-        break :blk ptr;
-    };
+        chip.bindIrq(irq);
+    }
 
     try irq.addHandler(handler, device);
 }
 
 pub fn releaseIrq(pin: u8, device: *const dev.Device) void {
-    const irq = &irqs.buffer[pin].?;
+    const irq = &irqs.buffer[pin];
 
     irq.removeHandler(device);
 
@@ -347,7 +349,7 @@ pub fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
 pub fn handleIrq(pin: u8) void {
     @setRuntimeSafety(false);
 
-    _ = irqs.buffer[pin].?.handle();
+    _ = irqs.buffer[pin].handle();
 
     chip.eoi();
 }
