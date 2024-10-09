@@ -253,6 +253,102 @@ const Pci2PciConfig = extern struct {
     bridge_ctrl: u16
 };
 
+pub const ClassCode = enum(u8) {
+    unclassified = 0x0,
+    mass_storage_controller = 0x1,
+    network_controller = 0x2,
+    display_controller = 0x3,
+    multimedia_controller = 0x4,
+    memory_controller = 0x5,
+    bridge = 0x6,
+    simple_comm_controller = 0x7,
+    base_system_peripheral = 0x8,
+    input_dev_controller = 0x9,
+    docking_station = 0xA,
+    processor = 0xB,
+    serial_bus_controller = 0xC,
+    wireless_controller = 0xD,
+    intelligent_controller = 0xE,
+    satellite_comm_contrller = 0xF,
+    encryption_controller = 0x10,
+    signal_proc_controller = 0x11,
+    proc_accelerator = 0x12,
+    non_essential_instrum = 0x13,
+    co_processor = 0x40,
+    vendor_specific = 0xFF
+};
+
+pub const SubclassCode = extern union {
+    unclassified: enum(u8) {
+        non_vga_unclass_dev = 0x0,
+        vga_unclass_dev = 0x1,
+
+        other = 0x80
+    },
+    mass_storage_device: enum(u8) {
+        scsi_bus_controller = 0x0,
+        ide_controller = 0x1,
+        floppy_disk_controller = 0x2,
+        ipi_bus_controller = 0x3,
+        raid_controller = 0x4,
+        ata_controller = 0x5,
+        sata_controller = 0x6,
+        serial_scsi_controller = 0x7,
+        non_volatile_mem_controller = 0x8,
+
+        other = 0x80
+    },
+    network_controller: enum(u8) {
+        ethernet_controller = 0x0,
+        token_ring_controller = 0x1,
+        fddi_controller = 0x2,
+        atm_controller = 0x3,
+        isdn_controller = 0x4,
+        worldfip_controller = 0x5,
+        picmg_multi_comp_controller = 0x6,
+        infiniband_controller = 0x7,
+        fabric_controller = 0x8,
+
+        other = 0x80
+    },
+    display_controller: enum(u8) {
+        vga_compat_controller = 0x0,
+        xga_controller = 0x1,
+        three_d_controller = 0x2,
+
+        other = 0x80
+    },
+    multimedia_controller: enum(u8) {
+        video_controller = 0x0,
+        audio_controller = 0x1,
+        comp_telephony_device = 0x2,
+        audio_device = 0x3,
+
+        other = 0x80
+    },
+    mem_controller: enum(u8) {
+        ram_controller = 0x0,
+        flash_controller = 0x1,
+
+        other = 0x80
+    },
+    bridge: enum(u8) {
+        host_bridge = 0x0,
+        isa_bridge = 0x1,
+        eisa_bridge = 0x2,
+        mca_bridge = 0x3,
+        pci_to_pci_bridge_0x4 = 0x4,
+        pcmcia_bridge = 0x5,
+        nubus_bridge = 0x6,
+        cardbus_bridge = 0x7,
+        raceway_bridge = 0x8,
+        pci_to_pci_bridge_0x9 = 0x9,
+        inf_to_pci_host_bridge = 0xa,
+
+        other = 0x80
+    }
+};
+
 pub const Regs = struct {
     const Command = packed struct {
         io_space: u1,
