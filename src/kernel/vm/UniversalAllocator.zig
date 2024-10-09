@@ -37,6 +37,7 @@
 
 const std = @import("std");
 
+const log = @import("../log.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
@@ -110,7 +111,7 @@ pub fn free(mem: ?*anyopaque) void {
     }
 
     // Dealloc small object
-    for (oma_pool) |oma| {
+    for (oma_pool[0..]) |*oma| {
         if (oma.contains(addr)) |arena| {
             oma.freeRaw(arena, addr);
             return;
@@ -128,7 +129,8 @@ pub fn free(mem: ?*anyopaque) void {
 /// - `size`: The size of the small memory block to allocate.
 /// - Returns: A pointer to the allocated memory block, or `null` if the allocation fails.
 fn allocSmall(size: u32) ?*void {
-    const rank = std.math.log2_int_ceil(u32, size) - std.math.log2(min_size);
+    const log2 = std.math.log2_int_ceil(u32, size);
+    const rank = if (size > min_size) log2 - comptime std.math.log2(min_size) else 0;
 
     return oma_pool[rank].alloc(void);
 }
