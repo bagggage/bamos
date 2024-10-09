@@ -57,7 +57,7 @@ var device: *dev.Device = undefined;
 pub fn init() !void {
     const bus = try dev.getBus("platform");
 
-    driver = try dev.registerDriver("ISA UART", bus, .{
+    driver = try dev.registerDriver("ISA UART", bus, null, .{
         .probe = .{ .platform = probe },
         .remove = remove
     });

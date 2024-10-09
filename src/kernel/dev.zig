@@ -106,7 +106,9 @@ pub const Bus = struct {
 
         var node = self.unmatched.first;
 
-        while (node) |dev| : (node = dev.next) {
+        while (node) |dev| {
+            node = dev.next;
+
             if (match_impl(driver, &dev.data)) {
                 if (driver.probe(&dev.data) == .missmatch) continue;
 
@@ -161,7 +163,9 @@ pub const Bus = struct {
 
         const node = self.matched.first;
 
-        while (node) |dev| : (node = dev.next) {
+        while (node) |dev| {
+            node = dev.next;
+
             if (dev.data.driver != driver) continue;
 
             driver.remove(&dev.data);
@@ -255,7 +259,7 @@ const DriverReg = struct {
     var lock = utils.Spinlock.init(.unlocked);
     var oma = vm.ObjectAllocator.init(DriverNode);
 
-    pub fn register(comptime name: []const u8, bus: *Bus, comptime ops: Driver.Operations) !*Driver {
+    pub fn register(comptime name: []const u8, bus: *Bus, data: ?*anyopaque, comptime ops: Driver.Operations) !*Driver {
         lock.lock();
         defer lock.unlock();
 
@@ -264,6 +268,7 @@ const DriverReg = struct {
         node.data.name = name;
         node.data.bus = bus;
         node.data.ops = ops;
+        node.data.impl_data.set(data);
 
         const bus_idx = DeviceReg.getBusIdx(bus);
 
@@ -349,7 +354,8 @@ const DeviceReg = struct {
 const AutoInit = struct {
     const modules = .{
         @import("dev/drivers/uart.zig"),
-        pci
+        pci,
+        @import("dev/drivers/blk/nvme.zig")
     };
 };
 
@@ -405,9 +411,10 @@ pub fn registerDevice(
 pub inline fn registerDriver(
     comptime name: []const u8,
     bus: *Bus,
+    data: ?*anyopaque,
     comptime ops: Driver.Operations
 ) !*Driver {
-    return DriverReg.register(name, bus, ops);
+    return DriverReg.register(name, bus, data, ops);
 }
 
 pub inline fn removeDevice(dev: *Device) void {
