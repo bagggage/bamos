@@ -2,7 +2,7 @@
 //! Includes handling kernel panics and tracing stack frame.
 
 const std = @import("std");
-const builtin = @import("std").builtin;
+const builtin = @import("builtin");
 const dbg = @import("dbg-info");
 
 const log = @import("log.zig");
@@ -27,7 +27,7 @@ extern fn getDebugSyms() *const dbg.Header;
 
 /// Handles a kernel panic by printing a panic message and a stack trace.
 /// This function is marked as `noreturn` and will halt the system.
-pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
+pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     @setCold(true);
 
     if (text_output.isEnabled() == false) text_output.init();
@@ -49,6 +49,12 @@ pub fn panic(msg: []const u8, _: ?*builtin.StackTrace, _: ?usize) noreturn {
 /// This function is used to provide a detailed trace of the function calls leading up to a panic.
 pub fn trace(it: *std.debug.StackIterator) void {
     text_output.setColor(video.Color.lyellow);
+
+    if (comptime builtin.mode == .ReleaseFast) {
+        text_output.print("Tracing cannot be done in `ReleaseFast` build, use `Debug` or `ReleaseSafe` build.");
+        return;
+    }
+
     text_output.print("[TRACE]:\n");
 
     var i: usize = 1;

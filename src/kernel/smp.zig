@@ -76,14 +76,19 @@ pub fn initCpu() void {
     arch.setupCpu(cpu_idx);
 }
 
+/// Returns the number of CPUs managed and detected by kernel.
 pub inline fn getNum() u16 {
     return @truncate(cpus_data.len);
 }
 
+/// Returns local data for currect CPU.
 pub inline fn getLocalData() *LocalData {
     return arch.getCpuLocalData();
 }
 
+/// Returns local data for the specific CPU.
+/// 
+/// - `cpu_idx`
 pub inline fn getCpuData(cpu_idx: u16) *LocalData {
     return &cpus_data[cpu_idx];
 }
