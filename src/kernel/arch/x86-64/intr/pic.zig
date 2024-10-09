@@ -38,3 +38,8 @@ pub inline fn read(pic_chip: Chip) u8 {
 pub inline fn write(pic_chip: Chip, reg: Regs, value: u8) void {
     io.outb(value, @intFromEnum(pic_chip) + @intFromEnum(reg));
 }
+
+fn eoi() void {
+    @setRuntimeSafety(false);
+    // TODO
+}
