@@ -14,8 +14,8 @@ pub const Id = struct {
 
     vendor_id: u16 = any,
     device_id: u16 = any,
-    class_code: u16 = any,
-    subclass: u16 = any
+    class_code: ?config.ClassCode = null,
+    subclass: ?config.SubclassCode = null
 };
 
 pub const Device = struct {
@@ -30,8 +30,8 @@ pub const Device = struct {
             .id = .{
                 .vendor_id = cfg.get(.vendor_id),
                 .device_id = cfg.get(.device_id),
-                .class_code = cfg.get(.class_code),
-                .subclass = cfg.get(.subclass)
+                .class_code = @enumFromInt(cfg.get(.class_code)),
+                .subclass = @bitCast(cfg.get(.subclass))
             },
             .intr_ctrl = intr.Control.init(cfg)
         };
@@ -39,6 +39,10 @@ pub const Device = struct {
 
     pub inline fn requestInterrupt(self: *Device, min: u8, max: u8, handler: *anyopaque, comptime types: intr.Types) !u8 {
         return self.intr_ctrl.request(min, max, handler, types);
+    }
+
+    pub inline fn from(device: *const dev.Device) *Device {
+        return device.driver_data.as(Device) orelse unreachable;
     }
 };
 
@@ -70,11 +74,11 @@ fn match(driver: *const dev.Driver, device: *const dev.Device) bool {
         (pci_driver.match_id.device_id == Id.any or
         pci_driver.match_id.device_id == pci_dev.id.device_id)
         and
-        (pci_driver.match_id.class_code == Id.any or
+        (pci_driver.match_id.class_code == null or
         pci_driver.match_id.class_code == pci_dev.id.class_code)
         and
-        (pci_driver.match_id.subclass == Id.any or
-        pci_driver.match_id.subclass == pci_dev.id.subclass)
+        (pci_driver.match_id.subclass == null or
+        @as(u8, @bitCast(pci_driver.match_id.subclass.?)) == @as(u8, @bitCast(pci_dev.id.subclass.?)))
     );
 }
 
