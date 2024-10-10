@@ -42,6 +42,13 @@ python -m http.server
 
 The Zig language description and documentation for its standard library can be found on the [official website](https://ziglang.org/).
 
+## Contributing
+
+BamOS is still a small but **growing** project.  
+We welcome any contributions and invite you to participate in the development and evolution of the project.
+
+See information on [contributing](./CONTRIBUTING.md).
+
 ## Building from Source
 
 The build process is quite straightforward:
