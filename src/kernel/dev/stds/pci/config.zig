@@ -350,7 +350,7 @@ pub const SubclassCode = extern union {
 };
 
 pub const Regs = struct {
-    const Command = packed struct {
+    pub const Command = packed struct {
         io_space: u1,
         mem_space: u1,
         bus_master: u1,
@@ -642,7 +642,7 @@ pub const ConfigSpace = struct {
     }
 
     pub fn readBar(self: *ConfigSpace, bar_idx: u3) usize {
-        const base = @offsetOf(DeviceConfig, "bar0") + (bar_idx * @sizeOf(u32));
+        const base = @offsetOf(DeviceConfig, "bar0") + (@as(usize, bar_idx) * @sizeOf(u32));
         const bar_l = self.read(base);
 
         // Is 64-bit ?

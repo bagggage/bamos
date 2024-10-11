@@ -212,6 +212,8 @@ pub const Driver = struct {
     pub const Operations = struct {
         pub const ProbeResult = enum {
             missmatch,
+            failed,
+            no_resources,
             success
         };
 

@@ -1,5 +1,7 @@
 //! PCI Bus builtin driver
 
+const std = @import("std");
+
 const dev = @import("../../dev.zig");
 const log = @import("../../log.zig");
 const utils = @import("../../utils.zig");
@@ -42,6 +44,7 @@ pub const Device = struct {
     }
 
     pub inline fn from(device: *const dev.Device) *Device {
+        std.debug.assert(device.bus == bus);
         return device.driver_data.as(Device) orelse unreachable;
     }
 };
