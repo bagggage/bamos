@@ -83,7 +83,7 @@ var huge_alloc_tree = HugeTree{};
 /// Maximum size of the memory block is limited by `vm.PageAllocator.max_alloc_pages`.
 /// - Returns: A pointer to the allocated memory block,
 /// or `null` if the allocation fails.
-pub inline fn alloc(size: usize) ?*void {
+pub inline fn alloc(size: usize) ?*anyopaque {
     std.debug.assert(size > 0 and size < (vm.PageAllocator.max_alloc_pages * vm.page_size));
 
     return if (size <= max_small_size) allocSmall(@truncate(size)) else allocHuge(@truncate(size));
@@ -128,11 +128,11 @@ pub fn free(mem: ?*anyopaque) void {
 /// 
 /// - `size`: The size of the small memory block to allocate.
 /// - Returns: A pointer to the allocated memory block, or `null` if the allocation fails.
-fn allocSmall(size: u32) ?*void {
+fn allocSmall(size: u32) ?*anyopaque {
     const log2 = std.math.log2_int_ceil(u32, size);
     const rank = if (size > min_size) log2 - comptime std.math.log2(min_size) else 0;
 
-    return oma_pool[rank].alloc(void);
+    return oma_pool[rank].alloc(anyopaque);
 }
 
 /// Allocates a large block of memory of the specified `size`.
@@ -142,7 +142,7 @@ fn allocSmall(size: u32) ?*void {
 /// 
 /// - `size`: The size of the large memory block to allocate.
 /// - Returns: A pointer to the allocated memory block, or `null` if the allocation fails.
-fn allocHuge(size: u32) ?*void {
+fn allocHuge(size: u32) ?*anyopaque {
     const pages = std.math.divCeil(u32, size, vm.page_size) catch unreachable;
 
     if (pages > vm.PageAllocator.max_alloc_pages) return null;
@@ -161,7 +161,7 @@ fn allocHuge(size: u32) ?*void {
 
     huge_alloc_tree.insert(node);
 
-    return @as(*void, @ptrFromInt(vm.getVirtLma(phys)));
+    return @as(*anyopaque, @ptrFromInt(vm.getVirtLma(phys)));
 }
 
 /// Initializes the pool of small object allocators (`oma_pool`) based on the size range 
