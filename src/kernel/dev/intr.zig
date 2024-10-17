@@ -375,7 +375,6 @@ pub fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: Trigge
     }
 
     const msi = &msis.buffer[idx];
-
     const vec = allocVector(null) orelse return Error.NoVector;
 
     msi.* = .{
@@ -388,6 +387,19 @@ pub fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: Trigge
     msis_used += 1;
 
     return idx;
+}
+
+pub fn releaseMsi(idx: u8) void {
+    msis_lock.lock();
+    defer msis_lock.unlock();
+
+    const msi = &msis.buffer[idx];
+
+    std.debug.assert(msi.in_use);
+
+    freeVector(msi.vector);
+
+    msi.in_use = false;
 }
 
 pub fn getMsiMessage(idx: u8) Msi.Message {
@@ -419,14 +431,14 @@ fn allocVector(cpu_idx: ?u16) ?Vector {
 }
 
 fn freeVector(vec: Vector) void {
-    std.debug.assert(vec.cpu_idx < cpus.len and vec.vec < arch.intr.max_vectors);
+    std.debug.assert(vec.cpu < cpus.len and vec.vec < arch.intr.max_vectors);
 
     cpus_lock.lock();
     defer cpus_lock.unlock();
 
-    cpus.buffer[vec.cpu_idx].freeVector(vec.vec);
+    cpus.buffer[vec.cpu].freeVector(vec.vec);
 
-    reorderCpus(vec.cpu.specific, .backward);
+    reorderCpus(vec.cpu, .backward);
 }
 
 inline fn calcCpuIdx(cpu: *const Cpu) u16 {
