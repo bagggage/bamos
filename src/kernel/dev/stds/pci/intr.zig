@@ -85,10 +85,10 @@ const Msi = struct {
     pub fn setup(self: *Msi, msg: intr.Msi.Message) void {
         if (self.is_64) {
             self.ref.x64.write(.msg_addr, msg.address);
-            self.ref.x64.write(.msg_data, msg.data);
+            self.ref.x64.write(.msg_data, @truncate(msg.data));
         } else {
             self.ref.x32.write(.msg_addr, @truncate(msg.address));
-            self.ref.x32.write(.msg_data, msg.data);
+            self.ref.x32.write(.msg_data, @truncate(msg.data));
         }
     }
 };
@@ -123,6 +123,7 @@ const MsiX = struct {
         const pba_table = vm.getVirtLma(cfg.readBar(pba_bar) + (pba_offset & 0xFFFF_FFF8));
 
         return .{
+            .msis = undefined,
             .ref = ref,
             .ctrl = ref.get(MessageControl, .msg_ctrl),
             .vec_table = @ptrFromInt(vec_table),
@@ -155,7 +156,7 @@ const MsiX = struct {
         return self.ctrl.table_size + 1;
     }
 
-    pub fn alloc(self: *MsiX, num: u8) !void {
+    pub fn alloc(self: *MsiX, num: u8) Error!void {
         std.debug.assert(num > 0 and num <= self.getMax());
 
         const msis= @as([*]u8, @ptrCast(vm.kmalloc(@sizeOf(u8) * num) orelse return error.NoMemory))[0..num];
@@ -186,33 +187,32 @@ const MsiX = struct {
 };
 
 const IntX = struct {
+    cfg: config.ConfigSpace,
     pin: u8 = 0,
 
     pub inline fn init(cfg: config.ConfigSpace) IntX {
-        return .{ .pin = cfg.get(.intr_pin) };
+        return .{
+            .cfg = cfg,
+            .pin = cfg.get(.intr_pin)
+        };
     }
 
-    pub inline fn enable(cfg: config.ConfigSpace) void {
-        const command_reg = cfg.getAs(config.Regs.Command, .command);
+    pub inline fn enable(self: *const IntX) void {
+        var command_reg = self.cfg.getAs(config.Regs.Command, .command);
         command_reg.intr_disable = 0;
 
-        cfg.setAs(.command, command_reg);
+        self.cfg.setAs(.command, command_reg);
     }
 
-    pub inline fn disable(cfg: config.ConfigSpace) void {
-        const command_reg = cfg.getAs(config.Regs.Command, .command);
+    pub inline fn disable(self: *const IntX) void {
+        var command_reg = self.cfg.getAs(config.Regs.Command, .command);
         command_reg.intr_disable = 1;
 
-        cfg.setAs(.command, command_reg);
+        self.cfg.setAs(.command, command_reg);
     }
 };
 
 pub const Control = struct {
-    const Error = error {
-        TooLittleIntr,
-        IntrNotAvail,
-    };
-
     const Meta = struct {
         is_allocated: bool = false,
 
@@ -265,44 +265,44 @@ pub const Control = struct {
     }
 
     pub fn request(self: *Control, cfg: config.ConfigSpace, min: u8, max: u8, comptime types: Types) Error!u8 {
-        std.debug.assert(min > 0 and min <= max);
+        std.debug.assert(min > 0 and min <= max and self.meta.is_allocated == false);
 
-        var num = 0;
+        var num: u8 = 0;
 
         if (types.msi_x and self.meta.isMsiXAvail()) {
-            const msi_x = MsiX.init(cfg, self.meta.msi_x_offset);
+            var msi_x = MsiX.init(cfg, self.meta.msi_x_offset);
 
             if (min > msi_x.getMax()) return Error.TooLittleIntr;
 
             num = std.mem.min(u8, &.{ @truncate(msi_x.getMax()), max });
             try msi_x.alloc(num);
 
-            IntX.init(cfg).disable(cfg);
+            IntX.init(cfg).disable();
             msi_x.enable();
             msi_x.maskAll(false);
 
-            self.data.msi_x = msi_x;
+            self.data = .{ .msi_x = msi_x };
         } else if (types.msi and self.meta.isMsiAvail()) {
-            const msi = Msi.init(cfg, self.meta.msi_offset);
+            var msi = Msi.init(cfg, self.meta.msi_offset);
 
             if (min > 1) return Error.TooLittleIntr;
 
             num = 1;
 
-            IntX.init(cfg).disable(cfg);
+            IntX.init(cfg).disable();
             _ = msi.alloc(1);
             msi.enable();
 
-            self.data = msi;
+            self.data = .{ .msi = msi };
         } else if (types.int_x and self.meta.isIntXAvail()) {
             if (min > 1) return Error.TooLittleIntr;
 
             num = 1;
 
             const int_x = IntX.init(cfg);
-            int_x.enable(cfg);
+            int_x.enable();
 
-            self.data = int_x;
+            self.data = .{ .int_x = int_x };
         } else {
             return Error.IntrNotAvail;
         }
@@ -336,15 +336,17 @@ pub const Control = struct {
     }
 
     pub fn setup(
-        self: *Control, device: *dev.Device, idx: u8, handler: intr.Handler.Fn,
+        self: *Control, device: *dev.Device, idx: u16, handler: intr.Handler.Fn,
         trigger_mode: intr.TriggerMode,
     ) intr.Error!void {
+        std.debug.assert(self.meta.is_allocated);
+
         switch (self.data) {
             .int_x => |*int_x| {
                 std.debug.assert(idx == 0);
                 _ = int_x;
 
-                return error.NotImplemented;
+                return error.NoMemory;
             },
             .msi => |*msi| {
                 std.debug.assert(idx == 0);
@@ -373,4 +375,10 @@ pub const Types = packed struct {
 
     pub const all = Types{ .int_x = true, .msi = true, .msi_x = true };
     pub const msi_s = Types{ .msi = true, .msi_x = true };
+};
+
+pub const Error = error {
+    TooLittleIntr,
+    IntrNotAvail,
+    NoMemory
 };

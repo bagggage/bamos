@@ -21,6 +21,8 @@ pub const Id = struct {
 };
 
 pub const Device = struct {
+    device: *dev.Device,
+
     id: Id,
     config: config.ConfigSpace,
     intr_ctrl: intr.Control,
@@ -28,6 +30,7 @@ pub const Device = struct {
 
     pub fn init(cfg: config.ConfigSpace) Device {
         return .{
+            .device = undefined,
             .config = cfg,
             .id = .{
                 .vendor_id = cfg.get(.vendor_id),
@@ -43,8 +46,12 @@ pub const Device = struct {
         if (self.intr_ctrl.meta.is_allocated) self.intr_ctrl.release();
     }
 
-    pub inline fn requestInterrupts(self: *Device, min: u8, max: u8, handler: *anyopaque, comptime types: intr.Types) !u8 {
-        return self.intr_ctrl.request(min, max, handler, types);
+    pub inline fn requestInterrupts(self: *Device, min: u8, max: u8, comptime types: intr.Types) !u8 {
+        return self.intr_ctrl.request(self.config, min, max, types);
+    }
+
+    pub inline fn setupInterrupt(self: *Device, idx: u16, handler: dev.intr.Handler.Fn, trigger_mode: dev.intr.TriggerMode) !void {
+        return self.intr_ctrl.setup(self.device, idx, handler, trigger_mode);
     }
 
     pub inline fn getCurrentIntrType(self: *Device) enum{int_x,msi,msi_x} {
@@ -151,6 +158,8 @@ fn enumDevice(seg_idx: u16, bus_idx: u8, dev_idx: u8, func_idx: u8) !bool {
         ),
         bus, null, pci_dev
     );
+
+    pci_dev.device = device;
 
     log.debug("PCI:{}: 0x{x:0>4} : 0x{x:0>4}", .{
         device.name, vendor_id, pci_dev.id.device_id

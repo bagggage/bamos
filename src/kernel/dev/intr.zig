@@ -20,7 +20,7 @@ pub const Chip = struct {
         pub const UnbindIrqFn = IrqFn;
         pub const MaskIrqFn = IrqFn;
         pub const UnmaksIrqFn = IrqFn;
-        pub const ConfigMsiFn = *const fn(*Msi, u8, TriggerMode) Msi.Message;
+        pub const ConfigMsiFn = *const fn(*Msi, u8, TriggerMode) void;
 
         eoi: EoiFn,
         bindIrq: BindIrqFn,
@@ -54,7 +54,7 @@ pub const Chip = struct {
     }
 
     pub inline fn configMsi(self: *const Chip, msi: *Msi, idx: u8, trigger_mode: TriggerMode) void {
-        return self.ops.configMsi(msi, idx, trigger_mode);
+        self.ops.configMsi(msi, idx, trigger_mode);
     }
 };
 
@@ -378,15 +378,16 @@ pub fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: Trigge
     const vec = allocVector(null) orelse return Error.NoVector;
 
     msi.* = .{
+        .message = undefined,
         .in_use = true,
         .vector = vec,
         .handler = .{ .func = handler, .device = device },
     };
 
-    chip.configMsi(msi, trigger_mode);
+    chip.configMsi(msi, @truncate(idx), trigger_mode);
     msis_used += 1;
 
-    return idx;
+    return @truncate(idx);
 }
 
 pub fn releaseMsi(idx: u8) void {

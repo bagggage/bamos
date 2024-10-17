@@ -228,7 +228,7 @@ fn eoi() void {
     lapic.set(.eoi, 0);
 }
 
-fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) intr.Msi.Message {
+fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) void {
     const address = Msi.Address{
         .dest_id = @truncate(msi.vector.cpu),
         .dest_mode = .physical,
@@ -254,7 +254,7 @@ fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) intr.Msi.M
         arch.intr.intr_gate_flags,
     );
 
-    return .{
+    msi.message = .{
         .address = @as(u32, @bitCast(address)),
         .data = @bitCast(data)
     };

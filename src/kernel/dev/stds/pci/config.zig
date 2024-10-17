@@ -625,11 +625,11 @@ pub const ConfigSpace = struct {
         return  self.internal.get(T, field);
     }
 
-    pub inline fn set(self: *ConfigSpace, comptime field: anytype, value: FieldType(field)) void {
+    pub inline fn set(self: *const ConfigSpace, comptime field: anytype, value: FieldType(field)) void {
         self.internal.write(field, value);
     }
 
-    pub inline fn setAs(self: *ConfigSpace, comptime field: anytype, value: anytype) void {
+    pub inline fn setAs(self: *const ConfigSpace, comptime field: anytype, value: anytype) void {
         self.internal.set(field, value);
     }
 
@@ -641,7 +641,7 @@ pub const ConfigSpace = struct {
         return Capability.init(self.internal.dyn_base, cap_ptr);
     }
 
-    pub fn readBar(self: *ConfigSpace, bar_idx: u3) usize {
+    pub fn readBar(self: *const ConfigSpace, bar_idx: u3) usize {
         const base = @offsetOf(DeviceConfig, "bar0") + (@as(usize, bar_idx) * @sizeOf(u32));
         const bar_l = self.read(base);
 
