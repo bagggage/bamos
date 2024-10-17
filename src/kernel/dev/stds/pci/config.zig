@@ -442,11 +442,11 @@ pub const Capability = struct {
             _rsrvd: u3,
 
             func_mask: u1,
-            enable: u1
+            enable: u1,
         };
 
         _header: Header,
-        msg_ctrl: u32,
+        msg_ctrl: u16,
 
         table_offset: regs.ReadOnlyP(u32),
         pba_offset: regs.ReadOnlyP(u32)

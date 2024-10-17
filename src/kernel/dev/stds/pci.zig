@@ -39,8 +39,20 @@ pub const Device = struct {
         };
     }
 
-    pub inline fn requestInterrupt(self: *Device, min: u8, max: u8, handler: *anyopaque, comptime types: intr.Types) !u8 {
+    pub inline fn deinit(self: *Device) void {
+        if (self.intr_ctrl.meta.is_allocated) self.intr_ctrl.release();
+    }
+
+    pub inline fn requestInterrupts(self: *Device, min: u8, max: u8, handler: *anyopaque, comptime types: intr.Types) !u8 {
         return self.intr_ctrl.request(min, max, handler, types);
+    }
+
+    pub inline fn getCurrentIntrType(self: *Device) enum{int_x,msi,msi_x} {
+        return self.intr_ctrl.data;
+    }
+
+    pub inline fn releaseInterrupts(self: *Device) void {
+        return self.intr_ctrl.release();
     }
 
     pub inline fn from(device: *const dev.Device) *Device {
@@ -88,6 +100,7 @@ fn match(driver: *const dev.Driver, device: *const dev.Device) bool {
 fn remove(device: *dev.Device) void {
     const pci_dev = device.driver_data.as(Device) orelse unreachable;
 
+    pci_dev.deinit();
     dev_oma.free(pci_dev);
 }
 

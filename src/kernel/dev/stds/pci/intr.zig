@@ -3,9 +3,11 @@
 const std = @import("std");
 
 const config = @import("config.zig");
+const dev = @import("../../../dev.zig");
 const vm = @import("../../../vm.zig");
-const io = @import("../../io.zig");
-const intr = @import("../../intr.zig");
+const io = dev.io;
+const log = @import("../../../log.zig");
+const intr = dev.intr;
 
 const Msi = struct {
     pub const Msi32Ref = config.ConfigSpaceGroup.Ref(config.Capability.Msi.x32);
@@ -18,6 +20,7 @@ const Msi = struct {
     },
     ctrl: MessageControl,
 
+    id: u8 = 0xFF,
     is_64: bool,
 
     pub fn init(cfg: config.ConfigSpace, cap_offset: u16) Msi {
@@ -29,6 +32,10 @@ const Msi = struct {
             .ctrl = ctrl,
             .is_64 = ctrl.x64_addr == 1,
         };
+    }
+
+    pub inline fn deinit(self: *Msi) void {
+        if (self.id != 0xFF) intr.releaseMsi(self.id);
     }
 
     pub inline fn enable(self: *Msi) void {
@@ -98,8 +105,11 @@ const MsiX = struct {
 
     ref: MsiXRef,
     ctrl: MessageControl,
+
     vec_table: [*]VectorEntry,
     pba_table: [*]u8,
+
+    msis: []u8,
 
     pub fn init(cfg: config.ConfigSpace, cap_offset: u16) MsiX {
         const ref = cfg.internal.referenceAsOffset(config.Capability.MsiX, cap_offset);
@@ -120,6 +130,17 @@ const MsiX = struct {
         };
     }
 
+    pub fn deinit(self: *MsiX) void {
+        for (self.msis, 0..) |msi, i| {
+            if (msi == 0xFF) continue;
+            intr.releaseMsi(msi);
+
+            self.maskIdx(@truncate(i), true);
+        }
+
+        vm.kfree(@ptrCast(self.msis.ptr));
+    }
+
     pub inline fn enable(self: *MsiX) void {
         self.ctrl.enable = 1;
         self.ref.set(.msg_ctrl, self.ctrl);
@@ -132,6 +153,16 @@ const MsiX = struct {
 
     pub inline fn getMax(self: *MsiX) u16 {
         return self.ctrl.table_size + 1;
+    }
+
+    pub fn alloc(self: *MsiX, num: u8) !void {
+        std.debug.assert(num > 0 and num <= self.getMax());
+
+        const msis= @as([*]u8, @ptrCast(vm.kmalloc(@sizeOf(u8) * num) orelse return error.NoMemory))[0..num];
+
+        for (0..num) |i| { msis[i] = 0xFF; }
+
+        self.msis = msis;
     }
 
     pub inline fn maskAll(self: *MsiX, comptime mask: bool) void {
@@ -183,6 +214,8 @@ pub const Control = struct {
     };
 
     const Meta = struct {
+        is_allocated: bool = false,
+
         is_int_x_avail: bool,
         msi_offset: u8,
         msi_x_offset: u8,
@@ -238,13 +271,15 @@ pub const Control = struct {
 
         if (types.msi_x and self.meta.isMsiXAvail()) {
             const msi_x = MsiX.init(cfg, self.meta.msi_x_offset);
-            
+
             if (min > msi_x.getMax()) return Error.TooLittleIntr;
 
             num = std.mem.min(u8, &.{ @truncate(msi_x.getMax()), max });
+            try msi_x.alloc(num);
 
             IntX.init(cfg).disable(cfg);
             msi_x.enable();
+            msi_x.maskAll(false);
 
             self.data.msi_x = msi_x;
         } else if (types.msi and self.meta.isMsiAvail()) {
@@ -264,29 +299,70 @@ pub const Control = struct {
 
             num = 1;
 
-            IntX.init(cfg).enable(cfg);
+            const int_x = IntX.init(cfg);
+            int_x.enable(cfg);
+
+            self.data = int_x;
         } else {
             return Error.IntrNotAvail;
         }
-        
+
+        self.meta.is_allocated = true;
+
         return num;
     }
 
+    pub fn release(self: *Control) void {
+        std.debug.assert(self.meta.is_allocated);
+
+        switch (self.data) {
+            .int_x => |*int_x| {
+                _ = int_x;
+                log.err("IntX not implemented yet.", .{});
+                unreachable;
+            },
+            .msi => |*msi| {
+                _ = msi.maskIdx(0, true);
+                msi.disable();
+                msi.deinit();
+            },
+            .msi_x => |*msi_x| {
+                msi_x.disable();
+                msi_x.deinit();
+            }
+        }
+
+        self.meta.is_allocated = false;
+    }
+
     pub fn setup(
-        self: *Control, idx: u8, handler: *anyopaque,
+        self: *Control, device: *dev.Device, idx: u8, handler: intr.Handler.Fn,
         trigger_mode: intr.TriggerMode,
     ) intr.Error!void {
-        _ = self; _ = idx; _ = handler; _ = trigger_mode;
-        //switch (self.data) {
-        //    .int_x => |int_x| {
-        //        
-        //    },
-        //    .msi => |msi| {
-        //        //intr.requsetMsi()
-        //    },
-        //    .msi_x => |msi_x| {
-        //    }
-        //}
+        switch (self.data) {
+            .int_x => |*int_x| {
+                std.debug.assert(idx == 0);
+                _ = int_x;
+
+                return error.NotImplemented;
+            },
+            .msi => |*msi| {
+                std.debug.assert(idx == 0);
+
+                const id = try intr.requestMsi(device, handler, trigger_mode);
+                msi.id = id;
+
+                msi.setup(intr.getMsiMessage(id));
+                _ = msi.maskIdx(id, false);
+            },
+            .msi_x => |*msi_x| {
+                const id = try intr.requestMsi(device, handler, trigger_mode);
+                msi_x.msis[idx] = id;
+
+                msi_x.setupIdx(idx, intr.getMsiMessage(id));
+                msi_x.maskIdx(idx, false);
+            }
+        }
     }
 };
 
