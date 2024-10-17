@@ -80,6 +80,14 @@ pub const kmalloc = UniversalAllocator.alloc;
 /// General-purpose kernel memory deallocation function.
 pub const kfree = UniversalAllocator.free;
 
+pub inline fn alloc(comptime T: type) ?*T {
+    return @alignCast(@ptrCast(kmalloc(@sizeOf(T))));
+}
+
+pub inline fn free(pointer: ?*anyopaque) void {
+    return kfree(pointer);
+}
+
 /// Mapping flags used to enable/disable specific features for memory pages.
 pub const MapFlags = packed struct {
     none: bool = false,
