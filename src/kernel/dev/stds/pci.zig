@@ -55,7 +55,13 @@ pub const Device = struct {
     }
 
     pub inline fn getCurrentIntrType(self: *Device) enum{int_x,msi,msi_x} {
-        return self.intr_ctrl.data;
+        std.debug.assert(self.intr_ctrl.meta.is_allocated);
+
+        return switch (self.intr_ctrl.data) {
+            .int_x => .int_x,
+            .msi => .msi,
+            .msi_x => .msi_x
+        };
     }
 
     pub inline fn releaseInterrupts(self: *Device) void {

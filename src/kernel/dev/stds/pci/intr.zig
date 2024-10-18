@@ -4,10 +4,11 @@ const std = @import("std");
 
 const config = @import("config.zig");
 const dev = @import("../../../dev.zig");
-const vm = @import("../../../vm.zig");
+const intr = dev.intr;
 const io = dev.io;
 const log = @import("../../../log.zig");
-const intr = dev.intr;
+const utils = @import("../../../utils.zig");
+const vm = @import("../../../vm.zig");
 
 const Msi = struct {
     pub const Msi32Ref = config.ConfigSpaceGroup.Ref(config.Capability.Msi.x32);

@@ -276,6 +276,9 @@ pub fn init() !void {
 
     chip = try arch.intr.init();
 
+    @memset(std.mem.asBytes(&msis.buffer), 0);
+    @memset(std.mem.asBytes(&irqs.buffer), 0);
+
     log.info("Interrupt controller: {s}", .{chip.name});
 }
 
@@ -386,6 +389,8 @@ pub fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: Trigge
 
     chip.configMsi(msi, @truncate(idx), trigger_mode);
     msis_used += 1;
+
+    log.debug("MSI allocated: {}: {}", .{idx, vec});
 
     return @truncate(idx);
 }
