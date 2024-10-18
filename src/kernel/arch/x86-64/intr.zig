@@ -25,7 +25,7 @@ pub const avail_vectors = max_vectors - reserved_vectors;
 pub const irq_base_vec = reserved_vectors;
 
 const rsrvd_vec_num = 32;
-const irq_stack_size = vm.page_size / 2;
+const irq_stack_size = vm.page_size;
 
 pub const Descriptor = packed struct {
     offset_1: u16 = 0,
@@ -185,8 +185,8 @@ fn initTss() !void {
     irq_stacks.len = cpus_num;
 
     for (irq_stacks, tss_pool) |*stack, *tss| {
-        const stack_ptr: u64 = @intFromPtr(stack);
-        const aligned_ptr = if ((stack_ptr % 0x10) == 0) stack_ptr else stack_ptr + @sizeOf(u64);
+        const stack_ptr: u64 = @intFromPtr(stack) + irq_stack_size;
+        const aligned_ptr = stack_ptr & 0xFFFF_FFFF_FFFF_FFF0;
 
         inline for (tss.ists[0..]) |*ist| {
             ist.* = aligned_ptr;
@@ -267,14 +267,20 @@ fn ExcpHandler(vec: comptime_int) type {
 
 fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv(.C) noreturn {
     const CodeDump = struct {
-        code: []const u8,
+        code: ?[]const u8,
 
         pub fn init(addr: usize) @This() {
+            if (addr == 0) return .{ .code = null };
             return .{ .code = @as([*]const u8, @ptrFromInt(addr))[0..10] };
         }
 
         pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            for (self.code) |byte| { try writer.print("{x:0>2} ", .{byte}); }
+            if (self.code == null) {
+                try writer.print("invalid instruction pointer...", .{});
+                return;
+            }
+
+            for (self.code.?) |byte| { try writer.print("{x:0>2} ", .{byte}); }
         }
     };
 
