@@ -432,49 +432,63 @@ const Controller = struct {
         comptime std.debug.assert(@sizeOf(SubmissionQueue) == @sizeOf(CompletionQueue));
         const array_size = @sizeOf(SubmissionQueue) * cpus_num;
 
-        {
+        { // I/O arrays initialization
             const base = virt + pool_real_size - (array_size * 2);
 
             self.io_submission = @ptrFromInt(base);
             self.io_completion = @ptrFromInt(base + array_size);
         }
 
+        // Configure queues structures in arrays
         for (0..cpus_num) |i| {
             const base = virt + (i * 2 * vm.page_size);
             const sq_buffer: [*]SubmissionEntry = @ptrFromInt(base);
             const cq_buffer: [*]CompletionEntry = @ptrFromInt(base + vm.page_size);
 
             const cq_real_len = if (i != cpus_num - 1) cq_len else (
-                (cq_len * @sizeOf(CompletionEntry) - array_size) / @sizeOf(CompletionEntry)
+                (cq_len * @sizeOf(CompletionEntry) - array_size * 2) / @sizeOf(CompletionEntry)
             );
 
             self.io_completion[i] = CompletionQueue.init(cq_buffer[0..cq_real_len]);
             self.io_submission[i] = SubmissionQueue.init(sq_buffer[0..sq_len]);
 
             @memset(cq_buffer[0..cq_real_len], std.mem.zeroes(CompletionEntry));
+        }
 
+        // Send commands to create completion queues
+        for (0..cpus_num) |i| {
             const id: u32 = @truncate(i + 1);
+            const cq = &self.io_completion[i];
 
-            self.sendAdminCmd(0, .create_completion_queue, @ptrCast(vm.getPhysLma(cq_buffer)), &.{
-                id   | (@as(u32, cq_real_len - 1) << 16), // (doorbell id) | (size - 1)
-                0b11 | (@as(u32, @truncate(i)) << 16) // (phys contiguous,intr enable) | (intr vector)
-            });
-            self.sendAdminCmd(0, .create_submission_queue, @ptrCast(vm.getPhysLma(sq_buffer)), &.{
+            self.sendAdminCmd(0, .create_completion_queue, @ptrCast(vm.getPhysLma(cq.ptr)), &.{
+                id   | (@as(u32, cq.size - 1) << 16), // (doorbell id) | (size - 1)
+                0b11 | (@as(u32, id - 1) << 16) // (phys contiguous,intr enable) | (intr vector)
+            }, false);
+        }
+        self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
+
+        // Send commands to create submission queues
+        for (0..cpus_num) |i| {
+            const id: u32 = @truncate(i + 1);
+            const sq = &self.io_submission[i];
+
+            self.sendAdminCmd(0, .create_submission_queue, @ptrCast(vm.getPhysLma(sq.ptr)), &.{
                 id   | (@as(u32, sq_len - 1) << 16), // (doorbell id) | (size - 1)
                 0b01 | (@as(u32, id) << 16) // (phys contiguous) | (completion queue id)
-            });
+            }, false);
         }
+        self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
     }
 
     fn identify(self: *Controller) !void {
         const buffer = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
-        const info: *Info = @ptrFromInt(vm.getVirtLma(buffer));
+        const info: *volatile Info = @ptrFromInt(vm.getVirtLma(buffer));
 
         info.vendor_id = 0xFFFF;
 
         self.sendAdminCmd(0, .identify, @ptrFromInt(buffer), &.{
             0x01 // (CNS) Controller identify
-        });
+        }, true);
 
         while (info.vendor_id == 0xFFFF) {}
 
@@ -487,24 +501,24 @@ const Controller = struct {
         vm.PageAllocator.free(buffer, 0);
     }
 
-    fn sendAdminCmd(self: *Controller, nsid: u32, command: Command.Admin, data: *anyopaque, specific: []const u32) void {
+    fn sendAdminCmd(self: *Controller, nsid: u32, command: Command.Admin, data: *anyopaque, specific: []const u32, comptime ring: bool) void {
         self.admin_lock.lock();
         defer self.admin_lock.unlock();
 
         const cmd = self.admin_submission.nextTail();
         cmd.* = SubmissionEntry.init(.{ .admin = command }, self.admin_submission.cmd_id, nsid, data, specific);
 
-        self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
+        if (ring) self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
     }
 
-    fn sendIoCmd(self: *Controller, nsid: u32, command: Command.Io, data: *anyopaque, specific: []const u32) void {
+    fn sendIoCmd(self: *Controller, nsid: u32, command: Command.Io, data: *anyopaque, specific: []const u32,comptime ring: bool) void {
         const cpu_idx = smp.getIdx();
         const queue = &self.io_submission[cpu_idx];
 
         const cmd = queue.nextTail();
         cmd.* = SubmissionEntry.init(.{ .io = command }, queue.cmd_id, nsid, data, specific);
 
-        self.ringDoorbell(cpu_idx + 1, queue.tail, .submission_tail);
+        if (ring) self.ringDoorbell(cpu_idx + 1, queue.tail, .submission_tail);
     }
 
     fn handleIoCompletion(self: *Controller, id: u16) void {
@@ -513,7 +527,6 @@ const Controller = struct {
 
         while (complete.phase_tag == queue.phase_bit) : (complete = queue.nextHead()) {
             complete.phase_tag = ~queue.phase_bit;
-            log.debug("{}", .{complete});
         }
 
         self.ringDoorbell(id + 1, queue.head, .completion_head);
@@ -523,11 +536,10 @@ const Controller = struct {
         const queue = &self.admin_completion;
         var complete = queue.getHead();
 
-        log.debug("phase tag: {}: id: {}", .{complete.phase_tag, complete.cmd_id});
-
         while (complete.phase_tag == queue.phase_bit) : (complete = queue.nextHead()) {
             complete.phase_tag = ~queue.phase_bit;
-            log.debug("{}", .{complete});
+
+            if (complete.status != 0) log.warn("NVMe: failed admin command: {}", .{complete});
         }
 
         self.ringDoorbell(0, queue.head, .completion_head);
@@ -538,15 +550,8 @@ const Controller = struct {
         const controller = pci_dev.data.as(Controller) orelse return false;
         const cpu_idx = smp.getIdx();
 
-        std.debug.assert(pci_dev.device == device);
-        log.warn("NVMe interrupt: {}", .{cpu_idx});
-
-        // Check admin queue
-        if (cpu_idx == 0) {
-            controller.handleAdminCompletion();
-        }
-
-        //controller.handleIoCompletion(cpu_idx);
+        if (cpu_idx == 0) controller.handleAdminCompletion();
+        controller.handleIoCompletion(cpu_idx);
 
         return true;
     }
