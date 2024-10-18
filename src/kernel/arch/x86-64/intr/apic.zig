@@ -230,12 +230,12 @@ fn eoi() void {
 
 fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) void {
     const address = Msi.Address{
-        .dest_id = @truncate(msi.vector.cpu),
+        .dest_id = cpuIdxToApicId(msi.vector.cpu),
         .dest_mode = .physical,
         .redir_hint = 0
     };
     const data = Msi.Data{
-        .vector = cpuIdxToApicId(msi.vector.cpu),
+        .vector = @truncate(msi.vector.vec),
         .delv_mode = .fixed,
         .pin_polarity = switch (trigger_mode) {
             .level_low => .active_low,
