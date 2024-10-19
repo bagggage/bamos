@@ -174,7 +174,7 @@ fn initTss() !void {
     const cpus_num = smp.getNum();
     const stacks_pages = std.math.divCeil(
         u32,
-        cpus_num * irq_stack_size,
+        @as(u32, cpus_num) * irq_stack_size,
         vm.page_size
     ) catch unreachable;
     const rank = std.math.log2_int_ceil(u32, stacks_pages);
