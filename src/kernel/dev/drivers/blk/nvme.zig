@@ -294,12 +294,15 @@ const Controller = struct {
     doorbell_stride: u16,
 
     admin_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
+    admin_cmpl: u16 = 0, // last complete command id
+    admin_fail: u16 = 0, // last failed command status
 
     admin_submission: SubmissionQueue = undefined,
     admin_completion: CompletionQueue = undefined,
 
     io_submission: [*]SubmissionQueue = undefined,
     io_completion: [*]CompletionQueue = undefined,
+    io_queues_rank: u8 = 0,
 
     namespaces: utils.SList(Namespace) = .{},
 
@@ -325,47 +328,62 @@ const Controller = struct {
         try self.reset(pci_dev, cap);
     }
 
-    pub fn reset(self: *Controller, pci_dev: *pci.Device, cap: BarRegs.Capabilities) !void {
-        var cfg = self.bar.get(BarRegs.Config, .ctrl_config);
-        var status: BarRegs.Status = undefined;
+    pub fn deinit(self: *Controller) void {
+        self.deinitIoQueues();
 
+        self.disable() catch |err| log.err("NVMe deinit: cannot disable controller: {s}", .{@errorName(err)});
+        self.deinitAdminQueues();
+
+        dev.io.release(vm.getPhysLma(self.bar.dyn_base), .mmio);
+    }
+
+    pub fn enable(self: *Controller) !void {
+        var cfg = self.bar.get(BarRegs.Config, .ctrl_config);
+        cfg.enable = 1;
+        self.bar.set(.ctrl_config, cfg);
+
+        // Wait for enabling
+        var status = self.bar.get(BarRegs.Status, .ctrl_status);
+        while (status.ready == 0) : (status = self.bar.get(BarRegs.Status, .ctrl_status)) {
+            if (status.fatal_status == 1) return error.ControllerFatal;
+        }
+    }
+
+    pub fn disable(self: *Controller) !void {
+        var cfg = self.bar.get(BarRegs.Config, .ctrl_config);
+        cfg.enable = 0;
+        self.bar.set(.ctrl_config, cfg);
+
+        // Wait for disabling
+        var status = self.bar.get(BarRegs.Status, .ctrl_status);
+        while (status.ready == 1) : (status = self.bar.get(BarRegs.Status, .ctrl_status)) {
+            if (status.fatal_status == 1) return error.ControllerFatal;
+        }
+    }
+
+    pub fn reset(self: *Controller, pci_dev: *pci.Device, cap: BarRegs.Capabilities) !void {
         if ((cap.cmd_sets & 1) == 0) return error.NvmeCommandSetNotSupported;
 
         const arch_page_size = comptime std.math.log2_int(usize, vm.page_size) - 12;
         if (cap.mem_page_size_min > arch_page_size or cap.mem_page_size_max < arch_page_size) return error.UnsupportedPageSize;
 
-        { // Disable
-            cfg.enable = 0;
-            self.bar.set(.ctrl_config, cfg);
+        var cfg = self.bar.get(BarRegs.Config, .ctrl_config);
 
-            // Wait for disabling
-            status = self.bar.get(BarRegs.Status, .ctrl_status);
-
-            while (status.ready == 1) : (status = self.bar.get(BarRegs.Status, .ctrl_status)) {
-                if (status.fatal_status == 1) return error.ControllerFatal;
-            }
-        }
+        try self.disable();
 
         { // Configure
+            cfg.enable = 0;
             cfg.mem_page_size = arch_page_size;
             cfg.cmd_set_selected = if ((cap.cmd_sets & 0x40) != 0) 0b110 else 0b000;
             cfg.arbit_mech_selected = .round_robin;
+
+            self.bar.set(.ctrl_config, cfg);
         }
 
         try self.initAdminQueues();
         errdefer self.deinitAdminQueues();
 
-        { // Enable
-            cfg.enable = 1;
-            self.bar.set(.ctrl_config, cfg);
-
-            // Wait for enabling
-            status = self.bar.get(BarRegs.Status, .ctrl_status);
-
-            while (status.ready == 0) : (status = self.bar.get(BarRegs.Status, .ctrl_status)) {
-                if (status.fatal_status == 1) return error.ControllerFatal;
-            }
-        }
+        try self.enable();
 
         const intr_num = try pci_dev.requestInterrupts(1, @truncate(smp.getNum()), .{ .msi_x = true });
         errdefer pci_dev.releaseInterrupts();
@@ -375,6 +393,8 @@ const Controller = struct {
         }
 
         try self.initIoQueues();
+        errdefer self.deinitIoQueues();
+
         try self.identify();
     }
 
@@ -416,7 +436,7 @@ const Controller = struct {
     }
 
     fn deinitAdminQueues(self: *Controller) void {
-        vm.PageAllocator.free(@intFromPtr(self.admin_submission.ptr), 1);
+        vm.PageAllocator.free(@intFromPtr(vm.getPhysLma(self.admin_submission.ptr)), 1);
     }
 
     fn initIoQueues(self: *Controller) !void {
@@ -427,7 +447,11 @@ const Controller = struct {
         const pool_real_size = (@as(u32, 1) << @truncate(pool_rank)) * vm.page_size;
 
         const pool = vm.PageAllocator.alloc(pool_rank) orelse return error.NoMemory;
+        errdefer vm.PageAllocator.free(pool, pool_rank);
+
         const virt = vm.getVirtLma(pool);
+
+        self.io_queues_rank = pool_rank;
 
         comptime std.debug.assert(@sizeOf(SubmissionQueue) == @sizeOf(CompletionQueue));
         const array_size = @sizeOf(SubmissionQueue) * cpus_num;
@@ -477,7 +501,54 @@ const Controller = struct {
                 0b01 | (@as(u32, id) << 16) // (phys contiguous) | (completion queue id)
             }, false);
         }
+        const last_cmd = self.admin_submission.cmd_id - 1;
+
         self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
+
+        // Wait
+        self.adminInitialWait(last_cmd);
+        if (self.admin_fail != 0) return error.CommandsFailed;
+    }
+
+    fn deinitIoQueues(self: *Controller) void {
+        const cpus_num = smp.getNum();
+        self.admin_cmpl = 0;
+        self.admin_fail = 0;
+
+        // Delete submission queues first
+        for (0..cpus_num) |i| {
+            const id: u32 = @truncate(i + 1);
+            self.sendAdminCmd(0, .delete_submission_queue, null, &.{id}, false);
+        }
+        self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
+
+        // Delete completion queues than
+        for (0..cpus_num) |i| {
+            const id: u32 = @truncate(i + 1);
+            self.sendAdminCmd(0, .delete_completion_queue, null, &.{id}, false);
+        }
+        const last_cmd = self.admin_submission.cmd_id - 1;
+
+        self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
+
+        // Wait for complete
+        self.adminInitialWait(last_cmd);
+
+        if (self.admin_fail != 0) log.err("Command failed during delete I/O queues; Ignoring", .{});
+
+        // Free memory
+        const phys = vm.getPhysLma(self.io_submission[0].ptr);
+        vm.PageAllocator.free(@intFromPtr(phys), self.io_queues_rank);
+    }
+
+    fn adminInitialWait(self: *Controller, cmd_id: u16) void {
+        while (@as(*volatile Controller, @ptrCast(self)).admin_cmpl < cmd_id) {
+            // In case if interrupts not handled
+            if (self.admin_cmpl == 0) {
+                log.warn("NVMe manual completion handling", .{});
+                self.handleAdminCompletion();
+            }
+        }
     }
 
     fn identify(self: *Controller) !void {
@@ -490,6 +561,7 @@ const Controller = struct {
             0x01 // (CNS) Controller identify
         }, true);
 
+        // Wait
         while (info.vendor_id == 0xFFFF) {}
 
         log.debug("{x}:{x}; {s}; {s}; firmware: {s}; ctrl id: {}", .{
@@ -501,7 +573,7 @@ const Controller = struct {
         vm.PageAllocator.free(buffer, 0);
     }
 
-    fn sendAdminCmd(self: *Controller, nsid: u32, command: Command.Admin, data: *anyopaque, specific: []const u32, comptime ring: bool) void {
+    fn sendAdminCmd(self: *Controller, nsid: u32, command: Command.Admin, data: ?*anyopaque, specific: []const u32, comptime ring: bool) void {
         self.admin_lock.lock();
         defer self.admin_lock.unlock();
 
@@ -511,7 +583,7 @@ const Controller = struct {
         if (ring) self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
     }
 
-    fn sendIoCmd(self: *Controller, nsid: u32, command: Command.Io, data: *anyopaque, specific: []const u32,comptime ring: bool) void {
+    fn sendIoCmd(self: *Controller, nsid: u32, command: Command.Io, data: ?*anyopaque, specific: []const u32,comptime ring: bool) void {
         const cpu_idx = smp.getIdx();
         const queue = &self.io_submission[cpu_idx];
 
@@ -539,7 +611,12 @@ const Controller = struct {
         while (complete.phase_tag == queue.phase_bit) : (complete = queue.nextHead()) {
             complete.phase_tag = ~queue.phase_bit;
 
-            if (complete.status != 0) log.warn("NVMe: failed admin command: {}", .{complete});
+            if (complete.status != 0) {
+                self.admin_fail = complete.status;
+                log.warn("NVMe: failed admin command: {}", .{complete});
+            }
+
+            self.admin_cmpl = complete.cmd_id;
         }
 
         self.ringDoorbell(0, queue.head, .completion_head);
@@ -554,6 +631,14 @@ const Controller = struct {
         controller.handleIoCompletion(cpu_idx);
 
         return true;
+    }
+
+    fn read(self: *Controller) void {
+        _ = self;
+    }
+
+    fn write(self: *Controller) void {
+        _ = self;
     }
 };
 
@@ -599,8 +684,9 @@ fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {
 
 fn remove(device: *dev.Device) void {
     const pci_dev = pci.Device.from(device);
-    const data = pci_dev.data.as(Controller) orelse return;
+    const controller = pci_dev.data.as(Controller) orelse return;
 
-    dev.io.release(data.bar.dyn_base, .mmio);
-    vm.free(pci_dev.data.ptr);
+    controller.deinit();
+
+    vm.free(controller);
 }
