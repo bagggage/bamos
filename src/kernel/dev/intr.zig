@@ -390,8 +390,6 @@ pub fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: Trigge
     chip.configMsi(msi, @truncate(idx), trigger_mode);
     msis_used += 1;
 
-    log.debug("MSI allocated: {}: {}", .{idx, vec});
-
     return @truncate(idx);
 }
 
@@ -406,6 +404,7 @@ pub fn releaseMsi(idx: u8) void {
     freeVector(msi.vector);
 
     msi.in_use = false;
+    msis_used -= 1;
 }
 
 pub fn getMsiMessage(idx: u8) Msi.Message {

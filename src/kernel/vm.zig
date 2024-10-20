@@ -93,7 +93,7 @@ pub inline fn free(pointer: ?*anyopaque) void {
 /// Implements `std.mem.Allocator` interface for use
 /// with Zig Standard Library `std`.
 pub var std_allocator = std.mem.Allocator{
-    .ptr = null,
+    .ptr = undefined,
     .vtable = &std_vtable
 };
 const std_vtable = opaque {
@@ -106,7 +106,7 @@ const std_vtable = opaque {
     fn stdAlloc(_: *anyopaque, len: usize, ptr_align: u8, _: usize) ?[*]u8 {
         const result = kmalloc(len) orelse return null;
         // Check if pointer is aligned
-        std.debug.assert((@intFromPtr(result) % ptr_align) == 0);
+        std.debug.assert((@intFromPtr(result) % (@as(u32, 1) << @truncate(ptr_align))) == 0);
         return @ptrCast(result);
     }
 
@@ -116,7 +116,7 @@ const std_vtable = opaque {
 
     fn stdResize(_: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, _: usize) bool {
         const new_buf: [*]u8 = @ptrCast(kmalloc(new_len) orelse return false);
-        std.debug.assert((@intFromPtr(new_buf) % buf_align) == 0);
+        std.debug.assert((@intFromPtr(new_buf) % (@as(u32, 1 ) << @truncate(buf_align))) == 0);
 
         if (buf.len < new_len) {
             @memcpy(new_buf[0..buf.len], buf);
@@ -125,7 +125,6 @@ const std_vtable = opaque {
         }
 
         kfree(buf.ptr);
-
         return true;
     }
 }.vtable;

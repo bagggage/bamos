@@ -117,6 +117,10 @@ fn typeIdShort(comptime T: type) u32 {
             type_id = typeIdShort(eu.payload);
             hasher.update(std.mem.asBytes(&type_id));
         },
+        .Fn => |f| {
+            for (f.params) |param| hasher.update(&.{@intFromEnum(@typeInfo(param.type orelse void))});
+            if (f.return_type) |RetT| hasher.update(&.{@intFromEnum(@typeInfo(RetT))});
+        },
         else => {
             const size = @sizeOf(T); const algn = @alignOf(T);
             hasher.update(std.mem.asBytes(&size));
