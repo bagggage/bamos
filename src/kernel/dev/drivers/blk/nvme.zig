@@ -142,15 +142,104 @@ const CompletionQueue = struct {
         };
     }
 
-    pub inline fn getHead(self: *CompletionQueue) *CompletionEntry {
+    pub inline fn getHead(self: *CompletionQueue) *volatile CompletionEntry {
         return &self.ptr[self.head];
     }
 
-    pub inline fn nextHead(self: *CompletionQueue) *CompletionEntry {
+    pub inline fn nextHead(self: *CompletionQueue) *volatile CompletionEntry {
         self.head = (self.head + 1) % self.size;
         if (self.head == 0) self.phase_bit = ~self.phase_bit;
 
         return &self.ptr[self.head];
+    }
+};
+
+const Drive = dev.classes.Drive;
+const NamespaceDrive = dev.obj.Inherit(Drive, Namespace);
+
+const Namespace = struct {
+    const Info = extern struct {
+        size: u64,
+        capacity: u64,
+        nuse: u64,
+        features: u8,
+        lba_num: u8,
+        lba_size: u8,
+        meta_caps: u8,
+        prot_caps: u8,
+        prot_types: u8,
+        nmic_caps: u8,
+        res_caps: u8,
+
+        _offset: [72]u8,
+
+        guid: [16]u8,
+        euid: u64,
+
+        lba_formats: [15]extern struct {
+            meta_size: u16,
+
+            data_size: u8,
+            rel_perf: u8
+        },
+    };
+
+    ctrl: *Controller,
+    id: u32,
+
+    pub fn init(self: *NamespaceDrive, ctrl: *Controller, nsid: u32, buffer: *[vm.page_size]u8) void {
+        self.derived = .{
+            .ctrl = ctrl,
+            .id = nsid,
+        };
+
+        return identify(self, buffer);
+    }
+
+    fn identify(self: *NamespaceDrive, buffer: *[vm.page_size]u8) void {
+        const ns = &self.derived;
+        const info: *volatile Info = @alignCast(@ptrCast(buffer));
+
+        ns.ctrl.sendAdminCmd(ns.id, .identify, vm.getPhysLma(buffer), &.{}, true);
+
+        const cmd_id = ns.ctrl.admin_submission.cmd_id;
+        ns.ctrl.adminInitialWait(cmd_id);
+
+        self.base.capacity = info.capacity;
+        self.base.lba_size = @as(u16, 1) << @truncate(info.lba_formats[0].data_size);
+        var perf: u8 = info.lba_formats[0].rel_perf;
+
+        for (1..info.lba_num + 1) |i| {
+            const format = info.lba_formats[i];
+
+            if (format.data_size == 0) break;
+            if (format.rel_perf >= perf) continue;
+
+            self.base.lba_size = @as(u16, 1) << @truncate(format.data_size);
+            perf = format.rel_perf;
+        }
+
+        log.info("NVMe: drive added: size: {} mb; lba size: {}", .{self.base.capacity * self.base.lba_size / utils.mb_size, self.base.lba_size});
+    }
+
+    fn readImpl(self: *NamespaceDrive, lba_offset: u32, buffer: []u8) bool {
+        self.derived.ctrl.sendIoCmd(
+            self.derived.id, .read,
+            vm.getPhys(buffer.ptr) orelse unreachable, &.{
+            lba_offset
+        }, true);
+
+        return true;
+    }
+
+    fn writeImpl(self: *NamespaceDrive, lba_offset: u32, buffer: []u8) bool {
+        self.derived.ctrl.sendIoCmd(
+            self.derived.id, .write,
+            vm.getPhys(buffer.ptr) orelse unreachable, &.{
+            lba_offset
+        }, true);
+
+        return true;
     }
 };
 
@@ -452,6 +541,7 @@ const Controller = struct {
         const virt = vm.getVirtLma(pool);
 
         self.io_queues_rank = pool_rank;
+        self.admin_fail = 0;
 
         comptime std.debug.assert(@sizeOf(SubmissionQueue) == @sizeOf(CompletionQueue));
         const array_size = @sizeOf(SubmissionQueue) * cpus_num;
@@ -501,8 +591,7 @@ const Controller = struct {
                 0b01 | (@as(u32, id) << 16) // (phys contiguous) | (completion queue id)
             }, false);
         }
-        const last_cmd = self.admin_submission.cmd_id - 1;
-
+        const last_cmd = self.admin_submission.cmd_id;
         self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
 
         // Wait
@@ -527,8 +616,7 @@ const Controller = struct {
             const id: u32 = @truncate(i + 1);
             self.sendAdminCmd(0, .delete_completion_queue, null, &.{id}, false);
         }
-        const last_cmd = self.admin_submission.cmd_id - 1;
-
+        const last_cmd = self.admin_submission.cmd_id;
         self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
 
         // Wait for complete
@@ -541,36 +629,62 @@ const Controller = struct {
         vm.PageAllocator.free(@intFromPtr(phys), self.io_queues_rank);
     }
 
-    fn adminInitialWait(self: *Controller, cmd_id: u16) void {
-        while (@as(*volatile Controller, @ptrCast(self)).admin_cmpl < cmd_id) {
-            // In case if interrupts not handled
-            if (self.admin_cmpl == 0) {
-                log.warn("NVMe manual completion handling", .{});
-                self.handleAdminCompletion();
-            }
-        }
+    pub fn adminInitialWait(self: *Controller, cmd_id: u16) void {
+        const idx = (cmd_id -% 1) % self.admin_completion.size;
+        const cmpl: *volatile CompletionEntry = &self.admin_completion.ptr[idx];
+
+        while (cmpl.cmd_id != cmd_id) {}
+
+        self.handleAdminCompletion();
     }
 
     fn identify(self: *Controller) !void {
-        const buffer = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
-        const info: *volatile Info = @ptrFromInt(vm.getVirtLma(buffer));
+        const buffer = vm.PageAllocator.alloc(1) orelse return error.NoMemory;
+        defer vm.PageAllocator.free(buffer, 1);
 
-        info.vendor_id = 0xFFFF;
+        const virt = vm.getVirtLma(buffer);
 
-        self.sendAdminCmd(0, .identify, @ptrFromInt(buffer), &.{
-            0x01 // (CNS) Controller identify
-        }, true);
+        // Identify controller
+        {
+            const info: *volatile Info = @ptrFromInt(virt);
+            info.vendor_id = 0xFAFA;
 
-        // Wait
-        while (info.vendor_id == 0xFFFF) {}
+            self.sendAdminCmd(0, .identify, @ptrFromInt(buffer), &.{
+                0x01 // (CNS) Controller identify
+            }, true);
 
-        log.debug("{x}:{x}; {s}; {s}; firmware: {s}; ctrl id: {}", .{
-            info.vendor_id,info.sub_vendor_id,info.serial,info.model,
-            info.firmware,
-            info.ctrl_id
-        });
+            // Wait
+            while (info.vendor_id == 0xFAFA) {}
 
-        vm.PageAllocator.free(buffer, 0);
+            log.debug("{x}:{x}; {s}; {s}; firmware: {s}; ctrl id: {}", .{
+                info.vendor_id,info.sub_vendor_id,info.serial,info.model,
+                info.firmware,
+                info.ctrl_id
+            });
+        }
+
+        // Identify namespaces
+        {
+            const ids: [*:0]volatile u32 = @ptrFromInt(virt);
+            ids[0] = 0xFF00_AFAF; // Magic
+
+            self.sendAdminCmd(0, .identify, @ptrFromInt(buffer), &.{
+                0x02 // (CNS) Namespace ID list
+            }, true);
+
+            // Wait
+            while (ids[0] == 0xFF00_AFAF) {}
+
+            const slice = ids[0..std.mem.len(@as([*:0]const u32, @volatileCast(ids)))];
+
+            for (slice) |namespace| {
+                const drive = try dev.obj.new(NamespaceDrive);
+                errdefer dev.obj.delete(NamespaceDrive, drive);
+
+                Namespace.init(drive, self, namespace, @ptrFromInt(virt + vm.page_size));
+                try dev.obj.add(Drive, &drive.base);
+            }
+        }
     }
 
     fn sendAdminCmd(self: *Controller, nsid: u32, command: Command.Admin, data: ?*anyopaque, specific: []const u32, comptime ring: bool) void {
@@ -632,17 +746,6 @@ const Controller = struct {
 
         return true;
     }
-
-    fn read(self: *Controller) void {
-        _ = self;
-    }
-
-    fn write(self: *Controller) void {
-        _ = self;
-    }
-};
-
-const Namespace = struct {
 };
 
 var pci_driver = pci.Driver{
@@ -667,13 +770,13 @@ fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {
     log.debug("NVMe controller: {s}", .{device.name.str()});
 
     const pci_dev = pci.Device.from(device);
-    const data = vm.alloc(Controller) orelse return .no_resources;
-    pci_dev.data.set(@ptrCast(data));
+    const controller = vm.alloc(Controller) orelse return .no_resources;
+    pci_dev.data.set(@ptrCast(controller));
 
-    data.init(pci_dev) catch |err| {
+    controller.init(pci_dev) catch |err| {
         log.err("NVMe initialization failed: {s}", .{@errorName(err)});
 
-        vm.free(data);
+        vm.free(controller);
         pci_dev.data.set(null);
 
         return .failed;
