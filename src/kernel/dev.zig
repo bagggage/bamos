@@ -7,6 +7,8 @@ const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
 pub const acpi = @import("dev/stds/acpi.zig");
+pub const classes = @import("dev/classes.zig");
+pub const obj = @import("dev/obj.zig");
 pub const regs = @import("dev/regs.zig");
 pub const io = @import("dev/io.zig");
 pub const intr = @import("dev/intr.zig");
