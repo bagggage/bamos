@@ -88,6 +88,48 @@ pub inline fn free(pointer: ?*anyopaque) void {
     return kfree(pointer);
 }
 
+/// Kernel high-level general purpose allocator interface.
+/// 
+/// Implements `std.mem.Allocator` interface for use
+/// with Zig Standard Library `std`.
+pub var std_allocator = std.mem.Allocator{
+    .ptr = null,
+    .vtable = &std_vtable
+};
+const std_vtable = opaque {
+    pub const vtable = std.mem.Allocator.VTable{
+        .alloc = stdAlloc,
+        .free = stdFree,
+        .resize = stdResize
+    };
+
+    fn stdAlloc(_: *anyopaque, len: usize, ptr_align: u8, _: usize) ?[*]u8 {
+        const result = kmalloc(len) orelse return null;
+        // Check if pointer is aligned
+        std.debug.assert((@intFromPtr(result) % ptr_align) == 0);
+        return @ptrCast(result);
+    }
+
+    fn stdFree(_: *anyopaque, buf: []u8, _: u8, _: usize) void {
+        kfree(buf.ptr);
+    }
+
+    fn stdResize(_: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, _: usize) bool {
+        const new_buf: [*]u8 = @ptrCast(kmalloc(new_len) orelse return false);
+        std.debug.assert((@intFromPtr(new_buf) % buf_align) == 0);
+
+        if (buf.len < new_len) {
+            @memcpy(new_buf[0..buf.len], buf);
+        } else {
+            @memcpy(new_buf[0..new_len], buf[0..new_len]);
+        }
+
+        kfree(buf.ptr);
+
+        return true;
+    }
+}.vtable;
+
 /// Mapping flags used to enable/disable specific features for memory pages.
 pub const MapFlags = packed struct {
     none: bool = false,
