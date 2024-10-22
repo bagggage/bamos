@@ -54,7 +54,7 @@ pub fn delete(comptime T: type, object: *T) void {
     vm.free(node);
 }
 
-fn addById(id: u32, node: *List.Node) Error!void {
+fn addByTypeId(id: u32, node: *List.Node) Error!void {
     map_lock.lock();
     defer map_lock.unlock();
 
@@ -70,7 +70,7 @@ pub inline fn add(comptime T: type, object: *T) Error!void {
     const id = comptime utils.typeId(T);
     const node: *utils.List(T).Node = @fieldParentPtr("data", object);
 
-    return addById(id, @ptrCast(node));
+    return addByTypeId(id, @ptrCast(node));
 }
 
 pub fn remove(object: anytype) void {

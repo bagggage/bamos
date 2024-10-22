@@ -97,27 +97,25 @@ const IoType = switch(builtin.cpu.arch) {
 
 const Mcfg = extern struct {
     header: acpi.SdtHeader,
-    reserved: [2]u32,
-
-    _entries: Entry,
+    reserved: u64 align(4),
 
     const Entry = extern struct {
         base: u64 align(4),
-        segment: u16, 
+        segment: u16,
 
         start_bus: u8,
         end_bus: u8,
     
-        reserved: [4]u8,
+        reserved: u32,
     };
 
     comptime {
         std.debug.assert(@sizeOf(Entry) == 16);
-        std.debug.assert(@sizeOf(Mcfg) == 44 + @sizeOf(Entry));
+        std.debug.assert(@sizeOf(Mcfg) == 44);
     }
 
     pub inline fn entries(self: *const Mcfg) []const Entry {
-        const ptr: [*]const Entry = @ptrCast(&self._entries);
+        const ptr: [*]const Entry = @ptrFromInt(@intFromPtr(self) + @sizeOf(Mcfg));
         const len = (self.header.length - @sizeOf(acpi.SdtHeader)) / @sizeOf(Entry);
 
         return ptr[0..len];

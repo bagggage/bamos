@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const boot = @import("../../boot.zig");
+const log = @import("../../log.zig");
 const io = @import("../io.zig");
 const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");
@@ -11,7 +12,7 @@ pub const SdtHeader = extern struct {
     revision: u8,
     checksum: u8,
     oem_id: [6]u8,
-    oem_table_id: u64 align(4),
+    oem_table_id: [8]u8,
     oem_revision: u32,
     creator_id: u32,
     creator_revision: u32,
@@ -25,7 +26,6 @@ pub const SdtHeader = extern struct {
         if (self.length == 0) return false;
 
         const ptr: [*]const u8 = @ptrCast(self);
-
         var sum: u8 = 0;
 
         for (0..self.length) |i| { sum +%= ptr[i]; }
@@ -42,12 +42,9 @@ pub const Xsdt = extern struct {
         std.debug.assert(@sizeOf(@This()) == @sizeOf(SdtHeader) + @sizeOf(*SdtHeader));
     }
 
-    pub inline fn len(self: *const Xsdt) usize {
-        return (self.header.length - @sizeOf(SdtHeader)) / @sizeOf(@TypeOf(self._entries));
-    }
-
-    pub inline fn entries(self: *Xsdt) [*]align(4) *SdtHeader {
-        return @ptrCast(&self._entries);
+    pub inline fn entries(self: *Xsdt) []align(4) *SdtHeader {
+        const len = (self.header.length - @sizeOf(SdtHeader)) / @sizeOf(@TypeOf(self._entries));
+        return @as([*]align(4) *SdtHeader, @ptrCast(&self._entries))[0..len];
     }
 };
 
@@ -59,13 +56,20 @@ pub fn init() !void {
     const phys = boot.getArchData().acpi_ptr;
 
     _ = io.request("ACPI Tables", phys, mmio_size, .mmio) orelse return error.MmioBusy;
+    errdefer io.release(phys, .mmio);
 
-    sdt = @ptrFromInt(phys);
-    sdt = vm.getVirtLma(sdt);
+    sdt = @ptrFromInt(vm.getVirtLma(phys));
+
+    if (!sdt.header.checkSum()) return error.XsdtChecksumFailed;
+
+    const fadt_hdr = findEntry("FACP") orelse return error.FadtNotFound;
+    if (!fadt_hdr.checkSum()) return error.FadtChecksumFailed;
 }
 
 pub fn findEntry(signature: *const [4:0]u8) ?*SdtHeader {
-    for (sdt.entries()[0..sdt.len()]) |ent| {
+    const entries = sdt.entries();
+
+    for (entries) |ent| {
         const entry: *SdtHeader = vm.getVirtLma(ent);
 
         if (!std.mem.eql(u8, &entry.signature, signature)) continue;
