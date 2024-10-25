@@ -104,6 +104,7 @@ obj_size: usize = undefined,
 const arenas_tar_capacity = 256;
 /// Allocator for managing arena nodes.
 var arenas_alloc: vm.BucketAllocator = undefined;
+var arenas_lock = utils.Spinlock.init(.unlocked);
 
 /// Initializes the Object Memory Allocator (OMA) system.
 /// 
@@ -171,10 +172,24 @@ pub fn initRaw(obj_size: usize, pool_phys: usize, pool_pages: u32) vm.Error!Self
     const real_pages = @as(u32, 1) << @truncate(result.arena_rank);
     std.debug.assert(real_pages == pool_pages);
 
-    const node = makeArena(pool_phys) orelse return vm.Error.NoMemory;
+    const node = makeArena(pool_phys) orelse return error.NoMemory;
     result.arenas.prepend(node);
 
     return result;
+}
+
+/// Deinitialize allocator, free all allocated memory.
+pub fn deinit(self: *Self) void {
+    var node = self.arenas.first;
+
+    while (node) |arena| {
+        const next = arena.next;
+        self.freeArena(arena);
+
+        node = next;
+    }
+
+    self.arenas.first = null;
 }
 
 /// Allocates memory for an object and cast it to pointer of type `T`.
@@ -257,10 +272,15 @@ inline fn getArenaSize(self: *const Self) usize {
 /// 
 /// - `pool_phys`: The physical memory address of the pool.
 /// - Returns: A pointer to the newly created `ArenaNode`, or `null` if allocation fails.
-fn makeArena(pool_phys: usize) ?*ArenaNode {
-    const node = arenas_alloc.alloc(ArenaNode) orelse return null;
-    node.data = Arena.init(pool_phys);
+fn makeArena(phys_pool: usize) ?*ArenaNode {
+    const node = blk: {
+        arenas_lock.lock();
+        defer arenas_lock.unlock();
 
+        break :blk arenas_alloc.alloc(ArenaNode) orelse return null;
+    };
+
+    node.data = Arena.init(phys_pool);
     return node;
 }
 
@@ -268,17 +288,13 @@ fn makeArena(pool_phys: usize) ?*ArenaNode {
 /// 
 /// - Returns: A pointer to the newly created `ArenaNode`, or `null` if allocation fails.
 fn newArena(self: *Self) ?*ArenaNode {
-    const node = arenas_alloc.alloc(ArenaNode) orelse return null;
-    const mem_pool = vm.PageAllocator.alloc(self.arena_rank);
-
-    if (mem_pool == null) {
-        arenas_alloc.free(node);
+    const phys = vm.PageAllocator.alloc(self.arena_rank) orelse return null;
+    const node = makeArena(phys) orelse {
+        vm.PageAllocator.free(phys, self.arena_rank);
         return null;
-    }
+    };
 
     self.arenas.prepend(node);
-    node.data = Arena.init(mem_pool.?);
-
     return node;
 }
 
@@ -287,5 +303,13 @@ fn newArena(self: *Self) ?*ArenaNode {
 /// - `arena`: Pointer to the `ArenaNode` to delete.
 fn deleteArena(self: *Self, arena: *ArenaNode) void {
     self.arenas.remove(arena);
-    vm.PageAllocator.free(arena.data.pool_base * vm.page_size, self.arena_rank);
+    self.freeArena(arena);
+}
+
+/// Free arena memory.
+/// 
+/// - `arena`: Pointer to the `ArenaNode` to free.
+inline fn freeArena(self: *Self, arena: *ArenaNode) void {
+    vm.PageAllocator.free(@as(usize, arena.data.pool_base) * vm.page_size, self.arena_rank);
+    arenas_alloc.free(arena);
 }
