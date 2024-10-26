@@ -6,6 +6,7 @@ const dev = @import("dev.zig");
 const log = @import("log.zig");
 const smp = @import("smp.zig");
 const utils = @import("utils.zig");
+const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
 
 pub const panic = @import("panic.zig").panic;
@@ -33,6 +34,7 @@ export fn main() noreturn {
 
     smp.initAll();
 
+    init(vfs);
     init(dev);
 }
 

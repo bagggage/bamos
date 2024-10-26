@@ -6,12 +6,18 @@ const std = @import("std");
 
 const dev = @import("dev.zig");
 const utils = @import("utils.zig");
+const log = @import("log.zig");
 const vm = @import("vm.zig");
 
 const entries_oma_capacity = 512;
 const fs_oma_capacity = 32;
 
-const hashFn = std.hash.Crc32.hash;
+const hashFn = std.hash.Fnv1a_32.hash;
+
+pub const Error = error {
+    Busy,
+    NoMemory
+};
 
 pub const FileSystem = struct {
     pub const Operations = struct {
@@ -22,15 +28,29 @@ pub const FileSystem = struct {
         unmount: UnmountT
     };
 
+    node: FsList.Node,
+
     name: []const u8,
     hash: u32,
-
-    device: ?*dev.Device = null,
 
     ops: Operations = undefined,
     dentry_ops: Dentry.Operations = undefined,
 
-    pub var oma = vm.SafeOma(FsList.Node).init(fs_oma_capacity);
+    pub fn init(comptime name: []const u8, ops: Operations, dentry_ops: Dentry.Operations) FileSystem {
+        comptime var buffer: [name.len]u8 = .{0} ** name.len;
+        const lower = comptime std.ascii.lowerString(&buffer, name);
+        const hash = comptime hashFn(lower);
+
+        return .{
+            .name = name,
+            .hash = hash,
+            .ops = ops,
+            .dentry_ops = dentry_ops,
+            .node = .{
+                .data = undefined
+            }
+        };
+    }
 };
 
 pub const Inode = struct {
@@ -47,11 +67,23 @@ pub const Inode = struct {
 
     index: u32,
     type: Type,
-    size: usize,
+    size: usize, // In bytes
+
+    access_time: u32,
+    modify_time: u32,
+    create_time: u32,
 
     fs_data: utils.AnyData = .{},
 
     pub var oma = vm.SafeOma(Inode).init(entries_oma_capacity);
+
+    pub inline fn new() ?*Inode {
+        return oma.alloc();
+    }
+
+    pub inline fn delete(self: *Inode) void {
+        oma.free(self);
+    }
 };
 
 pub const Dentry = struct {
@@ -82,6 +114,14 @@ pub const Dentry = struct {
     lock: utils.Spinlock = .{},
 
     pub var oma = vm.SafeOma(Dentry).init(entries_oma_capacity);
+
+    pub inline fn new() ?*Dentry {
+        return oma.alloc();
+    }
+
+    pub inline fn delete(self: *Dentry) void {
+        oma.free(self);
+    }
 
     pub fn init(self: *Dentry, name: []const u8, parent: ?*Dentry, inode: ?*Inode, ops: *Operations) void {
         self.name.hash = hashFn(name);
@@ -114,28 +154,54 @@ pub const Dentry = struct {
     }
 };
 
-const FsList = utils.List(FileSystem);
+const FsList = utils.List(*FileSystem);
 
 var root: *Dentry = undefined;
 var fs_list: FsList = .{};
-var fs_lock = utils.Spinlock.init(.unlocked);
+var fs_list_lock = utils.Spinlock.init(.unlocked);
 
-pub fn registerFs(
-    comptime name: []const u8,
-    device: ?*dev.Device,
-) !*FileSystem {
-    const node = FileSystem.oma.alloc() orelse return error.NoMemory;
-    const fs = &node.data;
+const AutoInit = opaque {
+    pub var file_systems = .{
+        @import("vfs/ext2.zig")
+    };
+};
 
-    fs.name = name;
-    fs.device = device;
+pub fn init() !void {
+    inline for (AutoInit.file_systems) |Fs| {
+        Fs.init() catch |err| {
+            log.err("Failed to initialize '"++@typeName(Fs)++"' filesystem: {s}", .{@errorName(err)});  
+        };
+    }
+}
 
-    fs_lock.lock();
-    defer fs_lock.unlock();
+pub fn deinit() void {
+    inline for (AutoInit.file_systems) |Fs| {
+        Fs.deinit();
+    }
+}
+
+pub fn registerFs(fs: *FileSystem) Error!void {
+    const node = &fs.node;
+    if (node.next != null or node.prev != null) return error.Busy;
+
+    fs.node.data = fs;
+
+    fs_list_lock.lock();
+    defer fs_list_lock.unlock();
 
     fs_list.append(node);
+}
 
-    return fs;
+pub fn unregisterFs(fs: *FileSystem) void {
+    {
+        fs_list_lock.lock();
+        defer fs_list_lock.unlock();
+
+        fs_list.remove(&fs.node);
+    }
+
+    fs.node.next = null;
+    fs.node.prev = null;
 }
 
 pub inline fn lookup(path: []const u8) ?*Dentry {
