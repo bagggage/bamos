@@ -111,7 +111,6 @@ const SubmissionQueue = struct {
     ptr: [*]SubmissionEntry,
     size: u16,
     tail: u16 = 0,
-    cmd_id: u16 = 0,
 
     pub fn init(buffer: []SubmissionEntry) SubmissionQueue {
         return .{
@@ -121,10 +120,7 @@ const SubmissionQueue = struct {
     }
 
     pub inline fn nextTail(self: *SubmissionQueue) *SubmissionEntry {
-        defer {
-            self.tail = (self.tail + 1) % self.size;
-            self.cmd_id +%= 1;
-        }
+        defer self.tail = (self.tail + 1) % self.size;
         return &self.ptr[self.tail];
     }
 };
@@ -184,29 +180,67 @@ const Namespace = struct {
         },
     };
 
+    const vtable = Drive.VTable{
+        .handle_io = handleIo
+    };
+
     ctrl: *Controller,
     id: u32,
 
-    pub fn init(self: *NamespaceDrive, ctrl: *Controller, nsid: u32, buffer: *[vm.page_size]u8) void {
+    pub fn init(self: *NamespaceDrive, ctrl: *Controller, nsid: u32, buffer: *[vm.page_size]u8) !void {
         self.derived = .{
             .ctrl = ctrl,
             .id = nsid,
         };
 
-        return identify(self, buffer);
+        try identify(self, buffer);
+        try self.base.initIo(true);
+
+        self.base.vtable = &vtable;
     }
 
-    fn identify(self: *NamespaceDrive, buffer: *[vm.page_size]u8) void {
+    pub fn deinit(self: *NamespaceDrive) void {
+        self.base.deinit();
+    }
+
+    pub fn handleIo(self: *Drive, request: *const Drive.IoRequest) bool {
+        const ns = &@as(*NamespaceDrive, @ptrCast(self)).derived;
+        ns.ctrl.sendIoCmd(
+            ns.id,
+            switch (request.operation) {
+                .read => .read,
+                .write => .write
+            },
+            request.id,
+            vm.getPhysLma(request.lma_buf),
+            &.{
+                @truncate(request.lba_offset),
+                @truncate(request.lba_offset >> 32),
+                request.lba_num - 1
+            },
+            true
+        );
+
+        return true;
+    }
+
+    pub inline fn completeIo(self: *NamespaceDrive, id: u16, status: Drive.IoRequest.Status) void {
+        self.base.completeIo(id, status);
+    }
+
+    fn identify(self: *NamespaceDrive, buffer: *[vm.page_size]u8) !void {
         const ns = &self.derived;
         const info: *volatile Info = @alignCast(@ptrCast(buffer));
 
-        ns.ctrl.sendAdminCmd(ns.id, .identify, vm.getPhysLma(buffer), &.{}, true);
+        const cmd_id = ns.ctrl.admin_submission.tail +% 1;
 
-        const cmd_id = ns.ctrl.admin_submission.cmd_id;
+        ns.ctrl.admin_fail = 0;
+        ns.ctrl.sendAdminCmd(ns.id, .identify, cmd_id, vm.getPhysLma(buffer), &.{}, true);
         ns.ctrl.adminInitialWait(cmd_id);
+        if (ns.ctrl.admin_fail != 0) return error.CommandsFailed;
 
-        self.base.capacity = info.capacity;
         self.base.lba_size = @as(u16, 1) << @truncate(info.lba_formats[0].data_size);
+        self.base.capacity = info.capacity * self.base.lba_size;
         var perf: u8 = info.lba_formats[0].rel_perf;
 
         for (1..info.lba_num + 1) |i| {
@@ -393,7 +427,7 @@ const Controller = struct {
     io_completion: [*]CompletionQueue = undefined,
     io_queues_rank: u8 = 0,
 
-    namespaces: utils.SList(Namespace) = .{},
+    namespaces: []*NamespaceDrive = &.{},
 
     pub fn init(self: *Controller, pci_dev: *pci.Device) !void {
         var pci_cmd = pci_dev.config.getAs(pci.config.Regs.Command, .command);
@@ -418,6 +452,12 @@ const Controller = struct {
     }
 
     pub fn deinit(self: *Controller) void {
+        for (self.namespaces) |ns| {
+            Namespace.deinit(ns);
+        }
+
+        if (self.namespaces.len > 0) vm.free(@ptrCast(self.namespaces.ptr));
+
         self.deinitIoQueues();
 
         self.disable() catch |err| log.err("NVMe deinit: cannot disable controller: {s}", .{@errorName(err)});
@@ -573,8 +613,9 @@ const Controller = struct {
         for (0..cpus_num) |i| {
             const id: u32 = @truncate(i + 1);
             const cq = &self.io_completion[i];
+            const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .create_completion_queue, @ptrCast(vm.getPhysLma(cq.ptr)), &.{
+            self.sendAdminCmd(0, .create_completion_queue, cmd_id, @ptrCast(vm.getPhysLma(cq.ptr)), &.{
                 id   | (@as(u32, cq.size - 1) << 16), // (doorbell id) | (size - 1)
                 0b11 | (@as(u32, id - 1) << 16) // (phys contiguous,intr enable) | (intr vector)
             }, false);
@@ -585,13 +626,14 @@ const Controller = struct {
         for (0..cpus_num) |i| {
             const id: u32 = @truncate(i + 1);
             const sq = &self.io_submission[i];
+            const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .create_submission_queue, @ptrCast(vm.getPhysLma(sq.ptr)), &.{
+            self.sendAdminCmd(0, .create_submission_queue, cmd_id, @ptrCast(vm.getPhysLma(sq.ptr)), &.{
                 id   | (@as(u32, sq_len - 1) << 16), // (doorbell id) | (size - 1)
                 0b01 | (@as(u32, id) << 16) // (phys contiguous) | (completion queue id)
             }, false);
         }
-        const last_cmd = self.admin_submission.cmd_id;
+        const last_cmd = self.admin_submission.tail;
         self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
 
         // Wait
@@ -607,16 +649,18 @@ const Controller = struct {
         // Delete submission queues first
         for (0..cpus_num) |i| {
             const id: u32 = @truncate(i + 1);
-            self.sendAdminCmd(0, .delete_submission_queue, null, &.{id}, false);
+            const cmd_id: u16 = self.admin_submission.tail +% 1;
+            self.sendAdminCmd(0, .delete_submission_queue, cmd_id, null, &.{id}, false);
         }
         self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
 
         // Delete completion queues than
         for (0..cpus_num) |i| {
             const id: u32 = @truncate(i + 1);
-            self.sendAdminCmd(0, .delete_completion_queue, null, &.{id}, false);
+            const cmd_id: u16 = self.admin_submission.tail +% 1;
+            self.sendAdminCmd(0, .delete_completion_queue, cmd_id, null, &.{id}, false);
         }
-        const last_cmd = self.admin_submission.cmd_id;
+        const last_cmd = self.admin_submission.tail;
         self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
 
         // Wait for complete
@@ -647,14 +691,12 @@ const Controller = struct {
         // Identify controller
         {
             const info: *volatile Info = @ptrFromInt(virt);
-            info.vendor_id = 0xFAFA;
+            const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .identify, @ptrFromInt(buffer), &.{
+            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(buffer), &.{
                 0x01 // (CNS) Controller identify
             }, true);
-
-            // Wait
-            while (info.vendor_id == 0xFAFA) {}
+            self.adminInitialWait(cmd_id);
 
             log.debug("{x}:{x}; {s}; {s}; firmware: {s}; ctrl id: {}", .{
                 info.vendor_id,info.sub_vendor_id,info.serial,info.model,
@@ -666,53 +708,84 @@ const Controller = struct {
         // Identify namespaces
         {
             const ids: [*:0]volatile u32 = @ptrFromInt(virt);
-            ids[0] = 0xFF00_AFAF; // Magic
+            const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .identify, @ptrFromInt(buffer), &.{
+            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(buffer), &.{
                 0x02 // (CNS) Namespace ID list
             }, true);
 
             // Wait
-            while (ids[0] == 0xFF00_AFAF) {}
+            self.adminInitialWait(cmd_id);
 
             const slice = ids[0..std.mem.len(@as([*:0]const u32, @volatileCast(ids)))];
+            if (slice.len == 0) return;
 
-            for (slice) |namespace| {
+            const ptr = vm.kmalloc(@sizeOf(*NamespaceDrive) * slice.len) orelse return error.NoMemory;
+
+            self.namespaces.ptr = @alignCast(@ptrCast(ptr));
+            self.namespaces.len = slice.len;
+            errdefer vm.kfree(@ptrCast(self.namespaces.ptr));
+
+            for (slice, 0..) |nsid, i| {
                 const drive = try dev.obj.new(NamespaceDrive);
                 errdefer dev.obj.delete(NamespaceDrive, drive);
 
-                Namespace.init(drive, self, namespace, @ptrFromInt(virt + vm.page_size));
+                try Namespace.init(drive, self, nsid, @ptrFromInt(virt + vm.page_size));
+                errdefer Namespace.deinit(drive);
+
                 try dev.obj.add(Drive, &drive.base);
+
+                self.namespaces[i] = drive;
             }
         }
     }
 
-    fn sendAdminCmd(self: *Controller, nsid: u32, command: Command.Admin, data: ?*anyopaque, specific: []const u32, comptime ring: bool) void {
+    fn sendAdminCmd(
+        self: *Controller, nsid: u32, command: Command.Admin,
+        id: u16, data: ?*anyopaque, specific: []const u32, comptime ring: bool
+    ) void {
         self.admin_lock.lock();
         defer self.admin_lock.unlock();
 
         const cmd = self.admin_submission.nextTail();
-        cmd.* = SubmissionEntry.init(.{ .admin = command }, self.admin_submission.cmd_id, nsid, data, specific);
+        cmd.* = SubmissionEntry.init(
+            .{ .admin = command }, id,
+            nsid, data, specific
+        );
 
         if (ring) self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
     }
 
-    fn sendIoCmd(self: *Controller, nsid: u32, command: Command.Io, data: ?*anyopaque, specific: []const u32,comptime ring: bool) void {
+    fn sendIoCmd(
+        self: *Controller, nsid: u32, command: Command.Io, id: u16,
+        data: ?*anyopaque, specific: []const u32,comptime ring: bool
+    ) void {
         const cpu_idx = smp.getIdx();
         const queue = &self.io_submission[cpu_idx];
 
         const cmd = queue.nextTail();
-        cmd.* = SubmissionEntry.init(.{ .io = command }, queue.cmd_id, nsid, data, specific);
+        cmd.* = SubmissionEntry.init(
+            .{ .io = command }, id,
+            nsid, data, specific
+        );
 
         if (ring) self.ringDoorbell(cpu_idx + 1, queue.tail, .submission_tail);
     }
 
     fn handleIoCompletion(self: *Controller, id: u16) void {
         const queue = &self.io_completion[id];
+        const sq = &self.io_submission[id];
+    
         var complete = queue.getHead();
 
         while (complete.phase_tag == queue.phase_bit) : (complete = queue.nextHead()) {
             complete.phase_tag = ~queue.phase_bit;
+
+            const sqe_idx = (complete.cmd_id % sq_len);
+            const sqe = &sq.ptr[sqe_idx];
+
+            const ns = self.namespaces[sqe.nsid - 1];
+            Namespace.completeIo(ns, complete.cmd_id, if (complete.status == 0) .success else .failed);
         }
 
         self.ringDoorbell(id + 1, queue.head, .completion_head);
