@@ -54,6 +54,8 @@ pub inline fn halt() noreturn {
 const TypeHasher = std.hash.Fnv1a_32;
 
 fn typeIdShort(comptime T: type) u32 {
+    @setEvalBranchQuota(10000);
+
     comptime var hasher = TypeHasher.init();
     const info = @typeInfo(T);
 
@@ -203,7 +205,7 @@ pub fn typeId(comptime T: type) u32 {
                 .Union => |u| {
                     var type_id = 0;
                     if (u.tag_type) |TagT| {
-                        type_id = typeIdImpl(TagT);
+                        type_id = typeIdImpl(TagT, next_lvl);
                         hasher.update(std.mem.asBytes(&type_id));
                     }
 

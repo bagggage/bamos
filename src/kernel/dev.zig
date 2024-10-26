@@ -28,7 +28,7 @@ pub const Name = struct {
 
     pub fn print(comptime fmt: []const u8, args: anytype) !Name {
         const len: u16 = @truncate(std.fmt.count(fmt, args));
-        const buffer: [*]u8 = @ptrCast(vm.kmalloc(len) orelse return error.NoMemory);
+        const buffer: [*]u8 = @ptrCast(vm.malloc(len) orelse return error.NoMemory);
 
         _ = try std.fmt.bufPrint(buffer[0..len], fmt, args);
 
@@ -47,7 +47,7 @@ pub const Name = struct {
     }
 
     pub inline fn deinit(self: *Name) void {
-        if (self.allocated) vm.kfree(self.ptr);
+        if (self.allocated) vm.free(self.ptr);
 
         self.len = 0;
     }

@@ -81,16 +81,14 @@ pub const logPt = arch.vm.logPt;
 pub const mmap = arch.vm.mmap;
 
 /// General-purpose kernel memory allocation function.
-pub const kmalloc = UniversalAllocator.alloc;
+pub const malloc = UniversalAllocator.alloc;
 /// General-purpose kernel memory deallocation function.
-pub const kfree = UniversalAllocator.free;
+pub const free = UniversalAllocator.free;
 
+/// General-purpose kernel allocation function to allocate
+/// object of the specific type.
 pub inline fn alloc(comptime T: type) ?*T {
-    return @alignCast(@ptrCast(kmalloc(@sizeOf(T))));
-}
-
-pub inline fn free(pointer: ?*anyopaque) void {
-    return kfree(pointer);
+    return @alignCast(@ptrCast(malloc(@sizeOf(T))));
 }
 
 /// Kernel high-level general purpose allocator interface.
@@ -109,18 +107,18 @@ const std_vtable = opaque {
     };
 
     fn stdAlloc(_: *anyopaque, len: usize, ptr_align: u8, _: usize) ?[*]u8 {
-        const result = kmalloc(len) orelse return null;
+        const result = malloc(len) orelse return null;
         // Check if pointer is aligned
         std.debug.assert((@intFromPtr(result) % (@as(u32, 1) << @truncate(ptr_align))) == 0);
         return @ptrCast(result);
     }
 
     fn stdFree(_: *anyopaque, buf: []u8, _: u8, _: usize) void {
-        kfree(buf.ptr);
+        free(buf.ptr);
     }
 
     fn stdResize(_: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, _: usize) bool {
-        const new_buf: [*]u8 = @ptrCast(kmalloc(new_len) orelse return false);
+        const new_buf: [*]u8 = @ptrCast(malloc(new_len) orelse return false);
         std.debug.assert((@intFromPtr(new_buf) % (@as(u32, 1 ) << @truncate(buf_align))) == 0);
 
         if (buf.len < new_len) {
@@ -129,7 +127,7 @@ const std_vtable = opaque {
             @memcpy(new_buf[0..new_len], buf[0..new_len]);
         }
 
-        kfree(buf.ptr);
+        free(buf.ptr);
         return true;
     }
 }.vtable;
@@ -221,7 +219,7 @@ pub inline fn getPhysLma(address: anytype) @TypeOf(address) {
     };
 }
 
-/// Retrieves the physical address associated with a virtual address by a specific page table.
+/// Translate the virtual address into physical address via specific page table.
 /// 
 /// - `address`: The virtual address to translate.
 /// - `pt`: The page table to use for translation.

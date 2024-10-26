@@ -112,7 +112,7 @@ pub const Irq = struct {
 
         while (node) |handler| {
             node = handler.next;
-            vm.kfree(handler);
+            vm.free(handler);
         }
 
         self.handlers = HandlerList{};
@@ -127,7 +127,7 @@ pub const Irq = struct {
 
         self.waitWhilePending();
 
-        const node: *HandlerNode = @alignCast(@ptrCast(vm.kmalloc(@sizeOf(HandlerNode)) orelse return error.NoMemory));
+        const node: *HandlerNode = @alignCast(@ptrCast(vm.malloc(@sizeOf(HandlerNode)) orelse return error.NoMemory));
 
         node.data = .{
             .device = device,
@@ -153,7 +153,7 @@ pub const Irq = struct {
         self.waitWhilePending();
 
         self.handlers.remove(handler);
-        vm.kfree(handler);
+        vm.free(handler);
     }
 
     pub fn handle(self: *Irq) bool {
@@ -265,7 +265,7 @@ pub fn init() !void {
     errdefer cpus_order.resize(0) catch unreachable;
 
     const bytes_per_bm = std.math.divCeil(comptime_int, arch.intr.avail_vectors, utils.byte_size) catch unreachable;
-    const bitmap_pool: [*]u8 = @ptrCast(vm.kmalloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
+    const bitmap_pool: [*]u8 = @ptrCast(vm.malloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
 
     for (cpus.slice(), 0..) |*cpu, i| {
         const bm_offset = i * bytes_per_bm;
@@ -288,7 +288,7 @@ pub fn deinit() void {
     cpus.resize(0) catch unreachable;
     cpus_order.resize(0) catch unreachable;
 
-    vm.kfree(pool);
+    vm.free(pool);
 
     for (irqs.constSlice()) |*irq_ent| {
         if (irq_ent.*) |irq| {

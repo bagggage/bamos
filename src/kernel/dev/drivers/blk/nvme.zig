@@ -720,11 +720,11 @@ const Controller = struct {
             const slice = ids[0..std.mem.len(@as([*:0]const u32, @volatileCast(ids)))];
             if (slice.len == 0) return;
 
-            const ptr = vm.kmalloc(@sizeOf(*NamespaceDrive) * slice.len) orelse return error.NoMemory;
+            const ptr = vm.malloc(@sizeOf(*NamespaceDrive) * slice.len) orelse return error.NoMemory;
 
             self.namespaces.ptr = @alignCast(@ptrCast(ptr));
             self.namespaces.len = slice.len;
-            errdefer vm.kfree(@ptrCast(self.namespaces.ptr));
+            errdefer vm.free(@ptrCast(self.namespaces.ptr));
 
             for (slice, 0..) |nsid, i| {
                 const drive = try dev.obj.new(NamespaceDrive);

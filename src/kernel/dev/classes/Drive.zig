@@ -83,7 +83,7 @@ pub fn initIo(self: *Self, multi_io: bool) Error!void {
 
     if (multi_io) {
         const cpus_num = smp.getNum();
-        const mem = vm.kmalloc(cpus_num * @sizeOf(IoQueue)) orelse return error.NoMemory;
+        const mem = vm.malloc(cpus_num * @sizeOf(IoQueue)) orelse return error.NoMemory;
 
         self.io = .{ .multi = @alignCast(@ptrCast(mem)) };
     } else {
@@ -95,7 +95,7 @@ pub fn initIo(self: *Self, multi_io: bool) Error!void {
 }
 
 pub fn deinit(self: *Self) void {
-    if (self.is_multi_io) vm.kfree(self.io.multi);
+    if (self.is_multi_io) vm.free(self.io.multi);
     self.io_oma.deinit();
 }
 
