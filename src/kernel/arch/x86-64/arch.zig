@@ -7,7 +7,6 @@ const std = @import("std");
 
 const boot = @import("../../boot.zig");
 const gdt = @import("gdt.zig");
-const hlvl_vm = @import("../../vm.zig");
 const lapic = @import("intr/lapic.zig");
 const log = @import("../../log.zig");
 const regs = @import("regs.zig");

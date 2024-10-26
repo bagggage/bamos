@@ -84,10 +84,15 @@ const Arena = struct {
     /// - `pool_size`: The size of the memory pool.
     /// - Returns: `true` if the address is within the arena's range, `false` otherwise.
     pub fn contains(self: *Arena, obj_addr: usize, pool_size: usize) bool {
-        const begin = vm.getVirtLma(@as(usize, self.pool_base) * vm.page_size);
+        const begin = self.getBase();
         const end = begin + pool_size;
 
         return obj_addr >= begin and obj_addr < end;
+    }
+
+    /// Returns virtual base address of the arena pool.
+    pub inline fn getBase(self: *const Arena) usize {
+        return vm.getVirtLma(@as(usize, self.pool_base) * vm.page_size);
     }
 };
 
@@ -136,7 +141,7 @@ pub fn init(comptime T: type) Self {
 /// 
 /// - `obj_size`: The size of the objects to allocate.
 /// - `capacity`: The number of the objects per arena.
-pub fn initCapacity(obj_size: usize, capacity: usize) Self {
+pub fn initCapacity(comptime obj_size: usize, comptime capacity: usize) Self {
     std.debug.assert(obj_size >= @sizeOf(FreeNode));
 
     const pages = std.math.divCeil(comptime_int, obj_size * capacity, vm.page_size) catch unreachable;
@@ -287,7 +292,7 @@ fn makeArena(phys_pool: usize) ?*ArenaNode {
 /// Allocates and initializes a new arena for the allocator.
 /// 
 /// - Returns: A pointer to the newly created `ArenaNode`, or `null` if allocation fails.
-fn newArena(self: *Self) ?*ArenaNode {
+pub fn newArena(self: *Self) ?*ArenaNode {
     const phys = vm.PageAllocator.alloc(self.arena_rank) orelse return null;
     const node = makeArena(phys) orelse {
         vm.PageAllocator.free(phys, self.arena_rank);

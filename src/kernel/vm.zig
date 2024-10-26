@@ -24,11 +24,12 @@ pub const heap_start = arch.vm.heap_start;
 
 pub const PageTable = arch.vm.PageTable;
 
-pub const PageAllocator = @import("vm/PageAllocator.zig");
-pub const ObjectAllocator = @import("vm/ObjectAllocator.zig");
 pub const BucketAllocator = @import("vm/BucketAllocator.zig");
-pub const UniversalAllocator = @import("vm/UniversalAllocator.zig");
+pub const cache = @import("vm/cache.zig");
 pub const Heap = utils.Heap;
+pub const ObjectAllocator = @import("vm/ObjectAllocator.zig");
+pub const PageAllocator = @import("vm/PageAllocator.zig");
+pub const UniversalAllocator = @import("vm/UniversalAllocator.zig");
 
 /// Thread-safe Object memory allocator wrapper.
 /// Combination of the `ObjectAllocator` and `Spinlock`.
@@ -57,6 +58,10 @@ pub fn SafeOma(comptime T: type) type {
             return .{
                 .oma = ObjectAllocator.initCapacity(@sizeOf(T), capacity)
             };
+        }
+
+        pub inline fn deinit(self: *Self) void {
+            self.oma.deinit();
         }
     };
 }
