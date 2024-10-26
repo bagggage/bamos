@@ -8,15 +8,15 @@ It is an **open-source** operating system project written in the Zig programming
 
 BamOS does not introduce new standards but strives for the **best** possible implementation of existing ones.
 
-<p align="center">
-  <img src="screenshot.png" alt="Screenshot"/>
-</p>
-
 ## Overview
 
 The main feature and goal of this project is to develop a **lightweight** and **extremely fast** operating system with a **well-documented**, **concise**, and **simple** codebase, as much as possible.
 
 It aims to include native support for multiple system ABIs between the kernel and user space (GNU/Linux, Windows NT, etc.) simultaneously. This should significantly improve the user experience and simplify the work for software developers.
+
+<p align="center">
+  <img src="screenshot.png" alt="Screenshot"/>
+</p>
 
 ## Why Zig?
 
