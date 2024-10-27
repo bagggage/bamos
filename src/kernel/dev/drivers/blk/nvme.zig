@@ -253,7 +253,7 @@ const Namespace = struct {
             perf = format.rel_perf;
         }
 
-        log.info("NVMe: drive added: size: {} mb; lba size: {}", .{self.base.capacity * self.base.lba_size / utils.mb_size, self.base.lba_size});
+        log.info("NVMe: drive added: size: {} mb; lba size: {}", .{self.base.capacity / utils.mb_size, self.base.lba_size});
     }
 
     fn readImpl(self: *NamespaceDrive, lba_offset: u32, buffer: []u8) bool {
@@ -781,7 +781,7 @@ const Controller = struct {
         while (complete.phase_tag == queue.phase_bit) : (complete = queue.nextHead()) {
             complete.phase_tag = ~queue.phase_bit;
 
-            const sqe_idx = (complete.cmd_id % sq_len);
+            const sqe_idx = queue.head % sq_len;
             const sqe = &sq.ptr[sqe_idx];
 
             const ns = self.namespaces[sqe.nsid - 1];
