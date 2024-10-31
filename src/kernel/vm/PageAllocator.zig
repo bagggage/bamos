@@ -45,7 +45,7 @@ const FreeArea = struct {
 
 const FreeNode = FreeArea.List_t.Node;
 
-const max_areas = 13;
+const max_areas = 14;
 
 pub const max_rank = max_areas;
 pub const max_alloc_pages = 1 << (max_rank - 1);
@@ -114,9 +114,7 @@ pub fn alloc(rank: u32) ?usize {
             }
         }
 
-        const entry = free_entry orelse {
-            return null;
-        };
+        const entry = free_entry orelse return null;
 
         var temp_pages: u32 = @as(u32, 1) << @truncate((temp_rank - 1));
         var temp_base: u32 = entGetBase(entry);
@@ -231,6 +229,7 @@ fn initAreas(bitmap_base: usize, bitmap_size: u32) void {
     var curr_bitmap_base = bitmap_base;
     var curr_bitmap_size = bitmap_size / 2;
 
+    // Initialize bitmaps
     for (0..max_areas) |i| {
         const bits: [*]u8 = @ptrFromInt(curr_bitmap_base);
         free_areas[i].bitmap = utils.Bitmap.init(bits[0..curr_bitmap_size], true);
@@ -239,6 +238,7 @@ fn initAreas(bitmap_base: usize, bitmap_size: u32) void {
         curr_bitmap_size = @max((curr_bitmap_size >> 1) + (curr_bitmap_size & 1), 1);
     }
 
+    // Fill free lists
     for (mem_map.entries[0..mem_map.len]) |*entry| {
         if (entry.type != .free) continue;
 

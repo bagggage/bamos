@@ -48,7 +48,7 @@ pub fn reserve(self: *Self, pages: u32) usize {
 
         if (suitable_range) |range| {
             result = range.data.base;
-            self.remove_range(range, pages);
+            self.removeRange(range, pages);
         }
     }
 
@@ -118,7 +118,7 @@ pub fn release(self: *Self, base: usize, pages: u32) void {
     }
 }
 
-inline fn remove_range(self: *Self, node: *List_t.Node, pages: u32) void {
+inline fn removeRange(self: *Self, node: *List_t.Node, pages: u32) void {
     if (node.data.pages > pages) {
         node.data.base += pages * vm.page_size;
         node.data.pages -= pages;
