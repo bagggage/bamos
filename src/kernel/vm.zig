@@ -158,6 +158,7 @@ var root_pt: *PageTable = undefined;
 
 /// The kernel heap used for allocation virtual address ranges.
 var heap = Heap.init(heap_start);
+var heap_lock = utils.Spinlock.init(.unlocked);
 
 /// Initializes the virtual memory management system. Must be called only once.
 /// 
@@ -264,7 +265,12 @@ pub inline fn getPhys(address: anytype) ?@TypeOf(address) {
 pub inline fn mmio(phys: usize, pages: u32) Error!usize {
     std.debug.assert(pages > 0);
 
-    const virt = heap.reserve(pages);
+    const virt = blk: {
+        heap_lock.lock();
+        defer heap_lock.unlock();
+
+        break :blk heap.reserve(pages);
+    };
 
     try mmap(
         virt, phys, pages,
@@ -281,6 +287,9 @@ pub inline fn mmio(phys: usize, pages: u32) Error!usize {
 /// - `pages`: The number of pages, must be the same as in `mmio` call.
 pub inline fn unmmio(virt: usize, pages: u32) void {
     std.debug.assert(virt >= heap_start and pages > 0);
+
+    heap_lock.lock();
+    defer heap_lock.unlock();
 
     heap.release(virt, pages);
 
@@ -301,4 +310,26 @@ pub inline fn newPt() ?*PageTable {
 
 pub inline fn getRootPt() *PageTable {
     return root_pt;
+}
+
+/// Reserve virtual addresses region on kernel heap.
+/// 
+/// - `pages`: The number of pages to reserve.
+/// - Returns: A base virtual address of the region.
+pub inline fn heapReserve(pages: u32) usize {
+    heap_lock.lock();
+    defer heap_lock.unlock();
+
+    return heap.reserve(pages);
+}
+
+/// Release virtual addresses region on kernel heap.
+/// 
+/// - `base`: A base virtual address of the region.
+/// - `pages`: The number of pages related to region.
+pub inline fn heapRelease(base: usize, pages: u32) void {
+    heap_lock.lock();
+    defer heap_lock.unlock();
+
+    heap.release(base, pages);
 }
