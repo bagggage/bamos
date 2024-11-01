@@ -1,4 +1,6 @@
-//! PCI Bus builtin driver
+//! # PCI Bus builtin driver
+
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 

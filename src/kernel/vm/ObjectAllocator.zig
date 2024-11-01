@@ -10,6 +10,8 @@
 //! 
 //! Best choise for allocating objects of the same size.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const boot = @import("../boot.zig");

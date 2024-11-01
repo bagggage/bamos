@@ -4,6 +4,8 @@
 //! including exceptions, informational messages, warnings, and errors.
 //! Manages thread-safe text output with color formatting.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 const builtin = @import("builtin");
 

@@ -1,5 +1,7 @@
 //! # Device objects subsystem
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const vm = @import("../vm.zig");

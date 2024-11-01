@@ -5,6 +5,8 @@
 //! from concurrent access by multiple threads in a multiprocessor environment.
 //! It "spins" in a loop, repeatedly checking if the lock is available.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 const atomic = std.atomic;
 const AtomicOrder = std.builtin.AtomicOrder;

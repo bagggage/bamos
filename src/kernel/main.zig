@@ -1,3 +1,7 @@
+//! # Kernel entry point
+
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const arch = utils.arch;

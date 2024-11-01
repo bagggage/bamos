@@ -1,4 +1,6 @@
-//! PCI Interrupts API
+//! # PCI Interrupts API
+
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 

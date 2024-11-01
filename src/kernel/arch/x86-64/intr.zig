@@ -1,3 +1,7 @@
+//! # Interrupts subsystem low-level implementation
+
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const apic = @import("intr/apic.zig");

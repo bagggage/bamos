@@ -3,6 +3,8 @@
 //! This module handles the initialization and management of the x86-64 CPU,
 //! Setup of control registers, enabling specific CPU features.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const boot = @import("../../boot.zig");

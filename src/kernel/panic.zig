@@ -1,6 +1,8 @@
 //! # Panic
 //! Includes handling kernel panics and tracing stack frame.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 const builtin = @import("builtin");
 const dbg = @import("dbg-info");

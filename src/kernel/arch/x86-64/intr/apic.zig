@@ -1,5 +1,7 @@
 //! # APIC Driver
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const acpi = dev.acpi;

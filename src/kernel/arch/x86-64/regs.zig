@@ -3,6 +3,8 @@
 //! Provides access to various x86-64 CPU registers, Global/Interrupt Descriptor Tables (GDT/IDT). 
 //! It includes functions for reading/writing MSRs and saving/restoring CPU state.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 // Model-Specific Register (MSR) addresses.

@@ -35,6 +35,8 @@
 //! convertion from physical to virtual address and back. A binary tree is used to manage allocations
 //! and store the number of allocated pages for future deallocation.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const log = @import("../log.zig");

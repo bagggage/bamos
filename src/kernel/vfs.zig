@@ -1,5 +1,7 @@
 //! # Virtual file system
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 pub const devfs = @import("vfs/devfs.zig");
 
 const std = @import("std");

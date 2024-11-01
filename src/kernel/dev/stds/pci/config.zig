@@ -1,4 +1,6 @@
-//! ## PCI Configuration space access mechanisms
+//! # PCI Configuration space access mechanisms
+
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");

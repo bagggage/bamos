@@ -4,6 +4,8 @@
 //! including memory mapping, framebuffer setup, and providing
 //! information from the bootloader to the kernel.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const c = @cImport({
     @cInclude("stdint.h");
     @cInclude("bootboot.h");

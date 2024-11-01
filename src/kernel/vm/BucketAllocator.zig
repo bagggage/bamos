@@ -6,6 +6,8 @@
 //! This allocator is suitable for scenarios where objects of the same size are frequently allocated and freed,
 //! offering low fragmentation and quick allocations.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const log = @import("../log.zig");

@@ -4,6 +4,8 @@
 //! It includes various memory allocators, page table management, and memory mapping
 //! utilities.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const arch = @import("utils.zig").arch;

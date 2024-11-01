@@ -2,6 +2,8 @@
 //! 
 //! - Specification: NVM Express Base Specification, Revision 2.1
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const dev = @import("../../../dev.zig");
