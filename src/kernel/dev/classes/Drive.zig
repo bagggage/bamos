@@ -5,15 +5,17 @@
 const std = @import("std");
 
 const cache = vm.cache;
+const dev = @import("../../dev.zig");
 const log = @import("../../log.zig");
 const smp = @import("../../smp.zig");
 const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");
+const vfs = @import("../../vfs.zig");
 
 const Self = @This();
 
 const IoQueue = utils.SList(IoRequest);
-const Oma = vm.SafeOma(IoQueue.Node);
+const IoOma = vm.SafeOma(IoQueue.Node);
 
 const io_oma_capacity = 198;
 
@@ -65,16 +67,20 @@ const Io = union {
     single: SingleIo,
 };
 
+base_name: []const u8,
+
 lba_size: u16,
 capacity: usize,
 
 io_id: u16 = 0,
 is_multi_io: bool = false,
+is_partitionable: bool = false,
 
 io: Io = undefined,
-io_oma: Oma = undefined,
+io_oma: IoOma = undefined,
 
 cache_ctrl: *cache.ControlBlock = undefined,
+parts: vfs.parts.List = .{},
 
 vtable: *const VTable,
 
@@ -83,7 +89,10 @@ fn checkIo(self: *const Self, lba_offset: usize, buffer: []const u8) void {
     std.debug.assert((lba_offset * self.lba_size) + buffer.len <= self.capacity);
 }
 
-pub fn init(self: *Self, multi_io: bool) Error!void {
+pub fn init(self: *Self, name: []const u8, multi_io: bool, partitions: bool) Error!void {
+    const root_part = try vfs.parts.new();
+    errdefer vfs.parts.delete(root_part);
+
     self.cache_ctrl = try cache.newCtrl();
     errdefer cache.deleteCtrl(self.cache_ctrl);
 
@@ -98,8 +107,27 @@ pub fn init(self: *Self, multi_io: bool) Error!void {
         self.io = .{ .single = .{} };
     }
 
-    self.io_oma = Oma.init(io_oma_capacity);
+    self.base_name = name;
+    self.io_oma = IoOma.init(io_oma_capacity);
     self.io_id = 0;
+
+    log.info("Drive: {s}; lba size: {}; capacity: {} MiB", .{
+        self.base_name, self.lba_size, self.capacity / utils.mb_size
+    });
+
+    {
+        root_part.data.lba_start = 0;
+        root_part.data.lba_end = self.capacity / self.lba_size;
+
+        self.parts = .{};
+        self.parts.append(root_part);
+        self.is_partitionable = partitions;
+
+        if (self.is_partitionable) vfs.parts.probe(self) catch |err| {
+            log.err("Failed to probe partitions: {s}", .{@errorName(err)});
+            self.is_partitionable = false;
+        };
+    }
 }
 
 pub fn deinit(self: *Self) void {
@@ -153,27 +181,16 @@ pub fn completeIo(self: *Self, id: u16, status: IoRequest.Status) void {
     }
 }
 
-pub fn readBlock(self: *Self, offset: usize) Error!*cache.Block {
+pub inline fn readCachedNext(self: *Self, block: *cache.Block, offset: usize) Error!*cache.Block {
     const blk_idx: u32 = @truncate(offset / cache.block_size);
+    if (block.key == blk_idx) return block;
 
-    if (self.cache_ctrl.get(blk_idx)) |block| return block;
+    return self.readBlock(blk_idx);
+}
 
-    const block = self.cache_ctrl.new(blk_idx) orelse return error.NoMemory;
-    const lba_idx = blk_idx * (cache.block_size / self.lba_size);
-
-    const rq_node = try self.makeRequest(.read, lba_idx, block.asSlice(), syncCallback);
-    const wait_id = ~rq_node.data.id;
-    const id_ptr: *volatile u16 = &rq_node.data.id;
-
-    _ = self.submitRequest(rq_node);
-
-    // Wait; FIXME: make this async!
-    while (id_ptr.* != wait_id) {}
-
-    const status: IoRequest.Status = @enumFromInt(rq_node.data.lba_num);
-    if (status == .failed) return error.IoFailed;
-
-    return block;
+pub inline fn readCached(self: *Self, offset: usize) Error!*cache.Block {
+    const blk_idx: u32 = @truncate(offset / cache.block_size);
+    return self.readBlock(blk_idx);
 }
 
 pub fn readAsync(self: *Self, lba_offset: usize, buffer: []u8, callback: IoRequest.CallbackFn) Error!void {
@@ -191,6 +208,27 @@ fn syncCallback(request: *const IoRequest, status: IoRequest.Status) void {
 
     rq.lba_num = @intFromEnum(status);
     rq.id = ~request.id;
+}
+
+fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
+    if (self.cache_ctrl.get(idx)) |block| return block;
+
+    const block = self.cache_ctrl.new(idx) orelse return error.NoMemory;
+    const lba_idx = idx * (cache.block_size / self.lba_size);
+
+    const rq_node = try self.makeRequest(.read, lba_idx, block.asSlice(), syncCallback);
+    const wait_id = ~rq_node.data.id;
+    const id_ptr: *volatile u16 = &rq_node.data.id;
+
+    _ = self.submitRequest(rq_node);
+
+    // Wait; FIXME: make this async!
+    while (id_ptr.* != wait_id) {}
+
+    const status: IoRequest.Status = @enumFromInt(rq_node.data.lba_num);
+    if (status == .failed) return error.IoFailed;
+
+    return block;
 }
 
 inline fn makeRequest(

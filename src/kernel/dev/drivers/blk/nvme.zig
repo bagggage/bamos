@@ -195,11 +195,10 @@ const Namespace = struct {
             .ctrl = ctrl,
             .id = nsid,
         };
+        self.base.vtable = &vtable;
 
         try identify(self, buffer);
-        try self.base.init(true);
-
-        self.base.vtable = &vtable;
+        try self.base.init("nvme", true, true);
     }
 
     pub fn deinit(self: *NamespaceDrive) void {
@@ -270,21 +269,10 @@ const Namespace = struct {
         ns.ctrl.adminInitialWait(cmd_id);
         if (ns.ctrl.admin_fail != 0) return error.CommandsFailed;
 
-        self.base.lba_size = @as(u16, 1) << @truncate(info.lba_formats[0].data_size);
+        const lba_idx = (info.lba_size & 0xF) | ((info.lba_size >> 1) & 0x70);
+
+        self.base.lba_size = @as(u16, 1) << @truncate(info.lba_formats[lba_idx].data_size);
         self.base.capacity = info.capacity * self.base.lba_size;
-        var perf: u8 = info.lba_formats[0].rel_perf;
-
-        for (1..info.lba_num + 1) |i| {
-            const format = info.lba_formats[i];
-
-            if (format.data_size == 0) break;
-            if (format.rel_perf >= perf) continue;
-
-            self.base.lba_size = @as(u16, 1) << @truncate(format.data_size);
-            perf = format.rel_perf;
-        }
-
-        log.info("NVMe: drive added: size: {} mb; lba size: {}", .{self.base.capacity / utils.mb_size, self.base.lba_size});
     }
 };
 
@@ -741,12 +729,12 @@ const Controller = struct {
                 const drive = try dev.obj.new(NamespaceDrive);
                 errdefer dev.obj.delete(NamespaceDrive, drive);
 
+                self.namespaces[i] = drive;
+
                 try Namespace.init(drive, self, nsid, @ptrFromInt(virt + vm.page_size));
                 errdefer Namespace.deinit(drive);
 
                 try dev.obj.add(Drive, &drive.base);
-
-                self.namespaces[i] = drive;
             }
         }
     }

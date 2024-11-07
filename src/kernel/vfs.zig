@@ -16,6 +16,10 @@ const fs_oma_capacity = 32;
 
 const hashFn = std.hash.Fnv1a_32.hash;
 
+pub const parts = @import("vfs/parts.zig");
+pub const Drive = dev.classes.Drive;
+pub const Partition = parts.Partition;
+
 pub const Error = error {
     Busy,
     NoMemory
