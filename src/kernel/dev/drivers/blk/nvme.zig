@@ -61,8 +61,8 @@ const SubmissionEntry = packed struct {
 
     meta_ptr: u64 = 0,
 
-    prp_entry1: u64,
-    prp_entry2: u64 = 0,
+    prp1: u64,
+    prp2: u64 = 0,
 
     cmd_dword10: u32 = 0,
     cmd_dword11: u32 = 0,
@@ -71,12 +71,13 @@ const SubmissionEntry = packed struct {
     cmd_dword14: u32 = 0,
     cmd_dword15: u32 = 0,
 
-    pub fn init(opcode: Opcode, id: u16, nsid: u32, data: ?*anyopaque, specific: []const u32) SubmissionEntry {
+    pub fn init(opcode: Opcode, id: u16, nsid: u32, prp1: u64, prp2: u64, specific: []const u32) SubmissionEntry {
         var result = SubmissionEntry{
             .opcode = opcode,
             .cmd_id = id,
             .nsid = nsid,
-            .prp_entry1 = if (data) |raw| @intFromPtr(raw) else 0
+            .prp1 = prp1,
+            .prp2 = prp2
         };
 
         const ptr: [*]u32 = @ptrCast(&result.cmd_dword10);
@@ -196,7 +197,7 @@ const Namespace = struct {
         };
 
         try identify(self, buffer);
-        try self.base.initIo(true);
+        try self.base.init(true);
 
         self.base.vtable = &vtable;
     }
@@ -207,6 +208,29 @@ const Namespace = struct {
 
     pub fn handleIo(self: *Drive, request: *const Drive.IoRequest) bool {
         const ns = &@as(*NamespaceDrive, @ptrCast(self)).derived;
+        const pages = request.lba_num / (vm.page_size / self.lba_size);
+        const prp1 = @intFromPtr(vm.getPhysLma(request.lma_buf));
+        const prp2: usize = switch (pages) {
+            0 => 0,
+            1 => prp1 + vm.page_size,
+            else => blk: {
+                // PRP List - the worst case
+                // Dirty and slow....
+                // FIXME!
+
+                const phys = vm.PageAllocator.alloc(0) orelse return false;
+                const list: [*]u64 = @ptrFromInt(vm.getVirtLma(phys));
+                var offset: u32 = vm.page_size;
+
+                for (0..pages - 1) |i| {
+                    list[i] = prp1 + offset;
+                    offset += vm.page_size;
+                }
+
+                break :blk phys;
+            }
+        }; 
+
         ns.ctrl.sendIoCmd(
             ns.id,
             switch (request.operation) {
@@ -214,11 +238,12 @@ const Namespace = struct {
                 .write => .write
             },
             request.id,
-            vm.getPhysLma(request.lma_buf),
+            prp1,
+            prp2,
             &.{
                 @truncate(request.lba_offset),
                 @truncate(request.lba_offset >> 32),
-                request.lba_num - 1
+                request.lba_num - 1,
             },
             true
         );
@@ -226,8 +251,12 @@ const Namespace = struct {
         return true;
     }
 
-    pub inline fn completeIo(self: *NamespaceDrive, id: u16, status: Drive.IoRequest.Status) void {
-        self.base.completeIo(id, status);
+    pub fn completeIo(self: *NamespaceDrive, cqe: *const CompletionEntry, sqe: *const SubmissionEntry) void {
+        if (sqe.prp2 != 0 and sqe.prp2 != (sqe.prp1 + vm.page_size)) {
+            vm.PageAllocator.free(sqe.prp2, 0);
+        }
+
+        self.base.completeIo(cqe.cmd_id, if (cqe.status == 0) .success else .failed);
     }
 
     fn identify(self: *NamespaceDrive, buffer: *[vm.page_size]u8) !void {
@@ -256,26 +285,6 @@ const Namespace = struct {
         }
 
         log.info("NVMe: drive added: size: {} mb; lba size: {}", .{self.base.capacity / utils.mb_size, self.base.lba_size});
-    }
-
-    fn readImpl(self: *NamespaceDrive, lba_offset: u32, buffer: []u8) bool {
-        self.derived.ctrl.sendIoCmd(
-            self.derived.id, .read,
-            vm.getPhys(buffer.ptr) orelse unreachable, &.{
-            lba_offset
-        }, true);
-
-        return true;
-    }
-
-    fn writeImpl(self: *NamespaceDrive, lba_offset: u32, buffer: []u8) bool {
-        self.derived.ctrl.sendIoCmd(
-            self.derived.id, .write,
-            vm.getPhys(buffer.ptr) orelse unreachable, &.{
-            lba_offset
-        }, true);
-
-        return true;
     }
 };
 
@@ -749,10 +758,11 @@ const Controller = struct {
         self.admin_lock.lock();
         defer self.admin_lock.unlock();
 
+        const prp1: usize = if (data) |ptr| @intFromPtr(ptr) else 0;
         const cmd = self.admin_submission.nextTail();
         cmd.* = SubmissionEntry.init(
             .{ .admin = command }, id,
-            nsid, data, specific
+            nsid, prp1, 0, specific
         );
 
         if (ring) self.ringDoorbell(0, self.admin_submission.tail, .submission_tail);
@@ -760,7 +770,7 @@ const Controller = struct {
 
     fn sendIoCmd(
         self: *Controller, nsid: u32, command: Command.Io, id: u16,
-        data: ?*anyopaque, specific: []const u32,comptime ring: bool
+        prp1: usize, prp2: usize, specific: []const u32,comptime ring: bool
     ) void {
         const cpu_idx = smp.getIdx();
         const queue = &self.io_submission[cpu_idx];
@@ -768,7 +778,7 @@ const Controller = struct {
         const cmd = queue.nextTail();
         cmd.* = SubmissionEntry.init(
             .{ .io = command }, id,
-            nsid, data, specific
+            nsid, prp1, prp2, specific
         );
 
         if (ring) self.ringDoorbell(cpu_idx + 1, queue.tail, .submission_tail);
@@ -787,7 +797,7 @@ const Controller = struct {
             const sqe = &sq.ptr[sqe_idx];
 
             const ns = self.namespaces[sqe.nsid - 1];
-            Namespace.completeIo(ns, complete.cmd_id, if (complete.status == 0) .success else .failed);
+            Namespace.completeIo(ns, @volatileCast(complete), sqe);
         }
 
         self.ringDoorbell(id + 1, queue.head, .completion_head);
