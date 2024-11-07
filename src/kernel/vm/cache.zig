@@ -44,6 +44,11 @@ pub const Block = packed struct {
         return @as([*]u8, @ptrFromInt(self.getVirtBase()))[inner_offset..block_size];
     }
 
+    pub inline fn asObject(self: Block, comptime T: type, offset: usize) *T {
+        const inner_offset = offset % block_size;
+        return @as(*T, @ptrFromInt(self.getVirtBase() + inner_offset));
+    }
+
     pub inline fn isLocked(self: Block) bool {
         return self.flags.locked != 0;
     }
@@ -94,7 +99,7 @@ pub const ControlBlock = struct {
             break :blk self.hash_table.get(key) orelse return null;
         };
 
-        if (node.data.lock()) self.untrack(&node.data);
+        //if (node.data.lock()) self.untrack(&node.data);
 
         return &node.data;
     }
@@ -103,7 +108,12 @@ pub const ControlBlock = struct {
         const block = self.allocBlock() orelse return null;
         block.data.data.key = key;
 
-        self.hash_table.add(&block.data);
+        {
+            self.hash_lock.lock();
+            defer self.hash_lock.unlock();
+
+            self.hash_table.add(&block.data);
+        }
 
         return &block.data.data;
     }
@@ -170,7 +180,7 @@ pub const ControlBlock = struct {
 
 /// Specific page-cache hash table
 const HashTable = struct {
-    pub const Node = packed struct {
+    pub const Node = extern struct {
         data: Block,
         next: ?*Node = null,
         prev: ?*Node = null,
@@ -260,6 +270,8 @@ const HashTable = struct {
 
         self.buckets.ptr = @ptrFromInt(virt);
         self.buckets.len = (initial_pages * vm.page_size) / @sizeOf(Bucket);
+
+        @memset(self.buckets, Bucket{});
     }
 
     pub fn deinit(self: *HashTable) void {

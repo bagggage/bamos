@@ -35,7 +35,7 @@ pub fn reserve(self: *Self, pages: u32) usize {
     var result: usize = undefined;
     var suitable_range: ?*List_t.Node = null;
 
-    if (self.free_list.first) {
+    if (self.free_list.first != null) {
         var curr_range = self.free_list.first;
 
         while (curr_range) |range| : (curr_range = range.next) {

@@ -17,8 +17,8 @@ pub const intr = @import("dev/intr.zig");
 pub const pci = @import("dev/stds/pci.zig");
 
 pub const Name = struct {
-    ptr: [*]const u8,
-    len: u16,
+    ptr: [*]const u8 = undefined,
+    len: u16 = 0,
 
     allocated: bool = false,
 
@@ -49,7 +49,7 @@ pub const Name = struct {
     }
 
     pub inline fn deinit(self: *Name) void {
-        if (self.allocated) vm.free(self.ptr);
+        if (self.allocated) vm.free(@constCast(self.ptr));
 
         self.len = 0;
     }
@@ -201,7 +201,7 @@ pub const Bus = struct {
 };
 
 pub const Device = struct {
-    name: Name,
+    name: Name = .{},
     bus: *Bus,
 
     driver: ?*const Driver,
