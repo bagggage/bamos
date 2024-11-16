@@ -15,11 +15,15 @@ pub const arch = switch (builtin.cpu.arch) {
 pub const AnyData = struct {
     ptr: ?*anyopaque = null,
 
+    pub inline fn from(ptr: *anyopaque) AnyData {
+        return .{ .ptr = ptr };
+    }
+
     pub inline fn set(self: *AnyData, ptr: ?*anyopaque) void {
         self.ptr = ptr;
     }
 
-    pub inline fn as(self: *const AnyData, comptime T: type) ?*T {
+    pub inline fn as(self: AnyData, comptime T: type) ?*T {
         return if (self.ptr) |val| @as(*T, @ptrCast(@alignCast(val))) else null;
     }
 };
@@ -137,7 +141,7 @@ fn typeIdShort(comptime T: type) u32 {
     return hasher.final();
 }
 
-pub fn typeId(comptime T: type) u32 {
+fn _typeId(comptime T: type) u32 {
     return comptime opaque {
         pub fn typeIdImpl(comptime Type: type, comptime level: comptime_int) u32 {
             if (level > 2) return typeIdShort(Type);
@@ -246,4 +250,13 @@ pub fn typeId(comptime T: type) u32 {
             return comptime hasher.final();
         }
     }.typeIdImpl(T, 0);
-} 
+}
+
+pub fn typeId(comptime T: type) u32 {
+    const name = comptime @typeName(T);
+
+    comptime var hasher = TypeHasher.init();
+    hasher.update(name);
+
+    return hasher.final();
+}

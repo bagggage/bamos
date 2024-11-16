@@ -9,7 +9,7 @@ const log = @import("../log.zig");
 const utils = @import("../utils.zig");
 
 const List = utils.List(u8);
-const HashMap = std.AutoHashMapUnmanaged(u32, List);
+const HashMap = std.AutoHashMapUnmanaged(u32, ObjectsList);
 
 comptime {
     std.debug.assert(@offsetOf(List.Node, "data") == (@sizeOf(usize) * 2));
@@ -40,6 +40,7 @@ fn checkType(comptime T: type) void {
     if (@typeInfo(T) != .Struct) @compileError("Object type must be a user-defined struct; found: '"++@typeName(T)++"'");
 }
 
+/// @export
 pub fn new(comptime T: type) Error!*T {
     checkType(T);
 
@@ -49,6 +50,7 @@ pub fn new(comptime T: type) Error!*T {
     return &(vm.alloc(Node) orelse return error.NoMemory).data;
 }
 
+/// @export
 pub fn delete(comptime T: type, object: *T) void {
     const Node = utils.List(T).Node;
     const node: *Node = @fieldParentPtr("data", object);
@@ -56,26 +58,15 @@ pub fn delete(comptime T: type, object: *T) void {
     vm.free(node);
 }
 
-fn addByTypeId(id: u32, node: *List.Node) Error!void {
-    map_lock.lock();
-    defer map_lock.unlock();
-
-    const entry = hash_map.getOrPutValue(vm.std_allocator, id, List{}) catch {
-        return error.NoMemory;
-    };
-
-    entry.value_ptr.append(@ptrCast(node));
-}
-
 pub inline fn add(comptime T: type, object: *T) Error!void {
     checkType(T);
     const id = comptime utils.typeId(T);
     const node: *utils.List(T).Node = @fieldParentPtr("data", object);
 
-    return addByTypeId(id, @ptrCast(node));
+    if (!addByTypeId(id, @ptrCast(node))) return error.NoMemory;
 }
 
-pub fn remove(object: anytype) void {
+pub inline fn remove(object: anytype) void {
     const Ptr = @TypeOf(object);
     const T = switch (@typeInfo(Ptr)) {
         .Pointer => |ptr| ptr.child,
@@ -86,37 +77,75 @@ pub fn remove(object: anytype) void {
     const node: *Node = @fieldParentPtr("data", object);
 
     const id = comptime utils.typeId(T);
+    const result = removeByTypeId(node, id);
 
-    {
+    std.debug.assert(result == true);
+}
+
+pub inline fn getObjects(comptime T: type) ?*utils.List(T) {
+    checkType(T);
+    const id = comptime utils.typeId(T);
+
+    return @alignCast(@ptrCast(getObjectsByTypeId(id) orelse return null));
+}
+
+pub export fn putObjects(list: *anyopaque) void {
+    const list_raw: *List = @alignCast(@ptrCast(list));
+    const objects: *ObjectsList = @fieldParentPtr("list", list_raw);
+
+    objects.lock.unlock();
+}
+
+export fn removeByTypeId(id: u32, node: *anyopaque) bool {
+    const obj_list = blk: {
         map_lock.lock();
         defer map_lock.unlock();
 
-        const list = hash_map.getPtr(id) orelse unreachable;
+        break :blk (hash_map.getPtr(id) orelse return false);
+    };
 
-        if (list.len == 1) {
-            const result = hash_map.remove(id);
-            std.debug.assert(result == true);
-        }
-        else {
-            list.remove(@ptrCast(node));
-        }
+    obj_list.lock.lock();
+    defer obj_list.lock.unlock();
+
+    if (obj_list.list.len == 1) {
+        map_lock.lock();
+        defer map_lock.unlock();
+            
+        return hash_map.remove(id);
+    }
+    else {
+        obj_list.list.remove(@alignCast(@ptrCast(node)));
     }
 
     vm.free(node);
+    return true;
 }
 
-pub fn getObjects(comptime T: type) ?*utils.List(T) {
-    checkType(T);
+export fn addByTypeId(id: u32, node: *anyopaque) bool {
+    const entry = blk: {
+        map_lock.lock();
+        defer map_lock.unlock();
 
-    map_lock.lock();
-    defer map_lock.unlock();
+        break :blk hash_map.getOrPutValue(vm.std_allocator, id, ObjectsList{}) catch {
+            return false;
+        };
+    };
 
-    const id = comptime utils.typeId(T);
+    entry.value_ptr.lock.lock();
+    defer entry.value_ptr.lock.unlock();
 
-    return @ptrCast(hash_map.getPtr(id) orelse return null);
+    entry.value_ptr.list.append(@alignCast(@ptrCast(node)));
+    return true;
 }
 
-pub fn releaseObjects(comptime T: type, list: *utils.List(T)) void {
-    const objects: *ObjectsList = @fieldParentPtr("list", list);
-    objects.lock.unlock();
+export fn getObjectsByTypeId(id: u32) ?*anyopaque {
+    const objects = blk: {
+        map_lock.lock();
+        defer map_lock.unlock();
+
+        break :blk hash_map.getPtr(id) orelse return null;
+    };
+
+    objects.lock.lock();
+    return &objects.list;
 }
