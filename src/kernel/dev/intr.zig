@@ -187,7 +187,7 @@ pub const Irq = struct {
 };
 
 pub const Msi = struct {
-    pub const Message = struct {
+    pub const Message = extern struct {
         address: usize,
         data: u32
     };
@@ -204,6 +204,7 @@ pub const Vector = struct {
     vec: u16,
 };
 
+/// @noexport
 const Cpu = struct {
     bitmap: utils.Bitmap = .{},
     allocated: u16 = 0,
@@ -238,12 +239,16 @@ const Cpu = struct {
 
 pub const max_intr = 128;
 
+/// @noexport
 const max_cpus = 128;
 
+/// @noexport
 const OrderArray = std.BoundedArray(*Cpu, max_cpus);
+/// @noexport
 const CpuArray = std.BoundedArray(Cpu, max_cpus);
-
+/// @noexport
 const IrqArray = std.BoundedArray(Irq, max_intr);
+/// @noexport
 const MsiArray = std.BoundedArray(Msi, max_intr);
 
 var cpus_order = OrderArray.init(0) catch unreachable;
@@ -300,55 +305,22 @@ pub fn deinit() void {
     }
 }
 
-pub fn requestIrq(pin: u8, device: *dev.Device, handler: Handler.Fn, tigger_mode: TriggerMode, shared: bool) Error!void {
-    const irq = &irqs.buffer[pin];
-
-    if (irq.in_use) {
-        if (!shared or irq.trigger_mode != tigger_mode) return Error.IntrBusy;
-    } else {
-        const vector = allocVector(null) orelse return Error.NoVector;
-        irq.* = Irq.init(pin, vector, tigger_mode, shared);
-
-        chip.bindIrq(irq);
-    }
-
-    try irq.addHandler(handler, device);
+pub inline fn requestIrq(pin: u8, device: *dev.Device, handler: Handler.Fn, tigger_mode: TriggerMode, shared: bool) Error!void {
+    const result = requestIrqEx(pin, device, handler, @intFromEnum(tigger_mode), shared);
+    if (result < 0) return utils.intToErr(Error, result);
 }
 
-pub fn releaseIrq(pin: u8, device: *const dev.Device) void {
+pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
     const irq = &irqs.buffer[pin];
 
     irq.removeHandler(device);
 
     if (irq.handlers.len > 0) return;
 
-    irqs.buffer[pin] = null;
+    irq.in_use = false;
 
     chip.unbindIrq(irq);
     freeVector(irq.vector);
-}
-
-pub fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
-    std.debug.assert(vec_base < arch.intr.max_vectors and num > 0);
-    std.debug.assert(vec_base + num <= arch.intr.max_vectors);
-
-    cpus_lock.lock();
-    defer cpus_lock.unlock();
-
-    const raw_base = vec_base - arch.intr.reserved_vectors;
-    const cpu = &cpus.buffer[cpu_idx];
-
-    for (0..num) |i| {
-        const vec = raw_base + i;
-
-        std.debug.assert(cpu.bitmap.get(vec) == 0);
-
-        cpu.bitmap.set(vec);
-    }
-
-    cpu.allocated += num;
-
-    reorderCpus(cpu_idx, .forward);
 }
 
 pub fn handleIrq(pin: u8) void {
@@ -368,34 +340,12 @@ pub fn handleMsi(idx: u8) void {
     chip.eoi();
 }
 
-pub fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: TriggerMode) Error!u8 {
-    msis_lock.lock();
-    defer msis_lock.unlock();
-
-    if (msis_used == max_intr) return Error.NoMemory;
-
-    var idx = @intFromPtr(handler) % msis.len;
-    while (msis.buffer[idx].in_use) {
-        idx = (idx +% 1) % msis.len;
-    }
-
-    const msi = &msis.buffer[idx];
-    const vec = allocVector(null) orelse return Error.NoVector;
-
-    msi.* = .{
-        .message = undefined,
-        .in_use = true,
-        .vector = vec,
-        .handler = .{ .func = handler, .device = device },
-    };
-
-    chip.configMsi(msi, @truncate(idx), trigger_mode);
-    msis_used += 1;
-
-    return @truncate(idx);
+pub inline fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: TriggerMode) Error!u8 {
+    const result = requestMsiEx(device, handler, @intFromEnum(trigger_mode));
+    return if (result < 0) utils.intToErr(Error, result) else @intCast(result);
 }
 
-pub fn releaseMsi(idx: u8) void {
+pub export fn releaseMsi(idx: u8) void {
     msis_lock.lock();
     defer msis_lock.unlock();
 
@@ -409,7 +359,7 @@ pub fn releaseMsi(idx: u8) void {
     msis_used -= 1;
 }
 
-pub fn getMsiMessage(idx: u8) Msi.Message {
+pub export fn getMsiMessage(idx: u8) Msi.Message {
     msis_lock.lock();
     defer msis_lock.unlock();
 
@@ -418,6 +368,59 @@ pub fn getMsiMessage(idx: u8) Msi.Message {
     std.debug.assert(msi.in_use);
 
     return msi.message;
+}
+
+export fn requestIrqEx(pin: u8, device: *dev.Device, handler: *const anyopaque, tigger_int: u8, shared: bool) i16 {
+    const tigger_mode: TriggerMode = @enumFromInt(tigger_int);
+    const irq = &irqs.buffer[pin];
+
+    if (irq.in_use) {
+        if (!shared or irq.trigger_mode != tigger_mode) return utils.errToInt(Error.IntrBusy);
+    } else {
+        const vector = allocVector(null) orelse return utils.errToInt(Error.NoVector);
+        irq.* = Irq.init(pin, vector, tigger_mode, shared);
+
+        chip.bindIrq(irq);
+    }
+
+    irq.addHandler(@ptrCast(handler), device) catch |err| {
+        return utils.errToInt(err);
+    };
+
+    return 0;
+}
+
+export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_int: u8) i16 {
+    const trigger_mode: TriggerMode = @enumFromInt(trigger_int);
+
+    msis_lock.lock();
+    defer msis_lock.unlock();
+
+    if (msis_used == max_intr) return utils.errToInt(Error.NoMemory);
+
+    var idx = @intFromPtr(handler) % msis.len;
+    while (msis.buffer[idx].in_use) {
+        idx = (idx +% 1) % msis.len;
+    }
+
+    const msi = &msis.buffer[idx];
+    const vec = allocVector(null) orelse return utils.errToInt(Error.NoVector);
+
+    msi.* = .{
+        .message = undefined,
+        .in_use = true,
+        .vector = vec,
+        .handler = .{ .func = @ptrCast(handler), .device = device },
+    };
+
+    chip.configMsi(msi, @truncate(idx), trigger_mode);
+    msis_used += 1;
+
+    return @intCast(idx);
+}
+
+inline fn calcCpuIdx(cpu: *const Cpu) u16 {
+    return @truncate((@intFromPtr(cpu) - @intFromPtr(&cpus.buffer)) / @sizeOf(Cpu));
 }
 
 fn allocVector(cpu_idx: ?u16) ?Vector {
@@ -448,10 +451,30 @@ fn freeVector(vec: Vector) void {
     reorderCpus(vec.cpu, .backward);
 }
 
-inline fn calcCpuIdx(cpu: *const Cpu) u16 {
-    return @truncate((@intFromPtr(cpu) - @intFromPtr(&cpus.buffer)) / @sizeOf(Cpu));
+fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
+    std.debug.assert(vec_base < arch.intr.max_vectors and num > 0);
+    std.debug.assert(vec_base + num <= arch.intr.max_vectors);
+
+    cpus_lock.lock();
+    defer cpus_lock.unlock();
+
+    const raw_base = vec_base - arch.intr.reserved_vectors;
+    const cpu = &cpus.buffer[cpu_idx];
+
+    for (0..num) |i| {
+        const vec = raw_base + i;
+
+        std.debug.assert(cpu.bitmap.get(vec) == 0);
+
+        cpu.bitmap.set(vec);
+    }
+
+    cpu.allocated += num;
+
+    reorderCpus(cpu_idx, .forward);
 }
 
+/// @noexport
 fn reorderCpus(cpu_idx: u16, comptime direction: enum{forward, backward}) void {
     const cpu = &cpus.buffer[cpu_idx];
     var order_idx = std.mem.indexOf(
