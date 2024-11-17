@@ -1,3 +1,5 @@
+// @noexport
+
 //! Low-level entry point for the kernel.
 
 // Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)

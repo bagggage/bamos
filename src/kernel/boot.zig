@@ -1,3 +1,5 @@
+// @noexport
+
 //! # Boot
 //! 
 //! Responsible for managing the early boot process of the system, 
@@ -130,7 +132,7 @@ pub fn getFb(fb_ptr: *Framebuffer) void {
 /// Use `freeMappings` to free resources after using mappings.
 /// 
 /// - Returns: array of `MappingEntry` or `vm.Error` if memory allocation fails.
-pub inline fn getMappings() vm.Error![]MappingEntry {
+pub fn getMappings() vm.Error![]MappingEntry {
     const MMap = MappingEntry;
     const Order = enum { DMA, Fb, Boot, Kernel, Envir, Stack };
 

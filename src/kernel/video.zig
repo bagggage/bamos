@@ -1,3 +1,5 @@
+// @noexport
+
 //! # Video Module
 //! 
 //! This module provides functionality related to video output, including text drawing.

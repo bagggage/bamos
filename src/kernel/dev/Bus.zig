@@ -75,7 +75,7 @@ pub export fn addDevice(self: *Self, name: dev.Name, driver: ?*const Driver, dat
 }
 
 pub export fn removeDevice(self: *Self, device: *Device) void {
-    const node: *dev.DeviceNode = @ptrFromInt(@intFromPtr(device) - @offsetOf(dev.DeviceNode, "data"));
+    const node: *dev.DeviceNode = @fieldParentPtr("data", device);
 
     self.dev_lock.lock();
     defer self.dev_lock.unlock();
