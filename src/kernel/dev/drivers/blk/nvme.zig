@@ -1,3 +1,5 @@
+// @noexport
+
 //! # NVMe Controller driver
 //! 
 //! - Specification: NVM Express Base Specification, Revision 2.1
@@ -184,7 +186,7 @@ const Namespace = struct {
     };
 
     const vtable = Drive.VTable{
-        .handle_io = handleIo
+        .handleIo = handleIo
     };
 
     ctrl: *Controller,
@@ -821,22 +823,19 @@ const Controller = struct {
     }
 };
 
-var pci_driver = pci.Driver{
-    .match_id = .{
-        .class_code = .mass_storage_controller,
-        .subclass = .{ .mass_storage_device = .non_volatile_mem_controller }
-    },
-};
-
-var driver: *dev.Driver = undefined;
-
-pub fn init() !void {
-    const bus = try dev.getBus("pci");
-
-    driver = try dev.registerDriver("nvme driver", bus, @ptrCast(&pci_driver), .{
+var pci_driver = pci.Driver.init("nvme driver",
+    .{
         .probe = .{ .universal = probe },
         .remove = remove,
-    });
+    },
+    .{
+        .class_code = .mass_storage_controller,
+        .subclass = .{ .mass_storage_device = .non_volatile_mem_controller }
+    }
+);
+
+pub fn init() !void {
+    try dev.registerDriver("pci", &pci_driver.base);
 }
 
 fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {

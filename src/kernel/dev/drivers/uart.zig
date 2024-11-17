@@ -1,3 +1,5 @@
+// @noexport
+
 //! # Serial port super-simple driver
 
 const std = @import("std");
@@ -51,16 +53,14 @@ const regs_base = switch (builtin.cpu.arch) {
 
 const regs = UartRegs{ .dyn_base = regs_base };
 
-var driver: *dev.Driver = undefined;
+var driver = dev.Driver.init("uart driver", .{
+    .probe = .{ .platform = probe },
+    .remove = remove
+});
 var device: *dev.Device = undefined;
 
 pub fn init() !void {
-    const bus = try dev.getBus("platform");
-
-    driver = try dev.registerDriver("ISA UART", bus, null, .{
-        .probe = .{ .platform = probe },
-        .remove = remove
-    });
+    try dev.registerDriver("platform", &driver);
 }
 
 pub inline fn put(byte: u8) void {

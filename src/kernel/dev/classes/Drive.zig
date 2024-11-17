@@ -54,7 +54,7 @@ pub const IoRequest = struct {
 pub const VTable = struct {
     pub const HandleIoFn = *const fn(obj: *Self, io_request: *const IoRequest) bool;
 
-    handle_io: HandleIoFn,
+    handleIo: HandleIoFn,
 };
 
 const Io = union {
@@ -72,7 +72,6 @@ base_name: []const u8,
 lba_size: u16,
 capacity: usize,
 
-io_id: u16 = 0,
 is_multi_io: bool = false,
 is_partitionable: bool = false,
 
@@ -109,7 +108,6 @@ pub fn init(self: *Self, name: []const u8, multi_io: bool, partitions: bool) Err
 
     self.base_name = name;
     self.io_oma = IoOma.init(io_oma_capacity);
-    self.io_id = 0;
 
     log.info("Drive: {s}; lba size: {}; capacity: {} MiB", .{
         self.base_name, self.lba_size, self.capacity / utils.mb_size
@@ -181,10 +179,15 @@ pub fn completeIo(self: *Self, id: u16, status: IoRequest.Status) void {
     }
 }
 
+pub inline fn putCache(self: *Self, block: *cache.Block) void {
+    self.cache_ctrl.put(block);
+}
+
 pub inline fn readCachedNext(self: *Self, block: *cache.Block, offset: usize) Error!*cache.Block {
     const blk_idx: u32 = @truncate(offset / cache.block_size);
-    if (block.key == blk_idx) return block;
+    if (block.lba_key == blk_idx) return block;
 
+    self.cache_ctrl.put(block);
     return self.readBlock(blk_idx);
 }
 
@@ -252,7 +255,7 @@ inline fn makeRequest(
 }
 
 fn submitRequest(self: *Self, request: *IoQueue.Node) bool {
-    if (self.vtable.handle_io(self, &request.data) == false) {
+    if (self.vtable.handleIo(self, &request.data) == false) {
         if (self.is_multi_io) {
             const cpu_idx = smp.getIdx();
             self.io.multi[cpu_idx].prepend(request);

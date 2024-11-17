@@ -15,7 +15,7 @@ pub const arch = switch (builtin.cpu.arch) {
 pub const AnyData = struct {
     ptr: ?*anyopaque = null,
 
-    pub inline fn from(ptr: *anyopaque) AnyData {
+    pub inline fn from(ptr: ?*anyopaque) AnyData {
         return .{ .ptr = ptr };
     }
 

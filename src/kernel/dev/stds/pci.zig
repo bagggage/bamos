@@ -71,23 +71,41 @@ pub const Device = struct {
     }
 
     pub inline fn from(device: *const dev.Device) *Device {
-        std.debug.assert(device.bus == bus);
+        std.debug.assert(device.bus == &bus.data);
         return device.driver_data.as(Device) orelse unreachable;
     }
 };
 
 pub const Driver = struct {
+    base: dev.DriverNode,
     match_id: Id,
+
+    pub fn init(
+        comptime name: []const u8,
+        comptime ops: dev.Driver.Operations,
+        comptime match_id: Id
+    ) Driver {
+        return .{
+            .base = dev.Driver.init(name, ops),
+            .match_id = match_id,
+        };
+    }
+
+    pub inline fn from(driver: *const dev.Driver) *const Driver {
+        const driver_node: *const dev.DriverNode = @fieldParentPtr("data", driver);
+        const pci_driver: *const Driver = @fieldParentPtr("base", driver_node);
+        return pci_driver;
+    }
 };
 
-var bus: *dev.Bus = undefined;
+var bus = dev.Bus.init("pci", .{
+    .match = match,
+    .remove = remove
+});
 var dev_oma = vm.ObjectAllocator.init(Device);
 
 pub fn init() !void {
-    bus = try dev.registerBus("pci", .{
-        .match = match,
-        .remove = remove
-    });
+    dev.registerBus(&bus);
 
     try config.init();
     try enumerate();
@@ -95,7 +113,7 @@ pub fn init() !void {
 
 fn match(driver: *const dev.Driver, device: *const dev.Device) bool {
     const pci_dev = device.driver_data.as(Device) orelse unreachable;
-    const pci_driver = driver.impl_data.as(Driver) orelse unreachable;
+    const pci_driver = Driver.from(driver);
 
     return (
         (pci_driver.match_id.vendor_id == Id.any or
@@ -159,13 +177,12 @@ fn enumDevice(seg_idx: u16, bus_idx: u8, dev_idx: u8, func_idx: u8) !bool {
 
     errdefer dev_oma.free(pci_dev);
 
-    const device = try dev.registerDevice(
+    const device = bus.data.addDevice(
         try dev.nameFmt(
             "{x:0>4}:{x:0>2}:{x:0>2}.{}",
             .{seg_idx,bus_idx,dev_idx,func_idx}
-        ),
-        bus, null, pci_dev
-    );
+        ), null, pci_dev
+    ) orelse return error.NoMemory;
 
     pci_dev.device = device;
 
