@@ -36,7 +36,7 @@ fn makeKernel(b: *std.Build) *std.Build.Step {
     const kernel_obj = b.addObject(.{
         .name = "bamos",
         .root_source_file = b.path(src_path++"/kernel/main.zig"),
-        .omit_frame_pointer = if (optimize == .Debug) false else null,
+        .omit_frame_pointer = if (optimize == .Debug or optimize == .ReleaseSafe) false else null,
         .optimize = optimize,
         .target = target,
         .code_model = .kernel,
@@ -103,6 +103,11 @@ fn makeDocs(b: *std.Build) *std.Build.Step {
         .{ .custom = "../docs" },
         "index.html"
     );
+    const logo_file = b.addInstallFileWithDir(
+        b.path(src_path++"/docs/logo.svg"),
+        .{ .custom = "../docs" },
+        "logo.svg"
+    );
     const js_file = b.addInstallFileWithDir(
         b.path(src_path++"/docs/main.js"),
         .{ .custom = "../docs" },
@@ -154,6 +159,7 @@ fn makeDocs(b: *std.Build) *std.Build.Step {
     tar_run.addArgs(&.{"-o", "docs/sources.tar", "-src", "src/kernel", "-n", "bamos"});
 
     wasm_install.step.dependOn(&tar_run.step);
+    wasm_install.step.dependOn(&logo_file.step);
     wasm_install.step.dependOn(&js_file.step);
     wasm_install.step.dependOn(&html_file.step);
 
