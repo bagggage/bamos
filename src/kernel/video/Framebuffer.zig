@@ -29,6 +29,10 @@ pub const Color = packed struct {
     pub const yellow    = Color{ .r=250,    .g=240,    .b=5   };
     pub const lyellow   = Color{ .r=255,    .g=235,    .b=75  };
     pub const orange    = Color{ .r=255,    .g=165,    .b=0   };
+    pub const magenta   = Color{ .r=150,    .g=57,     .b=184 };
+    pub const lmagenta  = Color{ .r=184,    .g=53,     .b=232 };
+    pub const cyan      = Color{ .r=66,     .g=139,    .b=184 };
+    pub const lcyan     = Color{ .r=53,     .g=164,    .b=232 };
 
     pub fn pack(self: *const Color, format: ColorFormat) u32 {
         var result: u32 = undefined;
