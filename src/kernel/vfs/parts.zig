@@ -16,8 +16,6 @@ pub const List = utils.List(Partition);
 pub const Error = Drive.Error;
 
 pub const Partition = struct {
-    device: *Drive,
-
     lba_start: usize,
     lba_end: usize,
 };

@@ -16,16 +16,10 @@ pub const Error = error {
 };
 
 pub const Block = packed struct {
-    pub const Flags = packed struct {
-        locked: u1 = 0,
-        busy: u1 = 0,
-        rsrvd: u2 = 0,
-    };
-
     phys_base: u28 = 0,
-    flags: Flags = .{},
+    ref_count: u4 = 0,
 
-    key: u32 = 0,
+    lba_key: u32 = 0,
 
     pub inline fn getPhysBase(self: Block) usize {
         return @as(usize, self.phys_base) * block_size;
@@ -33,6 +27,10 @@ pub const Block = packed struct {
 
     pub inline fn getVirtBase(self: Block) usize {
         return vm.getVirtLma(self.getPhysBase());
+    }
+
+    pub inline fn getOffset(self: Block) usize {
+        return @as(usize, self.lba_key) * block_size;
     }
 
     pub inline fn asSlice(self: Block) []u8 {
@@ -50,131 +48,15 @@ pub const Block = packed struct {
     }
 
     pub inline fn isLocked(self: Block) bool {
-        return self.flags.locked != 0;
+        return self.ref_count != 0;
     }
 
-    pub inline fn isBusy(self: Block) bool {
-        return self.flags.busy != 0;
+    pub inline fn lock(self: *Block) void {
+        self.ref_count += 1;
     }
 
-    pub inline fn lock(self: *Block) bool {
-        if (self.flags.locked != 0) return false;
-
-        self.flags.locked = 1;
-        return true;
-    }
-
-    pub inline fn take(self: *Block) void {
-        self.flags.busy = 1;
-    }
-};
-
-pub const ControlBlock = struct {
-    const LruList = utils.List(HashTable.Node);
-    const LruNode = LruList.Node;
-    const NodeOma = vm.SafeOma(LruNode);
-
-    hash_table: HashTable = .{},
-    hash_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
-
-    lru_list: LruList = .{},
-    lru_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
-
-    node_oma: NodeOma = NodeOma.init(256),
-
-    pub inline fn init(self: *ControlBlock) Error!void {
-        try self.hash_table.init();
-    }
-
-    pub fn deinit(self: *ControlBlock) void {
-        self.hash_table.deinit();
-        self.node_oma.deinit();
-    }
-
-    pub fn get(self: *ControlBlock, key: u32) ?*Block {
-        const node = blk: {
-            self.hash_lock.lock();
-            defer self.hash_lock.unlock();
-
-            break :blk self.hash_table.get(key) orelse return null;
-        };
-
-        //if (node.data.lock()) self.untrack(&node.data);
-
-        return &node.data;
-    }
-
-    pub fn new(self: *ControlBlock, key: u32) ?*Block {
-        const block = self.allocBlock() orelse return null;
-        block.data.data.key = key;
-
-        {
-            self.hash_lock.lock();
-            defer self.hash_lock.unlock();
-
-            self.hash_table.add(&block.data);
-        }
-
-        return &block.data.data;
-    }
-
-    pub inline fn track(self: *ControlBlock, block: *Block) void {
-        const node = getLruNode(block);
-
-        self.lru_lock.lock();
-        defer self.lru_lock.unlock();
-
-        self.lru_list.prepend(node);
-        total_blocks += 1;
-    }
-
-    pub inline fn untrack(self: *ControlBlock, block: *Block) void {
-        const node = getLruNode(block);
-
-        self.lru_lock.lock();
-        defer self.lru_lock.unlock();
-
-        self.lru_list.remove(node);
-        total_blocks -= 1;
-    }
-
-    pub fn update(self: *ControlBlock, block: *Block) void {
-        const node = getLruNode(block);
-
-        if (self.lru_list.first == node) return;
-
-        self.lru_lock.lock();
-        defer self.lru_lock.unlock();
-
-        self.lru_list.remove(node);
-        self.lru_list.prepend(node);
-    }
-
-    fn allocBlock(self: *ControlBlock) ?*LruNode {
-        const node = self.node_oma.alloc() orelse return null;
-        const entry = &node.data;
-
-        const phys = vm.PageAllocator.alloc(block_rank) orelse {
-            self.node_oma.free(node);
-            return null;
-        };
-
-        entry.data.phys_base = @truncate(phys / block_size);
-        entry.data.flags = .{};
-
-        return node;
-    }
-
-    fn freeBlock(self: *ControlBlock, node: *LruNode) void {
-        vm.PageAllocator.free(node.data.data.getPhysBase(), block_rank);
-        self.node_oma.free(node);
-    }
-
-    inline fn getLruNode(block: *Block) *LruNode {
-        const hash_node: *HashTable.Node = @alignCast(@fieldParentPtr("data", block));
-        const lru_node: *LruNode = @fieldParentPtr("data", hash_node);
-
-        return lru_node;
+    pub inline fn release(self: *Block) void {
+        self.ref_count -= 1;
     }
 };
 
@@ -238,7 +120,7 @@ const HashTable = struct {
             var node = self.head;
 
             while (node) |n| : (node = n.next) {
-                if (n.data.key == key) return n;
+                if (n.data.lba_key == key) return n;
             }
 
             return null;
@@ -281,12 +163,12 @@ const HashTable = struct {
     }
 
     pub fn add(self: *HashTable, entry: *Node) void {
-        const idx = entry.data.key % self.buckets.len;
+        const idx = entry.data.lba_key % self.buckets.len;
         self.buckets[idx].push(entry);
     }
 
     pub fn remove(self: *HashTable, entry: *Node) void {
-        const idx = entry.data.key % self.buckets.len;
+        const idx = entry.data.lba_key % self.buckets.len;
         self.buckets[idx].remove(entry);
     }
 
@@ -317,11 +199,128 @@ const HashTable = struct {
     }
 };
 
+pub const ControlBlock = struct {
+    const LruList = utils.List(HashTable.Node);
+    const LruNode = LruList.Node;
+    const NodeOma = vm.SafeOma(LruNode);
+
+    hash_table: HashTable = .{},
+    hash_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
+
+    lru_list: LruList = .{},
+    lru_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
+
+    node_oma: NodeOma = NodeOma.init(256),
+
+    pub inline fn init(self: *ControlBlock) Error!void {
+        try self.hash_table.init();
+    }
+
+    pub fn deinit(self: *ControlBlock) void {
+        self.hash_table.deinit();
+        self.node_oma.deinit();
+    }
+
+    pub fn get(self: *ControlBlock, key: u32) ?*Block {
+        self.lru_lock.lock();
+        self.hash_lock.lock();
+        defer self.lru_lock.unlock();
+        defer self.hash_lock.unlock();
+
+        const node = self.hash_table.get(key) orelse return null;
+
+        if (!node.data.isLocked()) self.untrack(&node.data);
+        node.data.lock();
+
+        return &node.data;
+    }
+
+    pub fn put(self: *ControlBlock, block: *Block) void {
+        self.lru_lock.lock();
+        defer self.lru_lock.unlock();
+
+        block.release();
+        if (!block.isLocked()) self.track(block);
+    }
+
+    pub fn new(self: *ControlBlock, key: u32) ?*Block {
+        const block = self.allocBlock() orelse return null;
+        block.data.data.lba_key = key;
+
+        {
+            self.hash_lock.lock();
+            defer self.hash_lock.unlock();
+
+            self.hash_table.add(&block.data);
+        }
+
+        block.data.data.lock();
+        return &block.data.data;
+    }
+
+    fn swap(self: *ControlBlock, target_num: u32) u32 {
+        self.lru_lock.lock();
+        defer self.lru_lock.unlock();
+
+        const num = target_num;
+        var node = self.lru_list.first;
+
+        while (node) |lru| : (node = lru.node) {
+
+            if (num >= target_num) break;
+        }
+
+        return num;
+    }
+
+    fn allocBlock(self: *ControlBlock) ?*LruNode {
+        const node = self.node_oma.alloc() orelse return null;
+        const entry = &node.data;
+
+        const phys = vm.PageAllocator.alloc(block_rank) orelse {
+            self.node_oma.free(node);
+            return null;
+        };
+
+        entry.data.phys_base = @truncate(phys / block_size);
+        entry.data.ref_count = 0;
+
+        return node;
+    }
+
+    //fn freeBlocks(self: *ControlBlock, first: *LruNode) void {
+    //    self.node_oma.lock.lock();
+    //    defer self.node_oma.lock.unlock();
+//
+    //    vm.PageAllocator.free(node.data.data.getPhysBase(), block_rank);
+    //}
+
+    inline fn track(self: *ControlBlock, block: *Block) void {
+        const node = getLruNode(block);
+        self.lru_list.prepend(node);
+        total_blocks += 1;
+    }
+
+    inline fn untrack(self: *ControlBlock, block: *Block) void {
+        const node = getLruNode(block);
+        self.lru_list.remove(node);
+        total_blocks -= 1;
+    }
+
+    inline fn getLruNode(block: *Block) *LruNode {
+        const hash_node: *HashTable.Node = @alignCast(@fieldParentPtr("data", block));
+        const lru_node: *LruNode = @fieldParentPtr("data", hash_node);
+
+        return lru_node;
+    }
+};
+
 const CtrlList = utils.List(ControlBlock);
 const CtrlNode = CtrlList.Node;
 const CtrlOma = vm.SafeOma(CtrlNode);
 
 var total_blocks: u32 = 0;
+
 var ctrl_lock = utils.Spinlock.init(.unlocked);
 var ctrl_list: CtrlList = .{};
 var ctrl_oma = CtrlOma.init(32);
@@ -356,7 +355,23 @@ pub fn deleteCtrl(ctrl: *ControlBlock) void {
     ctrl_oma.free(node);
 }
 
-pub fn swap() void {
+pub fn swap(target_num: u32) u32 {
+    var num = 0;
+
+    {
+        ctrl_lock.lock();
+        defer ctrl_lock.unlock();
+
+        const node = ctrl_list.first;
+
+        while (node) |ctrl| : (node = ctrl.next) {
+            num += ctrl.data.swap(target_num);
+
+            if (num >= target_num) break;
+        }
+    }
+
+    return num;
 }
 
 /// Returns the total number of cache pages.
