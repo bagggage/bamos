@@ -33,16 +33,16 @@ To create a kernel executable, all you need is the source code, the Zig compiler
 - The code documentation is available on [this page](https://bagggage.github.io/bamos/).
 If you want to generate the documentation locally, run the following command:
 
-```bash
-zig build docs
-```
+  ```sh
+  zig build docs
+  ```
+  
+  A static site will be placed in the `docs` directory, which can then be launched using:
 
-A static site will be placed in the `docs` directory, which can then be launched using:
-
-```bash
-cd docs
-python -m http.server
-```
+  ```sh
+  cd docs
+  python -m http.server
+  ```
 
 The Zig language description and documentation for its standard library can be found on the [official website](https://ziglang.org/).
 
@@ -59,7 +59,7 @@ The build process is quite straightforward:
 
 - Before you begin, ensure that the Zig compiler version [0.13.0](https://ziglang.org/download/) is installed on your workstation.
 
-```bash
+```sh
 git clone https://github.com/bagggage/bamos.git
 cd bamos
 zig build kernel --release=[small|safe|fast]
