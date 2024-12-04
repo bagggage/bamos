@@ -374,7 +374,7 @@ pub fn add_file(file_name: []const u8, bytes: []u8) !File.Index {
     const file_index: File.Index = @enumFromInt(files.entries.len);
     try files.put(gpa, file_name, .{ .ast = ast });
 
-    if (ast.errors.len > 0) {
+    if (ast.errors.len > 1) {
         log.err("can't index '{s}' because it has syntax errors", .{file_index.path()});
         return file_index;
     }
