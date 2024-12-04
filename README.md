@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/bagggage/bamos/wiki" target="_blank" rel="noopener noreferrer"><img src="logo.svg" width="472" alt="BamOS Logo"></a>
+  <a href="https://bagggage.github.io/bamos-book/" target="_blank" rel="noopener noreferrer"><img src="logo.svg" width="472" alt="BamOS Logo"></a>
 </p>
 
 ---
@@ -28,9 +28,9 @@ To create a kernel executable, all you need is the source code, the Zig compiler
 
 ## Documentation
 
-The **OS** documentation is available on [this page](https://github.com/bagggage/bamos/wiki).
+- The general **OS** documentation is available on [this page](https://bagggage.github.io/bamos-book/).
 
-The **kernel** documentation base on code is available on [this page](https://bagggage.github.io/bamos/).
+- The code documentation is available on [this page](https://bagggage.github.io/bamos/).
 If you want to generate the documentation locally, run the following command:
 
 ```bash
@@ -91,22 +91,7 @@ In the project's root directory, there are the `qemu.sh` and `debug.sh` scripts:
 
 BamOS is at an early stage of development, and many things are not yet implemented. Moreover, writing the implementation and developing the operating system architecture requires an iterative approach to find the best solutions, so some details may change, but this is all for the better.
 
-## Current State
+## Current Progress
 
-- x86-64 architecture support.
-- Virtual memory management system.
-- Logging system.
-- Hardware exceptions.
-- Device management system.
-- Interrupt handling system.
-- PCI bus driver.
-- NVMe driver.
-
-## Planned Features
-
-- Virtual file system (in progress).
-- Various file system drivers (ext2..4, NTFS, FAT32, etc.).
-- Drivers for other solid-state storage standards.
-- Processes architecture, scheduling.
-- System calls architecture and kernel-process interaction with support for various ABIs.
-- And much more...
+To track what has already been implemented in the project
+and what stage it is currently at, check out [**this page**](https://bagggage.github.io/bamos-book/current-progress).
