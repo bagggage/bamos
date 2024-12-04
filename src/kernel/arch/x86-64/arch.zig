@@ -17,8 +17,27 @@ const utils = @import("../../utils.zig");
 
 const Spinlock = utils.Spinlock;
 
+const Cpu = struct {
+    const Vendor = enum { unknown, Intel, AMD };
+    const max_name = 48;
+
+    name: [max_name:0]u8,
+    vendor: Vendor,
+
+    /// MHz
+    base_frequency: u32,
+    /// MHz
+    max_frequency: u32,
+    /// MHz
+    bus_frequency: u32,
+
+    pub fn getName(self: *const Cpu) []const u8 {
+        const len = std.mem.indexOf(u8, &self.name, "  ") orelse unreachable;
+        return self.name[0..len];
+    }
+};
+
 const CpuId = packed struct { a: u32, b: u32, c: u32, d: u32 };
-const CpuVendor = enum { unknown, Intel, AMD };
 
 pub const io = @import("io.zig");
 pub const intr = @import("intr.zig");
@@ -31,7 +50,7 @@ pub const CpuLocalData = struct {
 
 pub const cpuid_features = 1;
 
-var cpu_vendor: CpuVendor = undefined;
+var cpu: Cpu = undefined;
 
 /// `_start` implementation
 pub inline fn startImpl() void {
@@ -46,7 +65,7 @@ pub inline fn startImpl() void {
 /// If not, it waits until the initialization lock is available.
 pub fn preinit() void {
     initCpu();
-    initCpuVendor();
+    collectCpuInfo();
 
     vm.preinit();
 
@@ -84,8 +103,8 @@ pub inline fn halt() void {
     asm volatile ("hlt");
 }
 
-pub inline fn getCpuVendor() []const u8 {
-    return @tagName(cpu_vendor);
+pub inline fn getCpuInfo() *Cpu {
+    return &cpu;
 }
 
 pub inline fn setCpuLocalData(local_data: *smp.LocalData) void {
@@ -125,6 +144,15 @@ pub fn setupCpu(cpu_idx: u16) void {
     intr.enableCpu();
 }
 
+pub inline fn timestamp() usize {
+    var hi: u32 = undefined;
+    var lo: u32 = undefined;
+
+    asm volatile ("rdtsc" : [hi]"={edx}"(hi),[lo]"={eax}"(lo));
+
+    return (@as(u64, hi) << 32) | lo;
+}
+
 /// Enables kernel needed CPUs extentions
 /// - syscall/sysret
 /// - non-executable pages
@@ -145,18 +173,46 @@ inline fn enableAvx() void {
         \\xgetbv
         \\or $7,%%rax
         \\xsetbv
-        ::: "rcx", "rax", "rdx");
+        ::: "rcx", "rax", "rdx"
+    );
 }
 
-fn initCpuVendor() void {
+fn collectCpuInfo() void {
+    cpu.vendor = getCpuVendor();
+
+    const result = cpuid(0x16, undefined, undefined, undefined);
+    cpu.base_frequency = result.a;
+    cpu.max_frequency = result.b;
+    cpu.bus_frequency = result.c;
+
+    getCpuModelName(&cpu.name);
+}
+
+fn getCpuVendor() Cpu.Vendor {
     const amd_ecx = 0x444d4163; // "cAMD"
     const intel_ecx = 0x6c65746e; // "ntel"
 
     const cpuid0_ecx = cpuid(0, undefined, 0, undefined).c;
 
-    switch (cpuid0_ecx) {
-        amd_ecx => cpu_vendor = .AMD,
-        intel_ecx => cpu_vendor = .Intel,
-        else => cpu_vendor = .unknown,
+    return switch (cpuid0_ecx) {
+        amd_ecx => .AMD,
+        intel_ecx => .Intel,
+        else =>.unknown,
+    };
+}
+
+fn getCpuModelName(out: []u8) void {
+    std.debug.assert(out.len >= Cpu.max_name);
+
+    for (0..3) |i| {
+        const result = cpuid(0x8000_0002 + @as(u32, @truncate(i)), undefined, undefined, undefined);
+
+        const offset = i * 4 * 4;
+        const buffer: []u8 = out[offset..];
+
+        @memcpy(buffer[0..4], std.mem.asBytes(&result.a));
+        @memcpy(buffer[4..8], std.mem.asBytes(&result.b));
+        @memcpy(buffer[8..12], std.mem.asBytes(&result.c));
+        @memcpy(buffer[12..16], std.mem.asBytes(&result.d));
     }
 }
