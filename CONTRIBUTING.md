@@ -25,9 +25,8 @@ Document:
 - individual files,
 - and more...
 
-You can also contribute to the documentation on the project's [Wiki pages](https://github.com/bagggage/bamos).
-
-Unfortunately, GitHub does not allow pull requests for Wiki pages, but you can create an issue with your proposed updates. For example, you can provide a link to your own fork of the Wiki repository with your changes.
+You can also contribute to the [documentation book](https://github.com/bagggage/bamos-book). Document some OS features and
+create an pull request with your changes.
 
 ## Testing
 
