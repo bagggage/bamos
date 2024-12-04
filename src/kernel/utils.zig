@@ -5,6 +5,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const log = @import("log.zig");
+
 pub const algorithm = @import("utils/algorithm.zig");
 
 pub const arch = switch (builtin.cpu.arch) {
@@ -55,8 +57,66 @@ pub inline fn calcAlign(comptime T: type, value: T, alignment: T) T {
     return ((value + (alignment - 1)) & ~(alignment - 1));
 }
 
+pub inline fn errToInt(err: anyerror) i16 {
+    @setRuntimeSafety(false);
+    return std.math.negateCast(@intFromError(err)) catch unreachable;
+}
+
+pub inline fn intToErr(comptime Err: type, int: i16) Err {
+    const uint: u16 = @intCast(-int);
+    return @as(Err, @errorCast(@errorFromInt(uint)));
+}
+
 pub inline fn halt() noreturn {
     while (true) arch.halt();
+}
+
+/// @export
+pub fn profile(src: ?std.builtin.SourceLocation, func: anytype, args: anytype) void {
+    const begin = profileBegin();
+
+    const is_ret_error = comptime blk: {
+        const fn_type = @typeInfo(@TypeOf(func)).Fn;
+
+        if (fn_type.return_type) |ret_t| {
+            const ret_info = @typeInfo(ret_t);
+
+            break :blk (ret_info == .ErrorSet or ret_info == .ErrorUnion);
+        }
+
+        break :blk false;
+    };
+
+    if (is_ret_error) {
+        _ = @call(.auto, func, args) catch |err| {
+            log.err("Error while profiling: {s}", .{@errorName(err)});
+            return;
+        };
+    } else {
+        _ = @call(.auto, func, args);
+    }
+
+    const cycles = profileEnd(begin);
+    const cpu_mhz = arch.getCpuInfo().base_frequency;
+    const ms = if(cpu_mhz != 0) cycles / (cpu_mhz * 1000) else 0;
+
+    if (src) |s| {
+        log.warn("Profile at {s}.{s}:{}:{} - {}t ~ {}ms", .{
+            s.file, s.fn_name, s.line, s.column, cycles, ms
+        });
+    } else {
+        log.warn("Profile: {s} - {}t ~ {}ms", .{
+            @typeName(@TypeOf(func)), cycles, ms
+        });
+    }
+}
+
+pub inline fn profileBegin() usize {
+    return arch.timestamp();
+}
+
+pub inline fn profileEnd(begin: usize) usize {
+    return arch.timestamp() - begin;
 }
 
 const TypeHasher = std.hash.Fnv1a_32;
@@ -123,7 +183,7 @@ fn typeIdShort(comptime T: type) u32 {
         .ErrorUnion => |eu| {
             var type_id = typeIdShort(eu.error_set);
             hasher.update(std.mem.asBytes(&type_id));
-            
+
             type_id = typeIdShort(eu.payload);
             hasher.update(std.mem.asBytes(&type_id));
         },

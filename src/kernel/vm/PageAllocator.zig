@@ -54,8 +54,8 @@ pub const max_alloc_pages = 1 << (max_rank - 1);
 
 var free_areas: [max_areas]FreeArea = .{FreeArea{}} ** max_areas;
 
-var allocated_pages: u32 = 0;
-var total_pages: usize = 0;
+export var allocated_pages: u32 = 0;
+export var total_pages: usize = 0;
 
 var lock = Spinlock.init(.unlocked);
 
@@ -209,6 +209,8 @@ pub fn free(base: usize, rank: u32) void {
 }
 
 /// Checks if the page allocator has been initialized.
+///
+/// @noexport
 pub inline fn isInitialized() bool {
     return is_init;
 }
@@ -303,6 +305,8 @@ inline fn entGetBase(node: *FreeNode) u32 {
 }
 
 /// Gets the physical address of a free node.
+///
+/// @export
 inline fn entGetPhys(node: *FreeNode) usize {
     return vm.getPhysLma(@intFromPtr(node));
 }

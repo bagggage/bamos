@@ -46,6 +46,7 @@ pub fn init() !void {
     cpus_data.len = cpus_num;
 }
 
+/// @noexport
 pub inline fn initAll() void {
     init_lock.unlock();
 }
@@ -91,6 +92,8 @@ pub inline fn getLocalData() *LocalData {
 /// Returns local data for the specific CPU.
 /// 
 /// - `cpu_idx`
+///
+/// @noexport
 pub inline fn getCpuData(cpu_idx: u16) *LocalData {
     return &cpus_data[cpu_idx];
 }

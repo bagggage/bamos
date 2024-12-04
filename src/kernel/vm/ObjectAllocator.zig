@@ -155,6 +155,8 @@ pub fn initCapacity(comptime obj_size: usize, comptime capacity: usize) Self {
 /// 
 /// - `obj_size`: The size of the objects to allocate.
 /// - `pages`: The number of pages to allocate for the arena.
+///
+/// @export
 pub fn initSized(obj_size: usize, pages: u32) Self {
     std.debug.assert(obj_size >= @sizeOf(FreeNode));
 
@@ -186,7 +188,7 @@ pub fn initRaw(obj_size: usize, pool_phys: usize, pool_pages: u32) vm.Error!Self
 }
 
 /// Deinitialize allocator, free all allocated memory.
-pub fn deinit(self: *Self) void {
+pub export fn deinit(self: *Self) void {
     var node = self.arenas.first;
 
     while (node) |arena| {
@@ -203,30 +205,15 @@ pub fn deinit(self: *Self) void {
 /// 
 /// - `T`: The type of pointer.
 /// - Returns: A pointer to the allocated object, or `null` if allocation fails.
-pub fn alloc(self: *Self, comptime T: type) ?*T {
-    var node = self.arenas.first;
-
-    while (node) |arena| : (node = arena.next) {
-        if (arena.data.alloc_num < self.arena_capacity) break;
-    }
-
-    var arena: *ArenaNode = undefined;
-
-    if (node) |ptr| {
-        arena = ptr;
-    } else {
-        arena = self.newArena() orelse return null;
-    }
-
-    const result: *T = @ptrFromInt(arena.data.alloc(self.obj_size));
-    return result;
+pub inline fn alloc(self: *Self, comptime T: type) ?*T {
+    return @as(*T, @alignCast(@ptrCast(self.allocEx() orelse return null)));
 }
 
 /// Frees the memory of an object.
 /// Invalid object pointer causes UB.
 /// 
 /// - `obj_ptr`: Pointer to the object to free.
-pub fn free(self: *Self, obj_ptr: anytype) void {
+pub inline fn free(self: *Self, obj_ptr: anytype) void {
     comptime {
         const type_info = @typeInfo(@TypeOf(obj_ptr));
         switch (type_info) {
@@ -235,10 +222,7 @@ pub fn free(self: *Self, obj_ptr: anytype) void {
         }
     }
 
-    const obj_addr = @intFromPtr(obj_ptr);
-    const arena = self.contains(obj_addr) orelse unreachable;
-
-    self.freeRaw(arena, obj_addr);
+    self.freeEx(@intFromPtr(obj_ptr));
 }
 
 /// Frees object in arena without additional checks.
@@ -247,6 +231,8 @@ pub fn free(self: *Self, obj_ptr: anytype) void {
 /// 
 /// - `arena`: Arena node that belongs to the allocator instance.
 /// - `obj_addr`: Address of the object, managed by the arena, to free.
+///
+/// @noexport
 pub inline fn freeRaw(self: *Self, arena: *ArenaNode, obj_addr: usize) void {
     arena.data.free(obj_addr, self.obj_size);
 
@@ -257,6 +243,8 @@ pub inline fn freeRaw(self: *Self, arena: *ArenaNode, obj_addr: usize) void {
 /// 
 /// - `addr`: The address of the object.
 /// - Returns: A pointer to the arena if the address is managed by the allocator, `null` otherwise.
+///
+/// @noexport
 pub inline fn contains(self: *const Self, addr: usize) ?*ArenaNode {
     var node = self.arenas.first;
     const arena_size = self.getArenaSize();
@@ -273,6 +261,29 @@ pub inline fn contains(self: *const Self, addr: usize) ?*ArenaNode {
 /// Returns the arena size in bytes for the current allocator.
 inline fn getArenaSize(self: *const Self) usize {
     return (@as(u32, 1) << @truncate(self.arena_rank)) * vm.page_size;
+}
+
+export fn allocEx(self: *Self) ?*anyopaque {
+    var node = self.arenas.first;
+
+    while (node) |arena| : (node = arena.next) {
+        if (arena.data.alloc_num < self.arena_capacity) break;
+    }
+
+    var arena: *ArenaNode = undefined;
+
+    if (node) |ptr| {
+        arena = ptr;
+    } else {
+        arena = self.newArena() orelse return null;
+    }
+
+    return @ptrFromInt(arena.data.alloc(self.obj_size));
+}
+
+export fn freeEx(self: *Self, obj_addr: usize) void {
+    const arena = self.contains(obj_addr) orelse unreachable;
+    self.freeRaw(arena, obj_addr);
 }
 
 /// Creates a new arena and initializes it with a given physical memory pool.

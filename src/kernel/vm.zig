@@ -16,7 +16,9 @@ const log = @import("log.zig");
 /// The size of a memory page, specific to the architecture.
 pub const page_size = arch.vm.page_size;
 /// The start virtual address of the kernel in memory.
+/// @noexport
 pub const kernel_start = &boot.kernel_elf_start;
+/// @noexport
 pub const kernel_end = &boot.kernel_elf_end;
 pub const lma_start = arch.vm.lma_start;
 pub const lma_size = arch.vm.lma_size;
@@ -80,6 +82,12 @@ pub const setPt = arch.vm.setPt;
 pub const logPt = arch.vm.logPt;
 
 /// Maps a virtual memory range to a physical memory range.
+/// 
+/// - `virt`: base virtual address to which physicall region must be mapped.
+/// - `phys`: region base physical address.
+/// - `pages`: number of pages to map.
+/// - `flags`: flags to specify (see `vm.MapFlags` structure).
+/// - `page_table`: target page table.
 pub const mmap = arch.vm.mmap;
 
 /// General-purpose kernel memory allocation function.
@@ -195,7 +203,7 @@ const intPtrErrorStr = "Only integer and pointer types are acceptable";
 /// Translates a physical address to a virtual (LMA) address.
 /// This is the fastest address transalition.
 /// 
-/// - `address`: The physical address to translate.
+/// - `address`: the physical address to translate.
 /// - Returns: The translated virtual address.
 pub inline fn getVirtLma(address: anytype) @TypeOf(address) {
     const typeInfo = @typeInfo(@TypeOf(address));
@@ -210,7 +218,7 @@ pub inline fn getVirtLma(address: anytype) @TypeOf(address) {
 /// Translates a virtual address of the linear memory access (LMA) region to a physical.
 /// Can be used only with address returned from `getVirtLma`, UB otherwise.
 /// 
-/// - `address`: The virtual address to translate.
+/// - `address`: the virtual address to translate.
 /// - Returns: The translated physical address.
 pub inline fn getPhysLma(address: anytype) @TypeOf(address) {
     const type_info = @typeInfo(@TypeOf(address));

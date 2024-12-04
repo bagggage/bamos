@@ -22,7 +22,11 @@ pub const Partition = parts.Partition;
 
 pub const Error = error {
     Busy,
-    NoMemory
+    NoMemory,
+    NoFs,
+    BadDentry,
+    BadInode,
+    BadSuperblock,
 };
 
 pub const FileSystem = struct {
@@ -34,33 +38,39 @@ pub const FileSystem = struct {
         unmount: UnmountT
     };
 
-    node: FsList.Node,
-
     name: []const u8,
     hash: u32,
 
     ops: Operations = undefined,
     dentry_ops: Dentry.Operations = undefined,
 
-    pub fn init(comptime name: []const u8, ops: Operations, dentry_ops: Dentry.Operations) FileSystem {
+    pub fn init(comptime name: []const u8, ops: Operations, dentry_ops: Dentry.Operations) FsNode {
         comptime var buffer: [name.len]u8 = .{0} ** name.len;
         const lower = comptime std.ascii.lowerString(&buffer, name);
         const hash = comptime hashFn(lower);
 
         return .{
-            .name = name,
-            .hash = hash,
-            .ops = ops,
-            .dentry_ops = dentry_ops,
-            .node = .{
-                .data = undefined
+            .data = .{
+                .name = name,
+                .hash = hash,
+                .ops = ops,
+                .dentry_ops = dentry_ops,
             }
         };
     }
 };
 
+pub const Superblock = struct {
+    drive: ?*Drive,
+    offset: usize,
+
+    block_size: u32,
+
+    fs_data: utils.AnyData,
+};
+
 pub const Inode = struct {
-    pub const Type = enum(u4) {
+    pub const Type = enum(u8) {
         unknown = 0,
         regular_file,
         directory,
@@ -73,11 +83,17 @@ pub const Inode = struct {
 
     index: u32,
     type: Type,
-    size: usize, // In bytes
+    perm: u16,
+    size: u64, // In bytes
 
     access_time: u32,
     modify_time: u32,
     create_time: u32,
+
+    gid: u16,
+    uid: u16,
+
+    links_num: u16,
 
     fs_data: utils.AnyData = .{},
 
@@ -160,11 +176,24 @@ pub const Dentry = struct {
     }
 };
 
-const FsList = utils.List(*FileSystem);
+pub const MountPoint = struct {
+    fs: *FileSystem,
+    dentry: *Dentry,
+
+    super: Superblock,
+};
+
+const MountList = utils.List(MountPoint);
+const FsList = utils.List(FileSystem);
+const FsNode = FsList.Node;
 
 var root: *Dentry = undefined;
+
+var mount_list: MountList = .{};
+var mount_lock = utils.Spinlock.init(.unlocked);
+
 var fs_list: FsList = .{};
-var fs_list_lock = utils.Spinlock.init(.unlocked);
+var fs_lock = utils.Spinlock.init(.unlocked);
 
 const AutoInit = opaque {
     pub var file_systems = .{
@@ -186,30 +215,86 @@ pub fn deinit() void {
     }
 }
 
-pub fn registerFs(fs: *FileSystem) Error!void {
-    const node = &fs.node;
-    if (node.next != null or node.prev != null) return error.Busy;
+pub fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive) Error!void {
+    if (dentry.inode.?.type != .directory) return error.BadDentry;
 
-    fs.node.data = fs;
+    const fs = getFs(fs_name) orelse return error.NoFs;
 
-    fs_list_lock.lock();
-    defer fs_list_lock.unlock();
-
-    fs_list.append(node);
+    try fs.ops.mount(dentry, drive);
 }
 
-pub fn unregisterFs(fs: *FileSystem) void {
-    {
-        fs_list_lock.lock();
-        defer fs_list_lock.unlock();
+pub export fn registerFs(fs: *FsNode) bool {
+    if (fs.next != null or fs.prev != null) return false;
 
-        fs_list.remove(&fs.node);
+    fs_lock.lock();
+    defer fs_lock.unlock();
+
+    // Check if fs with same name exists
+    {
+        var fs_node = fs_list.first;
+
+        while (fs_node) |other_fs| : (fs_node = other_fs.next) {
+            if (other_fs.data.hash == fs.data.hash) return false;
+        }
     }
 
-    fs.node.next = null;
-    fs.node.prev = null;
+    fs_list.append(fs);
+    return true;
+}
+
+pub export fn unregisterFs(fs: *FsNode) void {
+    {
+        fs_lock.lock();
+        defer fs_lock.unlock();
+
+        fs_list.remove(fs);
+    }
+
+    fs.next = null;
+    fs.prev = null;
+}
+
+pub inline fn getFs(name: []const u8) ?*FileSystem {
+    return getFsEx(name.ptr, name.len);
 }
 
 pub inline fn lookup(path: []const u8) ?*Dentry {
     _ = path; return null;
+}
+
+export fn getFsEx(name_ptr: [*]const u8, name_len: usize) ?*FileSystem {
+    const name = name_ptr[0..name_len];
+    const hash = hashFn(name);
+
+    fs_lock.lock();
+    defer fs_lock.unlock();
+
+    var node = fs_list.first;
+
+    while (node) |fs| : (node = fs.next) {
+        if (fs.data.hash == hash) return &fs.data;
+    }
+
+    return null;
+}
+
+fn getSymName(comptime Member: type, comptime ref: anytype) ?[]const u8 {
+    const RefT = @TypeOf(ref);
+
+    for (std.meta.declarations(Member)) |decl| {
+        const decl_ref = @field(Member, decl.name);
+
+        if (@TypeOf(decl_ref) != RefT) continue;
+        if (ref == decl_ref) return decl.name;
+    }
+
+    return null;
+}
+
+fn exportFn(comptime Member: type, comptime ref: anytype) void {
+    const name = getSymName(Member, ref) orelse unreachable;
+    const api_name = @typeName(Member)++"."++name;
+
+    //@compileLog(api_name);
+    @export(ref, .{ .name = api_name });
 }
