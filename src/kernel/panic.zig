@@ -8,10 +8,11 @@ const builtin = @import("builtin");
 const dbg = @import("dbg-info");
 
 const logger = @import("logger.zig");
+const smp = @import("smp.zig");
 const text_output = video.text_output;
 const utils = @import("utils.zig");
-const vm = @import("vm.zig");
 const video = @import("video.zig");
+const vm = @import("vm.zig");
 
 /// Represents a symbol (function) from the kernel's debugging information.
 const Symbol = struct {
@@ -45,9 +46,17 @@ const StackDump = struct {
     }
 
     pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("<{s}>\n", .{ if (@intFromPtr(self.stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned" });
+        try writer.print(
+            "<{s}>" ++ logger.new_line,
+            .{if (@intFromPtr(self.stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned"}
+        );
 
-        for (self.stack, 0..) |entry, i| { try writer.print("+0x{x:0>2}: 0x{x:.>16}\n", .{i * @sizeOf(usize),entry}); }
+        for (self.stack, 0..) |entry, i| {
+            try writer.print(
+                "+0x{x:0>2}: 0x{x:.>16}" ++ logger.new_line,
+                .{i * @sizeOf(usize),entry}
+            );
+        }
     }
 };
 
@@ -103,12 +112,12 @@ pub fn exception(
     defer logger.release();
 
     tty_config.setColor(logger.writer, .bright_red) catch return;
-    logger.writer.writeAll("<<EXCEPTION>>" ++ logger.new_line) catch return;
+    logger.writer.print("<<EXCEPTION>> CPU: {}" ++ logger.new_line, .{smp.getIdx()}) catch return;
 
     tty_config.setColor(logger.writer, .bright_yellow) catch return;
-    logger.writer.print(fmt, args) catch return;
+    logger.writer.print(fmt ++ logger.new_line, args) catch return;
     logger.writer.print(
-        \\
+        logger.new_line ++
         \\code: {}
         \\stack: {}
         ++ logger.new_line
