@@ -271,40 +271,12 @@ fn ExcpHandler(vec: comptime_int) type {
 }
 
 fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv(.C) noreturn {
-    const CodeDump = struct {
-        code: ?[]const u8,
-
-        pub fn init(addr: usize) @This() {
-            if (addr == 0) return .{ .code = null };
-            return .{ .code = @as([*]const u8, @ptrFromInt(addr))[0..10] };
-        }
-
-        pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            if (self.code == null) {
-                try writer.print("invalid instruction pointer...", .{});
-                return;
-            }
-
-            for (self.code.?) |byte| { try writer.print("{x:0>2} ", .{byte}); }
-        }
-    };
-
-    const StackDump = struct {
-        stack: []const usize,
-
-        pub fn init(addr: usize) @This() {
-            return .{ .stack = @as([*]const usize, @ptrFromInt(addr))[0..10] };
-        }
-
-        pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-            try writer.print("<{s}>\n", .{ if (@intFromPtr(self.stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned" });
-
-            for (self.stack, 0..) |entry, i| { try writer.print("+0x{x:0>2}: 0x{x:.>16}\n", .{i * @sizeOf(usize),entry}); }
-        }
-    };
-
-    logger.excp(vec, error_code);
-    logger.rawLog(
+    panic.exception(
+        state.intr.rip,
+        state.intr.rsp,
+        state.callee.rbp,
+        \\#{} error: 0x{x}
+        \\
         \\Regs:
         \\rax: 0x{x:.>16}, rcx: 0x{x:.>16}, rdx: 0x{x:.>16}, rbx: 0x{x:.>16}
         \\rip: 0x{x:.>16}, rsp: 0x{x:.>16}, rbp: 0x{x:.>16}, rflags: 0x{x:.>8}
@@ -313,25 +285,17 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
         \\cr2: 0x{x:.>16}, cr3: 0x{x:.>16}, cr4: 0x{x:.>16}
         \\
         \\cs: 0x{x}, ss: 0x{x}, lapic id: {}
-        \\code: {}
-        \\stack: {}
-    , .{
+        , .{
+            vec, error_code,
             state.scratch.rax, state.scratch.rcx, state.scratch.rdx, state.callee.rbx,
             state.intr.rip, state.intr.rsp, state.callee.rbp, state.intr.rflags,
             state.scratch.r8, state.scratch.r9, state.scratch.r10, state.scratch.r11,
             state.callee.r12, state.callee.r13, state.callee.r14, state.callee.r15,
             regs.getCr2(), regs.getCr3(), regs.getCr4(),
             state.intr.cs, state.intr.ss, apic.lapic.getId(),
-            CodeDump.init(state.intr.rip), StackDump.init(state.intr.rsp)
-        },
-        @import("../../video/Framebuffer.zig").Color.lyellow,
-        false
+        }
     );
 
-    var it = std.debug.StackIterator.init(null, state.callee.rbp);
-    panic.trace(&it);
-
-    logger.excpEnd();
     utils.halt();
 }
 

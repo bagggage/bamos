@@ -213,6 +213,11 @@ inline fn handleEscapeSequence(seq: []const u8) u32 {
 inline fn handleEscapeCode(code: u8) void {
     @setRuntimeSafety(false);
 
+    if (code == 0) {
+        setColor(Color.lgray);
+        return;
+    }
+
     // Handle colors
     if ((code >= 30 and code <= 37) or (code >= 40 and code <= 47)) {
         const color_idx = code % 10;

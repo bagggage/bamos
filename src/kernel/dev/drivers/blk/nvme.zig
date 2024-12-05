@@ -461,7 +461,7 @@ const Controller = struct {
 
         self.deinitIoQueues();
 
-        self.disable() catch |err| log.err("NVMe deinit: cannot disable controller: {s}", .{@errorName(err)});
+        self.disable() catch |err| log.err("deinit: cannot disable controller: {s}", .{@errorName(err)});
         self.deinitAdminQueues();
 
         dev.io.release(vm.getPhysLma(self.bar.dyn_base), .mmio);
@@ -802,7 +802,7 @@ const Controller = struct {
 
             if (complete.status != 0) {
                 self.admin_fail = complete.status;
-                log.warn("NVMe: failed admin command: {}", .{complete});
+                log.warn("failed admin command: {}", .{complete});
             }
 
             self.admin_cmpl = complete.cmd_id;
@@ -839,14 +839,14 @@ pub fn init() !void {
 }
 
 fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {
-    log.debug("NVMe controller: {s}", .{device.name.str()});
+    log.debug("controller: {s}", .{device.name.str()});
 
     const pci_dev = pci.Device.from(device);
     const controller = vm.alloc(Controller) orelse return .no_resources;
     pci_dev.data.set(@ptrCast(controller));
 
     controller.init(pci_dev) catch |err| {
-        log.err("NVMe initialization failed: {s}", .{@errorName(err)});
+        log.err("initialization failed: {s}", .{@errorName(err)});
 
         vm.free(controller);
         pci_dev.data.set(null);

@@ -19,8 +19,37 @@ const Symbol = struct {
     name: []const u8 = undefined,
 };
 
-/// Buffer used for formatting stack trace messages.
-var fmt_buffer: [256]u8 = undefined;
+const CodeDump = struct {
+    code: ?[]const u8,
+
+    pub fn init(addr: usize) @This() {
+        if (addr == 0) return .{ .code = null };
+        return .{ .code = @as([*]const u8, @ptrFromInt(addr))[0..10] };
+    }
+
+    pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        if (self.code == null) {
+            try writer.print("invalid instruction pointer...", .{});
+            return;
+        }
+
+        for (self.code.?) |byte| { try writer.print("{x:0>2} ", .{byte}); }
+    }
+};
+
+const StackDump = struct {
+    stack: []const usize,
+
+    pub fn init(addr: usize) @This() {
+        return .{ .stack = @as([*]const usize, @ptrFromInt(addr))[0..10] };
+    }
+
+    pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try writer.print("<{s}>\n", .{ if (@intFromPtr(self.stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned" });
+
+        for (self.stack, 0..) |entry, i| { try writer.print("+0x{x:0>2}: 0x{x:.>16}\n", .{i * @sizeOf(usize),entry}); }
+    }
+};
 
 const tty_config: std.io.tty.Config = .escape_codes;
 
@@ -34,30 +63,77 @@ extern fn getDebugSyms() *const dbg.Header;
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     @setCold(true);
 
-    tty_config.setColor(logger.writer, .bright_red) catch {};
+    logger.capture();
+    defer logger.release();
 
-    _ = logger.writer.writeAll("[KERNEL PANIC]: ") catch {};
-    _ = logger.writer.writeAll(msg) catch {};
-    _ = logger.writer.writeAll("\n\r") catch {};
+    {
+        tty_config.setColor(logger.writer, .bright_red) catch {};
 
-    var it = std.debug.StackIterator.init(@returnAddress(), @frameAddress());
+        _ = logger.writer.writeAll("[KERNEL PANIC]: ") catch {};
+        _ = logger.writer.writeAll(msg) catch {};
+        _ = logger.writer.writeAll("\n\r") catch {};
 
-    trace(&it);
+        var it = std.debug.StackIterator.init(
+            @returnAddress(),
+            @frameAddress()
+        );
+
+        trace(&it, &logger.writer);
+    }
 
     utils.halt();
 }
 
+/// Handles exception by printing message.
+/// Makes stack dump, code dump and stack trace.
+/// 
+/// - `ip`: instruction pointer to make code dump.
+/// - `sp`: stack pointer to make stack dump.
+/// - `fp`: frame pointer to make stack trace.
+/// - `fmt`: additional message format string.
+/// - `args`: argumenets used within formating.
+pub fn exception(
+    ip: usize,
+    sp: usize,
+    fp: usize,
+    comptime fmt: []const u8,
+    args: anytype
+) void {
+    logger.capture();
+    defer logger.release();
+
+    tty_config.setColor(logger.writer, .bright_red) catch return;
+    logger.writer.writeAll("<<EXCEPTION>>" ++ logger.new_line) catch return;
+
+    tty_config.setColor(logger.writer, .bright_yellow) catch return;
+    logger.writer.print(fmt, args) catch return;
+    logger.writer.print(
+        \\
+        \\code: {}
+        \\stack: {}
+        ++ logger.new_line
+        , .{ CodeDump.init(ip), StackDump.init(sp) }
+    ) catch return;
+
+    var stack_it = std.debug.StackIterator.init(null, fp);
+    trace(&stack_it, &logger.writer);
+
+    tty_config.setColor(logger.writer, .reset) catch return;
+}
+
 /// Traces the stack frames and prints the corresponding function names with offsets.
 /// This function is used to provide a detailed trace of the function calls leading up to a panic.
-pub fn trace(it: *std.debug.StackIterator) void {
-    tty_config.setColor(logger.writer, .bright_yellow) catch {};
+pub fn trace(it: *std.debug.StackIterator, writer: *std.io.AnyWriter) void {
+    tty_config.setColor(writer, .bright_yellow) catch return;
 
     if (comptime builtin.mode == .ReleaseFast) {
-        logger.writer.writeAll("Tracing cannot be done in `ReleaseFast` build, use `Debug` or `ReleaseSafe` build.") catch {};
+        writer.writeAll(
+            "Tracing cannot be done in `ReleaseFast` build, use `Debug` or `ReleaseSafe` build."
+        ) catch return;
         return;
     }
 
-    logger.writer.writeAll("[TRACE]:\n\r") catch {};
+    writer.writeAll("[TRACE]:" ++ logger.new_line) catch return;
 
     var i: usize = 1;
 
@@ -66,13 +142,10 @@ pub fn trace(it: *std.debug.StackIterator) void {
         const sym_name = if (symbol) |sym| sym.name else "<unknown>";
         const addr_offset = if (symbol) |sym| ret_addr - sym.addr else 0;
 
-        const msg= std.fmt.bufPrint(
-            &fmt_buffer,
-            "{:2}. 0x{x:0<16}: {s}+0x{x}\n\r\x00",
+        writer.print(
+            "{:2}. 0x{x:0<16}: {s}+0x{x}" ++ logger.new_line,
             .{ i, ret_addr, sym_name, addr_offset }
-        ) catch unreachable;
-
-        logger.writer.writeAll(msg) catch {};
+        ) catch return;
     }
 }
 

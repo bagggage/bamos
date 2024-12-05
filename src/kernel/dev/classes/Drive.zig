@@ -109,7 +109,7 @@ pub fn init(self: *Self, name: []const u8, multi_io: bool, partitions: bool) Err
     self.base_name = name;
     self.io_oma = IoOma.init(io_oma_capacity);
 
-    log.info("Drive: {s}; lba size: {}; capacity: {} MiB", .{
+    log.info("init: {s}; lba size: {}; capacity: {} MiB", .{
         self.base_name, self.lba_size, self.capacity / utils.mb_size
     });
 

@@ -117,7 +117,7 @@ pub fn probe(drive: *Drive) Error!void {
         if (std.mem.eql(u8, &entry.guid.val, &Gpt.Entry.unused_guid.val)) break;
 
         _ = std.unicode.utf16LeToUtf8(&name, &entry.name) catch {};
-        log.info("Partition: type: {} guid: {}: \"{s}\"", .{
+        log.info("type: {} guid: {}: \"{s}\"", .{
             entry.type_guid, entry.guid, name[0..std.mem.len(@as([*:0]u8, @ptrCast(&name)))]
         });
 
