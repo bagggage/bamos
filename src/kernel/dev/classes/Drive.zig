@@ -6,7 +6,7 @@ const std = @import("std");
 
 const cache = vm.cache;
 const dev = @import("../../dev.zig");
-const log = @import("../../log.zig");
+const log = std.log.scoped(.Drive);
 const smp = @import("../../smp.zig");
 const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");

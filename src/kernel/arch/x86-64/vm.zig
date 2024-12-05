@@ -5,7 +5,7 @@
 const std = @import("std");
 
 const boot = @import("../../boot.zig");
-const log = @import("../../log.zig");
+const log = std.log.scoped(.@"x86-64.vm");
 const regs = @import("regs.zig");
 const vm = @import("../../vm.zig");
 const utils = @import("../../utils.zig");

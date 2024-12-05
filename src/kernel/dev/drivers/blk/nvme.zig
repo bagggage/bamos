@@ -9,7 +9,7 @@
 const std = @import("std");
 
 const dev = @import("../../../dev.zig");
-const log = @import("../../../log.zig");
+const log = std.log.scoped(.nvme);
 const pci = dev.pci;
 const smp = @import("../../../smp.zig");
 const utils = @import("../../../utils.zig");
@@ -230,7 +230,7 @@ const Namespace = struct {
 
                 break :blk phys;
             }
-        }; 
+        };
 
         ns.ctrl.sendIoCmd(
             ns.id,
@@ -777,7 +777,7 @@ const Controller = struct {
     fn handleIoCompletion(self: *Controller, id: u16) void {
         const queue = &self.io_completion[id];
         const sq = &self.io_submission[id];
-    
+
         var complete = queue.getHead();
 
         while (complete.phase_tag == queue.phase_bit) : (complete = queue.nextHead()) {

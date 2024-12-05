@@ -5,7 +5,6 @@
 const std = @import("std");
 
 const vm = @import("../vm.zig");
-const log = @import("../log.zig");
 const utils = @import("../utils.zig");
 
 const List = utils.List(u8);

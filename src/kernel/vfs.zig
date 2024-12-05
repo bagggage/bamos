@@ -8,7 +8,7 @@ const std = @import("std");
 
 const dev = @import("dev.zig");
 const utils = @import("utils.zig");
-const log = @import("log.zig");
+const log = std.log.scoped(.vfs);
 const vm = @import("vm.zig");
 
 const entries_oma_capacity = 512;

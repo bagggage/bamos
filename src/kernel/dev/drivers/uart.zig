@@ -6,7 +6,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const dev = @import("../../dev.zig");
-const log = @import("../../log.zig");
 
 const reg = dev.regs.reg;
 
@@ -63,12 +62,10 @@ pub fn init() !void {
     try dev.registerDriver("platform", &driver);
 }
 
-pub inline fn put(byte: u8) void {
-    regs.write(.data, byte);
-}
-
-pub inline fn write(buffer: []const u8) void {
-    for (buffer) |byte| put(byte);
+pub fn write(bytes: []const u8) void {
+    for (bytes) |byte| {
+        regs.write(.data, byte);
+    }
 }
 
 fn initPort() void {

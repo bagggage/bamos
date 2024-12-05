@@ -9,7 +9,8 @@ const arch = @import("arch.zig");
 const boot = @import("../../boot.zig");
 const gdt = @import("gdt.zig");
 const intr = @import("../../dev/intr.zig");
-const log = @import("../../log.zig");
+const log = std.log.scoped(.@"x86-64.intr");
+const logger = @import("../../logger.zig");
 const panic = @import("../../panic.zig");
 const pic = @import("intr/pic.zig");
 const regs = @import("regs.zig");
@@ -302,8 +303,8 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
         }
     };
 
-    log.excp(vec, error_code);
-    log.rawLog(
+    logger.excp(vec, error_code);
+    logger.rawLog(
         \\Regs:
         \\rax: 0x{x:.>16}, rcx: 0x{x:.>16}, rdx: 0x{x:.>16}, rbx: 0x{x:.>16}
         \\rip: 0x{x:.>16}, rsp: 0x{x:.>16}, rbp: 0x{x:.>16}, rflags: 0x{x:.>8}
@@ -330,7 +331,7 @@ fn commonExcpHandler(state: *regs.IntrState, vec: u32, error_code: u32) callconv
     var it = std.debug.StackIterator.init(null, state.callee.rbp);
     panic.trace(&it);
 
-    log.excpEnd();
+    logger.excpEnd();
     utils.halt();
 }
 

@@ -7,7 +7,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dbg = @import("dbg-info");
 
-const log = @import("log.zig");
+const logger = @import("logger.zig");
 const text_output = video.text_output;
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
@@ -22,6 +22,8 @@ const Symbol = struct {
 /// Buffer used for formatting stack trace messages.
 var fmt_buffer: [256]u8 = undefined;
 
+const tty_config: std.io.tty.Config = .escape_codes;
+
 /// External function to retrieve the debug symbols from the kernel.
 /// This function is generating by `debug-maker`, it makes possible to
 /// include generated debug information as `@embedFile` into the kernel executable.
@@ -32,13 +34,11 @@ extern fn getDebugSyms() *const dbg.Header;
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     @setCold(true);
 
-    if (text_output.isEnabled() == false) text_output.init();
+    tty_config.setColor(logger.writer, .bright_red) catch {};
 
-    text_output.setColor(video.Color.red);
-    text_output.print("[KERNEL PANIC]: ");
-    text_output.setColor(video.Color.lred);
-    text_output.print(msg);
-    text_output.print("\n");
+    _ = logger.writer.writeAll("[KERNEL PANIC]: ") catch {};
+    _ = logger.writer.writeAll(msg) catch {};
+    _ = logger.writer.writeAll("\n\r") catch {};
 
     var it = std.debug.StackIterator.init(@returnAddress(), @frameAddress());
 
@@ -50,14 +50,14 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
 /// Traces the stack frames and prints the corresponding function names with offsets.
 /// This function is used to provide a detailed trace of the function calls leading up to a panic.
 pub fn trace(it: *std.debug.StackIterator) void {
-    text_output.setColor(video.Color.lyellow);
+    tty_config.setColor(logger.writer, .bright_yellow) catch {};
 
     if (comptime builtin.mode == .ReleaseFast) {
-        text_output.print("Tracing cannot be done in `ReleaseFast` build, use `Debug` or `ReleaseSafe` build.");
+        logger.writer.writeAll("Tracing cannot be done in `ReleaseFast` build, use `Debug` or `ReleaseSafe` build.") catch {};
         return;
     }
 
-    text_output.print("[TRACE]:\n");
+    logger.writer.writeAll("[TRACE]:\n\r") catch {};
 
     var i: usize = 1;
 
@@ -66,13 +66,13 @@ pub fn trace(it: *std.debug.StackIterator) void {
         const sym_name = if (symbol) |sym| sym.name else "<unknown>";
         const addr_offset = if (symbol) |sym| ret_addr - sym.addr else 0;
 
-        _ = std.fmt.bufPrint(
+        const msg= std.fmt.bufPrint(
             &fmt_buffer,
-            "{:2}. 0x{x:0<16}: {s}+0x{x}\n\x00",
+            "{:2}. 0x{x:0<16}: {s}+0x{x}\n\r\x00",
             .{ i, ret_addr, sym_name, addr_offset }
         ) catch unreachable;
 
-        text_output.print(&fmt_buffer);
+        logger.writer.writeAll(msg) catch {};
     }
 }
 

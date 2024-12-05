@@ -11,7 +11,6 @@ const std = @import("std");
 const arch = @import("utils.zig").arch;
 const boot = @import("boot.zig");
 const utils = @import("utils.zig");
-const log = @import("log.zig");
 
 /// The size of a memory page, specific to the architecture.
 pub const page_size = arch.vm.page_size;

@@ -11,7 +11,7 @@ const boot = @import("../boot.zig");
 const math = std.math;
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
-const log = @import("../log.zig");
+const log = std.log.scoped(.PageAllocator);
 
 const Spinlock = utils.Spinlock;
 

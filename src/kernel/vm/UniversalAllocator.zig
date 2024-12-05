@@ -39,7 +39,6 @@
 
 const std = @import("std");
 
-const log = @import("../log.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 

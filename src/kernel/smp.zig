@@ -6,7 +6,7 @@ const std = @import("std");
 
 const arch = utils.arch;
 const boot = @import("boot.zig");
-const log = @import("log.zig");
+const log = std.log.scoped(.smp);
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 

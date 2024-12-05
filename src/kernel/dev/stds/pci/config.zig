@@ -8,7 +8,7 @@ const builtin = @import("builtin");
 const acpi = @import("../acpi.zig");
 const io = @import("../../io.zig");
 const regs = @import("../../regs.zig");
-const log = @import("../../../log.zig");
+const log = std.log.scoped(.@"pci.config");
 const utils = @import("../../../utils.zig");
 const vm = @import("../../../vm.zig");
 

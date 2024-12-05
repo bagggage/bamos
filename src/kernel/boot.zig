@@ -15,7 +15,7 @@ const c = @cImport({
 
 const std = @import("std");
 const builtin = @import("builtin");
-const log = @import("log.zig");
+const log = std.log.scoped(.boot);
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 

@@ -10,7 +10,7 @@ const boot = @import("../../../boot.zig");
 const dev = @import("../../../dev.zig");
 const io = dev.io;
 const intr = @import("../intr.zig");
-const log = @import("../../../log.zig");
+const log = std.log.scoped(.ioapic);
 const vm = @import("../../../vm.zig");
 
 const Interrupt = apic.Interrupt;

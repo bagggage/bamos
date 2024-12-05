@@ -9,7 +9,6 @@ const arch = @import("../arch.zig");
 const dev = @import("../../../dev.zig");
 const intr = dev.intr;
 const smp = @import("../../../smp.zig");
-const log = @import("../../../log.zig");
 const pic = @import("pic.zig");
 
 const c = @cImport(

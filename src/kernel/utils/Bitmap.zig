@@ -4,7 +4,6 @@
 
 const std = @import("std");
 
-const log = @import("../log.zig");
 const utils = @import("../utils.zig"); 
 
 const Self = @This();

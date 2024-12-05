@@ -4,7 +4,6 @@ const arch = @import("arch.zig");
 const boot = @import("../../boot.zig");
 const regs = @import("regs.zig");
 const intr = @import("intr.zig");
-const log = @import("../../log.zig");
 const vm = @import("../../vm.zig");
 
 pub const max_entries = 256;

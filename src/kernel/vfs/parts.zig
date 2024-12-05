@@ -4,7 +4,7 @@ const std = @import("std");
 
 const dev = @import("../dev.zig");
 const Drive = dev.classes.Drive;
-const log = @import("../log.zig");
+const log = std.log.scoped(.parts);
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 

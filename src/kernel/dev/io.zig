@@ -6,7 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const arch = utils.arch;
-const log = @import("../log.zig");
+const log = std.log.scoped(.@"dev.io");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 

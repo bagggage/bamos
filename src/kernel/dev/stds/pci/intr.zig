@@ -8,7 +8,7 @@ const config = @import("config.zig");
 const dev = @import("../../../dev.zig");
 const intr = dev.intr;
 const io = dev.io;
-const log = @import("../../../log.zig");
+const log = std.log.scoped(.@"pci.intr");
 const utils = @import("../../../utils.zig");
 const vm = @import("../../../vm.zig");
 

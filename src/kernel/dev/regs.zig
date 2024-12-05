@@ -4,7 +4,6 @@
 
 const std = @import("std");
 
-const log = @import("../log.zig");
 const io = @import("io.zig");
 
 pub const Register = struct {

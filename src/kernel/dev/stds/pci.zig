@@ -5,7 +5,7 @@
 const std = @import("std");
 
 const dev = @import("../../dev.zig");
-const log = @import("../../log.zig");
+const log = std.log.scoped(.pci);
 const utils = @import("../../utils.zig");
 const regs = dev.regs;
 const vm = @import("../../vm.zig");

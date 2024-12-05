@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const boot = @import("../../boot.zig");
-const log = @import("../../log.zig");
 const io = @import("../io.zig");
 const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");

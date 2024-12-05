@@ -10,7 +10,6 @@ const std = @import("std");
 const boot = @import("../../boot.zig");
 const gdt = @import("gdt.zig");
 const lapic = @import("intr/lapic.zig");
-const log = @import("../../log.zig");
 const regs = @import("regs.zig");
 const smp = @import("../../smp.zig");
 const utils = @import("../../utils.zig");

@@ -16,7 +16,6 @@ const vm = @import("../vm.zig");
 const Color = Framebuffer.Color;
 const Framebuffer = @import("Framebuffer.zig");
 const text_output = @import("text-output.zig");
-const log = @import("../log.zig");
 
 const use_buffers = true;
 
