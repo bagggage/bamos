@@ -1,7 +1,6 @@
-//! # Logging
+//! # Logger
 //! 
-//! Provides logging utilities for handling various types of log messages,
-//! including exceptions, informational messages, warnings, and errors.
+//! Provides implementation for `defaultLog(...)` used within `std.log`.
 //! Manages thread-safe text output with color formatting.
 
 // Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
@@ -79,6 +78,27 @@ pub fn switchFromEarly() void {
     writer = KernelWriter.setup();
 }
 
+pub fn capture() void {
+    const cpu_idx = smp.getIdx();
+
+    if (lock.isLocked() and lock_owner == cpu_idx) {
+        double_lock = true;
+        return;
+    }
+
+    lock.lock();
+    lock_owner = cpu_idx;
+}
+
+pub fn release() void {
+    if (double_lock) {
+        double_lock = false;
+        return;
+    }
+
+    lock.unlock();
+}
+
 // @export
 pub fn defaultLog(
     comptime level: std.log.Level,
@@ -136,25 +156,4 @@ inline fn levelToString(comptime level: std.log.Level) []const u8 {
         .warn   => "WARN",
         .err    => "ERROR"
     };
-}
-
-pub fn capture() void {
-    const cpu_idx = smp.getIdx();
-
-    if (lock.isLocked() and lock_owner == cpu_idx) {
-        double_lock = true;
-        return;
-    }
-
-    lock.lock();
-    lock_owner = cpu_idx;
-}
-
-pub fn release() void {
-    if (double_lock) {
-        double_lock = false;
-        return;
-    }
-
-    lock.unlock();
 }
