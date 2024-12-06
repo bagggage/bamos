@@ -70,6 +70,7 @@ const Io = union {
 base_name: []const u8,
 
 lba_size: u16,
+lba_shift: u4 = undefined,
 capacity: usize,
 
 is_multi_io: bool = false,
@@ -84,8 +85,8 @@ parts: vfs.parts.List = .{},
 vtable: *const VTable,
 
 fn checkIo(self: *const Self, lba_offset: usize, buffer: []const u8) void {
-    std.debug.assert((buffer.len % self.lba_size) == 0);
-    std.debug.assert((lba_offset * self.lba_size) + buffer.len <= self.capacity);
+    std.debug.assert(self.offsetModLba(buffer.len) == 0);
+    std.debug.assert(self.lbaToOffset(lba_offset) + buffer.len <= self.capacity);
 }
 
 pub fn init(self: *Self, name: []const u8, multi_io: bool, partitions: bool) Error!void {
@@ -107,6 +108,7 @@ pub fn init(self: *Self, name: []const u8, multi_io: bool, partitions: bool) Err
     }
 
     self.base_name = name;
+    self.lba_shift = std.math.log2_int(u16, self.lba_size);
     self.io_oma = IoOma.init(io_oma_capacity);
 
     log.info("init: {s}; lba size: {}; capacity: {} MiB", .{
@@ -115,7 +117,7 @@ pub fn init(self: *Self, name: []const u8, multi_io: bool, partitions: bool) Err
 
     {
         root_part.data.lba_start = 0;
-        root_part.data.lba_end = self.capacity / self.lba_size;
+        root_part.data.lba_end = self.offsetToLba(self.capacity);
 
         self.parts = .{};
         self.parts.append(root_part);
@@ -206,6 +208,19 @@ pub fn writeAsync(self: *Self, lba_offset: usize, buffer: []const u8, callback: 
     _ = self.submitRequest(node);
 }
 
+pub inline fn lbaToOffset(self: *const Self, lba_offset: usize) usize {
+    return lba_offset << self.lba_shift;
+}
+
+pub inline fn offsetToLba(self: *const Self, offset: usize) usize {
+    return offset >> self.lba_shift;
+}
+
+pub inline fn offsetModLba(self: *const Self, offset: usize) u16 {
+    const mask = comptime ~@as(u16, 1);
+    return ~(mask << self.lba_shift) & @as(u16, @truncate(offset));
+}
+
 fn syncCallback(request: *const IoRequest, status: IoRequest.Status) void {
     const rq = @constCast(request);
 
@@ -217,7 +232,7 @@ fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
     if (self.cache_ctrl.get(idx)) |block| return block;
 
     const block = self.cache_ctrl.new(idx) orelse return error.NoMemory;
-    const lba_idx = idx * (cache.block_size / self.lba_size);
+    const lba_idx = idx * self.offsetToLba(cache.block_size);
 
     const rq_node = try self.makeRequest(.read, lba_idx, block.asSlice(), syncCallback);
     const wait_id = ~rq_node.data.id;
@@ -247,7 +262,7 @@ inline fn makeRequest(
         node.data.operation = operation;
         node.data.lma_buf = buffer.ptr;
         node.data.lba_offset = lba_offset;
-        node.data.lba_num = @truncate(buffer.len / self.lba_size);
+        node.data.lba_num = @truncate(self.offsetToLba(buffer.len));
         node.data.callback = callback;
     }
 
