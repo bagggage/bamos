@@ -182,10 +182,7 @@ inline fn handleControlChar(char: u8) void {
         cc.bs => cursor.left(),
         cc.lf,
         cc.vt,
-        cc.ff => {
-            cacheChar(char);
-            cursor.nextRow();
-        },
+        cc.ff => cursor.nextRow(),
         else => {}
     }
 }
@@ -269,29 +266,33 @@ fn scroll() void {
 
         while (col < cols) : (col += 1) {
             const prev_offset = buf_offset - cols;
-            const c = char_buffer[buf_offset + col];
+            const char = char_buffer[buf_offset + col];
+            const color = color_buffer[buf_offset + col];
 
-            if (c == '\n' or c == 0) {
+            if (char == 0) {
                 var prev_c = char_buffer[prev_offset + col];
 
-                while (prev_c != 0 and prev_c != '\n' and col < cols) {
-                    text_output.drawChar(' ', curr_col, @truncate(row - 1), @truncate(col));
+                while (prev_c != 0 and col < cols) : ({
+                    col += 1; prev_c = char_buffer[prev_offset + col];
+                }) {
                     char_buffer[prev_offset + col] = 0;
-
-                    col += 1;
-                    prev_c = char_buffer[prev_offset + col];
+                    text_output.drawChar(' ', color, @truncate(row - 1), @truncate(col));
                 }
 
                 break;
             }
 
-            curr_col = color_buffer[buf_offset + col];
+            char_buffer[prev_offset + col] = char;
+            color_buffer[prev_offset + col] = color;
 
-            char_buffer[prev_offset + col] = c;
-            color_buffer[prev_offset + col] = curr_col;
-
-            text_output.drawChar(c, curr_col, @truncate(row - 1), @truncate(col));
+            text_output.drawChar(char, color, @truncate(row - 1), @truncate(col));
         }
+    }
+
+    // Cleanup last row
+    for (0..cols) |i| {
+        if (char_buffer[buf_offset + i] == 0) break;
+        char_buffer[buf_offset + i] = 0;
     }
 
     fastMemset256(@intFromPtr(framebuffer.base) + fb_size - row_size, row_size, 0);

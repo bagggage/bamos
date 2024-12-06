@@ -137,7 +137,7 @@ pub fn trace(it: *std.debug.StackIterator, writer: *std.io.AnyWriter) void {
 
     if (comptime builtin.mode == .ReleaseFast) {
         writer.writeAll(
-            "Tracing cannot be done in `ReleaseFast` build, use `Debug` or `ReleaseSafe` build."
+            "Tracing cannot be done in `ReleaseFast` build, use `Debug` or `ReleaseSafe` build." ++ logger.new_line
         ) catch return;
         return;
     }
