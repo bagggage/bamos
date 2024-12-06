@@ -64,7 +64,7 @@ const KernelWriter = struct {
     }
 };
 
-pub const new_line = "\n\r";
+pub const new_line = "\r\n";
 pub var writer: std.io.AnyWriter = EarlyWriter.setup();
 
 const tty_config: std.io.tty.Config = .escape_codes;

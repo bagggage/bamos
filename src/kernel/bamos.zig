@@ -33,4 +33,4 @@
 //! the implementation of a fully-fledged device management and driver system.
 //! - [**Architecture module**](./#bamos.arch.x86-64.arch): This module provides the implementation
 //! of the interface for architecture-dependent features.
-//! - [**Logging**](./#bamos.log): The logging system.
+//! - [**Logging**](./#bamos.logger): The logging system.
