@@ -90,9 +90,9 @@ pub fn probe(drive: *Drive) Error!void {
     std.debug.assert(drive.parts.len == 1);
 
     const lba_size = drive.lba_size;
-    var blk = try drive.readCached(lba_size);
-    const gpt = blk.asObject(Gpt.Header, lba_size);
-    
+    var cache_iter = try drive.readCached(lba_size);
+    const gpt = cache_iter.asObject(Gpt.Header);
+
     if (gpt.checkSign() == false) return;
 
     log.info("GPT found: {s}; patritions: {}; entry size: {}", .{
@@ -110,9 +110,9 @@ pub fn probe(drive: *Drive) Error!void {
 
     for (0..parts_num) |i| {
         const ent_offset = base_offset + (i * ent_size);
-        blk = try drive.readCachedNext(blk, ent_offset);
+        try drive.readCachedNext(&cache_iter, ent_offset);
 
-        const entry = blk.asObject(Gpt.Entry, ent_offset);
+        const entry = cache_iter.asObject(Gpt.Entry);
 
         if (std.mem.eql(u8, &entry.guid.val, &Gpt.Entry.unused_guid.val)) break;
 

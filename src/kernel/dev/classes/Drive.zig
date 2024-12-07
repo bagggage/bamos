@@ -181,21 +181,36 @@ pub fn completeIo(self: *Self, id: u16, status: IoRequest.Status) void {
     }
 }
 
-pub inline fn putCache(self: *Self, block: *cache.Block) void {
-    self.cache_ctrl.put(block);
+pub inline fn putCache(self: *Self, iter: *cache.Iterator) void {
+    if (iter.blk) |blk| {
+        self.cache_ctrl.put(blk);
+        iter.blk = null;
+    }
 }
 
-pub inline fn readCachedNext(self: *Self, block: *cache.Block, offset: usize) Error!*cache.Block {
-    const blk_idx: u32 = @truncate(offset / cache.block_size);
-    if (block.lba_key == blk_idx) return block;
-
-    self.cache_ctrl.put(block);
-    return self.readBlock(blk_idx);
+pub inline fn getCache(self: *const Self, offset: usize) ?cache.Iterator {
+    const blk = self.cache_ctrl.get(cache.offsetToBlock(offset)) orelse return null;
+    return cache.Iterator.from(blk, offset);
 }
 
-pub inline fn readCached(self: *Self, offset: usize) Error!*cache.Block {
-    const blk_idx: u32 = @truncate(offset / cache.block_size);
-    return self.readBlock(blk_idx);
+pub fn readCachedNext(self: *Self, iter: *cache.Iterator, offset: usize) Error!void {
+    @setRuntimeSafety(false);
+
+    iter.offset = offset;
+    const blk_idx = cache.offsetToBlock(offset);
+
+    if (iter.isValid()) {
+        if (iter.blk.?.lba_key == blk_idx) return;
+
+        self.cache_ctrl.put(iter.blk.?);
+    }
+
+    iter.blk = try self.readBlock(blk_idx);
+}
+
+pub inline fn readCached(self: *Self, offset: usize) Error!cache.Iterator {
+    const blk_idx = cache.offsetToBlock(offset);
+    return cache.Iterator.from(try self.readBlock(blk_idx), offset);
 }
 
 pub fn readAsync(self: *Self, lba_offset: usize, buffer: []u8, callback: IoRequest.CallbackFn) Error!void {
@@ -217,8 +232,22 @@ pub inline fn offsetToLba(self: *const Self, offset: usize) usize {
 }
 
 pub inline fn offsetModLba(self: *const Self, offset: usize) u16 {
-    const mask = comptime ~@as(u16, 1);
+    const mask = comptime ~@as(u16, 0);
     return ~(mask << self.lba_shift) & @as(u16, @truncate(offset));
+}
+
+pub fn getPartition(self: *const Self, part: u32) ?*vfs.Partition {
+    @setRuntimeSafety(false);
+
+    if (part >= self.parts.len) return null;
+
+    var node = self.parts.first;
+
+    for (0..part) |_| {
+        node = node.?.next;
+    }
+
+    return &node.?.data;
 }
 
 fn syncCallback(request: *const IoRequest, status: IoRequest.Status) void {

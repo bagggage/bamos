@@ -30,7 +30,7 @@ pub const Block = packed struct {
     }
 
     pub inline fn getOffset(self: Block) usize {
-        return @as(usize, self.lba_key) * block_size;
+        return blockToOffset(self.lba_key);
     }
 
     pub inline fn asSlice(self: Block) []u8 {
@@ -57,6 +57,33 @@ pub const Block = packed struct {
 
     pub inline fn release(self: *Block) void {
         self.ref_count -= 1;
+    }
+};
+
+pub const Iterator = struct {
+    blk: ?*Block = null,
+    offset: usize = 0,
+
+    pub fn blank() Iterator { return .{}; }
+
+    pub fn from(blk: *Block, offset: usize) Iterator {
+        return .{ .blk = blk, .offset = offset };
+    }
+
+    pub inline fn asObject(self: *const Iterator, T: type) *T {
+        return self.blk.?.asObject(T, self.offset);
+    }
+
+    pub inline fn asSlice(self: *const Iterator) []const u8 {
+        return self.blk.?.asSliceOffset(self.offset);
+    }
+
+    pub inline fn asSliceAbsolute(self: *const Iterator) []const u8 {
+        return self.blk.?.asSlice();
+    }
+
+    pub inline fn isValid(self: *const Iterator) bool {
+        return self.blk != null;
     }
 };
 
@@ -372,6 +399,14 @@ pub fn swap(target_num: u32) u32 {
     }
 
     return num;
+}
+
+pub inline fn offsetToBlock(offset: usize) u32 {
+    return @truncate(offset / block_size);
+}
+
+pub inline fn blockToOffset(block: u32) usize {
+    return @as(usize, block) * block_size;
 }
 
 /// Returns the total number of cache pages.
