@@ -14,6 +14,9 @@ const vm = @import("vm.zig");
 const entries_oma_capacity = 512;
 const super_oma_capacity = 32;
 
+const max_lookup_table_size = utils.mb_size * 16;
+const min_lookup_table_size = utils.mb_size;
+
 const hashFn = std.hash.Fnv1a_32.hash;
 
 pub const parts = @import("vfs/parts.zig");
@@ -26,6 +29,7 @@ pub const Error = error {
     Busy,
     NoMemory,
     NoFs,
+    NoEnt,
     BadDentry,
     BadInode,
     BadSuperblock,
@@ -181,9 +185,10 @@ pub const Dentry = struct {
     pub const Node = List.Node;
 
     pub const Operations = struct {
-        pub const FillT = *const fn(*Dentry) void;
+        pub const Lookup = *const fn(*const Dentry, []const u8) ?*Dentry;
+        pub const ReadInode = *const fn(*Dentry) Error!*Inode;
 
-        fill: FillT,
+        lookup: Lookup,
     };
 
     pub const Name = struct {
@@ -195,7 +200,6 @@ pub const Dentry = struct {
         };
 
         value: Union = undefined,
-        hash: u32 = 0,
         len: u8 = 0,
 
         pub fn init(self: *Name, name: []const u8) !void {    
@@ -212,7 +216,6 @@ pub const Dentry = struct {
                 self.value = .{ .long = buffer[0..name.len] };
             }
 
-            self.hash = hashFn(name);
             self.len = @truncate(name.len);
         }
 
@@ -229,7 +232,6 @@ pub const Dentry = struct {
                 );
             }
 
-            other.hash = self.hash;
             other.len = self.len;
         }
 
@@ -245,33 +247,41 @@ pub const Dentry = struct {
     name: Name,
 
     parent: *Dentry,
-    inode: ?*Inode = null,
+    super: *Superblock,
+    inode: *Inode,
     ops: *Operations,
 
     child: List = .{},
 
     lock: utils.Spinlock = .{},
 
-    pub var oma = vm.SafeOma(Node).init(entries_oma_capacity);
+    pub var oma = vm.SafeOma(LookupEntry).init(entries_oma_capacity);
 
     pub inline fn new() ?*Dentry {
-        return &(oma.alloc() orelse null).data;
+        return &(oma.alloc() orelse return null).data.value.data;
     }
 
     pub inline fn delete(self: *Dentry) void {
-        oma.free(self.getNode());
+        oma.free(self.getCacheEntry());
     }
 
     pub inline fn getNode(self: *Dentry) *Node {
         return @fieldParentPtr("data", self);
     }
 
-    pub fn init(self: *Dentry, name: []const u8, parent: ?*Dentry, inode: ?*Inode, ops: *Operations) !void {
+    pub inline fn getCacheEntry(self: *Dentry) *LookupEntry {
+        const entry: *LookupEntry.Data = @fieldParentPtr("value", self.getNode());
+        return @fieldParentPtr("data", entry);
+    } 
+
+    pub fn init(self: *Dentry, name: []const u8, parent: ?*Dentry, super: *Superblock, inode: *Inode, ops: *Operations) !void {
         try self.name.init(name);
 
         self.parent = parent orelse self;
+        self.super = super;
         self.inode = inode;
         self.ops = ops;
+        self.child = .{};
         self.lock = .{};
     }
 
@@ -279,33 +289,60 @@ pub const Dentry = struct {
         self.deleteChilds();
         self.name.deinit();
 
-        if (self.inode) |inode| {
-            // TODO: Call fs-driver cleanup functions
-            inode.delete();
-        }
+        self.inode.delete();
     }
 
-    pub fn exchange(self: *Dentry, inode: *Inode, ops: *Dentry.Operations) void {
+    pub fn exchange(self: *Dentry, super: *Superblock, inode: *Inode, ops: *Dentry.Operations) void {
         self.deleteChilds();
+        self.inode.delete();
 
-        if (self.inode) |i| {
-            // TODO: Call fs-driver cleanup functions
-            i.delete();
-        }
-
+        self.super = super;
         self.inode = inode;
         self.ops = ops;
     }
 
-    pub fn lookup(path: []const u8) ?*Dentry {
-        _ = path; return null;
+    pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
+        std.debug.assert(self.inode.type == .directory);
+
+        const hash = self.calcHash(child_name);
+        const child = blk: {
+            lookup_lock.lock();
+            defer lookup_lock.unlock();
+
+            break :blk &(lookup_table.get(hash) orelse break :blk null).data;
+        };
+
+        if (child == null) {
+            const new_child = self.ops.lookup(self, child_name) orelse return null;
+
+            self.addChild(new_child);
+
+            log.debug("new dentry: {s}: inode: {}", .{new_child.name.str(), new_child.inode.index});
+
+            lookup_lock.lock();
+            defer lookup_lock.unlock();
+
+            lookup_table.insert(hash, new_child.getCacheEntry());
+
+            return new_child;
+        }
+
+        return child;
     }
 
-    pub inline fn fill(self: *Dentry) void {
-        std.debug.assert(self.inode.type == .directory);
-        std.debug.assert(self.childs.len == 0);
+    pub fn addChild(self: *Dentry, child: *Dentry) void {
+        child.parent = self;
+        self.child.prepend(child.getNode());
+    }
 
-        self.ops.fill(self);
+    fn calcHash(parent: *const Dentry, name: []const u8) u64 {
+        const ptr = @intFromPtr(parent.inode);
+
+        var hasher = std.hash.Fnv1a_64.init();
+        hasher.update(name);
+        hasher.update(std.mem.asBytes(&ptr));
+
+        return hasher.final();
     }
 
     fn deleteChilds(self: *Dentry) void {
@@ -328,8 +365,16 @@ const MountList = utils.List(MountPoint);
 const MountNode = MountList.Node;
 const FsList = utils.List(FileSystem);
 const FsNode = FsList.Node;
+const LookupTable = utils.HashTable(u64, Dentry.Node, opaque{
+    pub fn hash(key: u64) u64 { return key; } 
+    pub fn eql(a: u64, b: u64) bool { return a == b; }
+});
+const LookupEntry = LookupTable.EntryNode;
 
-var root_dentry: Dentry = undefined;
+var root_dentry: *Dentry = undefined;
+
+var lookup_table: LookupTable = .{};
+var lookup_lock = utils.Spinlock.init(.unlocked);
 
 var mount_list: MountList = .{};
 var mount_lock = utils.Spinlock.init(.unlocked);
@@ -344,15 +389,19 @@ const AutoInit = opaque {
 };
 
 pub fn init() !void {
-    const root_inode = Inode.new() orelse return error.NoMemory;
-    @memset(std.mem.asBytes(root_inode), 0);
+    const total_mem_size = vm.PageAllocator.getTotalPages() * vm.page_size;
+    const table_size = std.math.clamp(
+        (total_mem_size / 100) / 2, // 0.5% of total memory
+        min_lookup_table_size,
+        max_lookup_table_size
+    );
+    const table_capacity = std.math.divCeil(usize, table_size, @sizeOf(LookupTable.Bucket)) catch unreachable;
 
-    root_inode.links_num = 1;
-    root_inode.type = .directory;
+    try lookup_table.init(@truncate(table_capacity));
 
-    root_dentry.name.init("/") catch unreachable;
-    root_dentry.parent = &root_dentry;
-    root_dentry.inode = root_inode;
+    log.info("lookup table: capacity: {}, size: {} KB", .{table_capacity,table_size / utils.kb_size});
+
+    try initRoot();
 
     inline for (AutoInit.file_systems) |Fs| {
         Fs.init() catch |err| {
@@ -368,7 +417,7 @@ pub fn deinit() void {
 }
 
 pub fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) Error!void {
-    if (dentry.inode.?.type != .directory) return error.BadDentry;
+    if (dentry.inode.type != .directory) return error.BadDentry;
 
     const fs = getFs(fs_name) orelse return error.NoFs;
 
@@ -443,12 +492,62 @@ pub inline fn getFs(name: []const u8) ?*FileSystem {
     return getFsEx(name.ptr, name.len);
 }
 
-pub inline fn lookup(path: []const u8) ?*Dentry {
-    _ = path; return null;
+pub inline fn lookup(dir: ?*Dentry, path: []const u8) !*Dentry {
+    if (path.len == 0) return error.InvalidArgs;
+
+    log.debug("lookup for: \"{s}\"", .{path});
+
+    var ent: ?*Dentry = if (path[0] == '/') root_dentry else dir orelse root_dentry;
+    var it = std.mem.split(
+        u8,
+        if (path[0] == '/') path[1..] else path[0..],
+        "/"
+    );
+
+    while (it.next()) |element| {
+        if (element.len == 0 or ent == null) break;
+        if (ent.?.inode.type != .directory) return error.BadDentry;
+
+        log.debug("element: {s}", .{element});
+
+        if (element[0] == '.') {
+            if (element.len == 1) {
+                continue;
+            } else if (element.ptr[1] == '.' and element.len == 2) {
+                ent = ent.?.parent;
+                continue;
+            }
+        }
+
+        ent = ent.?.lookup(element);
+    }
+
+    return ent orelse error.NoEnt;
 }
 
 pub inline fn getRoot() *Dentry {
-    return &root_dentry;
+    return root_dentry;
+}
+
+fn initRoot() !void {
+    const root_inode = Inode.new() orelse return error.NoMemory;
+    errdefer root_inode.delete();
+
+    @memset(std.mem.asBytes(root_inode), 0);
+
+    root_inode.links_num = 1;
+    root_inode.type = .directory;
+
+    root_dentry = Dentry.new() orelse return error.NoMemory;
+    errdefer root_dentry.delete();
+
+    root_dentry.init(
+        "/",
+        root_dentry,
+        undefined,
+        root_inode,
+        undefined
+    ) catch unreachable;
 }
 
 export fn getFsEx(name_ptr: [*]const u8, name_len: usize) ?*FileSystem {
