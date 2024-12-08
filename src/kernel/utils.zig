@@ -45,7 +45,10 @@ pub fn CmpFnType(comptime T: type) type {
 pub const List = std.DoublyLinkedList;
 pub const SList = std.SinglyLinkedList;
 pub const Spinlock = @import("utils/Spinlock.zig");
+pub const hash_table = @import("utils/hash-table.zig");
 pub const Heap = @import("utils/Heap.zig");
+pub const HashTable = hash_table.HashTable;
+pub const AutoHashTable = hash_table.AutoHashTable;
 
 pub const byte_size = 8;
 pub const kb_size = 1024;
