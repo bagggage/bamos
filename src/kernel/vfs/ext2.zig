@@ -248,6 +248,12 @@ const Dentry = struct {
     pub inline fn name(self: *Dentry) []u8 {
         return @as([*]u8, @ptrCast(&self._name))[0..self.name_len];
     }
+
+    pub inline fn next(self: *Dentry) ?*Dentry {
+        const dent: *Dentry = @ptrFromInt(@intFromPtr(self) + self.size);
+
+        return if (dent.inode == 0) null else dent;
+    }
 };
 
 var fs = vfs.FileSystem.init(
@@ -257,7 +263,9 @@ var fs = vfs.FileSystem.init(
         .mount = mount,
         .unmount = undefined
     },
-    undefined
+    .{
+        .lookup = dentryLookup,
+    }
 );
 
 pub fn init() !void {
@@ -291,11 +299,13 @@ pub fn mount(dentry: *vfs.Dentry, drive: *vfs.Drive, part: *const vfs.Partition)
     // Init root dentry
     {
         var cache_iter = cache.Iterator.blank();
+        defer drive.putCache(&cache_iter);
+
         const inode = try readInode(super, root_inode, &cache_iter);
 
         if (inode.type_perm.type != .directory) return error.BadInode;
 
-        dentry.exchange(try inode.cache(root_inode), &fs.data.dentry_ops);
+        dentry.exchange(super, try inode.cache(root_inode), &fs.data.dentry_ops);
     }
 
     log.info("mounting on drive: {s}", .{drive.base_name});
@@ -315,7 +325,7 @@ fn readBlock(super: *vfs.Superblock, block: u32, iter: *cache.Iterator) ![]u8 {
     const offset = super.part_offset + super.blockToOffset(block);
 
     try super.drive.readCachedNext(iter, offset);
-    return iter.asObject(u8)[0..super.block_size];
+    return iter.asSlice().ptr[0..super.block_size];
 }
 
 fn readInode(super: *vfs.Superblock, inode: u32, iter: *cache.Iterator) !*Inode {
@@ -330,4 +340,51 @@ fn readInode(super: *vfs.Superblock, inode: u32, iter: *cache.Iterator) !*Inode 
 
     try super.drive.readCachedNext(iter, offset);
     return iter.asObject(Inode);
+}
+
+fn readDirectory(super: *vfs.Superblock, inode: *Inode, iter: *cache.Iterator) !?*Dentry {
+    const block_idx = inode.direct_ptrs[0];
+    if (block_idx == 0) return null;
+
+    const block = try readBlock(super, inode.direct_ptrs[0], iter);
+
+    return @alignCast(@ptrCast(block.ptr));
+}
+
+fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
+    const super = parent.super;
+
+    var cache_iter = cache.Iterator.blank();
+    defer super.drive.putCache(&cache_iter);
+
+    const inode = readInode(super, parent.inode.index, &cache_iter) catch return null;
+    const dir = blk: {
+        if (readDirectory(super, inode, &cache_iter) catch return null) |first| {
+            var dent: ?*Dentry = first;
+
+            while (dent) |d| : (dent = d.next()) {
+                //log.debug("dent: {s}", .{d.name()});
+
+                if (std.mem.eql(u8, name, d.name())) break :blk d;
+            }
+        }
+
+        return null;
+    };
+
+    const child_dentry = vfs.Dentry.new() orelse return null;
+    child_dentry.init(dir.name(), undefined, super, undefined, &fs.data.dentry_ops) catch {
+        child_dentry.delete();
+        return null;
+    };
+
+    const child_inode_idx = dir.inode;
+    const child_inode = readInode(super, dir.inode, &cache_iter) catch return null;
+
+    child_dentry.inode = child_inode.cache(child_inode_idx) catch {
+        child_dentry.delete();
+        return null;
+    };
+
+    return child_dentry;
 }
