@@ -74,11 +74,11 @@ pub const Iterator = struct {
         return self.blk.?.asObject(T, self.offset);
     }
 
-    pub inline fn asSlice(self: *const Iterator) []const u8 {
+    pub inline fn asSlice(self: *const Iterator) []u8 {
         return self.blk.?.asSliceOffset(self.offset);
     }
 
-    pub inline fn asSliceAbsolute(self: *const Iterator) []const u8 {
+    pub inline fn asSliceAbsolute(self: *const Iterator) []u8 {
         return self.blk.?.asSlice();
     }
 
