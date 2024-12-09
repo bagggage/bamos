@@ -60,29 +60,29 @@ pub const Block = packed struct {
     }
 };
 
-pub const Iterator = struct {
+pub const Cursor = struct {
     blk: ?*Block = null,
     offset: usize = 0,
 
-    pub fn blank() Iterator { return .{}; }
+    pub fn blank() Cursor { return .{}; }
 
-    pub fn from(blk: *Block, offset: usize) Iterator {
+    pub fn from(blk: *Block, offset: usize) Cursor {
         return .{ .blk = blk, .offset = offset };
     }
 
-    pub inline fn asObject(self: *const Iterator, T: type) *T {
+    pub inline fn asObject(self: *const Cursor, T: type) *T {
         return self.blk.?.asObject(T, self.offset);
     }
 
-    pub inline fn asSlice(self: *const Iterator) []u8 {
+    pub inline fn asSlice(self: *const Cursor) []u8 {
         return self.blk.?.asSliceOffset(self.offset);
     }
 
-    pub inline fn asSliceAbsolute(self: *const Iterator) []u8 {
+    pub inline fn asSliceAbsolute(self: *const Cursor) []u8 {
         return self.blk.?.asSlice();
     }
 
-    pub inline fn isValid(self: *const Iterator) bool {
+    pub inline fn isValid(self: *const Cursor) bool {
         return self.blk != null;
     }
 };
