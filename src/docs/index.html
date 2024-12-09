@@ -6,59 +6,93 @@
     <style type="text/css">
       @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,200..900;1,200..900&display=swap');
       @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+      @import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,200..900;1,200..900&display=swap');
+
+      :root {
+        font-size: 62.5%;
+
+        --active-color: #208fff;
+
+        --border-color: #e5e5e5;
+        
+        --code-bg: hsl(206, 18%, 95%);
+        --code-border-color: #e5e5e5;
+
+        --body-font: Inter, "Source Sans 3";
+        --mono-font: "Source Code Pro", Consolas, "Ubuntu Mono", Menlo, "Liberation Mono", ui-monospace, monospace;
+
+        --main-font-size: 1.6rem;
+        --code-font-size: 0.875em;
+
+        --search-bar-bg: #fafafa;
+        --search-bar-border-color: #aaa;
+      }
 
       body {
-        font-family: Inter, "Source Sans 3";
-        font-size: medium;
+        font-family: var(--body-font);
+        font-size: var(--main-font-size);
+
         color: hsl(0, 0%, 16%);
+
         margin: auto;
-        max-width: 90%;
-        width: 70vmax;
+
+        max-width: 800px;
+        width: 80%;
       }
       .hidden {
         display: none;
       }
       a {
-        color: #177cef;
+        font-weight:bold;
         text-decoration: none;
+
+        color: #177cef;
+  
         line-height: 1.7em;
-        font-size: 1.0em;
-        font-weight: 500;
       }
-      pre{
-        font-family: "Source Code Pro",monospace;
+      p {
+        line-height: 1.45em;
+      }
+      pre {
+        display: list-item;
+
+        font-family: var(--mono-font);
         font-size: 1em;
-        background-color: hsl(206, 18%, 95%);
+
+        background-color: var(--code-bg);
+
         padding: 0.5em;
         margin: 0;
+
+        border: 1px solid var(--code-border-color);
+        border-radius: 6px;
+
         overflow-x: auto;
-        border-radius: 0.3em;
-        display: list-item;
         white-space: pre-wrap;
-        border-style: solid;
-        border-width: 1px;
       }
       code {
-        font-family:"Source Code Pro",monospace;
-        font-size: 0.9em;
+        font-family: var(--mono-font);
+        font-size: var(--code-font-size);
+        font-weight: 500;
       }
       code a {
-        color: #000000;
+        color: #222;
       }
-      .fieldDocs code, #tldDocs code, dd code {
+      .fieldDocs code, #tldDocs code, dd code, p code {
         margin: 0.1em;
         padding: 0.1em 0.3em;
         height: 0.2em;
-        border-radius: 0.3em;
-        border: 1px solid #38393b;
-        background-color: #2a2c2f;
+
+        border-radius: 3px;
+        border: 1px solid var(--code-border-color);
+        background-color: var(--code-bg);
 
         a {
           text-decoration: underline;
         }
       }
-      #tldDocs > ul > li, dd > ul > li {
-        margin-bottom: 0.3em;
+      ul {
+        line-height: 1.45em;
       }
       #listFields > div, #listParams > div {
         margin-bottom: 1em;
@@ -67,10 +101,11 @@
         padding-left: 0.5em;
       }
       .fieldDocs {
+        padding: 1px 1em;
+
         border: 1px solid #F5F5F5;
         border-top: 0px;
         border-radius: 0 0 0.5em 0.5em;
-        padding: 1px 1em;
       }
 
       .logo {
@@ -79,7 +114,7 @@
       .logo > img {
         padding: 0;
         margin: 0;
-        width: 10em;
+        width: 16em;
       }
 
       #navWrap {
@@ -90,14 +125,16 @@
       }
 
       #search {
-        color: #d2dbde;
         font-size: 0.9em;
+
+        background-color: var(--search-bar-bg);
+
         padding: 0.5em;
         width: 100%;
-        border-radius: 0.5em;
+
+        border-radius: 6px;
         border-style: solid;
-        border-color: #2A2A2A;
-        background-color: #17191a;
+        border-color: var(--search-bar-border-color);
       }
 
       nav {
@@ -127,45 +164,60 @@
       section {
         clear: both;
         padding-top: 1em;
+        padding-bottom: 1em;
+      }
+      section h1:first-child {
+        border-bottom: none;
       }
       section h1 {
-        border-bottom: 1px dashed #38393b;
+        border-bottom: 1px dashed var(--border-color);
+        font-size: 1.7em;
+
         margin: 0 0;
         margin-bottom: 0.5em;
         padding-bottom: 0.2em;
       }
       section h2 {
-        border-bottom: 1px solid #38393b;
-        font-size: 1.3em;
+        border-bottom: 1px solid var(--border-color);
+        font-size: 1.5em;
         margin: 0.5em 0;
         padding: 0.2em 0;
       }
       #listNav {
-        border-radius: 0.5em;
+        background-color: #f0f0f0;
+        border-radius: 6px;
+
         list-style-type: none;
+        overflow: hidden;
+
         margin: 0.5em 0 0 0;
         padding: 0;
-        overflow: hidden;
-        background-color: #f1f1f1;
       }
       #listNav li {
         float:left;
       }
       #listNav li a {
         display: block;
-        color: #000;
+        color: #444;
         text-align: center;
         line-height: normal;
         padding: .5em .8em;
         text-decoration: none;
       }
       #listNav li a:hover {
-        background-color: #555;
+        background-color: #666;
         color: #fff;
       }
       #listNav li a.active {
-        background-color: #FFBB4D;
-        color: #000;
+        background-color: var(--active-color);
+        color: #fff;
+      }
+
+      #listTypes a {
+        color: #34ceaf;
+      }
+      a:hover {
+        text-decoration: underline;
       }
 
       #helpDialog {
@@ -175,7 +227,6 @@
         top: 0;
         left: 0;
         background-color: #333;
-        color: #fff;
         border: 1px solid #fff;
       }
       #helpDialog h1 {
@@ -187,7 +238,7 @@
         margin: 0 0.2em;
       }
       kbd {
-        color: #000;
+        color: #222;
         background-color: #fafbfc;
         border-color: #d1d5da;
         border-bottom-color: #c6cbd1;
@@ -208,13 +259,24 @@
       }
 
       #tableFnErrors dt {
+        color: #ff4444;
         font-weight: bold;
+      }
+
+      table {
+        border-radius: 6px;
+        border-collapse: collapse;
+
+        background: var(--code-bg);
+      }
+      tr {
+        border: 2px solid var(--code-border-color);
       }
 
       dl > div {
         border-radius: 0.5em;
         padding: 0.5em;
-        border: 1px solid #c0c0c0;
+        border: 1px solid var(--code-border-color);
         margin-top: 0.5em;
       }
 
@@ -269,17 +331,24 @@
       }
 
       @media (prefers-color-scheme: dark) {
+        :root {
+          --border-color: #38393b;
+
+          --code-bg: hsl(225, 5%, 15%);
+          --code-border-color: #3a3b3e;
+
+          --search-bar-bg: #252628;
+          --search-bar-border-color: var(--code-border-color);
+        }
         body {
           background-color: hsl(220, 5%, 12%);
           color: #d2dbde;
         }
         pre {
-          background-color: hsl(225, 5%, 15%);
-          border-color: #3a3b3e;
-          color: #c5c7c8;
+          color: #d2dbde;
         }
         a {
-          color: #208fff;
+          color: var(--active-color);
         }
         code a {
           color: #ccc;
@@ -288,7 +357,7 @@
           color: #34ceaf;
         }
         .fieldDocs {
-          border-color:#2A2A2A;
+          border-color:#2a2a2a;
         }
         #listNav {
           background-color: hsl(220, 4%, 15%);
@@ -301,24 +370,17 @@
           color: #fff;
         }
         #listNav li a.active {
-          background-color: #208fff;
-          color: #000;
+          background-color: var(--active-color);
+          color: #222;
         }
         #listSearchResults li.selected {
-          background-color: #000;
+          background-color: #222;
         }
         #listSearchResults li.selected a {
           color: #fff;
         }
-        #listValues tr td a {
-          color: #ccc;
-          text-decoration: underline;
-        }
         #listFields code a, #listParams code a, #fnProto code a {
           color: #34ceaf;
-        }
-        dl > div {
-          border-color: #373737;
         }
         .tok-kw {
           color: #398dd3;
