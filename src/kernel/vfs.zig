@@ -508,8 +508,6 @@ pub inline fn lookup(dir: ?*Dentry, path: []const u8) !*Dentry {
         if (element.len == 0 or ent == null) break;
         if (ent.?.inode.type != .directory) return error.BadDentry;
 
-        log.debug("element: {s}", .{element});
-
         if (element[0] == '.') {
             if (element.len == 1) {
                 continue;
