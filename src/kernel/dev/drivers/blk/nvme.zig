@@ -823,7 +823,7 @@ const Controller = struct {
     }
 };
 
-var pci_driver = pci.Driver.init("nvme driver",
+var pci_driver = pci.Driver.init("nvme-ctrl",
     .{
         .probe = .{ .universal = probe },
         .remove = remove,
@@ -839,7 +839,7 @@ pub fn init() !void {
 }
 
 fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {
-    log.debug("controller: {s}", .{device.name.str()});
+    log.info("controller: {s}", .{device.name.str()});
 
     const pci_dev = pci.Device.from(device);
     const controller = vm.alloc(Controller) orelse return .no_resources;

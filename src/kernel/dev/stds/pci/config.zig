@@ -143,7 +143,7 @@ pub fn init() !void {
             cfg_io.write = PortsIo.write;
             cfg_io.getBase = PortsIo.getBase;
 
-            log.info("PCI config. space: i/o ports", .{});
+            log.info("i/o ports", .{});
         }
     }
     else if (entry) |hdr| {
@@ -681,5 +681,5 @@ fn initMmio(mcfg_hdr: *const acpi.SdtHeader) !void {
             return error.IoRegionBusy;
     }
 
-    log.info("PCI config. space: mmio: 0x{x}: max seg: {}", .{entries[0].base, max_seg});
+    log.info("mmio: 0x{x}: max seg: {}", .{entries[0].base, max_seg});
 }

@@ -118,6 +118,8 @@ pub export fn registerBus(bus: *BusNode) void {
     defer buses_lock.unlock();
 
     buses.prepend(bus);
+
+    log.info("{s} bus was registered", .{bus.data.name});
 }
 
 pub inline fn registerDevice(

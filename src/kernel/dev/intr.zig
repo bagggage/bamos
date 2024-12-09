@@ -286,7 +286,7 @@ pub fn init() !void {
     @memset(std.mem.asBytes(&msis.buffer), 0);
     @memset(std.mem.asBytes(&irqs.buffer), 0);
 
-    log.info("Interrupt controller: {s}", .{chip.name});
+    log.info("controller: {s}", .{chip.name});
 }
 
 pub fn deinit() void {

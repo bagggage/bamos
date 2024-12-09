@@ -186,7 +186,7 @@ fn enumDevice(seg_idx: u16, bus_idx: u8, dev_idx: u8, func_idx: u8) !bool {
 
     pci_dev.device = device;
 
-    log.debug("PCI:{}: 0x{x:0>4} : 0x{x:0>4}", .{
+    log.debug("device: {}: VEN_ID 0x{x:0>4} : DEV_ID 0x{x:0>4}", .{
         device.name, vendor_id, pci_dev.id.device_id
     });
 

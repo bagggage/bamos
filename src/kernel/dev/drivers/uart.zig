@@ -52,7 +52,7 @@ const regs_base = switch (builtin.cpu.arch) {
 
 const regs = UartRegs{ .dyn_base = regs_base };
 
-var driver = dev.Driver.init("uart driver", .{
+var driver = dev.Driver.init("uart rs-232", .{
     .probe = .{ .platform = probe },
     .remove = remove
 });

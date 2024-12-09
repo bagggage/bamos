@@ -405,7 +405,7 @@ pub fn init() !void {
 
     inline for (AutoInit.file_systems) |Fs| {
         Fs.init() catch |err| {
-            log.err("Failed to initialize '"++@typeName(Fs)++"' filesystem: {s}", .{@errorName(err)});  
+            log.err("failed to initialize '"++@typeName(Fs)++"' filesystem: {s}", .{@errorName(err)});  
         };
     }
 }
@@ -461,19 +461,24 @@ pub fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32
 pub export fn registerFs(fs: *FsNode) bool {
     if (fs.next != null or fs.prev != null) return false;
 
-    fs_lock.lock();
-    defer fs_lock.unlock();
-
-    // Check if fs with same name exists
     {
-        var fs_node = fs_list.first;
+        fs_lock.lock();
+        defer fs_lock.unlock();
 
-        while (fs_node) |other_fs| : (fs_node = other_fs.next) {
-            if (other_fs.data.hash == fs.data.hash) return false;
+        // Check if fs with same name exists
+        {
+            var fs_node = fs_list.first;
+
+            while (fs_node) |other_fs| : (fs_node = other_fs.next) {
+                if (other_fs.data.hash == fs.data.hash) return false;
+            }
         }
+
+        fs_list.append(fs);
     }
 
-    fs_list.append(fs);
+    log.info("{s} was registered", .{fs.data.name});
+
     return true;
 }
 
@@ -487,6 +492,8 @@ pub export fn unregisterFs(fs: *FsNode) void {
 
     fs.next = null;
     fs.prev = null;
+
+    log.info("{s} was removed", .{fs.data.name});
 }
 
 pub inline fn getFs(name: []const u8) ?*FileSystem {

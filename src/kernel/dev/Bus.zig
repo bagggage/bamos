@@ -5,6 +5,7 @@ const std = @import("std");
 const Device = @import("Device.zig");
 const dev = @import("../dev.zig");
 const Driver = @import("Driver.zig");
+const log = std.log.scoped(.@"dev.bus");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
@@ -104,6 +105,8 @@ pub export fn addDriver(self: *Self, driver: *dev.DriverNode) void {
         self.drivers.prepend(driver);
     }
 
+    log.info("{s}: {s} driver was attached", .{self.name,driver.data.name});
+
     self.matchDriver(&driver.data);
 }
 
@@ -116,6 +119,8 @@ pub export fn removeDriver(self: *Self, driver: *dev.DriverNode) void {
     }
 
     self.onRemoveDriver(&driver.data);
+
+    log.info("{s}: {s} driver was removed", .{self.name,driver.data.name});
 }
 
 fn matchDevice(self: *Self, device: *dev.DeviceNode) void {
