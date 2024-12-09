@@ -75,7 +75,7 @@ pub fn init() vm.Error!void {
     const mem_pool = boot.alloc(bitmap_pages) orelse return vm.Error.NoMemory;
     const virt_pool = vm.getVirtLma(mem_pool);
 
-    log.warn("BPA: mem pool size: {} KB", .{@as(usize, bitmap_pages) * (vm.page_size / utils.kb_size)});
+    log.warn("mem pool size: {} KB", .{@as(usize, bitmap_pages) * (vm.page_size / utils.kb_size)});
 
     initAreas(virt_pool, bitmap_size);
 
@@ -88,7 +88,7 @@ pub fn init() vm.Error!void {
 
     {
         const total_kb = total_pages * vm.page_size / utils.kb_size;
-        log.warn("BPA: total mem: {} KB ({} MB)", .{ total_kb, total_kb / utils.kb_size });
+        log.warn("total mem: {} KB ({} MB)", .{ total_kb, total_kb / utils.kb_size });
     }
 
     is_init = true;
