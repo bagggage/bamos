@@ -205,6 +205,11 @@ pub inline fn getArchData() ArchDataType() {
     };
 }
 
+pub inline fn getInitrd() []const u8 {
+    const ptr: [*]const u8 = @ptrFromInt(vm.getVirtLma(bootboot.initrd_ptr));
+    return ptr[0..bootboot.initrd_size];
+}
+
 fn ArchDataType() type {
     return switch (builtin.cpu.arch) {
         .aarch64 => @TypeOf(&bootboot.arch.aarch64),

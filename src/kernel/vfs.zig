@@ -186,7 +186,6 @@ pub const Dentry = struct {
 
     pub const Operations = struct {
         pub const Lookup = *const fn(*const Dentry, []const u8) ?*Dentry;
-        pub const ReadInode = *const fn(*Dentry) Error!*Inode;
 
         lookup: Lookup,
     };
@@ -272,7 +271,7 @@ pub const Dentry = struct {
     pub inline fn getCacheEntry(self: *Dentry) *LookupEntry {
         const entry: *LookupEntry.Data = @fieldParentPtr("value", self.getNode());
         return @fieldParentPtr("data", entry);
-    } 
+    }
 
     pub fn init(self: *Dentry, name: []const u8, parent: ?*Dentry, super: *Superblock, inode: *Inode, ops: *Operations) !void {
         try self.name.init(name);
@@ -384,6 +383,7 @@ var fs_lock = utils.Spinlock.init(.unlocked);
 
 const AutoInit = opaque {
     pub var file_systems = .{
+        @import("vfs/initrd.zig"),
         @import("vfs/ext2.zig")
     };
 };
@@ -435,6 +435,7 @@ pub fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32
             .device => try fs.mount(dentry, drive.?, drive.?.getPartition(part_idx).?),
             .virtual => try fs.mount(dentry, undefined, undefined)
         };
+        super.root = dentry;
 
         node.data = .{
             .dentry = dentry,
