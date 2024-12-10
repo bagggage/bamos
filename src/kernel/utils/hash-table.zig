@@ -122,7 +122,7 @@ pub fn HashTable(K: type, V: type, Context: type) type {
             const idx = hash % self.buckets.len;
 
             const bucket = &self.buckets[idx];
-            const node = bucket.get(hash) orelse null;
+            const node = bucket.get(hash) orelse return null;
 
             bucket.list.remove(node);
             self.len -= 1;
