@@ -52,23 +52,27 @@ inline fn getStream() std.io.StreamSource {
     };
 }
 
-fn mount(dentry: *vfs.Dentry, _: *vfs.Drive, _: *vfs.Partition) vfs.Error!*vfs.Superblock {
+fn mount(_: *vfs.Drive, _: *vfs.Partition) vfs.Error!*vfs.Superblock {
     // Already mounted
     if (initrd.len != 0) return error.Busy;
 
     const super = vfs.Superblock.new() orelse return error.NoMemory;
     errdefer super.delete();
 
-    super.init(null, null, 512, null);
-
     const inode = vfs.Inode.new() orelse return error.NoMemory;
+    errdefer inode.delete();
 
-    initrd = boot.getInitrd();
+    const dentry = vfs.Dentry.new() orelse return error.NoMemory;
+
+    super.init(null, null, 512, null);
+    super.root = dentry;
 
     @memset(std.mem.asBytes(inode), 0);
     inode.type = .directory;
 
-    dentry.exchange(super, inode, &fs.data.dentry_ops);
+    dentry.init("/", super, inode, &fs.data.dentry_ops) catch unreachable;
+
+    initrd = boot.getInitrd();
 
     return super;
 }
@@ -122,7 +126,7 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
 
             initInode(inode, &file, tar_iter.reader.context.getPos() catch unreachable);
 
-            try dentry.init(entry_name, null, parent.super, inode, &fs.data.dentry_ops);
+            try dentry.init(entry_name, parent.super, inode, &fs.data.dentry_ops);
 
             return dentry;
         }

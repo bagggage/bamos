@@ -10,6 +10,7 @@ const dev = @import("dev.zig");
 const utils = @import("utils.zig");
 const log = std.log.scoped(.vfs);
 const vm = @import("vm.zig");
+const tmpfs = @import("vfs/tmpfs.zig");
 
 const entries_oma_capacity = 512;
 const super_oma_capacity = 32;
@@ -37,11 +38,11 @@ pub const Error = error {
 
 pub const FileSystem = struct {
     pub const Operations = struct {
-        pub const MountT = *const fn(*Dentry, *Drive, *Partition) Error!*Superblock;
-        pub const UnmountT = *const fn(*Superblock) void;
+        pub const MountFn = *const fn(*Drive, *Partition) Error!*Superblock;
+        pub const UnmountFn = *const fn(*Superblock) void;
 
-        mount: MountT,
-        unmount: UnmountT
+        mount: MountFn,
+        unmount: UnmountFn
     };
     pub const Type = enum {
         virtual,
@@ -79,11 +80,10 @@ pub const FileSystem = struct {
 
     pub inline fn mount(
         self: *const FileSystem,
-        dentry: *Dentry,
         drive: *Drive,
         part: *Partition
     ) Error!*Superblock {
-        return self.ops.mount(dentry, drive, part);
+        return self.ops.mount(drive, part);
     }
 };
 
@@ -97,6 +97,7 @@ pub const Superblock = struct {
     block_shift: u4,
 
     root: *Dentry = undefined,
+    mount_point: *MountPoint = undefined,
 
     fs_data: utils.AnyData,
 
@@ -273,10 +274,10 @@ pub const Dentry = struct {
         return @fieldParentPtr("data", entry);
     }
 
-    pub fn init(self: *Dentry, name: []const u8, parent: ?*Dentry, super: *Superblock, inode: *Inode, ops: *Operations) !void {
+    pub fn init(self: *Dentry, name: []const u8, super: *Superblock, inode: *Inode, ops: *Operations) !void {
         try self.name.init(name);
 
-        self.parent = parent orelse self;
+        self.parent = self;
         self.super = super;
         self.inode = inode;
         self.ops = ops;
@@ -304,12 +305,7 @@ pub const Dentry = struct {
         std.debug.assert(self.inode.type == .directory);
 
         const hash = self.calcHash(child_name);
-        const child = blk: {
-            lookup_lock.lock();
-            defer lookup_lock.unlock();
-
-            break :blk &(lookup_table.get(hash) orelse break :blk null).data;
-        };
+        const child = getLookupCache(hash);
 
         if (child == null) {
             const new_child = self.ops.lookup(self, child_name) orelse return null;
@@ -318,10 +314,7 @@ pub const Dentry = struct {
 
             log.debug("new dentry: {s}: inode: {}", .{new_child.name.str(), new_child.inode.index});
 
-            lookup_lock.lock();
-            defer lookup_lock.unlock();
-
-            lookup_table.insert(hash, new_child.getCacheEntry());
+            insertLookupCache(hash, new_child);
 
             return new_child;
         }
@@ -332,6 +325,16 @@ pub const Dentry = struct {
     pub fn addChild(self: *Dentry, child: *Dentry) void {
         child.parent = self;
         self.child.prepend(child.getNode());
+    }
+
+    inline fn cacheName(dentry: *const Dentry) void {
+        const hash = dentry.parent.calcHash(dentry.name.str());
+        insertLookupCache(hash, dentry);
+    }
+
+    inline fn uncacheName(dentry: *const Dentry) bool {
+        const hash = dentry.parent.calcHash(dentry.name.str());
+        return removeLookupCache(hash) == dentry;
     }
 
     fn calcHash(parent: *const Dentry, name: []const u8) u64 {
@@ -414,48 +417,19 @@ pub fn deinit() void {
     inline for (AutoInit.file_systems) |Fs| {
         Fs.deinit();
     }
+
+    // TODO: unmount tmpfs
+    tmpfs.deinit();
 }
 
-pub fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) Error!void {
-    if (dentry.inode.type != .directory) return error.BadDentry;
+pub inline fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) Error!void {
+    const result =mountEx(
+        dentry,
+        fs_name.ptr, fs_name.len,
+        drive, part_idx
+    );
 
-    const fs = getFs(fs_name) orelse return error.NoFs;
-
-    if (
-        fs.kind == .device and
-        (drive == null or part_idx >= drive.?.parts.len)
-    ) return error.InvalidArgs;
-
-    const node = vm.alloc(MountNode) orelse return error.NoMemory;
-    errdefer vm.free(node);
-
-    // Init mount point
-    {
-        const super = switch (fs.kind) {
-            .device => try fs.mount(dentry, drive.?, drive.?.getPartition(part_idx).?),
-            .virtual => try fs.mount(dentry, undefined, undefined)
-        };
-        super.root = dentry;
-
-        node.data = .{
-            .dentry = dentry,
-            .fs = fs,
-            .super = super,
-        };
-    }
-
-    if (drive) |d| {
-        log.info("{s} on {s}:part:{} is mounted to \"{s}\"", .{
-            fs.name, d.base_name, part_idx, dentry.name.str()
-        });
-    } else {
-        log.info("{s} is mounted to \"{s}\"", .{fs.name, dentry.name.str()});
-    }
-
-    mount_lock.lock();
-    defer mount_lock.unlock();
-
-    mount_list.append(node);
+    if (result < 0) return utils.intToErr(Error, result);
 }
 
 pub export fn registerFs(fs: *FsNode) bool {
@@ -500,7 +474,7 @@ pub inline fn getFs(name: []const u8) ?*FileSystem {
     return getFsEx(name.ptr, name.len);
 }
 
-pub inline fn lookup(dir: ?*Dentry, path: []const u8) !*Dentry {
+pub fn lookup(dir: ?*Dentry, path: []const u8) !*Dentry {
     if (path.len == 0) return error.InvalidArgs;
 
     log.debug("lookup for: \"{s}\"", .{path});
@@ -525,6 +499,8 @@ pub inline fn lookup(dir: ?*Dentry, path: []const u8) !*Dentry {
             }
         }
 
+        log.debug("call lookup", .{});
+
         ent = ent.?.lookup(element);
     }
 
@@ -535,25 +511,12 @@ pub inline fn getRoot() *Dentry {
     return root_dentry;
 }
 
-fn initRoot() !void {
-    const root_inode = Inode.new() orelse return error.NoMemory;
-    errdefer root_inode.delete();
+export fn mountEx(dentry: *Dentry, fs_name_ptr: [*]const u8, fs_name_len: usize, drive: ?*Drive, part_idx: u32) i16 {    
+    mountImpl(dentry, fs_name_ptr[0..fs_name_len], drive, part_idx) catch |err| {
+        return utils.errToInt(err);
+    };
 
-    @memset(std.mem.asBytes(root_inode), 0);
-
-    root_inode.links_num = 1;
-    root_inode.type = .directory;
-
-    root_dentry = Dentry.new() orelse return error.NoMemory;
-    errdefer root_dentry.delete();
-
-    root_dentry.init(
-        "/",
-        root_dentry,
-        undefined,
-        root_inode,
-        undefined
-    ) catch unreachable;
+    return 0;
 }
 
 export fn getFsEx(name_ptr: [*]const u8, name_len: usize) ?*FileSystem {
@@ -570,6 +533,92 @@ export fn getFsEx(name_ptr: [*]const u8, name_len: usize) ?*FileSystem {
     }
 
     return null;
+}
+
+fn mountImpl(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) Error!void {
+    if (
+        dentry.inode.type != .directory or
+        (dentry == root_dentry)
+    ) return error.BadDentry;
+
+    const fs = getFs(fs_name) orelse return error.NoFs;
+
+    if (
+        fs.kind == .device and
+        (drive == null or part_idx >= drive.?.parts.len)
+    ) return error.InvalidArgs;
+
+    const node = vm.alloc(MountNode) orelse return error.NoMemory;
+    errdefer vm.free(node);
+
+    // Init mount point
+    {
+        const super = switch (fs.kind) {
+            .device => try fs.mount(drive.?, drive.?.getPartition(part_idx).?),
+            .virtual => try fs.mount(undefined, undefined)
+        };
+
+        node.data = .{
+            .dentry = dentry,
+            .fs = fs,
+            .super = super,
+        };
+        super.mount_point = &node.data;
+
+        // Swap entries
+        const parent = dentry.parent;
+        super.root.parent = parent;
+
+        const hash = parent.calcHash(dentry.name.str());
+
+        _ = removeLookupCache(hash);
+        insertLookupCache(hash, super.root);
+    }
+
+    if (drive) |d| {
+        log.info("{s} on {s}:part:{} is mounted to \"{s}\"", .{
+            fs.name, d.base_name, part_idx, dentry.name.str()
+        });
+    } else {
+        log.info("{s} is mounted to \"{s}\"", .{fs.name, dentry.name.str()});
+    }
+
+    mount_lock.lock();
+    defer mount_lock.unlock();
+
+    mount_list.append(node);
+}
+
+fn initRoot() !void {
+    try tmpfs.init();
+
+    const tmp_fs = getFs("tmpfs") orelse return error.NoTmpfs;
+    const super = try tmp_fs.mount(undefined, undefined);
+
+    root_dentry = super.root;
+
+    log.info("tmpfs was mounted as \"{s}\"", .{root_dentry.name.str()});
+}
+
+fn getLookupCache(hash: u64) ?*Dentry {
+    lookup_lock.lock();
+    defer lookup_lock.unlock();
+
+    return &(lookup_table.get(hash) orelse return null).data;
+}
+
+fn insertLookupCache(hash: u64, dentry: *Dentry) void {
+    lookup_lock.lock();
+    defer lookup_lock.unlock();
+
+    lookup_table.insert(hash, dentry.getCacheEntry());
+}
+
+fn removeLookupCache(hash: u64) ?*Dentry {
+    lookup_lock.lock();
+    defer lookup_lock.unlock();
+
+    return &(lookup_table.remove(hash) orelse return null).data.value.data;
 }
 
 fn getSymName(comptime Member: type, comptime ref: anytype) ?[]const u8 {

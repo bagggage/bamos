@@ -315,7 +315,7 @@ pub fn deinit() void {
     vfs.unregisterFs(&fs);
 }
 
-pub fn mount(dentry: *vfs.Dentry, drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Superblock {
+pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Superblock {
     const part_offset = drive.lbaToOffset(part.lba_start);
     const part_super_offset = part_offset + super_offset;
 
@@ -341,10 +341,10 @@ pub fn mount(dentry: *vfs.Dentry, drive: *vfs.Drive, part: *const vfs.Partition)
         defer drive.putCache(&cache_cursor);
 
         const inode = try readInode(super, root_inode, &cache_cursor);
-
         if (inode.type_perm.type != .directory) return error.BadInode;
 
-        dentry.exchange(super, try inode.cache(root_inode), &fs.data.dentry_ops);
+        const dentry = vfs.Dentry.new() orelse return error.NoMemory;
+        dentry.init("/", super, try inode.cache(root_inode), &fs.data.dentry_ops) catch unreachable;
     }
 
     log.info("mounting on drive: {s}", .{drive.base_name});
@@ -410,7 +410,7 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
 
     // Init new vfs dentry
     const child_dentry = vfs.Dentry.new() orelse return null;
-    child_dentry.init(ext_dent.name(), undefined, super, undefined, &fs.data.dentry_ops) catch {
+    child_dentry.init(ext_dent.name(), super, undefined, &fs.data.dentry_ops) catch {
         child_dentry.delete();
         return null;
     };
