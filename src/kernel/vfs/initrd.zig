@@ -24,7 +24,9 @@ var fs = vfs.FileSystem.init(
         .unmount = undefined
     },
     .{
-        .lookup = dentryLookup
+        .lookup = dentryLookup,
+        .makeDirectory = undefined,
+        .createFile = undefined
     }
 );
 
@@ -36,7 +38,15 @@ var link_name: [max_name]u8 = .{ 0 } ** max_name;
 pub fn init() !void {
     if (!vfs.registerFs(&fs)) return error.RegisterFailed;
 
-    try vfs.mount(vfs.getRoot(), "initramfs", null, undefined);
+    const mount_dir = vfs.getRoot().makeDirectory("initrd") catch |err| {
+        log.err("failed to create mount point: {}", .{err});
+        return error.MountFailed;
+    };
+
+    vfs.mount(mount_dir, "initramfs", null, undefined) catch |err| {
+        log.err("while mount: {}", .{err});
+        return error.MountFailed;
+    };
 }
 
 pub fn deinit() void {

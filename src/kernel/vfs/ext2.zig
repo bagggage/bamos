@@ -304,6 +304,8 @@ var fs = vfs.FileSystem.init(
     },
     .{
         .lookup = dentryLookup,
+        .makeDirectory = undefined,
+        .createFile = undefined
     }
 );
 
@@ -345,6 +347,8 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
 
         const dentry = vfs.Dentry.new() orelse return error.NoMemory;
         dentry.init("/", super, try inode.cache(root_inode), &fs.data.dentry_ops) catch unreachable;
+
+        super.root = dentry;
     }
 
     log.info("mounting on drive: {s}", .{drive.base_name});

@@ -19,6 +19,11 @@ const max_name_len = 64;
 const oma_capacity = 128;
 
 const Entry = struct {
+    const Kind = enum {
+        directory,
+        file
+    };
+
     const List = utils.SList(Entry);
     const Node = List.Node;
 
@@ -60,7 +65,7 @@ const Entry = struct {
     name_buf: [max_name_len]u8 = undefined,
     name_len: u8 = 0,
 
-    data: union(enum) {
+    data: union(Kind) {
         directory: Directory,
         file: File,
     },
@@ -104,7 +109,9 @@ var fs = vfs.FileSystem.init(
         .unmount = undefined
     },
     .{
-        .lookup = dentryLookup
+        .lookup = dentryLookup,
+        .makeDirectory = dentryMakeDirectory,
+        .createFile = dentryCreateFile,
     }
 );
 
@@ -140,6 +147,26 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     return createDentry(parent.super, child) catch return null;
 }
 
+fn dentryMakeDirectory(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
+    return dentryCreateEntry(parent, child, .directory);
+}
+
+fn dentryCreateFile(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
+    return dentryCreateEntry(parent, child, .file);
+}
+
+fn dentryCreateEntry(parent: *const vfs.Dentry, child: *vfs.Dentry, comptime kind: Entry.Kind) vfs.Error!void {
+    const dir = parent.inode.fs_data.as(Entry).?;
+
+    const entry = try createEntry(child.name.str(), kind);
+    errdefer entry.delete();
+
+    const inode = try createInode(entry);
+
+    dir.data.directory.childs.prepend(entry.getNode());
+    child.inode = inode;
+}
+
 fn createDentry(super: *vfs.Superblock, entry: *const Entry) !*vfs.Dentry {
     const dentry = vfs.Dentry.new() orelse return error.NoMemory;
     errdefer dentry.delete();
@@ -168,7 +195,7 @@ fn createInode(entry: *const Entry) !*vfs.Inode {
     return inode;
 }
 
-fn createEntry(name: []const u8, comptime kind: enum {directory,file}) !*Entry {
+fn createEntry(name: []const u8, comptime kind: Entry.Kind) !*Entry {
     const entry: *Entry = Entry.new() orelse return error.NoMemory;
     errdefer entry.delete();
 

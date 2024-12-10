@@ -181,14 +181,30 @@ pub const Inode = struct {
     }
 };
 
+pub const Path = struct {
+    dentry: *const Dentry,
+
+    pub fn format(self: Path, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        if (self.dentry.parent != root_dentry) {
+            try format(.{.dentry = self.dentry.parent}, "", .{}, writer);
+        }
+
+        try writer.print("/{s}", .{self.dentry.name.str()});
+    }
+};
+
 pub const Dentry = struct {
     pub const List = utils.SList(Dentry);
     pub const Node = List.Node;
 
     pub const Operations = struct {
-        pub const Lookup = *const fn(*const Dentry, []const u8) ?*Dentry;
+        pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
+        pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry) Error!void;
+        pub const CreateFileFn = *const fn(*const Dentry, *Dentry) Error!void;
 
-        lookup: Lookup,
+        lookup: LookupFn,
+        makeDirectory: MakeDirectoryFn,
+        createFile: CreateFileFn,
     };
 
     pub const Name = struct {
@@ -322,9 +338,33 @@ pub const Dentry = struct {
         return child;
     }
 
+    pub fn makeDirectory(self: *Dentry, name: []const u8) Error!*Dentry {
+        const dir_dentry = try self.createLike(name);
+        errdefer { dir_dentry.name.deinit(); dir_dentry.delete(); }
+
+        try self.ops.makeDirectory(self, dir_dentry);
+        self.addChild(dir_dentry);
+
+        return dir_dentry;
+    }
+
+    pub fn createFile(self: *Dentry, name: []const u8) Error!*Dentry {
+        const file_dentry = try self.createLike(name);
+        errdefer { file_dentry.name.deinit(); file_dentry.delete(); }
+
+        try self.ops.createFile(self, file_dentry);
+        self.addChild(file_dentry);
+
+        return file_dentry;
+    }
+
     pub fn addChild(self: *Dentry, child: *Dentry) void {
         child.parent = self;
         self.child.prepend(child.getNode());
+    }
+
+    pub inline fn path(self: *const Dentry) Path {
+        return Path{ .dentry = self };
     }
 
     inline fn cacheName(dentry: *const Dentry) void {
@@ -335,6 +375,19 @@ pub const Dentry = struct {
     inline fn uncacheName(dentry: *const Dentry) bool {
         const hash = dentry.parent.calcHash(dentry.name.str());
         return removeLookupCache(hash) == dentry;
+    }
+
+    fn createLike(self: *const Dentry, name: []const u8) !*Dentry {
+        const dentry = Dentry.new() orelse return error.NoMemory;
+        errdefer dentry.delete();
+
+        try dentry.name.init(name);
+        errdefer dentry.name.deinit();
+
+        dentry.super = self.super;
+        dentry.ops = self.ops;
+
+        return dentry;
     }
 
     fn calcHash(parent: *const Dentry, name: []const u8) u64 {
@@ -423,7 +476,7 @@ pub fn deinit() void {
 }
 
 pub inline fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) Error!void {
-    const result =mountEx(
+    const result = mountEx(
         dentry,
         fs_name.ptr, fs_name.len,
         drive, part_idx
@@ -498,8 +551,6 @@ pub fn lookup(dir: ?*Dentry, path: []const u8) !*Dentry {
                 continue;
             }
         }
-
-        log.debug("call lookup", .{});
 
         ent = ent.?.lookup(element);
     }
@@ -577,10 +628,10 @@ fn mountImpl(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32
 
     if (drive) |d| {
         log.info("{s} on {s}:part:{} is mounted to \"{s}\"", .{
-            fs.name, d.base_name, part_idx, dentry.name.str()
+            fs.name, d.base_name, part_idx, dentry.path()
         });
     } else {
-        log.info("{s} is mounted to \"{s}\"", .{fs.name, dentry.name.str()});
+        log.info("{s} is mounted to \"{s}\"", .{fs.name, dentry.path()});
     }
 
     mount_lock.lock();
