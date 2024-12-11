@@ -8,8 +8,8 @@ const std = @import("std");
 
 const cache = @import("../vm.zig").cache;
 const log = std.log.scoped(.ext2);
-const vfs = @import("../vfs.zig");
 const utils = @import("../utils.zig");
+const vfs = @import("../vfs.zig");
 
 const super_offset = 1024;
 const super_magic = 0xEF53;
@@ -295,6 +295,8 @@ const Dentry = extern struct {
     }
 };
 
+const DentryStubOps = vfs.internals.DentryStubOps(.ext2);
+
 var fs = vfs.FileSystem.init(
     "ext2",
     .device,
@@ -304,8 +306,8 @@ var fs = vfs.FileSystem.init(
     },
     .{
         .lookup = dentryLookup,
-        .makeDirectory = undefined,
-        .createFile = undefined
+        .makeDirectory = DentryStubOps.makeDirectory,
+        .createFile = DentryStubOps.createFile
     }
 );
 

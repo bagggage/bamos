@@ -14,6 +14,8 @@ const TarIterator = tar.Iterator(std.io.StreamSource.Reader);
 const TarFile = TarIterator.File;
 const TarHeader = tar.output.Header;
 
+const DentryStubOps = vfs.internals.DentryStubOps(.ext2);
+
 const max_name = 256;
 
 var fs = vfs.FileSystem.init(
@@ -25,8 +27,8 @@ var fs = vfs.FileSystem.init(
     },
     .{
         .lookup = dentryLookup,
-        .makeDirectory = undefined,
-        .createFile = undefined
+        .makeDirectory = DentryStubOps.makeDirectory,
+        .createFile = DentryStubOps.createFile
     }
 );
 
@@ -44,7 +46,7 @@ pub fn init() !void {
     };
 
     vfs.mount(mount_dir, "initramfs", null, undefined) catch |err| {
-        log.err("while mount: {}", .{err});
+        log.err("while mounting: {}", .{err});
         return error.MountFailed;
     };
 }

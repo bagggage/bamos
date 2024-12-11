@@ -20,7 +20,9 @@ const min_lookup_table_size = utils.mb_size;
 
 const hashFn = std.hash.Fnv1a_32.hash;
 
+pub const internals = @import("vfs/internals.zig");
 pub const parts = @import("vfs/parts.zig");
+
 pub const Drive = dev.classes.Drive;
 pub const Partition = parts.Partition;
 
@@ -31,6 +33,7 @@ pub const Error = error {
     NoMemory,
     NoFs,
     NoEnt,
+    BadOperation,
     BadDentry,
     BadInode,
     BadSuperblock,

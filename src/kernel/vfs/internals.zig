@@ -1,0 +1,55 @@
+//! # VFS Internal implementations
+
+const std = @import("std");
+
+const vfs = @import("../vfs.zig");
+
+const Kind = enum {
+    panic,
+    stub,
+};
+
+fn DentryOps(comptime fs: @Type(.EnumLiteral), comptime kind: Kind) type{
+    const fs_name = @tagName(fs);
+
+    return opaque {
+        fn message(comptime op_name: []const u8) []const u8 {
+            return fs_name ++ " not implements `" ++ op_name ++ "` operation";
+        }
+
+        pub fn lookup(_: *const vfs.Dentry, _: []const u8) ?*vfs.Dentry {
+            const msg = comptime message("lookup");
+            switch (kind) {
+                .panic => @panic(msg),
+                .stub => std.log.err(msg, .{})
+            }
+            return null;
+        }
+
+        pub fn makeDirectory(_: *const vfs.Dentry, _: *vfs.Dentry) vfs.Error!void {
+            const msg = comptime message("makeDirectory");
+            switch (kind) {
+                .panic => @panic(msg),
+                .stub => std.log.err(msg, .{})
+            }
+            return error.BadOperation;
+        }
+
+        pub fn createFile(_: *const vfs.Dentry, _: *vfs.Dentry) vfs.Error!void {
+            const msg = comptime message("createFile");
+            switch (kind) {
+                .panic => @panic(msg),
+                .stub => std.log.err(msg, .{})
+            }
+            return error.BadOperation;
+        }
+    };
+}
+
+pub fn DentryPanicOps(comptime fs: @Type(.EnumLiteral)) type {
+    return DentryOps(fs, .panic);
+}
+
+pub fn DentryStubOps(comptime fs: @Type(.EnumLiteral)) type {
+    return DentryOps(fs, .stub);
+}
