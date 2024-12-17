@@ -93,6 +93,7 @@ ops: *Operations,
 
 child: List = .{},
 
+ref_count: utils.RefCount(u32) = .{},
 lock: utils.Spinlock = .{},
 
 pub var oma = vm.SafeOma(lookup_cache.Entry).init(oma_capacity);
@@ -123,13 +124,22 @@ pub fn init(self: *Dentry, name: []const u8, super: *Superblock, inode: *Inode, 
     self.ops = ops;
     self.child = .{};
     self.lock = .{};
+    self.ref_count = .{};
 }
 
 pub fn deinit(self: *Dentry) void {
-    self.deleteChilds();
+    std.debug.assert(
+        self.ref_count.count() == 0 and
+        self.child.first == null
+    );
+
+    _ = lookup_cache.uncache(self);
+
+    if (self.parent != self) self.parent.removeChild(self);
     self.name.deinit();
 
-    self.inode.delete();
+    // TODO: Ref count for inode
+    // self.inode.put();
 }
 
 pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
@@ -173,12 +183,34 @@ pub fn createFile(self: *Dentry, name: []const u8) Error!*Dentry {
 }
 
 pub fn addChild(self: *Dentry, child: *Dentry) void {
+    self.ref();
+
     child.parent = self;
     self.child.prepend(child.getNode());
 }
 
+pub fn removeChild(self: *Dentry, child: *Dentry) void {
+    child.parent = child;
+    self.child.remove(child.getNode());
+
+    self.deref();
+}
+
 pub inline fn path(self: *const Dentry) Path {
     return Path{ .dentry = self };
+}
+
+pub inline fn ref(self: *Dentry) void {
+    self.ref_count.inc();
+}
+
+pub fn deref(self: *Dentry) void {
+    if (self.ref_count.put()) {
+        log.debug("freeing \"{s}\"", .{self.name.str()});
+
+        self.deinit();
+        self.delete();
+    }
 }
 
 fn createLike(self: *const Dentry, name: []const u8) !*Dentry {

@@ -297,7 +297,10 @@ fn lookupEx(dir: ?*Dentry, path: []const u8) Error!*Dentry {
             }
         }
 
-        ent = ent.?.lookup(element);
+        const child = ent.?.lookup(element);
+        ent.?.deref();
+
+        ent = child;
     }
 
     return ent orelse error.NoEnt;
@@ -310,6 +313,7 @@ fn initRoot() !void {
     const super = try tmp_fs.mount(undefined, undefined);
 
     root_dentry = super.root;
+    root_dentry.ref();
 
     log.info("tmpfs was mounted as \"{s}\"", .{root_dentry.name.str()});
 }

@@ -41,7 +41,9 @@ pub fn get(hash: u64) ?*Dentry {
     lock.lock();
     defer lock.unlock();
 
-    return &(table.get(hash) orelse return null).data;
+    const dentry = &(table.get(hash) orelse return null).data;
+
+    return if (dentry.ref_count.get()) dentry else null;
 }
 
 pub fn insert(hash: u64, dentry: *Dentry) void {
