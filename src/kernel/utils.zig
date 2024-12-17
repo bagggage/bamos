@@ -7,6 +7,7 @@ const builtin = @import("builtin");
 
 const log = std.log.scoped(.utils);
 
+pub const api = @import("utils/api.zig");
 pub const algorithm = @import("utils/algorithm.zig");
 pub const arch = switch (builtin.cpu.arch) {
     .x86_64 => @import("arch/x86-64/arch.zig"),
@@ -49,6 +50,7 @@ pub const hash_table = @import("utils/hash-table.zig");
 pub const Heap = @import("utils/Heap.zig");
 pub const HashTable = hash_table.HashTable;
 pub const AutoHashTable = hash_table.AutoHashTable;
+pub const RefCount = @import("utils/ref-count.zig").RefCount;
 
 pub const byte_size = 8;
 pub const kb_size = 1024;
