@@ -7,13 +7,13 @@ const std = @import("std");
 const api = utils.api.scoped(@This());
 const dev = @import("dev.zig");
 const log = std.log.scoped(.vfs);
-const tmpfs = @import("vfs/tmpfs.zig");
+const tmpfs = @import("vfs/drivers//tmpfs.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
 const hashFn = std.hash.Fnv1a_32.hash;
 
-pub const devfs = @import("vfs/devfs.zig");
+//pub const devfs = @import("vfs/drivers//devfs.zig");
 pub const internals = @import("vfs/internals.zig");
 pub const lookup_cache = @import("vfs/lookup-cache.zig");
 pub const parts = @import("vfs/parts.zig");
@@ -111,11 +111,6 @@ const MountList = utils.List(MountPoint);
 const MountNode = MountList.Node;
 const FsList = utils.List(FileSystem);
 const FsNode = FsList.Node;
-const LookupTable = utils.HashTable(u64, Dentry.Node, opaque{
-    pub fn hash(key: u64) u64 { return key; } 
-    pub fn eql(a: u64, b: u64) bool { return a == b; }
-});
-const LookupEntry = LookupTable.EntryNode;
 
 export var root_dentry: *Dentry = undefined;
 
@@ -127,8 +122,8 @@ var fs_lock = utils.Spinlock.init(.unlocked);
 
 const AutoInit = opaque {
     pub var file_systems = .{
-        @import("vfs/initrd.zig"),
-        @import("vfs/ext2.zig")
+        @import("vfs/drivers/initrd.zig"),
+        @import("vfs/drivers/ext2.zig")
     };
 };
 

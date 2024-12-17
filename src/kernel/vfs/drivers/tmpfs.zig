@@ -8,12 +8,14 @@
 //! It can also be mounted during regular operation; however,
 //! any data written to it is not preserved and remains in RAM only until it is unmounted.
 
+// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const log = std.log.scoped(.tmpfs);
-const utils = @import("../utils.zig");
-const vfs = @import("../vfs.zig");
-const vm = @import("../vm.zig");
+const utils = @import("../../utils.zig");
+const vfs = @import("../../vfs.zig");
+const vm = @import("../../vm.zig");
 
 const max_name_len = 64;
 const oma_capacity = 128;

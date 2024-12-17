@@ -5,10 +5,10 @@
 const std = @import("std");
 const tar = std.tar;
 
-const boot = @import("../boot.zig");
+const boot = @import("../../boot.zig");
 const log = std.log.scoped(.initrd);
-const utils = @import("../utils.zig");
-const vfs = @import("../vfs.zig");
+const utils = @import("../../utils.zig");
+const vfs = @import("../../vfs.zig");
 
 const TarIterator = tar.Iterator(std.io.StreamSource.Reader);
 const TarFile = TarIterator.File;
