@@ -14,7 +14,7 @@ fn DentryOps(comptime fs: @Type(.EnumLiteral), comptime kind: Kind) type{
 
     return opaque {
         fn message(comptime op_name: []const u8) []const u8 {
-            return fs_name ++ " not implements `" ++ op_name ++ "` operation";
+            return fs_name ++ " doesn't implement `" ++ op_name ++ "` operation";
         }
 
         pub fn lookup(_: *const vfs.Dentry, _: []const u8) ?*vfs.Dentry {
