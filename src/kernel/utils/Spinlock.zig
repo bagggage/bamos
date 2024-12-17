@@ -9,7 +9,8 @@
 
 const std = @import("std");
 const atomic = std.atomic;
-const AtomicOrder = std.builtin.AtomicOrder;
+
+const Self = @This();
 
 exclusion: atomic.Value(u8) = atomic.Value(u8).init(@intFromEnum(State.unlocked)),
 
@@ -18,8 +19,6 @@ pub const State = enum(u1) {
     unlocked = 0,
     locked = 1,
 };
-
-const Self = @This();
 
 /// Initializes a new spinlock with the specified initial state.
 ///
