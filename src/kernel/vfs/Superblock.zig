@@ -35,7 +35,7 @@ pub inline fn new() ?*Superblock {
     return oma.alloc();
 }
 
-pub inline fn delete(self: *Superblock) void {
+pub inline fn free(self: *Superblock) void {
     oma.free(self);
 }
 

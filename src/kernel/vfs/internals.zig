@@ -21,7 +21,7 @@ fn DentryOps(comptime fs: @Type(.EnumLiteral), comptime kind: Kind) type{
             const msg = comptime message("lookup");
             switch (kind) {
                 .panic => @panic(msg),
-                .stub => std.log.err(msg, .{})
+                .stub => std.log.warn(msg, .{})
             }
             return null;
         }
@@ -30,7 +30,7 @@ fn DentryOps(comptime fs: @Type(.EnumLiteral), comptime kind: Kind) type{
             const msg = comptime message("makeDirectory");
             switch (kind) {
                 .panic => @panic(msg),
-                .stub => std.log.err(msg, .{})
+                .stub => std.log.warn(msg, .{})
             }
             return error.BadOperation;
         }
@@ -39,7 +39,7 @@ fn DentryOps(comptime fs: @Type(.EnumLiteral), comptime kind: Kind) type{
             const msg = comptime message("createFile");
             switch (kind) {
                 .panic => @panic(msg),
-                .stub => std.log.err(msg, .{})
+                .stub => std.log.warn(msg, .{})
             }
             return error.BadOperation;
         }

@@ -1,3 +1,5 @@
+// @noexport
+
 //! # Simple Text Output
 //! 
 //! Responsible for rendering text and characters using a `RawFont` to framebuffer.

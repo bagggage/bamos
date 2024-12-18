@@ -31,12 +31,19 @@ const File = struct {
 
     page_list: PageList = .{},
 
-    pub fn new() ?*File {
+    pub inline fn new() ?*File {
         return oma.alloc();
     }
 
-    pub fn free(self: *File) void {
+    pub inline fn free(self: *File) void {
         oma.free(self);
+    }
+
+    pub fn deinit(_: *File) void {}
+
+    pub fn delete(self: *File) void {
+        self.deinit();
+        self.free();
     }
 };
 
@@ -51,6 +58,7 @@ var fs = vfs.FileSystem.init(
         .lookup = dentryLookup,
         .makeDirectory = dentryMakeDirectory,
         .createFile = dentryCreateFile,
+        .deinitInode = deinitInode
     }
 );
 
@@ -128,4 +136,11 @@ fn createInode(comptime kind: EntryKind) !*vfs.Inode {
     }
 
     return inode;
+}
+
+fn deinitInode(inode: *const vfs.Inode) void {
+    if (inode.type == .regular_file) {
+        const file = inode.fs_data.as(File).?;
+        file.delete();
+    }
 }

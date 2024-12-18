@@ -135,14 +135,14 @@ pub fn exception(
 pub fn trace(it: *std.debug.StackIterator, writer: *std.io.AnyWriter) void {
     tty_config.setColor(writer, .bright_yellow) catch return;
 
+    writer.print("[TRACE]: <0x{x:0<16}>" ++ logger.new_line, .{if (it.first_address) |ip| ip else 0}) catch return;
+
     if (comptime builtin.mode == .ReleaseFast) {
         writer.writeAll(
             "Tracing cannot be done in `ReleaseFast` build, use `Debug` or `ReleaseSafe` build." ++ logger.new_line
         ) catch return;
         return;
     }
-
-    writer.writeAll("[TRACE]:" ++ logger.new_line) catch return;
 
     var i: usize = 1;
 
