@@ -17,89 +17,26 @@ const utils = @import("../../utils.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
-const max_name_len = 64;
 const oma_capacity = 128;
 
-const Entry = struct {
-    const Kind = enum {
-        directory,
-        file
-    };
+const EntryKind = enum {
+    directory,
+    file
+};
 
-    const List = utils.SList(Entry);
-    const Node = List.Node;
+const File = struct {
+    const PageList = utils.SList(u32);
 
-    const Directory = struct {
-        const Self = @This();
+    var oma = vm.SafeOma(File).init(oma_capacity);
 
-        childs: List = .{},
+    page_list: PageList = .{},
 
-        pub fn deinit(self: *Directory) void {
-            var node = self.childs.first;
-
-            while (node) |n| : (node = n.next) {
-                n.data.deinit();
-                n.data.delete();
-            }
-        }
-
-        pub fn lookup(self: *const Self, name: []const u8) ?*Entry {
-            var node = self.childs.first;
-
-            while (node) |n| : (node = n.next) {
-                if (std.mem.eql(u8, n.data.getName(), name)) return &n.data;
-            }
-
-            return null;
-        }
-    };
-
-    const File = struct {
-        const PageList = utils.SList(u32);
-
-        pub fn deinit(self: *File) void {
-            _ = self;
-        }
-    };
-
-    pub var oma = vm.SafeOma(Node).init(oma_capacity);
-
-    name_buf: [max_name_len]u8 = undefined,
-    name_len: u8 = 0,
-
-    data: union(Kind) {
-        directory: Directory,
-        file: File,
-    },
-
-    pub inline fn deinit(self: *Entry) void {
-        switch (self.data) {
-            .directory => |*dir| dir.deinit(),
-            .file => |*file| file.deinit()
-        }
+    pub fn new() ?*File {
+        return oma.alloc();
     }
 
-    pub fn rename(self: *Entry, name: []const u8) !void {
-        if (name.len > max_name_len) return error.InvalidArgs;
-
-        @memcpy(self.name_buf[0..name.len], name);
-        self.name_len = @truncate(name.len);
-    }
-
-    pub inline fn getName(self: *const Entry) []const u8 {
-        return self.name_buf[0..self.name_len];
-    }
-
-    pub inline fn getNode(self: *Entry) *Node {
-        return @fieldParentPtr("data", self);
-    }
-
-    pub inline fn new() ?*Entry {
-        return &(oma.alloc() orelse return null).data;
-    }
-
-    pub inline fn delete(self: *Entry) void {
-        oma.free(self.getNode());
+    pub fn free(self: *File) void {
+        oma.free(self);
     }
 };
 
@@ -127,92 +64,68 @@ pub fn deinit() void {
 
 fn mount(_: *vfs.Drive, _: *const vfs.Partition) vfs.Error!*vfs.Superblock {
     const super = vfs.Superblock.new() orelse return error.NoMemory;
-    errdefer super.delete();
+    errdefer super.free();
 
-    const root = try createEntry("/", .directory);
-    errdefer deleteEntry(root);
-
-    const dentry = try createDentry(super, root);
+    const root = try createDentry(super, "/", .directory);
 
     super.init(null, null, vm.page_size * 4, null);
-    super.root = dentry;
+    super.root = root;
 
     return super;
 }
 
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
-    const inode = parent.inode;
-    const directory = &inode.fs_data.as(Entry).?.data.directory;
+    var node = parent.child.first;
 
-    const child = directory.lookup(name) orelse return null;
+    while (node) |n| : (node = n.next) {
+        if (std.mem.eql(u8, n.data.name.str(), name)) return &n.data;
+    }
 
-    return createDentry(parent.super, child) catch return null;
+    return null;
 }
 
-fn dentryMakeDirectory(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
-    return dentryCreateEntry(parent, child, .directory);
-}
-
-fn dentryCreateFile(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
-    return dentryCreateEntry(parent, child, .file);
-}
-
-fn dentryCreateEntry(parent: *const vfs.Dentry, child: *vfs.Dentry, comptime kind: Entry.Kind) vfs.Error!void {
-    const dir = parent.inode.fs_data.as(Entry).?;
-
-    const entry = try createEntry(child.name.str(), kind);
-    errdefer entry.delete();
-
-    const inode = try createInode(entry);
-
-    dir.data.directory.childs.prepend(entry.getNode());
+fn dentryMakeDirectory(_: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
+    const inode = try createInode(.directory);
     child.inode = inode;
 }
 
-fn createDentry(super: *vfs.Superblock, entry: *const Entry) !*vfs.Dentry {
+fn dentryCreateFile(_: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
+    const inode = try createInode(.file);
+    child.inode = inode;
+}
+
+fn createDentry(super: *vfs.Superblock, name: []const u8, comptime kind: EntryKind) !*vfs.Dentry {
     const dentry = vfs.Dentry.new() orelse return error.NoMemory;
     errdefer dentry.free();
 
-    const inode = try createInode(entry);
+    const inode = try createInode(kind);
     errdefer inode.free();
 
-    try dentry.init(entry.getName(), super, inode, &fs.data.dentry_ops);
+    try dentry.init(name, super, inode, &fs.data.dentry_ops);
+
+    // Prevent auto-freeing dentry
+    dentry.ref();
 
     return dentry;
 }
 
-fn createInode(entry: *const Entry) !*vfs.Inode {
+fn createInode(comptime kind: EntryKind) !*vfs.Inode {
     const inode = vfs.Inode.new() orelse return error.NoMemory;
     errdefer inode.free();
 
-    @memset(std.mem.asBytes(inode), 0);
-
-    inode.links_num = 1;
-    inode.fs_data.set(@constCast(entry));
-    inode.type = switch (entry.data) {
-        .directory => .directory,
-        .file => .regular_file
+    inode.* = .{
+        .index = 0,
+        .type = switch (kind) {
+            .directory => .directory,
+            .file => .regular_file
+        },
+        .perm = 0
     };
+
+    if (kind == .file) {
+        const file = File.new() orelse return error.NoMemory;
+        inode.fs_data.set(file);
+    }
 
     return inode;
-}
-
-fn createEntry(name: []const u8, comptime kind: Entry.Kind) !*Entry {
-    const entry: *Entry = Entry.new() orelse return error.NoMemory;
-    errdefer entry.delete();
-
-    entry.* = .{
-        .data = switch (kind) {
-            .directory => .{ .directory = .{} },
-            .file => .{ .file = .{} }
-        }
-    };
-    try entry.rename(name);
-
-    return entry;
-}
-
-inline fn deleteEntry(entry: *Entry) void {
-    entry.deinit();
-    entry.delete();
 }
