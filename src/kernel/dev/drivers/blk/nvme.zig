@@ -729,7 +729,7 @@ const Controller = struct {
 
             for (slice, 0..) |nsid, i| {
                 const drive = try dev.obj.new(NamespaceDrive);
-                errdefer dev.obj.delete(NamespaceDrive, drive);
+                errdefer dev.obj.free(NamespaceDrive, drive);
 
                 self.namespaces[i] = drive;
 

@@ -50,7 +50,7 @@ pub fn new(comptime T: type) Error!*T {
 }
 
 /// @export
-pub fn delete(comptime T: type, object: *T) void {
+pub fn free(comptime T: type, object: *T) void {
     const Node = utils.List(T).Node;
     const node: *Node = @fieldParentPtr("data", object);
 
