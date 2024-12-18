@@ -23,16 +23,16 @@ pub const Type = enum(u8) {
 index: u32,
 type: Type,
 perm: u16,
-size: u64, // In bytes
+size: u64 = 0, // In bytes
 
-access_time: u32,
-modify_time: u32,
-create_time: u32,
+access_time: u32 = 0,
+modify_time: u32 = 0,
+create_time: u32 = 0,
 
-gid: u16,
-uid: u16,
+gid: u16 = 0,
+uid: u16 = 0,
 
-links_num: u16,
+links_num: u16 = 1,
 
 ref_count: utils.RefCount(u32) = .{},
 
@@ -43,7 +43,6 @@ pub var oma = vm.SafeOma(Inode).init(oma_capacity);
 pub inline fn new() ?*Inode {
     const inode = oma.alloc() orelse return null;
     inode.ref_count = .{};
-    inode.fs_data = .{};
 
     return inode;
 }

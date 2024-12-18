@@ -228,9 +228,7 @@ const Inode = extern struct {
             .gid = self.gid,
             .uid = self.uid,
 
-            .links_num = self.links_num,
-
-            .fs_data = utils.AnyData.from(@constCast(self)),
+            .links_num = self.links_num
         };
 
         return inode;
@@ -331,7 +329,7 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
     if (!ext_super.check()) return error.BadSuperblock;
 
     const super = vfs.Superblock.new() orelse return error.NoMemory;
-    errdefer super.delete();
+    errdefer super.free();
 
     // Init super
     {

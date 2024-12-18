@@ -69,7 +69,7 @@ fn mount(_: *vfs.Drive, _: *vfs.Partition) vfs.Error!*vfs.Superblock {
     if (initrd.len != 0) return error.Busy;
 
     const super = vfs.Superblock.new() orelse return error.NoMemory;
-    errdefer super.delete();
+    errdefer super.free();
 
     const inode = vfs.Inode.new() orelse return error.NoMemory;
     errdefer inode.free();
@@ -79,8 +79,11 @@ fn mount(_: *vfs.Drive, _: *vfs.Partition) vfs.Error!*vfs.Superblock {
     super.init(null, null, 512, null);
     super.root = dentry;
 
-    @memset(std.mem.asBytes(inode), 0);
-    inode.type = .directory;
+    inode.* = .{
+        .index = 0,
+        .type = .directory,
+        .perm = 0
+    };
 
     dentry.init("/", super, inode, &fs.data.dentry_ops) catch unreachable;
 
@@ -152,17 +155,19 @@ fn handleErr(err: anyerror) void {
 }
 
 fn initInode(inode: *vfs.Inode, file: *const TarFile, pos: usize) void {
-    @memset(std.mem.asBytes(inode), 0);
+    inode.* = .{
+        // Offset in tar
+        .index = @truncate(pos - @sizeOf(tar.output.Header)),
 
-    // Offset
-    inode.index = @truncate(pos - @sizeOf(tar.output.Header));
-    inode.type = switch (file.kind) {
-        .directory => .directory,
-        .file => .regular_file,
-        .sym_link => .symbolic_link
+        .type = switch (file.kind) {
+            .directory => .directory,
+            .file => .regular_file,
+            .sym_link => .symbolic_link
+        },
+        .perm = 0,
+        .size = file.size,
+
+        // Data pointer
+        .fs_data = utils.AnyData.from(@constCast(&initrd.ptr[pos]))
     };
-    inode.size = file.size;
-
-    // Set file data pointer
-    inode.fs_data.set(@constCast(&initrd.ptr[pos]));
 }
