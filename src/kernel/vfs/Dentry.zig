@@ -25,10 +25,12 @@ pub const Operations = struct {
     pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
     pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry) Error!void;
     pub const CreateFileFn = *const fn(*const Dentry, *Dentry) Error!void;
+    pub const DeinitInodeFn = *const fn(*const Inode) void;
 
     lookup: LookupFn,
     makeDirectory: MakeDirectoryFn,
     createFile: CreateFileFn,
+    deinitInode: DeinitInodeFn = vfs.internals.DentryNoneOps.deinitInode
 };
 
 pub const Name = struct {
@@ -99,10 +101,19 @@ lock: utils.Spinlock = .{},
 pub var oma = vm.SafeOma(lookup_cache.Entry).init(oma_capacity);
 
 pub inline fn new() ?*Dentry {
-    return &(oma.alloc() orelse return null).data.value.data;
+    const dentry = &(oma.alloc() orelse return null).data.value.data;
+    dentry.* = .{
+        .name = undefined,
+        .parent = undefined,
+        .super = undefined,
+        .inode = undefined,
+        .ops = undefined
+    };
+
+    return dentry;
 }
 
-pub inline fn delete(self: *Dentry) void {
+pub inline fn free(self: *Dentry) void {
     oma.free(self.getCacheEntry());
 }
 
@@ -122,24 +133,26 @@ pub fn init(self: *Dentry, name: []const u8, super: *Superblock, inode: *Inode, 
     self.super = super;
     self.inode = inode;
     self.ops = ops;
-    self.child = .{};
-    self.lock = .{};
-    self.ref_count = .{};
 }
 
 pub fn deinit(self: *Dentry) void {
-    std.debug.assert(
-        self.ref_count.count() == 0 and
-        self.child.first == null
-    );
+    std.debug.assert(self.ref_count.count() == 0);
 
     _ = lookup_cache.uncache(self);
 
     if (self.parent != self) self.parent.removeChild(self);
-    self.name.deinit();
 
-    // TODO: Ref count for inode
-    // self.inode.put();
+    if (self.inode.deref()) {
+        self.ops.deinitInode(self.inode);
+        self.inode.free();
+    }
+
+    self.name.deinit();
+}
+
+pub fn delete(self: *Dentry) void {
+    self.deinit();
+    self.free();
 }
 
 pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
@@ -164,7 +177,7 @@ pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
 
 pub fn makeDirectory(self: *Dentry, name: []const u8) Error!*Dentry {
     const dir_dentry = try self.createLike(name);
-    errdefer { dir_dentry.name.deinit(); dir_dentry.delete(); }
+    errdefer { dir_dentry.name.deinit(); dir_dentry.free(); }
 
     try self.ops.makeDirectory(self, dir_dentry);
     self.addChild(dir_dentry);
@@ -174,7 +187,7 @@ pub fn makeDirectory(self: *Dentry, name: []const u8) Error!*Dentry {
 
 pub fn createFile(self: *Dentry, name: []const u8) Error!*Dentry {
     const file_dentry = try self.createLike(name);
-    errdefer { file_dentry.name.deinit(); file_dentry.delete(); }
+    errdefer { file_dentry.name.deinit(); file_dentry.free(); }
 
     try self.ops.createFile(self, file_dentry);
     self.addChild(file_dentry);
@@ -191,9 +204,12 @@ pub fn addChild(self: *Dentry, child: *Dentry) void {
 
 pub fn removeChild(self: *Dentry, child: *Dentry) void {
     child.parent = child;
-    self.child.remove(child.getNode());
 
-    self.deref();
+    if (self.ref_count.put()) {
+        self.delete();
+    } else {
+        self.child.remove(child.getNode());
+    }
 }
 
 pub inline fn path(self: *const Dentry) Path {
@@ -204,18 +220,13 @@ pub inline fn ref(self: *Dentry) void {
     self.ref_count.inc();
 }
 
-pub fn deref(self: *Dentry) void {
-    if (self.ref_count.put()) {
-        log.debug("freeing \"{s}\"", .{self.name.str()});
-
-        self.deinit();
-        self.delete();
-    }
+pub inline fn deref(self: *Dentry) void {
+    if (self.ref_count.put()) self.delete();
 }
 
 fn createLike(self: *const Dentry, name: []const u8) !*Dentry {
     const dentry = Dentry.new() orelse return error.NoMemory;
-    errdefer dentry.delete();
+    errdefer dentry.free();
 
     try dentry.name.init(name);
     errdefer dentry.name.deinit();
@@ -224,12 +235,4 @@ fn createLike(self: *const Dentry, name: []const u8) !*Dentry {
     dentry.ops = self.ops;
 
     return dentry;
-}
-
-fn deleteChilds(self: *Dentry) void {
-    var node = self.child.first;
-    while (node) |child| : (node = child.next) {
-        child.data.deinit();
-        child.data.delete();
-    }
 }

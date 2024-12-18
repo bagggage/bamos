@@ -34,14 +34,28 @@ uid: u16,
 
 links_num: u16,
 
+ref_count: utils.RefCount(u32) = .{},
+
 fs_data: utils.AnyData = .{},
 
 pub var oma = vm.SafeOma(Inode).init(oma_capacity);
 
 pub inline fn new() ?*Inode {
-    return oma.alloc();
+    const inode = oma.alloc() orelse return null;
+    inode.ref_count = .{};
+    inode.fs_data = .{};
+
+    return inode;
 }
 
-pub inline fn delete(self: *Inode) void {
+pub inline fn free(self: *Inode) void {
     oma.free(self);
+}
+
+pub inline fn ref(self: *Inode) void {
+    self.ref_count.inc();
+}
+
+pub inline fn deref(self: *Inode) bool {
+    return self.ref_count.put();
 }

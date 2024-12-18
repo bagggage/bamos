@@ -72,7 +72,7 @@ fn mount(_: *vfs.Drive, _: *vfs.Partition) vfs.Error!*vfs.Superblock {
     errdefer super.delete();
 
     const inode = vfs.Inode.new() orelse return error.NoMemory;
-    errdefer inode.delete();
+    errdefer inode.free();
 
     const dentry = vfs.Dentry.new() orelse return error.NoMemory;
 
@@ -131,10 +131,10 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
         if (std.mem.eql(u8, entry_name, name)) {
             // Init new dentry
             const dentry = vfs.Dentry.new() orelse return error.NoMemory;
-            errdefer dentry.delete();
+            errdefer dentry.free();
 
             const inode = vfs.Inode.new() orelse return error.NoMemory;
-            errdefer inode.delete();
+            errdefer inode.free();
 
             initInode(inode, &file, tar_iter.reader.context.getPos() catch unreachable);
 

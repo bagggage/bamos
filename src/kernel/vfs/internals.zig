@@ -53,3 +53,7 @@ pub fn DentryPanicOps(comptime fs: @Type(.EnumLiteral)) type {
 pub fn DentryStubOps(comptime fs: @Type(.EnumLiteral)) type {
     return DentryOps(fs, .stub);
 }
+
+pub const DentryNoneOps = opaque {
+    pub fn deinitInode(_: *const vfs.Inode) void {}
+};

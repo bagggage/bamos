@@ -171,10 +171,10 @@ fn dentryCreateEntry(parent: *const vfs.Dentry, child: *vfs.Dentry, comptime kin
 
 fn createDentry(super: *vfs.Superblock, entry: *const Entry) !*vfs.Dentry {
     const dentry = vfs.Dentry.new() orelse return error.NoMemory;
-    errdefer dentry.delete();
+    errdefer dentry.free();
 
     const inode = try createInode(entry);
-    errdefer inode.delete();
+    errdefer inode.free();
 
     try dentry.init(entry.getName(), super, inode, &fs.data.dentry_ops);
 
@@ -183,7 +183,7 @@ fn createDentry(super: *vfs.Superblock, entry: *const Entry) !*vfs.Dentry {
 
 fn createInode(entry: *const Entry) !*vfs.Inode {
     const inode = vfs.Inode.new() orelse return error.NoMemory;
-    errdefer inode.delete();
+    errdefer inode.free();
 
     @memset(std.mem.asBytes(inode), 0);
 
