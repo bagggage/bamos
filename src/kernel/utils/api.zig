@@ -11,7 +11,7 @@ pub fn scoped(comptime Scope: type) type {
 
     return opaque {
         /// @export
-        pub fn externFn(comptime func: anytype, comptime name_tag: @Type(.EnumLiteral)) @TypeOf(&func) {
+        pub fn externFn(comptime func: anytype, comptime name_tag: @Type(.enum_literal)) @TypeOf(&func) {
             const func_ptr = comptime @extern(*const anyopaque, .{ .name = scope_name ++ "." ++ @tagName(name_tag) });
             return @ptrCast(func_ptr);
         }

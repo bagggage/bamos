@@ -20,24 +20,24 @@ pub fn Mechanism(
     comptime {
         const data_info = @typeInfo(DataType);
 
-        if (data_info != .Int or data_info.Int.signedness == .signed or data_info.Int.bits % 8 != 0)
+        if (data_info != .int or data_info.int.signedness == .signed or data_info.int.bits % 8 != 0)
             @compileError("Data type must be an unsigned integer e.g. `u<x>`, where x - number of bits: 8, 16, 32, 64");
 
         const addr_info = @typeInfo(AddrType);
 
-        if (addr_info != .Int or addr_info.Int.signedness != .unsigned)
+        if (addr_info != .int or addr_info.int.signedness != .unsigned)
             @compileError("Address type must be an unsigned integer e.g `u<x>`, where x - number of bits");
 
         const read_info = @typeInfo(@TypeOf(readFn));
         const write_info = @typeInfo(@TypeOf(writeFn));
 
         if (
-            read_info != .Fn or write_info != .Fn or
-            write_info.Fn.return_type != void or
-            read_info.Fn.return_type != DataType or
-            read_info.Fn.params.len != 1 or write_info.Fn.params.len != 2 or
-            write_info.Fn.params[0].type != AddrType or write_info.Fn.params[1].type != DataType or
-            read_info.Fn.params[0].type != AddrType
+            read_info != .@"fn" or write_info != .@"fn" or
+            write_info.@"fn".return_type != void or
+            read_info.@"fn".return_type != DataType or
+            read_info.@"fn".params.len != 1 or write_info.@"fn".params.len != 2 or
+            write_info.@"fn".params[0].type != AddrType or write_info.@"fn".params[1].type != DataType or
+            read_info.@"fn".params[0].type != AddrType
         ) {
             @compileError("Read/Write must be a functions: `fn read(AddrType) DataType` and `fn write(AddrType, DataType) void`");
         }
@@ -64,7 +64,7 @@ pub fn Mechanism(
 
             comptime {
                 const data_info = @typeInfo(NonUniformDataType);
-                if (data_info != .Int and data_info != .ComptimeInt)
+                if (data_info != .int and data_info != .comptime_int)
                     @compileError("Invalid non-uniform data type: "++@typeName(IntType)++", must be an integer");
             }
 
@@ -108,7 +108,7 @@ pub fn Mechanism(
 
             comptime {
                 const data_info = @typeInfo(NonUniformDataType);
-                if (data_info != .Int and data_info != .ComptimeInt)
+                if (data_info != .int and data_info != .comptime_int)
                     @compileError("Invalid non-uniform data type: "++@typeName(NonUniformDataType)++", must be an integer");
             }
 
@@ -273,8 +273,8 @@ fn writeMmioFn(comptime AddrType: type, comptime DataType: type)
         pub inline fn write(address: AddrType, data: DataType) void {
             @setRuntimeSafety(false);
             const ptr = switch (@typeInfo(AddrType)) {
-                .ComptimeInt, .Int => @as(*volatile DataType, @ptrFromInt(address)),
-                .Pointer => @as(*volatile DataType, @ptrCast(address)),
+                .comptime_int, .int => @as(*volatile DataType, @ptrFromInt(address)),
+                .pointer => @as(*volatile DataType, @ptrCast(address)),
                 else => @compileError("Invalid address type")
             };
             ptr.* = std.mem.nativeToLittle(DataType, data);
@@ -289,8 +289,8 @@ fn readMmioFn(comptime AddrType: type, comptime DataType: type)
         pub inline fn read(address: AddrType) DataType {
             @setRuntimeSafety(false);
             const ptr = switch (@typeInfo(AddrType)) {
-                .ComptimeInt, .Int => @as(*const volatile DataType, @ptrFromInt(address)),
-                .Pointer => @as(*const volatile DataType, @ptrCast(address)),
+                .comptime_int, .int => @as(*const volatile DataType, @ptrFromInt(address)),
+                .pointer => @as(*const volatile DataType, @ptrCast(address)),
                 else => @compileError("Invalid address type")
             };
             return std.mem.littleToNative(DataType, ptr.*);

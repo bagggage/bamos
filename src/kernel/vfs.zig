@@ -278,10 +278,10 @@ fn lookupEx(dir: ?*Dentry, path: []const u8) Error!*Dentry {
     log.debug("lookup for: \"{s}\"", .{path});
 
     var ent: ?*Dentry = if (path[0] == '/') root_dentry else dir orelse root_dentry;
-    var it = std.mem.split(
+    var it = std.mem.splitScalar(
         u8,
         if (path[0] == '/') path[1..] else path[0..],
-        "/"
+        '/'
     );
 
     while (it.next()) |element| {

@@ -217,7 +217,7 @@ pub inline fn free(self: *Self, obj_ptr: anytype) void {
     comptime {
         const type_info = @typeInfo(@TypeOf(obj_ptr));
         switch (type_info) {
-            .Pointer => |ptr| if (ptr.size != .One) @compileError("Argument type must be a pointer to one object"),
+            .pointer => |ptr| if (ptr.size != .One) @compileError("Argument type must be a pointer to one object"),
             else => @compileError("Argument type must be a pointer to one object"),
         }
     }

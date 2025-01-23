@@ -48,7 +48,7 @@ const Bucket = struct {
         var bitmap_size: u32 = std.math.divCeil(u32, capacity, utils.byte_size) catch unreachable;
 
         // Adjust the capacity to ensure the bucket fits within the allocated pages.
-        while ((utils.calcAlign(
+        while ((utils.alignUp(
             u32, (capacity * obj_size) + bitmap_size,
             @alignOf(BucketNode)) + @sizeOf(BucketNode)) >
             (pages * vm.page_size))
@@ -119,7 +119,7 @@ pub inline fn init(comptime T: type) Self {
 pub fn makeNode(self: *Self, pool_addr: usize) *BucketNode {
     const bitmap_size = std.math.divCeil(u32, self.bucket_capacity, utils.byte_size) catch unreachable;
     const bitmap_addr = pool_addr + (self.bucket_capacity * self.obj_size);
-    const node_addr = utils.calcAlign(usize, bitmap_addr + bitmap_size, @alignOf(BucketNode));
+    const node_addr = utils.alignUp(usize, bitmap_addr + bitmap_size, @alignOf(BucketNode));
 
     const node: *BucketNode = @ptrFromInt(node_addr);
     node.data = Bucket.init(bitmap_addr, self.bucket_capacity, pool_addr);

@@ -70,8 +70,7 @@ extern fn getDebugSyms() *const dbg.Header;
 /// Handles a kernel panic by printing a panic message and a stack trace.
 /// This function is marked as `noreturn` and will halt the system.
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
-    @setCold(true);
-
+    @branchHint(.cold);
     logger.capture();
     defer logger.release();
 

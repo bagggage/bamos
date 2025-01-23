@@ -50,7 +50,7 @@ fn makeKernel(b: *std.Build) *std.Build.Step {
         .name = "dbg-maker",
         .root_source_file = b.path(src_path++"/debug-maker/main.zig"),
         .optimize = .ReleaseFast,
-        .target = b.host,
+        .target = b.graph.host,
     });
 
     const maker_run = b.addRunArtifact(dbg_maker);
@@ -150,7 +150,7 @@ fn makeDocs(b: *std.Build) *std.Build.Step {
     const tar_maker = b.addExecutable(.{
         .name = "tar-maker",
         .root_source_file = b.path(src_path++"/docs/tar/main.zig"),
-        .target = b.host,
+        .target = b.graph.host,
         .optimize = .ReleaseFast,
         .strip = true
     });

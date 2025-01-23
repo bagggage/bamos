@@ -28,7 +28,7 @@ pub const Register = struct {
             if (Type) |T| {
                 const info = @typeInfo(T);
 
-                if (info != .Int and info != .Struct)
+                if (info != .int and info != .@"struct")
                     @compileError("Register type can only be an integer or a structure, found: "++@typeName(Type.?));
             }
         }
@@ -61,7 +61,7 @@ pub fn Group(
     }
 
     const reg_names = std.builtin.Type{
-        .Enum = .{
+        .@"enum" = .{
             .fields = fields,
             .decls = &.{},
             .tag_type = u8,
@@ -107,7 +107,7 @@ pub fn Group(
             const Type = getRegInfo(member).Type orelse return DataType;
             const info = @typeInfo(Type);
 
-            if (info == .Int) return Type;
+            if (info == .int) return Type;
 
             return std.meta.Int(.unsigned, @bitSizeOf(Type));
         }
@@ -270,7 +270,7 @@ pub fn from(comptime Layout: type) []const Register {
     const layout_info = @typeInfo(Layout);
 
     switch (layout_info) {
-        .Struct => |info| {
+        .@"struct" => |info| {
             inline for (info.fields) |field| {
                 if (field.name[0] == '_') continue;
 
@@ -284,7 +284,7 @@ pub fn from(comptime Layout: type) []const Register {
                 };
             }
         },
-        .Union => |info| {
+        .@"union" => |info| {
             inline for (info.fields) |field| {
                 result = result ++ from(field.type);
             }
@@ -296,7 +296,7 @@ pub fn from(comptime Layout: type) []const Register {
 }
 
 fn getTypeAccess(comptime Type: type) Register.Access {
-    if (@typeInfo(Type) != .Struct) return .rw;
+    if (@typeInfo(Type) != .@"struct") return .rw;
     if (@hasDecl(Type, "access") == false) return .rw;
     if (@TypeOf(Type.access) != Register.Access) return .rw;
 

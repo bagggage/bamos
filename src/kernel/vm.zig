@@ -26,6 +26,7 @@ pub const lma_end = arch.vm.lma_end;
 pub const heap_start = arch.vm.heap_start;
 
 pub const PageTable = arch.vm.PageTable;
+pub const VirtualRegion = @import("vm/VirtualRegion.zig");
 
 pub const BucketAllocator = @import("vm/BucketAllocator.zig");
 pub const cache = @import("vm/cache.zig");
@@ -208,8 +209,8 @@ pub inline fn getVirtLma(address: anytype) @TypeOf(address) {
     const typeInfo = @typeInfo(@TypeOf(address));
 
     return switch (typeInfo) {
-        .Int, .ComptimeInt => address + lma_start,
-        .Pointer => @ptrFromInt(@intFromPtr(address) + lma_start),
+        .int, .comptime_int => address + lma_start,
+        .pointer => @ptrFromInt(@intFromPtr(address) + lma_start),
         else => @compileError(intPtrErrorStr),
     };
 }
@@ -223,8 +224,8 @@ pub inline fn getPhysLma(address: anytype) @TypeOf(address) {
     const type_info = @typeInfo(@TypeOf(address));
 
     return switch (type_info) {
-        .Int, .ComptimeInt => address - lma_start,
-        .Pointer => @ptrFromInt(@intFromPtr(address) - lma_start),
+        .int, .comptime_int => address - lma_start,
+        .pointer => @ptrFromInt(@intFromPtr(address) - lma_start),
         else => @compileError(intPtrErrorStr),
     };
 }
@@ -238,12 +239,12 @@ pub inline fn getPhysPt(address: anytype, pt: *const PageTable) ?@TypeOf(address
     const type_info = @typeInfo(@TypeOf(address));
 
     _ = switch (type_info) {
-        .Int, .ComptimeInt, .Pointer => 0,
+        .int, .comptime_int, .pointer => 0,
         else => @compileError(intPtrErrorStr),
     };
 
     const virt = switch (type_info) {
-        .Pointer => @intFromPtr(address),
+        .pointer => @intFromPtr(address),
         else => address,
     };
 
@@ -252,7 +253,7 @@ pub inline fn getPhysPt(address: anytype, pt: *const PageTable) ?@TypeOf(address
     const phys = arch.vm.getPhys(virt, pt) orelse return null;
 
     return switch (type_info) {
-        .Pointer => @ptrFromInt(phys),
+        .pointer => @ptrFromInt(phys),
         else => phys,
     };
 }

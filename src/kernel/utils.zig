@@ -57,7 +57,7 @@ pub const kb_size = 1024;
 pub const mb_size = kb_size * 1024;
 pub const gb_size = mb_size * 1024;
 
-pub inline fn calcAlign(comptime T: type, value: T, alignment: T) T {
+pub inline fn alignUp(comptime T: type, value: T, alignment: T) T {
     return ((value + (alignment - 1)) & ~(alignment - 1));
 }
 

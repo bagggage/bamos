@@ -38,7 +38,7 @@ pub const GuidPartitionTable = extern struct {
     /// Represents GPT header.  
     /// *little-endian*
     pub const Header = extern struct {
-        pub const sign_value = "EFI PART";
+        pub const sign_value = "EFI PART".*;
 
         signature: [8]u8 = sign_value,
         revision: u32,
@@ -62,7 +62,7 @@ pub const GuidPartitionTable = extern struct {
         ents_crc32: u32,
 
         pub fn checkSign(self: *const Header) bool {
-            return std.mem.eql(u8, &self.signature, sign_value);
+            return std.mem.eql(u8, &self.signature, &sign_value);
         }
     };
 

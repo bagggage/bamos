@@ -155,12 +155,12 @@ pub inline fn useIdt(idt: *DescTable) void {
     regs.setIdtr(idtr);
 }
 
-pub inline fn enableCpu() void {
+pub inline fn enableForCpu() void {
     @setRuntimeSafety(false);
     asm volatile("sti");
 }
 
-pub inline fn disableCpu() void {
+pub inline fn disableForCpu() void {
     @setRuntimeSafety(false);
     asm volatile("cli");
 }
@@ -314,7 +314,7 @@ pub fn lowLevelIntrHandler(
                     ));
 
                     comptime {
-                        @export(isr, .{
+                        @export(&isr, .{
                             .name = std.fmt.comptimePrint(
                                 "isr{x}_{x}",
                                 .{n, std.hash.crc.Crc16Arc.hash(handler)}
@@ -379,8 +379,8 @@ export fn msiHandlerCaller(idx: u8) callconv(.C) void {
 }
 
 comptime{
-    @export(CommonIntrHandler("irqHandlerCaller").handler, .{ .name = "commonIrqHandler" });
-    @export(CommonIntrHandler("msiHandlerCaller").handler, .{ .name = "commonMsiHandler" });
+    @export(&CommonIntrHandler("irqHandlerCaller").handler, .{ .name = "commonIrqHandler" });
+    @export(&CommonIntrHandler("msiHandlerCaller").handler, .{ .name = "commonMsiHandler" });
 }
 
 inline fn iret() void {

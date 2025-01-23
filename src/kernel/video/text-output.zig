@@ -55,10 +55,9 @@ pub fn deinit() void {
 pub const drawChar: fn(char: u8, color: u32, row: u16, col: u16) void = if (use_texture) drawCharTextured else drawCharRendered;
 
 fn drawCharTextured(char: u8, color: u32, row: u16, col: u16) void {
-    @setCold(false);
     @setRuntimeSafety(false);
 
-    if (char == 0) return;
+    if (char == 0) { @branchHint(.unlikely); return; }
 
     const ColorVec = @Vector(font.width, u32);
 
@@ -79,7 +78,6 @@ fn drawCharTextured(char: u8, color: u32, row: u16, col: u16) void {
 }
 
 fn drawCharRendered(char: u8, color: u32, row: u16, col: u16) void {
-    @setCold(false);
     @setRuntimeSafety(false);
 
     if (char == 0) return;
@@ -91,7 +89,7 @@ fn drawCharRendered(char: u8, color: u32, row: u16, col: u16) void {
 
 /// Renders the font into a texture buffer for fast character drawing.
 fn renderFont(texture: []u32) void {
-    @setCold(true);
+    @branchHint(.cold);
 
     var offset: u32 = 0;
     const char_num = font.glyphs.len / font.charsize;

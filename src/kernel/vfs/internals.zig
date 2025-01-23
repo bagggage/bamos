@@ -9,7 +9,7 @@ const Kind = enum {
     stub,
 };
 
-fn DentryOps(comptime fs: @Type(.EnumLiteral), comptime kind: Kind) type{
+fn DentryOps(comptime fs: @Type(.enum_literal), comptime kind: Kind) type{
     const fs_name = @tagName(fs);
 
     return opaque {
@@ -46,11 +46,11 @@ fn DentryOps(comptime fs: @Type(.EnumLiteral), comptime kind: Kind) type{
     };
 }
 
-pub fn DentryPanicOps(comptime fs: @Type(.EnumLiteral)) type {
+pub fn DentryPanicOps(comptime fs: @Type(.enum_literal)) type {
     return DentryOps(fs, .panic);
 }
 
-pub fn DentryStubOps(comptime fs: @Type(.EnumLiteral)) type {
+pub fn DentryStubOps(comptime fs: @Type(.enum_literal)) type {
     return DentryOps(fs, .stub);
 }
 

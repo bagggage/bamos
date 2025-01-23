@@ -563,7 +563,7 @@ fn FieldMember(comptime field: Fields) type {
     const field_name = @tagName(field);
     const info = @typeInfo(ConfigSpaceLayout);
 
-    for (info.Union.fields) |member| {
+    for (info.@"union".fields) |member| {
         if (@hasField(member.type, field_name)) {
             return member.type;
         }

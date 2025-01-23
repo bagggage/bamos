@@ -36,7 +36,7 @@ var hash_map: HashMap = .{};
 var map_lock = utils.Spinlock.init(.unlocked);
 
 fn checkType(comptime T: type) void {
-    if (@typeInfo(T) != .Struct) @compileError("Object type must be a user-defined struct; found: '"++@typeName(T)++"'");
+    if (@typeInfo(T) != .@"struct") @compileError("Object type must be a user-defined struct; found: '"++@typeName(T)++"'");
 }
 
 /// @export
