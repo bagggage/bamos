@@ -112,24 +112,28 @@ pub var std_allocator = std.mem.Allocator{
 const std_vtable = opaque {
     pub const vtable = std.mem.Allocator.VTable{
         .alloc = stdAlloc,
+        .resize = stdResize,
+        .remap = stdRemap,
         .free = stdFree,
-        .resize = stdResize
     };
 
-    fn stdAlloc(_: *anyopaque, len: usize, ptr_align: u8, _: usize) ?[*]u8 {
+    fn stdAlloc(_: *anyopaque, len: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
         const result = malloc(len) orelse return null;
         // Check if pointer is aligned
-        std.debug.assert((@intFromPtr(result) % (@as(u32, 1) << @truncate(ptr_align))) == 0);
+        // std.debug.assert((@intFromPtr(result) % (@as(u32, 1) << @truncate(ptr_align))) == 0);
         return @ptrCast(result);
     }
 
-    fn stdFree(_: *anyopaque, buf: []u8, _: u8, _: usize) void {
+    fn stdFree(_: *anyopaque, buf: []u8, _: std.mem.Alignment, _: usize) void {
         free(buf.ptr);
     }
 
-    fn stdResize(_: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, _: usize) bool {
-        const new_buf: [*]u8 = @ptrCast(malloc(new_len) orelse return false);
-        std.debug.assert((@intFromPtr(new_buf) % (@as(u32, 1 ) << @truncate(buf_align))) == 0);
+    fn stdResize(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
+        return buf.len >= new_len;
+    }
+
+    fn stdRemap(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) ?[*]u8 {
+        const new_buf: [*]u8 = @ptrCast(malloc(new_len) orelse return null);
 
         if (buf.len < new_len) {
             @memcpy(new_buf[0..buf.len], buf);
@@ -138,7 +142,7 @@ const std_vtable = opaque {
         }
 
         free(buf.ptr);
-        return true;
+        return new_buf;
     }
 }.vtable;
 
