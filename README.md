@@ -57,7 +57,7 @@ See information on [contributing](./CONTRIBUTING.md).
 
 The build process is quite straightforward:
 
-- Before you begin, ensure that the Zig compiler version [0.13.0](https://ziglang.org/download/) is installed on your workstation.
+- Before you begin, ensure that the Zig compiler version [**0.14.0**](https://ziglang.org/download/) is installed on your workstation.
 
 ```sh
 git clone https://github.com/bagggage/bamos.git

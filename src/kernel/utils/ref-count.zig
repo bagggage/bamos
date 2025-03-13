@@ -7,7 +7,7 @@ const std = @import("std");
 pub fn RefCount(comptime UintType: type) type {
     comptime {
         const uint_type = @typeInfo(UintType);
-        if (uint_type != .Int or uint_type.Int.signedness != .unsigned) {
+        if (uint_type != .int or uint_type.int.signedness != .unsigned) {
             @compileError("`UintType` must be unsigned integer, e.g. `u8`,`u16`,`u32` etc.");
         }
     }

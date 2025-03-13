@@ -181,12 +181,12 @@ pub fn BinaryTree(comptime T: type, comptime cmp_func: ?utils.CmpFnType(T)) type
             const err_str = "Only raw values or pointers to data member type allowed";
 
             switch (type_info) {
-                .Pointer => |ptr| {
+                .pointer => |ptr| {
                     if (ptr.child != T) @compileError(err_str);
                     return func(self, val);
                 },
-                .ComptimeInt,
-                .ComptimeFloat => switch (@typeInfo(T)) {
+                .comptime_int,
+                .comptime_float => switch (@typeInfo(T)) {
                     .Int,
                     .Float => {
                         const value = @as(T, val);
