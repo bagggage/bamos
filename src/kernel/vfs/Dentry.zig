@@ -22,15 +22,22 @@ pub const List = utils.SList(Dentry);
 pub const Node = List.Node;
 
 pub const Operations = struct {
+    const IoKind = enum {
+        read,
+        write
+    };
+
     pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
     pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry) Error!void;
     pub const CreateFileFn = *const fn(*const Dentry, *Dentry) Error!void;
     pub const DeinitInodeFn = *const fn(*const Inode) void;
+    pub const IoHandlerFn = *const fn(*const Dentry, IoKind, u32, u32) Error!void;
 
     lookup: LookupFn,
     makeDirectory: MakeDirectoryFn,
     createFile: CreateFileFn,
-    deinitInode: DeinitInodeFn = vfs.internals.DentryNoneOps.deinitInode
+    deinitInode: DeinitInodeFn = vfs.internals.DentryNoneOps.deinitInode,
+    ioHandler: IoHandlerFn,
 };
 
 pub const Name = struct {

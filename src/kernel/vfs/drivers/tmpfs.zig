@@ -58,7 +58,8 @@ var fs = vfs.FileSystem.init(
         .lookup = dentryLookup,
         .makeDirectory = dentryMakeDirectory,
         .createFile = dentryCreateFile,
-        .deinitInode = deinitInode
+        .deinitInode = deinitInode,
+        .ioHandler = undefined
     }
 );
 

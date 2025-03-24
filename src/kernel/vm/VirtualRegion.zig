@@ -27,7 +27,7 @@ const Page = packed struct {
     }
 
     comptime {
-        std.debug.assert(@sizeOf(Page) == 16);
+        std.debug.assert(@sizeOf(Page) == 8);
     }
 };
 
@@ -59,7 +59,7 @@ pub fn deinit(self: *Self) void {
 
 pub fn grow(self: *Self, rank: u8, map_flags: vm.MapFlags) bool {
     const node = allocPages(rank) orelse return false;
-    const pages = @as(u32, 1) << @truncate(rank);
+    const pages = @as(u24, 1) << @truncate(rank);
 
     vm.mmap(
         self.base + self.size(),
@@ -116,6 +116,11 @@ pub inline fn getVirtLma(self: *const Self, offset: usize) ?usize {
     return vm.getVirtLma(self.getPhys(offset) orelse return null);
 }
 
+pub fn getTopAligned(self: *const Self, comptime alignment: u5) usize {
+    const top = self.base + self.size();
+    return utils.alignDown(usize, top - 1, alignment);
+}
+
 fn allocPages(rank: u8) ?*PageNode {
     const node = page_oma.alloc() orelse return null;
     const phys = vm.PageAllocator.alloc(rank) orelse {
@@ -123,9 +128,9 @@ fn allocPages(rank: u8) ?*PageNode {
         return null;
     };
 
-    node.data.* = .{
+    node.data = .{
         .rank = rank,
-        .base = phys / vm.page_size
+        .base = @truncate(phys / vm.page_size)
     };
 
     return node;

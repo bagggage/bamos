@@ -305,7 +305,8 @@ var fs = vfs.FileSystem.init(
     .{
         .lookup = dentryLookup,
         .makeDirectory = DentryStubOps.makeDirectory,
-        .createFile = DentryStubOps.createFile
+        .createFile = DentryStubOps.createFile,
+        .ioHandler = undefined
     }
 );
 
