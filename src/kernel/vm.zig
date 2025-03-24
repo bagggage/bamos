@@ -31,6 +31,7 @@ pub const VirtualRegion = @import("vm/VirtualRegion.zig");
 pub const BucketAllocator = @import("vm/BucketAllocator.zig");
 pub const cache = @import("vm/cache.zig");
 pub const Heap = utils.Heap;
+pub const obj = @import("vm/object.zig");
 pub const ObjectAllocator = @import("vm/ObjectAllocator.zig");
 pub const PageAllocator = @import("vm/PageAllocator.zig");
 pub const UniversalAllocator = @import("vm/UniversalAllocator.zig");
