@@ -208,6 +208,21 @@ pub inline fn setGs(selector: u16) void {
     );
 }
 
+pub inline fn getSs() u16 {
+    var ss: u16 = undefined;
+    asm volatile ("mov %%ss,%[res]"
+        : [res] "=r" (ss),
+    );
+
+    return ss;
+}
+
+pub inline fn setSs(selector: u16) void {
+    asm volatile ("mov %[res],%%ss"
+        :: [res] "r" (selector),
+    );
+}
+
 pub inline fn saveCallerRegs() void {
     asm volatile (
         \\push %r15
@@ -266,6 +281,21 @@ pub inline fn saveState() void {
 pub inline fn restoreState() void {
     restoreCallerRegs();
     restoreScratchRegs();
+}
+
+pub inline fn getStack() usize {
+    var stack: usize = undefined;
+    asm volatile ("mov %%rsp,%[res]"
+        : [res] "=r" (stack),
+    );
+
+    return stack;
+}
+
+pub inline fn setStack(stack: usize) void {
+    asm volatile ("mov %[res],%%rsp"
+        :: [res] "r" (stack),
+    );
 }
 
 pub inline fn getIdtr() IDTR {

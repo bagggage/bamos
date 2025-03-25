@@ -38,6 +38,7 @@ const Cpu = struct {
 
 const CpuId = packed struct { a: u32, b: u32, c: u32, d: u32 };
 
+pub const Context = @import("Context.zig");
 pub const io = @import("io.zig");
 pub const intr = @import("intr.zig");
 pub const vm = @import("vm.zig");
@@ -140,7 +141,7 @@ pub fn setupCpu(cpu_idx: u16) void {
     gdt.setupCpu();
 
     intr.setupCpu(@truncate(cpu_idx));
-    intr.enableCpu();
+    intr.enableForCpu();
 }
 
 pub inline fn timestamp() usize {

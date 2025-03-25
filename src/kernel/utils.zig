@@ -61,6 +61,10 @@ pub inline fn alignUp(comptime T: type, value: T, alignment: T) T {
     return ((value + (alignment - 1)) & ~(alignment - 1));
 }
 
+pub inline fn alignDown(comptime T: type, value: T, alignment: T) T {
+    return value & ~(alignment - 1);
+}
+
 pub inline fn errToInt(err: anyerror) i16 {
     @setRuntimeSafety(false);
     return std.math.negateCast(@intFromError(err)) catch unreachable;

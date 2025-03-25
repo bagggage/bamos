@@ -8,6 +8,28 @@ const vm = @import("../../vm.zig");
 
 pub const max_entries = 256;
 
+pub const SegmentSelector = packed struct {
+    /// Privilege Level.
+    rpl: enum(u2) {
+        kernel = 0,
+        userspace = 3,
+    },
+
+    /// Specifies which descriptor table to useSpecifies which descriptor table to use.
+    /// 0 - GDT; 1 - LDT. 
+    ti: enum(u1) {
+        gdt = 0,
+        ldt = 1
+    },
+
+    /// Entry index within the table.
+    index: u13,
+
+    pub inline fn asInt(self: SegmentSelector) u16 {
+        return @bitCast(self);
+    }
+};
+
 pub const SegmentDescriptor = packed struct {
     limit: u16,
     base: u24,
@@ -49,6 +71,18 @@ pub const SystemSegmentDescriptor = packed struct {
             .flags = flags
         };
     }
+};
+
+pub const kernel_cs: SegmentSelector = .{
+    .index = 7,
+    .ti = .gdt,
+    .rpl = .kernel,
+};
+
+pub const kernel_ss: SegmentSelector = .{
+    .index = 6,
+    .ti = .gdt,
+    .rpl = .kernel
 };
 
 var gdt = std.BoundedArray(SegmentDescriptor, max_entries).init(0) catch unreachable;

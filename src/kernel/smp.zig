@@ -7,6 +7,7 @@ const std = @import("std");
 const arch = utils.arch;
 const boot = @import("boot.zig");
 const log = std.log.scoped(.smp);
+const sched = @import("sched.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
@@ -14,6 +15,8 @@ const Spinlock = utils.Spinlock;
 
 pub const LocalData = struct {
     idx: u16,
+    current_task: *sched.AnyTask,
+
     arch_specific: arch.CpuLocalData,
 };
 
