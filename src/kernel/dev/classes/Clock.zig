@@ -13,20 +13,32 @@ const Priority = enum(u8) {
     high = 2,
 };
 
-pub const Time = extern struct {
+pub const DateTime = extern struct {
     seconds: u8 = 0,
     minutes: u8 = 0,
     hours: u8 = 0,
     month: u8 = 0,
     day: u8 = 0,
-    year: u16 = 0
+    year: u16 = 0,
+
+    pub fn format(
+        self: DateTime,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        try writer.print("{:0>2}.{:0>2}.{:0>4} {:0>2}:{:0>2}:{:0>2}", .{
+            self.day, self.month, self.year,
+            self.hours, self.minutes, self.seconds
+        });
+    }
 };
 
 pub const IntrCallbackFn = *const fn(clock: *Self) void;
 
 pub const VTable = struct {
-    pub const GetTimeFn = *const fn(obj: *Self) Time;
-    pub const SetTimeFn = *const fn(obj: *Self, time: Time) bool;
+    pub const GetTimeFn = *const fn(obj: *Self) DateTime;
+    pub const SetTimeFn = *const fn(obj: *Self, time: DateTime) bool;
     pub const MaskIrqFn = *const fn(obj: *Self, mask: bool) void;
     pub const ConfigIrqFn = *const fn(obj: *Self, freq_div: u8, callback: IntrCallbackFn) dev.intr.Error!void;
 
@@ -54,11 +66,11 @@ pub fn init(self: *Self, device: *const dev.Device, vt: *const VTable, base_freq
     };
 }
 
-pub inline fn getTime(self: *Self) Time {
+pub inline fn getTime(self: *Self) DateTime {
     return self.vtable.getTime(self);
 }
 
-pub inline fn setTime(self: *Self, time: Time) bool {
+pub inline fn setTime(self: *Self, time: DateTime) bool {
     return self.vtable.setTime(self, time);
 }
 

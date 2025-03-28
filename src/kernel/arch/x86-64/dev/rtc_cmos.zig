@@ -118,10 +118,10 @@ fn irqHandler(_: *dev.Device) bool {
     return true;
 }
 
-fn getTime(_: *Clock) Clock.Time {
+fn getTime(_: *Clock) Clock.DateTime {
     while (isUsed()) {}
 
-    var time: Clock.Time = .{};
+    var time: Clock.DateTime = .{};
     time.seconds = regs.read(.seconds);
     time.minutes = regs.read(.minutes);
     time.hours = regs.read(.hours);
@@ -147,7 +147,7 @@ fn getTime(_: *Clock) Clock.Time {
     return time;
 }
 
-fn setTime(_: *Clock, time: Clock.Time) bool {
+fn setTime(_: *Clock, time: Clock.DateTime) bool {
     _ = time;
     return true;
 }
