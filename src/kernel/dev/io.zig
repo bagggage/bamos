@@ -277,7 +277,11 @@ fn writeMmioFn(comptime AddrType: type, comptime DataType: type)
                 .pointer => @as(*volatile DataType, @ptrCast(address)),
                 else => @compileError("Invalid address type")
             };
-            ptr.* = std.mem.nativeToLittle(DataType, data);
+            if (comptime builtin.cpu.arch.endian() != .little) {
+                ptr.* = std.mem.nativeToLittle(DataType, data);
+            } else {
+                ptr.* = data;
+            }
         }
     }.write;
 }

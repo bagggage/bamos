@@ -370,6 +370,34 @@ pub export fn getMsiMessage(idx: u8) Msi.Message {
     return msi.message;
 }
 
+pub fn allocVector(cpu_idx: ?u16) ?Vector {
+    cpus_lock.lock();
+    defer cpus_lock.unlock();
+
+    const cpu = if (cpu_idx) |idx| &cpus.buffer[idx] else cpus_order.get(0);
+
+    const idx = cpu_idx orelse calcCpuIdx(cpu);
+    const vec = cpu.allocVector() orelse return null;
+
+    reorderCpus(idx, .forward);
+
+    return .{
+        .cpu = idx,
+        .vec = vec
+    };
+}
+
+pub fn freeVector(vec: Vector) void {
+    std.debug.assert(vec.cpu < cpus.len and vec.vec < arch.intr.max_vectors);
+
+    cpus_lock.lock();
+    defer cpus_lock.unlock();
+
+    cpus.buffer[vec.cpu].freeVector(vec.vec);
+
+    reorderCpus(vec.cpu, .backward);
+}
+
 export fn requestIrqEx(pin: u8, device: *dev.Device, handler: *const anyopaque, tigger_int: u8, shared: bool) i16 {
     const tigger_mode: TriggerMode = @enumFromInt(tigger_int);
     const irq = &irqs.buffer[pin];
@@ -421,34 +449,6 @@ export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_i
 
 inline fn calcCpuIdx(cpu: *const Cpu) u16 {
     return @truncate((@intFromPtr(cpu) - @intFromPtr(&cpus.buffer)) / @sizeOf(Cpu));
-}
-
-fn allocVector(cpu_idx: ?u16) ?Vector {
-    cpus_lock.lock();
-    defer cpus_lock.unlock();
-
-    const cpu = if (cpu_idx) |idx| &cpus.buffer[idx] else cpus_order.get(0);
-
-    const idx = cpu_idx orelse calcCpuIdx(cpu);
-    const vec = cpu.allocVector() orelse return null;
-
-    reorderCpus(idx, .forward);
-
-    return .{
-        .cpu = idx,
-        .vec = vec
-    };
-}
-
-fn freeVector(vec: Vector) void {
-    std.debug.assert(vec.cpu < cpus.len and vec.vec < arch.intr.max_vectors);
-
-    cpus_lock.lock();
-    defer cpus_lock.unlock();
-
-    cpus.buffer[vec.cpu].freeVector(vec.vec);
-
-    reorderCpus(vec.cpu, .backward);
 }
 
 fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {

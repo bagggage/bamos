@@ -383,6 +383,6 @@ comptime{
     @export(&CommonIntrHandler("msiHandlerCaller").handler, .{ .name = "commonMsiHandler" });
 }
 
-inline fn iret() void {
+pub inline fn iret() void {
     asm volatile("iretq");
 }
