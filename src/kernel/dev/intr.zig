@@ -264,6 +264,14 @@ var msis_used: u8 = 0;
 
 pub var chip: Chip = undefined;
 
+pub inline fn enableForCpu() void {
+    arch.intr.enableForCpu();
+}
+
+pub inline fn disableForCpu() void {
+    arch.intr.disableForCpu();
+}
+
 pub fn init() !void {
     const cpus_num = smp.getNum();
 

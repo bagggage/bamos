@@ -40,12 +40,16 @@ var system_clock: ?*Self = null;
 
 device: *const dev.Device,
 vtable: *const VTable,
+
+/// Frequency in Hz.
+base_frequency: u32,
 priority: Priority,
 
-pub fn init(self: *Self, device: *const dev.Device, vt: *const VTable, priority: Priority) void {
+pub fn init(self: *Self, device: *const dev.Device, vt: *const VTable, base_frequency: u32, priority: Priority) void {
     self.* = .{
         .device = device,
         .vtable = vt,
+        .base_frequency = base_frequency,
         .priority = priority
     };
 }
@@ -62,8 +66,12 @@ pub inline fn maskIrq(self: *Self, mask: bool) void {
     self.vtable.maskIrq(self, mask);
 }
 
-pub inline fn configIrq(self: *Self, freq_div: u8, callback: IntrCallbackFn) dev.intr.Error!void {
-    return self.vtable.configIrq(self, freq_div, callback);
+pub inline fn configIrq(self: *Self, freq_div_rank: u8, callback: IntrCallbackFn) dev.intr.Error!void {
+    return self.vtable.configIrq(self, freq_div_rank, callback);
+}
+
+pub fn getFrequency(self: *const Self, freq_div_rank: u8) u32 {
+    return self.base_frequency >> @truncate(freq_div_rank);
 }
 
 pub fn onObjectAdd(obj: *Self) void {

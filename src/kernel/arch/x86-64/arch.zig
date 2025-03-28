@@ -39,6 +39,7 @@ const Cpu = struct {
 const CpuId = packed struct { a: u32, b: u32, c: u32, d: u32 };
 
 pub const Context = @import("Context.zig");
+pub const executor = @import("executor.zig");
 pub const io = @import("io.zig");
 pub const intr = @import("intr.zig");
 pub const vm = @import("vm.zig");
@@ -74,7 +75,13 @@ pub fn preinit() void {
 }
 
 /// Initialize architecture dependent devices.
-pub inline fn devInit() !void {}
+pub inline fn devInit() !void {
+    const cmos = @import("dev/cmos.zig");
+    const rtc_cmos = @import("dev/rtc_cmos.zig");
+
+    try cmos.init();
+    try rtc_cmos.init();
+}
 
 pub inline fn cpuid(eax: u32, ebx: u32, ecx: u32, edx: u32) CpuId {
     @setRuntimeSafety(false);
