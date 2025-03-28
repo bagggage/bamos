@@ -105,9 +105,25 @@ pub export fn addDriver(self: *Self, driver: *dev.DriverNode) void {
         self.drivers.prepend(driver);
     }
 
+    driver.data.bus = self;
+
     log.info("{s}: {s} driver was attached", .{self.name,driver.data.name});
 
-    self.matchDriver(&driver.data);
+    if (self.type == comptime dev.nameHash("platform")) {
+        const result = driver.data.platformProbe();
+
+        if (result == .success) return;
+        switch (result) {
+            .missmatch => log.warn("{s}: device not presented or not supported", .{self.name}),
+            .failed => log.err("{s}: not enough resources to initialize device", .{self.name}),
+            .no_resources => log.err("{s}: probing failed", .{self.name}),
+            .success => unreachable
+        }
+
+        self.removeDriver(driver);
+    } else {
+        self.matchDriver(&driver.data);
+    }
 }
 
 pub export fn removeDriver(self: *Self, driver: *dev.DriverNode) void {
@@ -119,6 +135,7 @@ pub export fn removeDriver(self: *Self, driver: *dev.DriverNode) void {
     }
 
     self.onRemoveDriver(&driver.data);
+    driver.data.bus = undefined;
 
     log.info("{s}: {s} driver was removed", .{self.name,driver.data.name});
 }
