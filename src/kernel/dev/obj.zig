@@ -63,6 +63,9 @@ pub inline fn add(comptime T: type, object: *T) Error!void {
     const node: *utils.List(T).Node = @fieldParentPtr("data", object);
 
     if (!addByTypeId(id, @ptrCast(node))) return error.NoMemory;
+
+    // Class callback
+    if (comptime @hasDecl(T, "onObjectAdd")) T.onObjectAdd(object);
 }
 
 pub inline fn remove(object: anytype) void {
@@ -71,6 +74,9 @@ pub inline fn remove(object: anytype) void {
         .Pointer => |ptr| ptr.child,
         else => @compileError("Expected pointer to an object; Found: '"++@typeName(Ptr)++"'")
     };
+
+    // Class callback
+    if (@hasDecl(T, "onObjectRemove")) T.onObjectRemove(object);
 
     const Node = utils.List(T).Node;
     const node: *Node = @fieldParentPtr("data", object);
