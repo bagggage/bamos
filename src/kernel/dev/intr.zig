@@ -13,6 +13,8 @@ const smp = @import("../smp.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
+const cpu_any: u16 = 0xFFFF;
+
 pub const Chip = struct {
     pub const Operations = struct {
         const IrqFn = *const fn(*const Irq) void;
@@ -340,8 +342,14 @@ pub fn handleMsi(idx: u8) void {
     chip.eoi();
 }
 
-pub inline fn requestMsi(device: *dev.Device, handler: Handler.Fn, trigger_mode: TriggerMode) Error!u8 {
-    const result = requestMsiEx(device, handler, @intFromEnum(trigger_mode));
+pub inline fn requestMsi(
+    device: *dev.Device, handler: Handler.Fn,
+    trigger_mode: TriggerMode, cpu_idx: ?u16
+) Error!u8 {
+    const result = requestMsiEx(
+        device, handler,
+        @intFromEnum(trigger_mode), cpu_idx orelse cpu_any
+    );
     return if (result < 0) utils.intToErr(Error, result) else @intCast(result);
 }
 
@@ -381,6 +389,8 @@ pub fn allocVector(cpu_idx: ?u16) ?Vector {
 
     reorderCpus(idx, .forward);
 
+    log.debug("allocated: cpu: {}, vec: {}", .{idx, vec});
+
     return .{
         .cpu = idx,
         .vec = vec
@@ -418,7 +428,7 @@ export fn requestIrqEx(pin: u8, device: *dev.Device, handler: *const anyopaque, 
     return 0;
 }
 
-export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_int: u8) i16 {
+export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_int: u8, cpu_idx: u16) i16 {
     const trigger_mode: TriggerMode = @enumFromInt(trigger_int);
 
     msis_lock.lock();
@@ -432,7 +442,9 @@ export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_i
     }
 
     const msi = &msis.buffer[idx];
-    const vec = allocVector(null) orelse return utils.errToInt(Error.NoVector);
+    const vec = allocVector(
+        if (cpu_idx == cpu_any) null else cpu_idx
+    ) orelse return utils.errToInt(Error.NoVector);
 
     msi.* = .{
         .message = undefined,

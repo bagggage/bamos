@@ -52,8 +52,15 @@ pub const Device = struct {
         return self.intr_ctrl.request(self.config, min, max, types);
     }
 
-    pub inline fn setupInterrupt(self: *Device, idx: u16, handler: dev.intr.Handler.Fn, trigger_mode: dev.intr.TriggerMode) !void {
-        return self.intr_ctrl.setup(self.device, idx, handler, trigger_mode);
+    pub inline fn setupInterrupt(
+        self: *Device, idx: u16,
+        handler: dev.intr.Handler.Fn, trigger_mode: dev.intr.TriggerMode,
+        cpu_idx: ?u16
+    ) !void {
+        return self.intr_ctrl.setup(
+            self.device, idx,
+            handler, trigger_mode, cpu_idx
+        );
     }
 
     pub inline fn getCurrentIntrType(self: *Device) enum{int_x,msi,msi_x} {

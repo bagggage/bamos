@@ -340,7 +340,7 @@ pub const Control = struct {
 
     pub fn setup(
         self: *Control, device: *dev.Device, idx: u16, handler: intr.Handler.Fn,
-        trigger_mode: intr.TriggerMode,
+        trigger_mode: intr.TriggerMode, cpu_idx: ?u16
     ) intr.Error!void {
         std.debug.assert(self.meta.is_allocated);
 
@@ -354,14 +354,14 @@ pub const Control = struct {
             .msi => |*msi| {
                 std.debug.assert(idx == 0);
 
-                const id = try intr.requestMsi(device, handler, trigger_mode);
+                const id = try intr.requestMsi(device, handler, trigger_mode, cpu_idx);
                 msi.id = id;
 
                 msi.setup(intr.getMsiMessage(id));
                 _ = msi.maskIdx(id, false);
             },
             .msi_x => |*msi_x| {
-                const id = try intr.requestMsi(device, handler, trigger_mode);
+                const id = try intr.requestMsi(device, handler, trigger_mode, cpu_idx);
                 msi_x.msis[idx] = id;
 
                 msi_x.setupIdx(idx, intr.getMsiMessage(id));

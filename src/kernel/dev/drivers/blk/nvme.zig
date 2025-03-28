@@ -519,7 +519,10 @@ const Controller = struct {
         errdefer pci_dev.releaseInterrupts();
 
         for (0..intr_num) |intr| {
-            try pci_dev.setupInterrupt(@truncate(intr), intrHandler, .edge);
+            try pci_dev.setupInterrupt(
+                @truncate(intr), intrHandler,
+                .edge, @truncate(intr)
+            );
         }
 
         try self.initIoQueues();
