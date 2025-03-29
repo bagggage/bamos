@@ -49,3 +49,10 @@ pub inline fn unlock(self: *Self) void {
 pub inline fn isLocked(self: *Self) bool {
     return self.exclusion.load(.unordered) != 0;
 }
+
+/// Wait until the lock is not in specified `state`.
+pub fn wait(self: *Self, state: State) void {
+    while (self.exclusion.load(.acquire) != @intFromEnum(state)) {
+        continue;
+    }
+}
