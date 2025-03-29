@@ -8,8 +8,9 @@ const acpi = dev.acpi;
 const arch = @import("../arch.zig");
 const dev = @import("../../../dev.zig");
 const intr = dev.intr;
-const smp = @import("../../../smp.zig");
 const pic = @import("pic.zig");
+const regs = @import("../regs.zig");
+const smp = @import("../../../smp.zig");
 
 const c = @cImport(
     @cInclude("cpuid.h")
@@ -141,6 +142,8 @@ const Msi = struct {
     };
 };
 
+const APIC_ENABLED = 0x800;
+
 var madt: *Madt = undefined;
 
 pub fn init() !void {
@@ -151,6 +154,9 @@ pub fn init() !void {
     if (!madt.header.checkSum()) return error.DamagedMadt;
 
     pic.disable();
+
+    // Set enabled APIC in MSR
+    regs.setMsr(regs.MSR_APIC_BASE, regs.getMsr(regs.MSR_APIC_BASE) | APIC_ENABLED);
 
     try lapic.init();
     try ioapic.init();

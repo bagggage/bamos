@@ -3,8 +3,9 @@ const std = @import("std");
 const apic = @import("apic.zig");
 const dev = @import("../../../dev.zig");
 const io = dev.io;
-const regs = @import("../regs.zig");
 const vm = @import("../../../vm.zig");
+
+const Interrupt = @import("apic.zig").Interrupt;
 
 pub const Regs = enum(u16) {
     id = 0x20,
@@ -37,7 +38,23 @@ pub const Regs = enum(u16) {
     const icr_base = 0x300;
 };
 
-const APIC_ENABLED = 0x800;
+pub const LvtTimer = packed struct {
+    vector: u8,
+
+    rsrvd: u4 = 0,
+    delv_status: Interrupt.DeliveryStatus,
+
+    rsrvd_1: u3 = 0,
+    mask: u1 = 0,
+
+    timer_mode: enum(u2) {
+        once = 0b00,
+        periodic = 0b01,
+        tsc_deadline = 0b10
+    },
+
+    rsrvd_2: u13 = 0,
+};
 
 var is_initialized = false;
 var base: usize = undefined;
@@ -48,13 +65,13 @@ pub fn init() !void {
     base = io.request("LAPIC", madt.lapic_base, 0x400, .mmio) orelse return error.MmioBusy;
     base = vm.getVirtLma(base);
 
-    // Set enabled APIC in MSR
-    regs.setMsr(regs.MSR_APIC_BASE, regs.getMsr(regs.MSR_APIC_BASE) | APIC_ENABLED);
+    is_initialized = true;
+}
 
+pub fn initPerCpu() void {
     // Set the Spurious Interrupt Vector Register bit 8
     set(.spurious_intr_vec, get(.spurious_intr_vec) | 0x100);
-
-    is_initialized = true;
+    set(.task_prior, 0);
 }
 
 pub inline fn isInitialized() bool {
