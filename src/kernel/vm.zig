@@ -4,12 +4,14 @@
 //! It includes various memory allocators, page table management, and memory mapping
 //! utilities.
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
 const arch = @import("utils.zig").arch;
 const boot = @import("boot.zig");
+const log = std.log.scoped(.vm);
+const smp = @import("smp.zig");
 const utils = @import("utils.zig");
 
 /// The size of a memory page, specific to the architecture.
@@ -163,8 +165,14 @@ pub const MapFlags = packed struct {
     }
 };
 
+pub const FaultCause = enum {
+    read,
+    write,
+    exec
+};
+
 /// Error types that can occur during memory management operations.
-pub const Error = error{
+pub const Error = error {
     Uninitialized,
     NoMemory,
 };
@@ -347,4 +355,15 @@ pub inline fn heapRelease(base: usize, pages: u32) void {
     defer heap_lock.unlock();
 
     heap.release(base, pages);
+}
+
+pub fn pageFaultHandler(addr: usize, cause: FaultCause, userspace: bool) bool {
+    log.warn(
+        \\Page Fault (CPU {}): 
+        \\ address: 0x{x:>16}; cause: {s}
+        \\ userspace: {}
+        , .{smp.getIdx(), addr, @tagName(cause), userspace}
+    );
+
+    return false;
 }
