@@ -80,3 +80,13 @@ pub fn jumpTo(self: *Self) noreturn {
 
     unreachable;
 }
+
+pub inline fn switchTo(self: *Self, to: *Self) void {
+    regs.saveCallerRegs();
+
+    self.stack_ptr.ptr = @ptrFromInt(regs.getStack());
+    regs.setStack(@intFromPtr(to.stack_ptr.ptr));
+
+    regs.restoreCallerRegs();
+    return;
+}
