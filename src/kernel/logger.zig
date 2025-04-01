@@ -18,7 +18,7 @@ const video = @import("video.zig");
 const Spinlock = utils.Spinlock;
 
 const EarlyWriter = struct {
-    const buffer_size = 1024;
+    const buffer_size = 2048;
     const Stream = std.io.FixedBufferStream([buffer_size]u8);
 
     var stream: Stream = .{
