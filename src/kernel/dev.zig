@@ -1,6 +1,6 @@
 //! # Device module
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -96,14 +96,16 @@ var platform_bus = Bus.init("platform",.{
     .remove = platformBusRemove
 });
 
-pub fn init() !void {
-    registerBus(&platform_bus);
-
+pub fn preinit() !void {
     try acpi.init();
     try intr.init();
 
-    try utils.arch.devInit();
+    registerBus(&platform_bus);
 
+    try utils.arch.devInit();
+}
+
+pub fn init() !void {
     inline for (AutoInit.modules) |Module| {
         if (Module.init()) {
             log.info(@typeName(Module)++": initialized", .{});

@@ -14,22 +14,35 @@ const vm = @import("vm.zig");
 const Spinlock = utils.Spinlock;
 
 pub const LocalData = struct {
-    idx: u16,
-    current_task: *sched.AnyTask,
+    idx: u16 = 0,
 
-    arch_specific: arch.CpuLocalData,
+    current_sp: usize = 0,
+    kernel_sp: usize = 0,
+
+    scheduler: sched.Scheduler = .{},
+
+    intr_num: u8 = 0,
+
+    arch_specific: arch.CpuLocalData = undefined,
+
+    pub inline fn isInInterrupt(self: *const LocalData) bool {
+        return self.intr_num > 0;
+    }
 };
 
 var init_lock = Spinlock.init(.unlocked);
-var is_initial_cpu = true;
 
 var cpus_data: []LocalData = undefined;
 
 pub fn preinit() void {
+    const Static = opaque {
+        var is_boot_cpu = true;
+    };
+
     init_lock.lock();
 
-    if (is_initial_cpu) {
-        is_initial_cpu = false;
+    if (Static.is_boot_cpu) {
+        Static.is_boot_cpu = false;
 
         cpus_data.len = boot.getCpusNum();
     } else {
@@ -47,6 +60,8 @@ pub fn init() !void {
 
     cpus_data.ptr = @ptrFromInt(vm.getVirtLma(phys));
     cpus_data.len = cpus_num;
+
+    @memset(cpus_data, LocalData{});
 }
 
 /// @noexport
@@ -107,9 +122,15 @@ pub inline fn getIdx() u16 {
 
 fn waitForInit() noreturn {
     initCpu();
-
     init_lock.unlock();
 
+    sched.executor.init() catch |err| {
+        log.err("cpu {}: executor initialization failed: {s}", .{
+            getIdx(), @errorName(err)
+        });
+    };
+
     log.warn("CPU {} initialized", .{getIdx()});
-    utils.halt();
+
+    sched.waitStartup();
 }
