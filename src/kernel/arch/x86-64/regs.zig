@@ -7,6 +7,8 @@
 
 const std = @import("std");
 
+const smp = @import("../../smp.zig");
+
 // Model-Specific Register (MSR) addresses.
 pub const MSR_EFER = 0xC0000080;
 pub const MSR_STAR = 0xC0000081;
@@ -221,6 +223,30 @@ pub inline fn setSs(selector: u16) void {
     asm volatile ("mov %[res],%%ss"
         :: [res] "r" (selector),
     );
+}
+
+pub inline fn swapgs() void {
+    asm volatile("swapgs");
+}
+
+pub inline fn swapStackToKernel() void {
+    asm volatile(std.fmt.comptimePrint(
+        \\ movq %rsp, %gs:{}
+        \\ movq %gs:{}, %rsp
+        , .{
+            @offsetOf(smp.LocalData, "current_sp"),
+            @offsetOf(smp.LocalData, "kernel_sp")
+        }
+    ));
+}
+
+pub inline fn swapStackToUser() void {
+    asm volatile(std.fmt.comptimePrint(
+        \\ movq %gs:{}, %rsp
+        , .{
+            @offsetOf(smp.LocalData, "current_sp")
+        }
+    ));
 }
 
 pub inline fn saveCallerRegs() void {
