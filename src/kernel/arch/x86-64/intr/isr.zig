@@ -245,39 +245,7 @@ pub fn irqHandler(
     return Static.table[idx];
 }
 
-fn CommonIntrHandler(comptime handlerCaller: []const u8) type {
-    return struct {
-        pub fn handler() callconv(.Naked) noreturn {
-            regs.saveScratchRegs();
-
-            // Load index to arg0 
-            asm volatile(std.fmt.comptimePrint(
-                \\mov {}(%rsp),%rdi
-                , .{@sizeOf(regs.ScratchRegs)})
-            );
-
-            const is_stack_aligned = comptime (@sizeOf(regs.LowLevelIntrState) % 0x10) == 0;
-            if (comptime !is_stack_aligned) regs.stackAlloc(1);
-
-            // Call `handlerCaller`
-            asm volatile(std.fmt.comptimePrint(
-                "call {s}", .{handlerCaller}
-            ));
-
-            if (!is_stack_aligned) regs.stackFree(1);
-            regs.restoreScratchRegs();
-
-            // Pop `pin` number from stack;
-            regs.stackFree(1);
-            arch.intr.iret();
-        }
-    };
-}
-
 comptime{
-    //@export(&CommonIntrHandler("handleIrq").handler, .{ .name = "commonIrqHandler" });
-    //@export(&CommonIntrHandler("handleMsi").handler, .{ .name = "commonMsiHandler" });
-
     @export(&IsrHelper(false).entry, .{ .name = isrEntryName });
     @export(&IsrHelper(true).entry, .{ .name = isrErrorEntryName });
     @export(&IsrHelper(false).exit, .{ .name = isrExitName });
