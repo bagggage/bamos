@@ -191,7 +191,7 @@ inline fn isAvail() bool {
 fn bindIrq(irq: *const intr.Irq) void {
     arch.intr.setupIsr(
         irq.vector,
-        arch.intr.lowLevelIntrHandler(irq.pin, "commonIrqHandler"),
+        arch.intr.isr.irqHandler(irq.pin, .irq, 32),
         .kernel,
         arch.intr.intr_gate_flags,
     );
@@ -256,7 +256,7 @@ fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) void {
 
     arch.intr.setupIsr(
         msi.vector,
-        arch.intr.lowLevelIntrHandler(idx, "commonMsiHandler"),
+        arch.intr.isr.irqHandler(idx, .msi, 64),
         .kernel,
         arch.intr.intr_gate_flags,
     );

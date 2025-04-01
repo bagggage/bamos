@@ -7,6 +7,7 @@ const std = @import("std");
 const arch = utils.arch;
 const boot = @import("../boot.zig");
 const dev = @import("../dev.zig");
+const executor = @import("../sched.zig").executor;
 const io = dev.io;
 const log = std.log.scoped(.intr);
 const smp = @import("../smp.zig");
@@ -333,21 +334,21 @@ pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
     freeVector(irq.vector);
 }
 
-pub fn handleIrq(pin: u8) void {
+pub export fn handleIrq(pin: u8) void {
     @setRuntimeSafety(false);
 
     _ = irqs.buffer[pin].handle();
 
-    chip.eoi();
+    handlerExit();
 }
 
-pub fn handleMsi(idx: u8) void {
+pub export fn handleMsi(idx: u8) void {
     @setRuntimeSafety(false);
 
     const handler = &msis.buffer[idx].handler;
     _ = handler.func(handler.device);
 
-    chip.eoi();
+    handlerExit();
 }
 
 pub inline fn requestMsi(
@@ -525,4 +526,11 @@ fn reorderCpus(cpu_idx: u16, comptime direction: enum{forward, backward}) void {
             }
         }
     }
+}
+
+fn handlerExit() void {
+    enableForCpu();
+    chip.eoi();
+
+    executor.onIntrExit();
 }
