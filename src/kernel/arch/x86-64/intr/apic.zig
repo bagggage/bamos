@@ -256,7 +256,7 @@ fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) void {
 
     arch.intr.setupIsr(
         msi.vector,
-        arch.intr.isr.irqHandler(idx, .msi, 64),
+        arch.intr.isr.irqHandler(idx, .msi, intr.max_msi),
         .kernel,
         arch.intr.intr_gate_flags,
     );
