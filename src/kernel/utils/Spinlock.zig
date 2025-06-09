@@ -54,8 +54,10 @@ pub inline fn lockAtomic(self: *Self) void {
 
 /// Restore local interrupt state and releases the lock.
 pub fn unlock(self: *Self) void {
-    intr.restoreForCpu(self.exclusion.raw == .locked_intr);
+    const intr_enable = self.exclusion.raw == .locked_intr;
+
     self.unlockAtomic();
+    intr.restoreForCpu(intr_enable);
 }
 
 /// Releases the lock.
