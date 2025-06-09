@@ -163,6 +163,12 @@ pub inline fn disableForCpu() void {
     asm volatile("cli");
 }
 
+pub inline fn isEnabledForCpu() bool {
+    @setRuntimeSafety(false);
+    const flags = regs.getFlags();
+    return flags.intr_enable;
+}
+
 pub inline fn iret() void {
     asm volatile("iretq");
 }

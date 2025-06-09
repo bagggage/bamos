@@ -48,6 +48,33 @@ pub const EFER = packed struct {
     reserved_3: u48,
 };
 
+pub const Flags = packed struct {
+    carry: bool = false,
+    reserved_1: u1 = 1,
+    parity: bool = false,
+    reserved_2: u1 = 1,
+    aux_carry: bool = false,
+    reserved_3: u1 = 1,
+    zero: bool = false,
+    sign: bool = false,
+    trap: bool = false,
+    intr_enable: bool = false,
+    direction: bool = false,
+    overflow: bool = false,
+    io_privilege: u2 = undefined,
+    nested_task: u1 = undefined,
+    reserved_4: u1 = 0,
+    @"resume": bool = false,
+    virt_mode: bool = false,
+    align_check: bool = false,
+    virt_intr: bool = false,
+    virt_intr_pending: bool = false,
+    cpuid: bool = true,
+    reserved_5: u8 = 0,
+    aes: bool = false,
+    alt_instr_set: bool = false
+};
+
 pub const ScratchRegs = extern struct {
     rax: u64 = 0,
     rdi: u64 = 0,
@@ -91,7 +118,7 @@ pub const IntrState = extern struct {
 pub const LowLevelIntrState = extern struct {
     scratch: ScratchRegs,
 
-    idx: u64, 
+    idx: u64,
     intr: InterruptFrame,
 
     comptime {
@@ -223,6 +250,18 @@ pub inline fn setSs(selector: u16) void {
     asm volatile ("mov %[res],%%ss"
         :: [res] "r" (selector),
     );
+}
+
+pub inline fn getFlags() Flags {
+    var flags: Flags = undefined;
+    asm volatile(
+        \\pushfq
+        \\pop %rax
+        : [out] "={rax}" (flags)
+        :
+        : "memory"
+    );
+    return flags;
 }
 
 pub inline fn swapgs() void {

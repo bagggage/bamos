@@ -7,52 +7,83 @@
 
 // Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
 
-const std = @import("std");
 const atomic = std.atomic;
+const std = @import("std");
+const smp = @import("../smp.zig");
+const intr = @import("../dev.zig").intr;
 
 const Self = @This();
 
-exclusion: atomic.Value(u8) = atomic.Value(u8).init(@intFromEnum(State.unlocked)),
+exclusion: atomic.Value(State) = .init(.unlocked),
 
-/// Represents the lock state
-pub const State = enum(u1) {
+/// Represents the lock state.
+pub const State = enum(u8) {
     unlocked = 0,
-    locked = 1,
+    locked_no_intr = 1,
+    locked_intr = 2
 };
 
 /// Initializes a new spinlock with the specified initial state.
-///
-/// - `initial_state`: The initial state of the lock (either `locked` or `unlocked`).
-pub inline fn init(initial_state: State) Self {
+/// 
+/// - `locked`: The initial state of the lock: `true` - locked, `false` - unlocked.
+pub inline fn init(init_state: enum{locked,unlocked}) Self {
     return Self{
-        .exclusion = atomic.Value(u8).init(@intFromEnum(initial_state))
+        .exclusion = .init(
+            if (init_state == .locked)
+                .locked_intr else .unlocked
+        )
     };
 }
 
+/// Saves the local state of interrupts and disables them on the current CPU.
 /// Attempts to acquire the lock. 
-/// This function will spin in a loop until the lock is successfully acquired.
-pub inline fn lock(self: *Self) void {
-    while (self.exclusion.cmpxchgWeak(
-        @intFromEnum(State.unlocked), @intFromEnum(State.locked),
-        .acquire, .monotonic
-    ) != null) {}
+/// Will spin in a loop until the lock is successfully acquired.
+pub fn lock(self: *Self) void {
+    const state: State = if (intr.saveAndDisableForCpu())
+        .locked_intr else .locked_no_intr;
+    self.rawLock(state);
 }
 
-/// Releases the lock, making it available for others threads to acquire.
-pub inline fn unlock(self: *Self) void {
-    self.exclusion.store(@intFromEnum(State.unlocked), .release);
+/// Attempts to acquire the lock. 
+/// Will spin in a loop until the lock is successfully acquired.
+/// 
+/// Can be called **only** in atomic context (aka interrupts disabled)
+pub inline fn lockAtomic(self: *Self) void {
+    self.rawLock(.locked_no_intr);
+}
+
+/// Restore local interrupt state and releases the lock.
+pub fn unlock(self: *Self) void {
+    intr.restoreForCpu(self.exclusion.raw == .locked_intr);
+    self.unlockAtomic();
+}
+
+/// Releases the lock.
+/// 
+/// Can be called **only** in atomic context (aka interrupts disabled)
+pub inline fn unlockAtomic(self: *Self) void {
+    self.exclusion.store(.unlocked, .release);
 }
 
 /// Checks if the spinlock is currently locked.
 ///
 /// - Returns `true` if the spinlock is locked, `false` otherwise.
 pub inline fn isLocked(self: *Self) bool {
-    return self.exclusion.load(.unordered) != 0;
+    return self.exclusion.load(.unordered) != .unlocked;
 }
 
 /// Wait until the lock is not in specified `state`.
 pub fn wait(self: *Self, state: State) void {
-    while (self.exclusion.load(.acquire) != @intFromEnum(state)) {
-        continue;
+    while (self.exclusion.load(.acquire) != state) {
+        std.atomic.spinLoopHint();
+    }
+}
+
+inline fn rawLock(self: *Self, lock_state: State) void {
+    while (self.exclusion.cmpxchgWeak(
+        State.unlocked, lock_state,
+        .acquire, .monotonic
+    ) != null) {
+        std.atomic.spinLoopHint();
     }
 }
