@@ -21,7 +21,7 @@ pub const LocalData = struct {
 
     scheduler: sched.Scheduler = .{},
 
-    nested_intr: std.atomic.Value(u8) = 0,
+    nested_intr: std.atomic.Value(u8) = .init(0),
 
     arch_specific: arch.CpuLocalData = undefined,
 

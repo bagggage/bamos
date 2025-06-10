@@ -27,6 +27,7 @@ pub fn begin(scheduler: *sched.Scheduler) noreturn {
     scheduler.current_task = task;
     task.common.state = .running;
 
+    std.debug.assert(intr.isEnabledForCpu());
     task.asUserTask().thread.context.jumpTo();
 }
 
@@ -67,9 +68,11 @@ pub fn onIntrExit() void {
     const local = smp.getLocalData();
 
     if (local.tryIfNotNestedInterrupt()) {
-        defer local.nested_intr.fetchSub(1, .acquire);
+        defer _ = local.nested_intr.fetchSub(1, .acquire);
 
-        if (local.scheduler.needRescheduling()) processRescheduling();
+        if (local.scheduler.needRescheduling()) {
+            processRescheduling(&local.scheduler);
+        }
     }
 }
 
@@ -83,7 +86,7 @@ export fn timerIntrHandler() void {
     }
 }
 
-fn sleepTask() noreturn {
+pub fn sleepTask() noreturn {
     sched.getCurrent().planRescheduling();
     intr.enableForCpu();
 

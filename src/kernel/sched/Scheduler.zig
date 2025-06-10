@@ -4,6 +4,7 @@
 
 const std = @import("std");
 
+const sched = @import("../sched.zig");
 const tasks = @import("tasks.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
@@ -17,14 +18,14 @@ const Flags = packed struct {
 };
 
 const TaskQueue = struct {
-    const len = tasks.max_priority;
+    const len = sched.max_priority;
 
     lists: [len]tasks.List = .{ tasks.List{} } ** len,
     last_min: u8 = 0,
 
     pub fn push(self: *TaskQueue, task: *tasks.AnyTask) void {
         const priority = task.common.getPriority();
-        if (priority < self.last_min) self.last_min = task.common.priority;
+        if (priority < self.last_min) self.last_min = priority;
 
         self.lists[priority].prepend(task.asNode());
     }

@@ -62,51 +62,59 @@ pub const Common = struct {
     /// Returns task priotiry in range 0-31. Less is better.
     pub inline fn getPriority(self: *const Common) sched.Priority {
         @setRuntimeSafety(false);
-        return
-            @as(sched.Priority, base_priority) +%
-            self.static_prior +%
-            self.bonus_prior;
+        const result: i8 = @as(i8, base_priority) +% self.static_prior +% self.bonus_prior;
+        return @truncate(@as(u8, @bitCast(result)));
     }
 
+    /// Apply interactivity punish and calculate new time slice.
     pub fn expireTime(self: *Common) void {
         std.debug.assert(self.time_slice == 0);
 
-        const given_time: i32 = self.calcTimeSlice();
-        const punish = (given_time + self.inter_delta) / 2;
+        const given_time: i8 = self.calcTimeSlice();
+        const punish = @divTrunc(given_time + self.inter_delta, 2);
 
         self.updateInteractivity(-punish);
         self.updateTimeSlice();
     }
 
+    /// Calculate and set time slice for the task.
     pub inline fn updateTimeSlice(self: *Common) void {
         self.time_slice = self.calcTimeSlice();
     }
 
+    /// Apply interativity bonus to the task and update
+    /// priority bonus.
     pub fn updateInteractivity(self: *Common, bonus: i8) void {
+        @setRuntimeSafety(false);
+
         const delta = bonus - self.inter_delta;
         if (delta == 0) return;
 
-        self.inter_delta = self.inter_delta +| if (delta > 0) 1 else -1;
-        self.interactivity = self.interactivity +| delta;
+        if (delta > 0) { self.inter_delta +|= 1; }
+        else { self.inter_delta -|= 1; }
 
+        const new_inter: i32 = @as(i32, self.interactivity) +% delta;
+
+        self.interactivity = @intCast(std.math.clamp(new_inter, 0, 255));
         self.updateBonus();
     }
 
+    /// Update priority bonus based on task interactivity.
     pub fn updateBonus(self: *Common) void {
-        const delta =
-            (@as(i16, base_interactivity) - self.interactivity) /
-            ((base_interactivity + 1) / max_prior_delta);
+        const divisor = (base_interactivity + 1) / max_prior_delta;
+        const delta = @divTrunc(@as(i16, base_interactivity) - self.interactivity, divisor);
         self.bonus_prior = @truncate(delta);
     }
 
+    /// Caclulate time slice for the task and return it.
     fn calcTimeSlice(self: *const Common) Ticks {
         const percision = 16;
-        const max_bonus: comptime_int = std.math.log2_int(comptime_int, sched.max_priority * 8);
+        const max_bonus: comptime_int = std.math.log2(sched.max_priority * 8);
         const norm_mult: comptime_int = ((sched.max_slice_ticks + 1) * percision) / max_bonus;
 
-        const reverse_prior: u32 = sched.max_priority - self.getPriority();
+        const reverse_prior: u32 = @as(u32, sched.max_priority) - self.getPriority();
         const bonus: u32 = std.math.log2_int(u32, reverse_prior * 8);
-        const norm_bonus = (bonus * norm_mult) / percision;
+        const norm_bonus: Ticks = @truncate((bonus * norm_mult) / percision);
 
         return if (norm_bonus < sched.min_slice_ticks)
             sched.min_slice_ticks else norm_bonus;

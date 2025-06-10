@@ -103,9 +103,11 @@ fn clockIntrCallback(clock: *Clock) void {
 fn timerIntrRoutin() callconv(.naked) noreturn {
     regs.saveState();
 
-    asm volatile("call timerIntrHandler");
+    asm volatile(
+        \\call timerIntrHandler
+        \\call intrHandlerExit
+    );
 
     regs.restoreState();
-    lapic.set(.eoi, 0);
     intr.iret();
 }
