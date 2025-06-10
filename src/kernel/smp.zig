@@ -21,12 +21,19 @@ pub const LocalData = struct {
 
     scheduler: sched.Scheduler = .{},
 
-    intr_num: u8 = 0,
+    nested_intr: std.atomic.Value(u8) = 0,
 
     arch_specific: arch.CpuLocalData = undefined,
 
     pub inline fn isInInterrupt(self: *const LocalData) bool {
-        return self.intr_num > 0;
+        return self.nested_intr.raw > 0;
+    }
+
+    pub fn tryIfNotNestedInterrupt(self: *LocalData) bool {
+        return self.nested_intr.cmpxchgStrong(
+            0, 1,
+            .acquire, .monotonic
+        ) != null;
     }
 };
 
