@@ -3,6 +3,7 @@
 // Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const log = std.log.scoped(.executor);
 
@@ -17,54 +18,76 @@ pub fn init() !void {
     try arch.executor.init();
 }
 
-pub fn begin() noreturn {
-    const scheduler = sched.getCurrent();
-    scheduler.schedule();
-
+pub fn begin(scheduler: *sched.Scheduler) noreturn {
     const task = scheduler.next() orelse {
-        log.warn("No tasks to begin with. Halting the kernel...", .{});
+        log.warn("No tasks to begin with. Halting core...", .{});
         utils.halt();
     };
 
     scheduler.current_task = task;
+    task.common.state = .running;
+
     task.asUserTask().thread.context.jumpTo();
 }
 
-pub fn processRescheduling() void {
-    const local = smp.getLocalData();
-    const scheduler = &local.scheduler;
+pub fn processRescheduling(scheduler: *sched.Scheduler) void {
+    scheduler.flags.need_resched = false;
 
-    scheduler.schedule();
-    processNextTask(scheduler);
+    if (scheduler.flags.expire) {
+        scheduler.expire();
+        scheduler.flags.expire = false;
+    }
+
+    var task = scheduler.next();
+    if (task == null) {
+        scheduler.schedule();
+        task = scheduler.next();
+
+        // TODO: Check if it's correct
+        if (task == null) sleepTask();
+    }
+
+    switchTask(scheduler, task.?);
 }
 
-pub fn processNextTask(scheduler: *sched.Scheduler) void {
-    if (scheduler.next()) |next| {
-        const prev = scheduler.current_task;
+pub fn switchTask(scheduler: *sched.Scheduler, task: *sched.AnyTask) void {
+    const curr_task = scheduler.current_task.asUserTask();
+    scheduler.current_task = task;
+    task.common.state = .running;
 
-        scheduler.current_task = next;
-        arch.Context.switchTo(
-            &prev.asUserTask().thread.context,
-            &next.asUserTask().thread.context
-        );
-    } else {
-        sleepTask();
-    }
+    curr_task.thread.context.switchTo(&task.asUserTask().thread.context);
+}
+
+pub fn sleep() void {
+    //const scheduler = sched.getCurrent();
+    //const node = scheduler.current_task.asNode();sleepTask();
 }
 
 pub fn onIntrExit() void {
     const local = smp.getLocalData();
 
-    if (!local.isInInterrupt() and local.scheduler.needRescheduling()) {
-        processRescheduling();
+    if (local.tryIfNotNestedInterrupt()) {
+        defer local.nested_intr.fetchSub(1, .acquire);
+
+        if (local.scheduler.needRescheduling()) processRescheduling();
     }
 }
 
-pub export fn timerIntrHandler() void {
-    processNextTask(sched.getCurrent());
+export fn timerIntrHandler() void {
+    const scheduler = sched.getCurrent();
+    scheduler.current_task.common.time_slice -= 1;
 
+    if (scheduler.current_task.common.time_slice == 0) {
+        scheduler.flags.expire = true;
+        scheduler.planRescheduling();
+    }
 }
 
-fn sleepTask() void {
+fn sleepTask() noreturn {
+    sched.getCurrent().planRescheduling();
+    intr.enableForCpu();
+
     while (true) arch.halt();
+
+    unreachable;
 }

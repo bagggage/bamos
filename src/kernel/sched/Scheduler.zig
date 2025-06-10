@@ -12,67 +12,89 @@ const Self = @This();
 
 const Flags = packed struct {
     need_resched: bool = false,
+    expire: bool = false,
+    preemt: bool = false,
+};
+
+const TaskQueue = struct {
+    const len = tasks.max_priority;
+
+    lists: [len]tasks.List = .{ tasks.List{} } ** len,
+    last_min: u8 = 0,
+
+    pub fn push(self: *TaskQueue, task: *tasks.AnyTask) void {
+        const priority = task.common.getPriority();
+        if (priority < self.last_min) self.last_min = task.common.priority;
+
+        self.lists[priority].prepend(task.asNode());
+    }
+
+    pub fn pop(self: *TaskQueue) ?*tasks.AnyTask {
+        for (self.lists[self.last_min..len]) |*list| {
+            if (list.popFirst()) |node| return &node.data;
+
+            self.last_min += 1;
+        }
+
+        return null;
+    }
+
+    pub fn remove(self: *TaskQueue, task: *tasks.AnyTask) void {
+        const priority = task.common.getPriority();
+        self.lists[priority].remove(task.asNode());
+    }
 };
 
 task_lock: utils.Spinlock = .init(.unlocked),
+task_queues: [2]TaskQueue = .{ TaskQueue{} } ** 2,
 
-task_queue: tasks.List = .{},
-exec_queue: tasks.List = .{},
-wait_queue: tasks.List = .{},
+active_queue: *TaskQueue = undefined,
+expired_queue: *TaskQueue = undefined,
 
 current_task: *tasks.AnyTask = undefined,
 
 flags: Flags = .{},
 
+pub fn init(self: *Self) void {
+    self.active_queue = &self.task_queues[0];
+    self.expired_queue = &self.task_queues[1];
+}
+
 pub fn enqueueTask(self: *Self, task: *tasks.AnyTask) void {
     std.debug.assert(task.common.state == .free);
-
-    task.common.state = .unscheduled;
 
     self.task_lock.lock();
     defer self.task_lock.unlock();
 
-    self.task_queue.prepend(task.asNode());
+    self.active_queue.push(task);
+    task.common.state = .scheduled;
 }
 
 pub fn dequeueTask(self: *Self,  task: *tasks.AnyTask) void {
-    std.debug.assert(task.common.state != .free);
+    std.debug.assert(task.common.state == .scheduled);
 
-    const node = task.asNode();
+    self.task_lock.lock();
+    defer self.task_lock.unlock();
 
-    switch (task.common.state) {
-        .unscheduled => {
-            self.task_lock.lock();
-            defer self.task_lock.unlock();
-
-            self.task_queue.remove(node);
-        },
-        .scheduled => self.exec_queue.remove(node),
-        .running => @panic("TODO: implement removing task from exec pool while running."),
-        .free => unreachable,
-    }
-
+    self.active_queue.remove(task);
     task.common.state = .free;
 }
 
-pub fn schedule(self: *Self) void {
-    std.debug.assert(self.exec_queue.first == null);
+pub inline fn expire(self: *Self) void {
+    self.current_task.common.expireTime();
+    self.expired_queue.push(self.current_task);
 
-    while (self.task_queue.popFirst()) |node| {
-        node.data.common.state = .scheduled;
-        self.exec_queue.prepend(node);
-    }
+    self.current_task.common.state = .scheduled;
+}
+
+pub inline fn schedule(self: *Self) void {
+    const temp_queue = self.active_queue;
+    self.active_queue = self.expired_queue;
+    self.expired_queue = temp_queue;
 }
 
 pub inline fn next(self: *Self) ?*tasks.AnyTask {
-    const node = self.exec_queue.popFirst();
-
-    if (node) |n| {
-        n.data.common.state = .free;
-        return &n.data;
-    }
-
-    return null;
+    return self.active_queue.pop();
 }
 
 pub inline fn planRescheduling(self: *Self) void {

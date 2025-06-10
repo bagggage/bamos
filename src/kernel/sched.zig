@@ -11,6 +11,17 @@ const utils = @import("utils.zig");
 
 const kernel_stack_size = 32 * utils.kb_size;
 
+/// Scheduler timer target frequency.
+pub const hz = 1000;
+pub const min_slice_ticks = 3;
+pub const max_slice_ticks = std.math.maxInt(Ticks);
+/// Maximum priority (starting from 1).
+pub const max_priority = 1 << @bitSizeOf(Priority);
+
+/// Less is better.
+pub const Priority = u5;
+pub const Ticks = u4;
+
 pub const Scheduler = @import("sched/Scheduler.zig");
 pub const executor = @import("sched/executor.zig");
 pub const tasks = @import("sched/tasks.zig");
@@ -37,13 +48,14 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     const scheduler = getScheduler(cpu_idx);
     const task = newKernelTask("Startup", taskHandler) orelse return error.NoMemory;
 
+    scheduler.init();
     scheduler.enqueueTask(task);
 
-    if (cpu_idx == smp.getIdx()) executor.begin();
+    if (cpu_idx == smp.getIdx()) executor.begin(scheduler);
 }
 
 pub fn waitStartup() noreturn {
-    executor.begin();
+    executor.begin(getCurrent());
 }
 
 pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*AnyTask {
@@ -58,7 +70,6 @@ pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*AnyTask 
     task.thread.context.init(
         stack_top,
         @intFromPtr(handler),
-        .kernel
     );
 
     return @ptrCast(task);

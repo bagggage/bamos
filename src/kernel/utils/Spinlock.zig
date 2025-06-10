@@ -5,7 +5,7 @@
 //! from concurrent access by multiple threads in a multiprocessor environment.
 //! It "spins" in a loop, repeatedly checking if the lock is available.
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const atomic = std.atomic;
 const std = @import("std");
@@ -25,7 +25,7 @@ pub const State = enum(u8) {
 
 /// Initializes a new spinlock with the specified initial state.
 /// 
-/// - `locked`: The initial state of the lock: `true` - locked, `false` - unlocked.
+/// - `locked`: The initial state of the lock.
 pub inline fn init(init_state: enum{locked,unlocked}) Self {
     return Self{
         .exclusion = .init(
@@ -68,7 +68,7 @@ pub inline fn unlockAtomic(self: *Self) void {
 }
 
 /// Checks if the spinlock is currently locked.
-///
+/// 
 /// - Returns `true` if the spinlock is locked, `false` otherwise.
 pub inline fn isLocked(self: *Self) bool {
     return self.exclusion.load(.unordered) != .unlocked;
