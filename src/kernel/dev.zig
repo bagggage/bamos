@@ -106,6 +106,8 @@ pub fn preinit() !void {
 }
 
 pub fn init() !void {
+    intr.enableForCpu();
+
     inline for (AutoInit.modules) |Module| {
         if (Module.init()) {
             log.info(@typeName(Module)++": initialized", .{});
