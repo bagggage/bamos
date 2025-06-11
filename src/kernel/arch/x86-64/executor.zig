@@ -16,10 +16,16 @@ const utils = @import("../../utils.zig");
 const Clock = dev.classes.Clock;
 
 const clock_freq_div_rank = 12;
+const timer_div_conf = struct { divider: comptime_int, config: comptime_int } {
+    .divider = 16,
+    .config = 0b0011
+};
 
 var eval_lock = utils.Spinlock.init(.unlocked);
 /// Scheduler timer frequency in Hz.
 var timer_frequency: u32 = 0;
+var timer_ns_per_tick: u32 = 0;
+var timer_init_count: u32 = 0;
 /// Scheduler timer interrupt interval in milliseconds.
 var time_slice_granule: u8 = 0;
 
@@ -44,7 +50,7 @@ fn initCpuTimer() !void {
 
     const lvt_timer: lapic.LvtTimer = .{
         .delv_status = .relaxed,
-        .timer_mode = .periodic,
+        .timer_mode = .once,
         .mask = 1,
         .vector = @truncate(intr_vec.vec)
     };
@@ -53,7 +59,8 @@ fn initCpuTimer() !void {
 
     eval_lock.wait(.unlocked);
 
-    lapic.set(.timer_init_count, @as(u32, time_slice_granule) * std.time.ns_per_ms);
+    lapic.set(.timer_div_conf, timer_div_conf.config);
+    lapic.set(.timer_init_count, timer_init_count);
     lapic.set(.lvt_timer, @bitCast(lvt_timer));
 }
 
@@ -77,7 +84,12 @@ fn evalTimerFrequency() !void {
 
     clock.maskIrq(true);
 
-    log.info("timer frequency: {} MHz", .{timer_frequency / 1000_000});
+    timer_ns_per_tick = @truncate(@as(u64, std.time.ns_per_s) / timer_frequency);
+    if (timer_ns_per_tick == 0) timer_ns_per_tick = 1;
+
+    timer_init_count = @as(u32, time_slice_granule) * (std.time.ns_per_ms / timer_ns_per_tick) / timer_div_conf.divider;
+
+    log.info("timer frequency: {} MHz, ns per tick: {}", .{timer_frequency / 1000_000, timer_ns_per_tick});
     log.info("time slice granule: {} ms", .{time_slice_granule});
 }
 
@@ -96,6 +108,7 @@ fn clockIntrCallback(clock: *Clock) void {
         return;
     }
 
+    // Set divider to 1.
     lapic.set(.timer_div_conf, 0b1011);
     lapic.set(.timer_init_count, std.math.maxInt(u32));
 
@@ -104,13 +117,14 @@ fn clockIntrCallback(clock: *Clock) void {
 }
 
 fn timerIntrRoutin() callconv(.naked) noreturn {
+    asm volatile("call isr.entry");
+    defer asm volatile("jmp isr.exit");
+
     regs.saveState();
+    defer regs.restoreState();
 
-    asm volatile(
-        \\call timerIntrHandler
-        \\call intrHandlerExit
-    );
+    asm volatile("call timerIntrHandler");
+    defer asm volatile("call intrHandlerExit");
 
-    regs.restoreState();
-    intr.iret();
+    lapic.set(.timer_init_count, timer_init_count);
 }

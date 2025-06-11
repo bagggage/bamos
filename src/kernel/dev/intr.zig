@@ -473,7 +473,7 @@ pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
 pub export fn handleIrq(pin: u8) void {
     @setRuntimeSafety(false);
 
-    _ = smp.getLocalData().nested_intr.fetchAdd(1, .acquire);
+    _ = smp.getLocalData().enterInterrupt();
     _ = irqs.buffer[pin].handle();
 
     handlerExit();
@@ -482,7 +482,7 @@ pub export fn handleIrq(pin: u8) void {
 pub export fn handleMsi(idx: u8) void {
     @setRuntimeSafety(false);
 
-    _ = smp.getLocalData().nested_intr.fetchAdd(1, .acquire);
+    _ = smp.getLocalData().enterInterrupt();
 
     const handler = &msis.buffer[idx].handler;
     _ = handler.func(handler.device);
@@ -705,6 +705,8 @@ fn reorderCpus(cpu_idx: u16, comptime direction: enum{forward, backward}) void {
 /// Used only in `handleMsi`, `handleIrq` and `intrHandlerExit`.
 fn handlerExit() void {
     @setRuntimeSafety(false);
+
+    smp.getLocalData().exitInterrupt();
 
     enableForCpu();
     chip.eoi();

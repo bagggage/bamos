@@ -80,17 +80,15 @@ pub fn onIntrExit() void {
             local.exitInterrupt();
         }
     }
-
-    local.exitInterrupt();
 }
 
 export fn timerIntrHandler() void {
     const local = smp.getLocalData();
-    local.nested_intr.raw += 1;
+    local.enterInterrupt();
 
     const scheduler = &local.scheduler;
     const curr_task = scheduler.current_task;
-    
+
     if (curr_task.common.time_slice > 0) {
         curr_task.common.time_slice -= 1;
 
@@ -98,8 +96,6 @@ export fn timerIntrHandler() void {
             scheduler.flags.expire = true;
             scheduler.planRescheduling();
         }
-    } else {
-        log.warn("time slice is zero but interrupt received!", .{});
     }
 }
 

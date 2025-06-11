@@ -31,7 +31,7 @@ pub const LocalData = struct {
 
     pub fn tryIfNotNestedInterrupt(self: *LocalData) bool {
         return self.nested_intr.cmpxchgWeak(
-            1, 2,
+            0, 1,
             .acquire, .monotonic
         ) == null;
     }
