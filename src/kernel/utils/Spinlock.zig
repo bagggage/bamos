@@ -81,9 +81,25 @@ pub fn wait(self: *Self, state: State) void {
     }
 }
 
+pub fn tryLock(self: *Self) bool {
+    const state: State = if (intr.saveAndDisableForCpu())
+        .locked_intr else .locked_no_intr;
+    return self.exclusion.cmpxchgWeak(
+        .unlocked, state,
+        .acquire, .monotonic
+    ) == null;
+}
+
+pub inline fn tryLockAtomic(self: *Self) bool {
+    return self.exclusion.cmpxchgWeak(
+        .unlocked, .locked_no_intr,
+        .acquire, .monotonic
+    ) == null;
+}
+
 inline fn rawLock(self: *Self, lock_state: State) void {
     while (self.exclusion.cmpxchgWeak(
-        State.unlocked, lock_state,
+        .unlocked, lock_state,
         .acquire, .monotonic
     ) != null) {
         std.atomic.spinLoopHint();
