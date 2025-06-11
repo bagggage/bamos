@@ -75,8 +75,8 @@ pub const Common = struct {
     pub fn expireTime(self: *Common) void {
         std.debug.assert(self.time_slice == 0);
 
-        const given_time: i8 = self.calcTimeSlice();
-        const punish = @divTrunc(given_time + self.inter_delta, 2);
+        const given_time: i8 = @as(i8, @intCast(self.calcTimeSlice())) * 2;
+        const punish = given_time + self.inter_delta;
 
         self.updateInteractivity(-punish);
         self.updateTimeSlice();
@@ -86,7 +86,7 @@ pub const Common = struct {
         std.debug.assert(self.time_slice > 0);
 
         self.updateInteractivity(
-            @intCast(sched.executor.getTickGranule() * self.time_slice)
+            @as(i8, @intCast(self.time_slice)) * 2
         );
     }
 
@@ -122,15 +122,19 @@ pub const Common = struct {
     /// Caclulate time slice for the task and return it.
     fn calcTimeSlice(self: *const Common) Ticks {
         const percision = 16;
-        const max_bonus: comptime_int = std.math.log2(sched.max_priority * 8);
+        const max_bonus: comptime_int = comptime calcTimeBonus(sched.max_priority);
         const norm_mult: comptime_int = ((sched.max_slice_ticks + 1) * percision) / max_bonus;
 
         const reverse_prior: u32 = @as(u32, sched.max_priority) - self.getPriority();
-        const bonus: u32 = std.math.log2_int(u32, reverse_prior * 8);
+        const bonus: u32 = calcTimeBonus(reverse_prior);
         const norm_bonus: Ticks = @truncate((bonus * norm_mult) / percision);
 
         return if (norm_bonus < sched.min_slice_ticks)
             sched.min_slice_ticks else norm_bonus;
+    }
+
+    inline fn calcTimeBonus(reverse_prior: u32) u32 {
+        return std.math.log2(reverse_prior * reverse_prior);
     }
 };
 
