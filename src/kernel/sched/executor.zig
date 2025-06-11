@@ -35,7 +35,7 @@ pub fn begin(scheduler: *sched.Scheduler) noreturn {
     task.asUserTask().thread.context.jumpTo();
 }
 
-pub fn processRescheduling(scheduler: *sched.Scheduler) void {
+pub fn reschedule(scheduler: *sched.Scheduler) void {
     scheduler.flags.need_resched = false;
 
     if (scheduler.flags.expire) scheduler.expire();
@@ -52,37 +52,89 @@ pub fn processRescheduling(scheduler: *sched.Scheduler) void {
     switchTask(scheduler, task.?);
 }
 
-pub fn switchTask(scheduler: *sched.Scheduler, task: *sched.AnyTask) void {
-    const local = scheduler.getCpuLocal();
+pub fn yeild() void {
+    const scheduler = sched.getCurrent();
+    scheduler.disablePreemtion();
 
-    const curr_task = scheduler.current_task.asKernelTask();
-    task.common.state = .running;
-
-    if (local.isInInterrupt()) local.exitInterrupt();
-    if (task.asKernelTask() == curr_task) return;
-
-    scheduler.current_task = task;
-    curr_task.thread.context.switchTo(&task.asKernelTask().thread.context);
+    scheduler.yeild();
+    reschedule(scheduler);
 }
 
-pub fn sleep() void {
-    //const scheduler = sched.getCurrent();
-    //const node = scheduler.current_task.asNode();sleepTask();
+pub fn pause() void {
+    const scheduler = sched.getCurrent();
+    const task = scheduler.current_task;
+
+    scheduler.disablePreemtion();
+
+    task.common.yeildBonus();
+    task.common.state = .waiting;
+
+    reschedule(scheduler);
+}
+
+pub fn awake(task: *sched.AnyTask) void {
+    std.debug.assert(task.common.state == .waiting);
+
+    const sleep_bonus = 16;
+    const local = smp.getLocalData();
+
+    task.common.updateInteractivity(sleep_bonus);
+    local.scheduler.enqueueTask(task);
+}
+
+/// Returns number of milliseconds per one timer tick.
+pub inline fn getTickGranule() u8 {
+    return arch.executor.time_slice_granule;
 }
 
 pub fn onIntrExit() void {
+    @setRuntimeSafety(false);
+
     const local = smp.getLocalData();
 
     if (local.tryIfNotNestedInterrupt()) {
         if (local.scheduler.needRescheduling()) {
-            processRescheduling(&local.scheduler);
+            reschedule(&local.scheduler);
         } else {
             local.exitInterrupt();
         }
     }
 }
 
+fn switchTask(scheduler: *sched.Scheduler, task: *sched.AnyTask) void {
+    const local = scheduler.getCpuLocal();
+
+    const curr_task = scheduler.current_task.asKernelTask();
+    task.common.state = .running;
+
+    if (local.isInInterrupt()) local.exitInterrupt();
+    if (task.asKernelTask() == curr_task) {
+        scheduler.enablePreemtion();
+        return;
+    }
+
+    scheduler.current_task = task;
+    scheduler.enablePreemtion();
+
+    curr_task.thread.context.switchTo(&task.asKernelTask().thread.context);
+}
+
+fn sleepTask() noreturn {
+    const local = smp.getLocalData();
+    local.scheduler.enablePreemtion();
+
+    if (local.isInInterrupt()) local.exitInterrupt();
+
+    // sure that interrupts is enabled.
+    intr.enableForCpu();
+    while (true) arch.halt();
+
+    unreachable;
+}
+
 export fn timerIntrHandler() void {
+    @setRuntimeSafety(false);
+
     const local = smp.getLocalData();
     local.enterInterrupt();
 
@@ -97,16 +149,4 @@ export fn timerIntrHandler() void {
             scheduler.planRescheduling();
         }
     }
-}
-
-pub fn sleepTask() noreturn {
-    const local = smp.getLocalData();
-
-    if (local.isInInterrupt()) local.exitInterrupt();
-
-    // sure that interrupts is enabled.
-    intr.enableForCpu();
-    while (true) arch.halt();
-
-    unreachable;
 }

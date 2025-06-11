@@ -82,6 +82,14 @@ pub const Common = struct {
         self.updateTimeSlice();
     }
 
+    pub fn yeildBonus(self: *Common) void {
+        std.debug.assert(self.time_slice > 0);
+
+        self.updateInteractivity(
+            @intCast(sched.executor.getTickGranule() * self.time_slice)
+        );
+    }
+
     /// Calculate and set time slice for the task.
     pub inline fn updateTimeSlice(self: *Common) void {
         self.time_slice = self.calcTimeSlice();
@@ -126,7 +134,7 @@ pub const Common = struct {
     }
 };
 
-pub const List = utils.SList(AnyTask);
+pub const List = utils.List(AnyTask);
 pub const Node = List.Node;
 
 pub const AnyTask = struct {

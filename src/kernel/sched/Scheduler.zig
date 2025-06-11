@@ -28,7 +28,8 @@ const TaskQueue = struct {
         const priority = task.common.getPriority();
         if (priority < self.last_min) self.last_min = priority;
 
-        self.lists[priority].prepend(task.asNode());
+        task.common.state = .scheduled;
+        self.lists[priority].append(task.asNode());
     }
 
     pub fn pop(self: *TaskQueue) ?*tasks.AnyTask {
@@ -63,7 +64,7 @@ pub fn init(self: *Self) void {
 }
 
 pub fn enqueueTask(self: *Self, task: *tasks.AnyTask) void {
-    std.debug.assert(task.common.state == .free);
+    std.debug.assert(task.common.state == .free or task.common.state == .waiting);
 
     task.common.updateBonus();
     task.common.updateTimeSlice();
@@ -72,7 +73,6 @@ pub fn enqueueTask(self: *Self, task: *tasks.AnyTask) void {
     defer self.task_lock.unlock();
 
     self.active_queue.push(task);
-    task.common.state = .scheduled;
 
     self.tryPreemt(task);
 }
@@ -91,8 +91,15 @@ pub inline fn expire(self: *Self) void {
     self.current_task.common.expireTime();
     self.expired_queue.push(self.current_task);
 
-    self.current_task.common.state = .scheduled;
     self.flags.expire = false;
+}
+
+pub fn yeild(self: *Self) void {
+    self.current_task.common.yeildBonus();
+    self.current_task.common.updateBonus();
+    self.current_task.common.updateTimeSlice();
+
+    self.expired_queue.push(self.current_task);
 }
 
 pub inline fn schedule(self: *Self) void {

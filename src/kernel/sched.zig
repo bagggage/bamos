@@ -14,7 +14,7 @@ const kernel_stack_size = 32 * utils.kb_size;
 /// Scheduler timer target frequency.
 pub const hz = 1000;
 pub const min_slice_ticks = 3;
-pub const max_slice_ticks = std.math.maxInt(Ticks);
+pub const max_slice_ticks = 10; //std.math.maxInt(Ticks);
 /// Maximum priority (starting from 1).
 pub const max_priority = 1 << @bitSizeOf(Priority);
 
