@@ -26,8 +26,9 @@ var eval_lock = utils.Spinlock.init(.unlocked);
 var timer_frequency: u32 = 0;
 var timer_ns_per_tick: u32 = 0;
 var timer_init_count: u32 = 0;
+
 /// Scheduler timer interrupt interval in milliseconds.
-var time_slice_granule: u8 = 0;
+pub var time_slice_granule: u8 = 0;
 
 pub fn init() !void {
     std.debug.assert(lapic.isInitialized());
@@ -50,7 +51,7 @@ fn initCpuTimer() !void {
 
     const lvt_timer: lapic.LvtTimer = .{
         .delv_status = .relaxed,
-        .timer_mode = .once,
+        .timer_mode = .periodic,
         .mask = 1,
         .vector = @truncate(intr_vec.vec)
     };
@@ -125,6 +126,4 @@ fn timerIntrRoutin() callconv(.naked) noreturn {
 
     asm volatile("call timerIntrHandler");
     defer asm volatile("call intrHandlerExit");
-
-    lapic.set(.timer_init_count, timer_init_count);
 }
