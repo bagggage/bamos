@@ -68,9 +68,12 @@ pub fn jumpTo(self: *Self) noreturn {
     unreachable;
 }
 
-pub inline fn switchTo(_: *Self, _: *Self) void {
+pub inline fn switchTo(from: *Self, to: *Self) void {
     asm volatile(
-        "call switchToEx":::
+        "call switchToEx"::
+        [arg1] "{rdi}" (from),
+        [arg2] "{rsi}" (to)
+        :
         "{rax}","{rdi}","{rsi}","{rdx}",
         "{rcx}","{r8}","{r9}","{r10}",
         "{r11}", "memory"
@@ -78,7 +81,10 @@ pub inline fn switchTo(_: *Self, _: *Self) void {
 }
 
 export fn switchToEx(_: *Self, _: *Self) callconv(.naked) void {
+    defer asm volatile("retq");
+
     regs.saveCallerRegs();
+    defer regs.restoreCallerRegs();
 
     // Swap stack.
     comptime std.debug.assert(@offsetOf(Self, "stack_ptr") == 0);
@@ -86,7 +92,4 @@ export fn switchToEx(_: *Self, _: *Self) callconv(.naked) void {
         \\ mov %rsp, (%rdi)
         \\ mov (%rsi), %rsp
     );
-
-    regs.restoreCallerRegs();
-    asm volatile("retq");
 }
