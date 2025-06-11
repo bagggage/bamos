@@ -1,6 +1,6 @@
 //! # Interrupt subsystem
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -11,6 +11,7 @@ const executor = @import("../sched.zig").executor;
 const io = dev.io;
 const log = std.log.scoped(.intr);
 const smp = @import("../smp.zig");
+const sched = @import("../sched.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
@@ -81,6 +82,30 @@ pub const Handler = struct {
 
     device: *dev.Device,
     func: Fn,
+};
+
+pub const SoftHandler = struct {
+    pub const Node = List.Node;
+    pub const Fn = *const fn(?*anyopaque) void;
+
+    const List = utils.SList(void);
+
+    ctx: ?*anyopaque,
+    func: Fn,
+
+    pending: bool = false,
+    node: Node = .{ .data = {} },
+
+    pub fn init(func: Fn, ctx: ?*anyopaque) SoftHandler {
+        return .{
+            .func = func,
+            .ctx = ctx
+        };
+    }
+
+    inline fn fromNode(node: *Node) *SoftHandler {
+        return @fieldParentPtr("node", node);
+    }
 };
 
 pub const Irq = struct {
@@ -240,7 +265,63 @@ const Cpu = struct {
     }
 };
 
+const SoftIntrTask = struct {
+    task: *sched.AnyTask,
+
+    sched_list: SoftHandler.List = .{},
+    num_pending: std.atomic.Value(u8) = .init(0),
+
+    pub fn handler() noreturn {
+        const local = smp.getLocalData();
+        const self = &soft_tasks[local.idx];
+
+        while (true) {
+            while (self.isPending()) {
+                const soft_intr = self.pickSoftIntr();
+                soft_intr.func(soft_intr.ctx);
+
+                self.completeSoftIntr(soft_intr);
+            }
+
+            executor.pause();
+        }
+    }
+
+    pub fn isPending(self: *SoftIntrTask) bool {
+        return self.num_pending.raw != 0;
+    }
+
+    pub fn schedule(self: *SoftIntrTask, intr: *SoftHandler) void {
+        if (intr.pending) return;
+
+        intr.pending = true;
+        self.sched_list.prepend(&intr.node);
+        self.num_pending.raw += 1;
+
+        if (self.task.common.state == .free) {
+            self.task.common.static_prior = sched.tasks.high_static_prior;
+            sched.getCurrent().enqueueTask(self.task);
+        }
+    }
+
+    inline fn pickSoftIntr(self: *SoftIntrTask) *SoftHandler {
+        disableForCpu();
+        defer enableForCpu();
+
+        return SoftHandler.fromNode(self.sched_list.popFirst().?);
+    }
+
+    inline fn completeSoftIntr(self: *SoftIntrTask, intr: *SoftHandler) void {
+        disableForCpu();
+        defer enableForCpu();
+
+        self.num_pending -= 1;
+        intr.pending = false;
+    }
+};
+
 pub const max_intr = 128;
+pub const max_msi = max_intr;
 
 /// @noexport
 const max_cpus = 128;
@@ -252,7 +333,7 @@ const CpuArray = std.BoundedArray(Cpu, max_cpus);
 /// @noexport
 const IrqArray = std.BoundedArray(Irq, max_intr);
 /// @noexport
-const MsiArray = std.BoundedArray(Msi, max_intr);
+const MsiArray = std.BoundedArray(Msi, max_msi);
 
 var cpus_order = OrderArray.init(0) catch unreachable;
 var cpus = CpuArray.init(0) catch unreachable;
@@ -263,14 +344,42 @@ var irqs = IrqArray.init(max_intr) catch unreachable;
 var msis = MsiArray.init(max_intr) catch unreachable;
 var msis_used: u8 = 0;
 
+var soft_tasks: []SoftIntrTask = undefined;
+
 pub var chip: Chip = undefined;
 
+/// Enable all interrupts for current CPU.
 pub inline fn enableForCpu() void {
     arch.intr.enableForCpu();
 }
 
+/// Disable all interrupts (except NMI) for current CPU.
 pub inline fn disableForCpu() void {
     arch.intr.disableForCpu();
+}
+
+/// Returns `true` if interrupts is enabled for current CPU,
+/// `false` otherwise.
+pub inline fn isEnabledForCpu() bool {
+    return arch.intr.isEnabledForCpu();
+}
+
+/// Disable interrupts for current CPU.
+/// 
+/// Returns `true` if interrupts was enabled before 
+/// this function disable it, `false` otherwise.
+pub inline fn saveAndDisableForCpu() bool {
+    const intr_enable = arch.intr.isEnabledForCpu();
+    arch.intr.disableForCpu();
+    return intr_enable;
+}
+
+/// Enable interrupts for current CPU if `intr_enable`=`true`,
+/// otherwise do nothing.
+/// 
+/// Used in pair with `saveAndDisableForCpu`.
+pub inline fn restoreForCpu(intr_enable: bool) void {
+    if (intr_enable) arch.intr.enableForCpu();
 }
 
 pub fn init() !void {
@@ -282,7 +391,11 @@ pub fn init() !void {
     cpus_order = try OrderArray.init(cpus_num);
     errdefer cpus_order.resize(0) catch unreachable;
 
-    const bytes_per_bm = std.math.divCeil(comptime_int, arch.intr.avail_vectors, utils.byte_size) catch unreachable;
+    const bytes_per_bm = std.math.divCeil(
+        comptime_int,
+        arch.intr.avail_vectors,
+        utils.byte_size
+    ) catch unreachable;
     const bitmap_pool: [*]u8 = @ptrCast(vm.malloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
 
     for (cpus.slice(), 0..) |*cpu, i| {
@@ -292,12 +405,32 @@ pub fn init() !void {
         cpus_order.set(i, cpu);
     }
 
+    // TODO: Initialize software interrupt tasks
+
     chip = try arch.intr.init();
 
     @memset(std.mem.asBytes(&msis.buffer), 0);
     @memset(std.mem.asBytes(&irqs.buffer), 0);
 
     log.info("controller: {s}", .{chip.name});
+}
+
+fn initSoftIntr(cpus_num: u16) !void {
+    soft_tasks.ptr = @alignCast(@ptrCast(
+        vm.malloc(@sizeOf(SoftIntrTask) * cpus_num) orelse return error.NoMemory
+    ));
+    errdefer vm.free(soft_tasks.ptr);
+
+    soft_tasks.len = cpus_num;
+
+    for (soft_tasks, 0..) |*soft_task, i| {
+        const task = sched.newKernelTask("soft_intr", SoftIntrTask.handler) catch |err| {
+            for (0..i) |j| sched.freeTask(soft_tasks[j].task);
+            return err;
+        };
+
+        soft_task.* = .{ .task = task };
+    }
 }
 
 pub fn deinit() void {
@@ -314,6 +447,9 @@ pub fn deinit() void {
             irq.deinit();
         }
     }
+
+    for (soft_tasks) |*soft_task| sched.freeTask(soft_task.task);
+    vm.free(soft_tasks.ptr);
 }
 
 pub inline fn requestIrq(pin: u8, device: *dev.Device, handler: Handler.Fn, tigger_mode: TriggerMode, shared: bool) Error!void {
@@ -337,6 +473,7 @@ pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
 pub export fn handleIrq(pin: u8) void {
     @setRuntimeSafety(false);
 
+    _ = smp.getLocalData().nested_intr.fetchAdd(1, .acquire);
     _ = irqs.buffer[pin].handle();
 
     handlerExit();
@@ -344,6 +481,8 @@ pub export fn handleIrq(pin: u8) void {
 
 pub export fn handleMsi(idx: u8) void {
     @setRuntimeSafety(false);
+
+    _ = smp.getLocalData().nested_intr.fetchAdd(1, .acquire);
 
     const handler = &msis.buffer[idx].handler;
     _ = handler.func(handler.device);
@@ -415,6 +554,41 @@ pub fn freeVector(vec: Vector) void {
     cpus.buffer[vec.cpu].freeVector(vec.vec);
 
     reorderCpus(vec.cpu, .backward);
+}
+
+pub fn allocSoftHandler(device: *dev.Device, cpu_idx: ?u16) bool {
+    const handler = vm.obj.new(SoftHandler) orelse return false;
+
+    const task_idx = if (cpu_idx) |idx| idx else smp.getIdx();
+    const soft_task = &soft_tasks[task_idx];
+
+    log.debug("soft irq: {}, cpu: {}", .{device.name, task_idx});
+
+    const node = vm.obj.asSingleNode(SoftHandler, handler);
+    node.next = null;
+
+    soft_task.unsched_list.prepend(node);
+    device.soft_intr_num.fetchAdd(1, .release);
+
+    return true;
+}
+
+pub fn freeSoftHandler(device: *dev.Device, cpu_idx: ?u16) void {
+    std.debug.assert(device.soft_intr_num.raw > 0);
+
+    device.soft_intr_num.fetchSub(1, .acquire);
+
+    const task_idx = if (cpu_idx) |idx| idx else smp.getIdx();
+    const soft_task = &soft_tasks[task_idx];
+
+    const node = soft_task.unsched_list.popFirst() orelse unreachable;
+
+    vm.obj.free(SoftHandler, node.data);
+}
+
+pub fn scheduleSoft(intr: *SoftHandler) void {
+    const soft_task = &soft_tasks[smp.getIdx()];
+    soft_task.schedule(intr);
 }
 
 export fn requestIrqEx(pin: u8, device: *dev.Device, handler: *const anyopaque, tigger_int: u8, shared: bool) i16 {
@@ -528,9 +702,18 @@ fn reorderCpus(cpu_idx: u16, comptime direction: enum{forward, backward}) void {
     }
 }
 
+/// Used only in `handleMsi`, `handleIrq` and `intrHandlerExit`.
 fn handlerExit() void {
+    @setRuntimeSafety(false);
+
     enableForCpu();
     chip.eoi();
 
     executor.onIntrExit();
+}
+
+/// Used in arch-specific code to exit from
+/// timer interrupt routin.
+export fn intrHandlerExit() callconv(.c) void {
+    handlerExit();
 }
