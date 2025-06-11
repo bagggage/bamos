@@ -30,10 +30,18 @@ pub const LocalData = struct {
     }
 
     pub fn tryIfNotNestedInterrupt(self: *LocalData) bool {
-        return self.nested_intr.cmpxchgStrong(
-            0, 1,
+        return self.nested_intr.cmpxchgWeak(
+            1, 2,
             .acquire, .monotonic
-        ) != null;
+        ) == null;
+    }
+
+    pub inline fn enterInterrupt(self: *LocalData) void {
+        self.nested_intr.raw += 1;
+    }
+
+    pub inline fn exitInterrupt(self: *LocalData) void {
+        self.nested_intr.raw -= 1;
     }
 };
 

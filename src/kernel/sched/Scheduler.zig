@@ -4,6 +4,7 @@
 
 const std = @import("std");
 
+const smp = @import("../smp.zig");
 const sched = @import("../sched.zig");
 const tasks = @import("tasks.zig");
 const utils = @import("../utils.zig");
@@ -14,7 +15,7 @@ const Self = @This();
 const Flags = packed struct {
     need_resched: bool = false,
     expire: bool = false,
-    preemt: bool = false,
+    preemtion: bool = false,
 };
 
 const TaskQueue = struct {
@@ -64,11 +65,16 @@ pub fn init(self: *Self) void {
 pub fn enqueueTask(self: *Self, task: *tasks.AnyTask) void {
     std.debug.assert(task.common.state == .free);
 
+    task.common.updateBonus();
+    task.common.updateTimeSlice();
+
     self.task_lock.lock();
     defer self.task_lock.unlock();
 
     self.active_queue.push(task);
     task.common.state = .scheduled;
+
+    self.tryPreemt(task);
 }
 
 pub fn dequeueTask(self: *Self,  task: *tasks.AnyTask) void {
@@ -86,12 +92,22 @@ pub inline fn expire(self: *Self) void {
     self.expired_queue.push(self.current_task);
 
     self.current_task.common.state = .scheduled;
+    self.flags.expire = false;
 }
 
 pub inline fn schedule(self: *Self) void {
     const temp_queue = self.active_queue;
     self.active_queue = self.expired_queue;
     self.expired_queue = temp_queue;
+}
+
+pub inline fn tryPreemt(self: *Self, task: *const tasks.AnyTask) void {
+    if (
+        self.flags.preemtion and
+        self.current_task.common.getPriority() > task.common.getPriority()
+    ) {
+        self.planRescheduling();
+    }
 }
 
 pub inline fn next(self: *Self) ?*tasks.AnyTask {
@@ -104,4 +120,16 @@ pub inline fn planRescheduling(self: *Self) void {
 
 pub inline fn needRescheduling(self: *const Self) bool {
     return self.flags.need_resched;
+}
+
+pub inline fn getCpuLocal(self: *Self) *smp.LocalData {
+    return @fieldParentPtr("scheduler", self);
+}
+
+pub inline fn enablePreemtion(self: *Self) void {
+    self.flags.preemtion = true;
+}
+
+pub inline fn disablePreemtion(self: *Self) void {
+    self.flags.preemtion = false;
 }

@@ -38,6 +38,11 @@ const max_prior_delta = std.math.maxInt(PriorDelta) + 1;
 const base_priority = sched.max_priority / 2;
 const base_interactivity = std.math.maxInt(u8) / 2;
 
+/// Highest static priority value.
+pub const high_static_prior = std.math.minInt(PriorDelta);
+/// Lower static priority value.
+pub const low_static_prior = std.math.maxInt(PriorDelta);
+
 pub const Common = struct {
     vtable: *const VTable = &stub_vtable,
 

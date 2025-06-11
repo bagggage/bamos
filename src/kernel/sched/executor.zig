@@ -27,17 +27,18 @@ pub fn begin(scheduler: *sched.Scheduler) noreturn {
     scheduler.current_task = task;
     task.common.state = .running;
 
+    scheduler.enablePreemtion();
+
     std.debug.assert(intr.isEnabledForCpu());
+    if (smp.getIdx() == 0) arch.executor.maskTimerIntr(false);
+
     task.asUserTask().thread.context.jumpTo();
 }
 
 pub fn processRescheduling(scheduler: *sched.Scheduler) void {
     scheduler.flags.need_resched = false;
 
-    if (scheduler.flags.expire) {
-        scheduler.expire();
-        scheduler.flags.expire = false;
-    }
+    if (scheduler.flags.expire) scheduler.expire();
 
     var task = scheduler.next();
     if (task == null) {
@@ -52,11 +53,16 @@ pub fn processRescheduling(scheduler: *sched.Scheduler) void {
 }
 
 pub fn switchTask(scheduler: *sched.Scheduler, task: *sched.AnyTask) void {
-    const curr_task = scheduler.current_task.asUserTask();
-    scheduler.current_task = task;
+    const local = scheduler.getCpuLocal();
+
+    const curr_task = scheduler.current_task.asKernelTask();
     task.common.state = .running;
 
-    curr_task.thread.context.switchTo(&task.asUserTask().thread.context);
+    if (local.isInInterrupt()) local.exitInterrupt();
+    if (task.asKernelTask() == curr_task) return;
+
+    scheduler.current_task = task;
+    curr_task.thread.context.switchTo(&task.asKernelTask().thread.context);
 }
 
 pub fn sleep() void {
@@ -68,28 +74,42 @@ pub fn onIntrExit() void {
     const local = smp.getLocalData();
 
     if (local.tryIfNotNestedInterrupt()) {
-        defer _ = local.nested_intr.fetchSub(1, .acquire);
-
         if (local.scheduler.needRescheduling()) {
             processRescheduling(&local.scheduler);
+        } else {
+            local.exitInterrupt();
         }
     }
+
+    local.exitInterrupt();
 }
 
 export fn timerIntrHandler() void {
-    const scheduler = sched.getCurrent();
-    scheduler.current_task.common.time_slice -= 1;
+    const local = smp.getLocalData();
+    local.nested_intr.raw += 1;
 
-    if (scheduler.current_task.common.time_slice == 0) {
-        scheduler.flags.expire = true;
-        scheduler.planRescheduling();
+    const scheduler = &local.scheduler;
+    const curr_task = scheduler.current_task;
+    
+    if (curr_task.common.time_slice > 0) {
+        curr_task.common.time_slice -= 1;
+
+        if (curr_task.common.time_slice == 0) {
+            scheduler.flags.expire = true;
+            scheduler.planRescheduling();
+        }
+    } else {
+        log.warn("time slice is zero but interrupt received!", .{});
     }
 }
 
 pub fn sleepTask() noreturn {
-    sched.getCurrent().planRescheduling();
-    intr.enableForCpu();
+    const local = smp.getLocalData();
 
+    if (local.isInInterrupt()) local.exitInterrupt();
+
+    // sure that interrupts is enabled.
+    intr.enableForCpu();
     while (true) arch.halt();
 
     unreachable;
