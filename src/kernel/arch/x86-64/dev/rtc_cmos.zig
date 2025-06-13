@@ -49,18 +49,21 @@ const RtcRegs = dev.regs.Group(
 const rtc_irq = 8;
 const rtc_frequency = 32768;
 
+const driver_name = "rtc_cmos";
+const device_name = driver_name;
+
 const vtable: Clock.VTable = .{
-    .getTime = getTime,
-    .setTime = setTime,
+    .getDateTime = getDateTime,
+    .setDateTime = setDateTime,
     .maskIrq = maskIrq,
     .configIrq = configIrq
 };
 
 var driver = dev.Driver.init(
-    "rtc cmos",
+    driver_name,
     .{
         .probe = .{ .platform = &probe },
-        .remove = &remove
+        .remove = dev.Driver.Operations.removeStub
     }
 );
 var device: *dev.Device = undefined;
@@ -74,7 +77,7 @@ pub fn init() !void {
     try dev.registerDriver("platform", &driver);
 }
 
-pub fn probe(self: *const dev.Driver) dev.Driver.Operations.ProbeResult {
+fn probe(self: *const dev.Driver) dev.Driver.Operations.ProbeResult {
     initDriver(self) catch |err| {
         log.err("initialization failed: {s}", .{@errorName(err)});
         return .no_resources;
@@ -83,12 +86,10 @@ pub fn probe(self: *const dev.Driver) dev.Driver.Operations.ProbeResult {
     return .success;
 }
 
-pub fn remove(_: *dev.Device) void {}
-
 fn initDriver(self: *const dev.Driver) !void {
     regs = try RtcRegs.init();
 
-    device = try self.addDevice(dev.nameOf("rtc cmos"), null);
+    device = try self.addDevice(dev.nameOf(device_name), null);
     errdefer dev.removeDevice(device);
 
     clock = try dev.obj.new(Clock);
@@ -107,7 +108,7 @@ fn initDriver(self: *const dev.Driver) !void {
     // Then write to CMOS/RTC RAM.
     cmos.write(0x8A, 0x20);
 
-    clock.init(device, &vtable, rtc_frequency, .low);
+    clock.init(device, &vtable, rtc_frequency, .system_low);
     try dev.obj.add(Clock, clock);
 }
 
@@ -118,16 +119,22 @@ fn irqHandler(_: *dev.Device) bool {
     return true;
 }
 
-fn getTime(_: *Clock) Clock.DateTime {
-    while (isUsed()) {}
-
+fn getDateTime(_: *Clock) Clock.DateTime {
     var time: Clock.DateTime = .{};
-    time.seconds = regs.read(.seconds);
-    time.minutes = regs.read(.minutes);
-    time.hours = regs.read(.hours);
-    time.day = regs.read(.day);
-    time.month = regs.read(.month);
-    time.year = regs.read(.year);
+
+    {
+        dev.intr.disableForCpu();
+        defer dev.intr.enableForCpu();
+
+        while (isUsed()) std.atomic.spinLoopHint();
+
+        time.seconds = regs.read(.seconds);
+        time.minutes = regs.read(.minutes);
+        time.hours = regs.read(.hours);
+        time.day = regs.read(.day);
+        time.month = regs.read(.month);
+        time.year = regs.read(.year);
+    }
 
     const century = regs.read(.century);
     const reg_b = regs.read(.reg_b);
@@ -147,7 +154,7 @@ fn getTime(_: *Clock) Clock.DateTime {
     return time;
 }
 
-fn setTime(_: *Clock, time: Clock.DateTime) bool {
+fn setDateTime(_: *Clock, time: Clock.DateTime) bool {
     _ = time;
     return true;
 }
