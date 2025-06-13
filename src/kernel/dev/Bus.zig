@@ -64,8 +64,9 @@ pub export fn addDevice(self: *Self, name: dev.Name, driver: ?*const Driver, dat
         self.dev_lock.lock();
         defer self.dev_lock.unlock();
 
-        if (driver != null) {
+        if (driver) |drv| {
             self.matched.append(node);
+            self.matchLog(device, drv);
         }
         else {
             self.matchDevice(node);
@@ -154,6 +155,7 @@ fn matchDevice(self: *Self, device: *dev.DeviceNode) void {
         device.data.driver = &driver.data;
         self.matched.append(device);
 
+        self.matchLog(&device.data, &driver.data);
         return;
     }
 
@@ -179,8 +181,14 @@ fn matchDriver(self: *Self, driver: *Driver) void {
 
             self.unmatched.remove(device);
             self.matched.append(device);
+
+            self.matchLog(&device.data, driver);
         }
     }
+}
+
+inline fn matchLog(self: *const Self, device: *const Device, driver: *const Driver) void {
+    log.info("{s}: '{}' matches the {s} driver", .{self.name, device.name, driver.name});
 }
 
 fn onRemoveDriver(self: *Self, driver: *const Driver) void {
