@@ -10,8 +10,10 @@ const utils = @import("../utils.zig");
 const List = utils.List(u8);
 const HashMap = std.AutoHashMapUnmanaged(u32, ObjectsList);
 
+const expected_data_offset = @sizeOf(usize) * 2;
+
 comptime {
-    std.debug.assert(@offsetOf(List.Node, "data") == (@sizeOf(usize) * 2));
+    std.debug.assert(@offsetOf(List.Node, "data") == expected_data_offset);
 }
 
 const ObjectsList = struct {
@@ -36,7 +38,11 @@ var hash_map: HashMap = .{};
 var map_lock = utils.Spinlock.init(.unlocked);
 
 fn checkType(comptime T: type) void {
-    if (@typeInfo(T) != .@"struct") @compileError("Object type must be a user-defined struct; found: '"++@typeName(T)++"'");
+    if (@typeInfo(T) != .@"struct") {
+        @compileError(
+            "Object type must be a user-defined struct; found: '"++@typeName(T)++"'"
+        );
+    }
 }
 
 /// @export
@@ -58,10 +64,12 @@ pub fn free(comptime T: type, object: *T) void {
 }
 
 pub inline fn add(comptime T: type, object: *T) Error!void {
-    checkType(T);
-    const id = comptime utils.typeId(T);
-    const node: *utils.List(T).Node = @fieldParentPtr("data", object);
+    comptime checkType(T);
 
+    const Node = getNodeType(T);
+    const id = comptime utils.typeId(T);
+
+    const node: *Node = @fieldParentPtr("data", object);
     if (!addByTypeId(id, @ptrCast(node))) return error.NoMemory;
 
     // Class callback
@@ -69,26 +77,27 @@ pub inline fn add(comptime T: type, object: *T) Error!void {
 }
 
 pub inline fn remove(object: anytype) void {
-    const Ptr = @TypeOf(object);
-    const T = switch (@typeInfo(Ptr)) {
+    const Ptr: type = @TypeOf(object);
+    const T= switch (@typeInfo(Ptr)) {
         .Pointer => |ptr| ptr.child,
         else => @compileError("Expected pointer to an object; Found: '"++@typeName(Ptr)++"'")
     };
 
-    // Class callback
-    if (@hasDecl(T, "onObjectRemove")) T.onObjectRemove(object);
+    const Node = getNodeType(T);
+    const id = comptime utils.typeId(T);
 
-    const Node = utils.List(T).Node;
+    // Class callback
+    if (comptime @hasDecl(T, "onObjectRemove")) {
+        T.onObjectRemove(object);
+    }
     const node: *Node = @fieldParentPtr("data", object);
 
-    const id = comptime utils.typeId(T);
-    const result = removeByTypeId(node, id);
-
+    const result = removeByTypeId(id, node);
     std.debug.assert(result == true);
 }
 
 pub inline fn getObjects(comptime T: type) ?*utils.List(T) {
-    checkType(T);
+    comptime checkType(T);
     const id = comptime utils.typeId(T);
 
     return @alignCast(@ptrCast(getObjectsByTypeId(id) orelse return null));
@@ -153,4 +162,15 @@ export fn getObjectsByTypeId(id: u32) ?*anyopaque {
 
     objects.lock.lock();
     return &objects.list;
+}
+
+fn getNodeType(T: type) type {
+    const List_t = utils.List(T);
+    const Node = List_t.Node;
+
+    comptime {
+        std.debug.assert(@offsetOf(Node, "data") == expected_data_offset);
+    }
+
+    return Node;
 }
