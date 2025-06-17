@@ -6,6 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const dev = @import("../../dev.zig");
+const log = std.log.scoped(.uart);
 
 const reg = dev.regs.reg;
 
@@ -52,14 +53,10 @@ const regs_base = switch (builtin.cpu.arch) {
 
 const regs = UartRegs{ .dyn_base = regs_base };
 
-var driver = dev.Driver.init("uart rs-232", .{
-    .probe = .{ .platform = probe },
-    .remove = remove
-});
 var device: *dev.Device = undefined;
 
-pub fn init() !void {
-    try dev.registerDriver("platform", &driver);
+pub inline fn init() !void {
+    try initDevice(dev.getKernelDriver());
 }
 
 pub fn write(bytes: []const u8) void {
@@ -94,21 +91,12 @@ fn testPort() bool {
     return regs.read(.data) == test_byte;
 }
 
-fn probe(self: *const dev.Driver) dev.Driver.Operations.ProbeResult {
-    _ = UartRegs.initBase(regs_base) catch return .missmatch;
+fn initDevice(self: *const dev.Driver) !void {
+    _ = try UartRegs.initBase(regs_base);
+    errdefer dev.io.release(regs_base, .io_ports);
 
     initPort();
+    if (!testPort()) return; // COM port is unavailable.
 
-    if (!testPort()) return .missmatch;
-
-    device = self.addDevice(dev.nameOf("UART RS-232"), null) catch {
-        dev.io.release(regs_base, .io_ports);
-        return .missmatch;
-    };
-
-    return .success;
-}
-
-fn remove(_: *dev.Device) void {
-    dev.io.release(regs_base, .io_ports);
+    device = try self.addDevice(dev.nameOf("UART RS-232"), null);
 }
