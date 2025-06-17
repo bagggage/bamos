@@ -2,7 +2,7 @@
 
 //! # Kernel entry point
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -14,6 +14,7 @@ const logger = @import("logger.zig");
 const log = std.log;
 const sched = @import("sched.zig");
 const smp = @import("smp.zig");
+const sys = @import("sys.zig");
 const utils = @import("utils.zig");
 const vfs = @import("vfs.zig");
 const video = @import("video.zig");
@@ -63,7 +64,8 @@ pub export fn main() noreturn {
 
     preinit(dev);
 
-    init(sched.executor);
+    init(sys.time);
+    init(sched);
 
     sched.startup(0, kernelStartupTask) catch |err| {
         log.err("startup failed: {s}", .{@errorName(err)});
@@ -85,20 +87,40 @@ fn kernelStartupTask() noreturn {
         };
     }
 
+    const fake_task = sched.newKernelTask("fake_task", fakeTask).?;
+    sched.getCurrent().enqueueTask(fake_task);
+    dev.intr.enableForCpu();
+
     init(vfs);
     init(dev);
 
-    utils.halt();
+    sched.pause();
+
+    unreachable;
+}
+
+fn fakeTask() noreturn {
+    const scheduler: *volatile sched.Scheduler = sched.getCurrent();
+
+    while (true) {
+        log.debug("fake: {} - {}: {}", .{
+            scheduler.current_task.common.time_slice,
+            @as(u8, scheduler.current_task.common.interactivity),
+            @as(u32, 32) - scheduler.current_task.common.getPriority(),
+        });
+
+        for (0..10) |_| sched.yeild();
+    }
+
+    unreachable;
 }
 
 /// Specific task to wait until kernel initialization is done
 /// and run userspace after.
 fn awaitTask() noreturn {
-    log.debug("await: {}", .{smp.getIdx()});
+    sched.pause();
 
-    while (true) {
-        //sched.executor.yeild();
-    }
+    unreachable;
 }
 
 fn preinit(comptime Module: type) void {
