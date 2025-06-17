@@ -5,6 +5,7 @@
 const std = @import("std");
 
 const smp = @import("smp.zig");
+const sys = @import("sys.zig");
 const log = std.log.scoped(.sched);
 const vm = @import("vm.zig");
 const utils = @import("utils.zig");
@@ -23,7 +24,6 @@ pub const Priority = u5;
 pub const Ticks = u4;
 
 pub const Scheduler = @import("sched/Scheduler.zig");
-pub const executor = @import("sched/executor.zig");
 pub const tasks = @import("sched/tasks.zig");
 pub const thread = @import("sched/thread.zig");
 
@@ -35,6 +35,13 @@ pub const PrivilegeLevel = enum(u8) {
     userspace,
     kernel
 };
+
+/// Minimal timer interrupt interval in milliseconds.
+var time_granule_ms: u32 = 0;
+
+pub inline fn init() !void {
+    sys.time.initPerCpu();
+}
 
 pub inline fn getScheduler(cpu_idx: u16) *Scheduler {
     return &smp.getCpuData(cpu_idx).scheduler;
@@ -51,11 +58,11 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     scheduler.init();
     scheduler.enqueueTask(task);
 
-    if (cpu_idx == smp.getIdx()) executor.begin(scheduler);
+    if (cpu_idx == smp.getIdx()) scheduler.begin();
 }
 
-pub fn waitStartup() noreturn {
-    executor.begin(getCurrent());
+pub inline fn waitStartup() noreturn {
+    getCurrent().begin();
 }
 
 pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*AnyTask {
@@ -73,4 +80,38 @@ pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*AnyTask 
     );
 
     return @ptrCast(task);
+}
+
+pub fn yeild() void {
+    const scheduler = getCurrent();
+    scheduler.disablePreemtion();
+
+    scheduler.yeild();
+    scheduler.reschedule();
+}
+
+pub fn pause() void {
+    const scheduler = getCurrent();
+    const task = scheduler.current_task;
+
+    scheduler.disablePreemtion();
+
+    task.common.yeildBonus();
+    task.common.state = .waiting;
+
+    scheduler.reschedule();
+}
+
+pub fn awake(task: *AnyTask) void {
+    std.debug.assert(task.common.state == .waiting);
+
+    const sleep_bonus = 16;
+    const local = smp.getLocalData();
+
+    task.common.updateInteractivity(sleep_bonus);
+    local.scheduler.enqueueTask(task);
+}
+
+pub inline fn getTimeGranuleMs() u32 {
+    return time_granule_ms;
 }

@@ -7,7 +7,6 @@ const std = @import("std");
 const arch = utils.arch;
 const boot = @import("../boot.zig");
 const dev = @import("../dev.zig");
-const executor = @import("../sched.zig").executor;
 const io = dev.io;
 const log = std.log.scoped(.intr);
 const smp = @import("../smp.zig");
@@ -283,7 +282,7 @@ const SoftIntrTask = struct {
                 self.completeSoftIntr(soft_intr);
             }
 
-            executor.pause();
+            sched.pause();
         }
     }
 
@@ -702,16 +701,29 @@ fn reorderCpus(cpu_idx: u16, comptime direction: enum{forward, backward}) void {
     }
 }
 
+fn onIntrExit(local: *smp.LocalData) void {
+    @setRuntimeSafety(false);
+
+    if (local.tryIfNotNestedInterrupt()) {
+        if (local.scheduler.needRescheduling()) {
+            local.scheduler.reschedule();
+        } else {
+            local.exitInterrupt();
+        }
+    }
+}
+
 /// Used only in `handleMsi`, `handleIrq` and `intrHandlerExit`.
 fn handlerExit() void {
     @setRuntimeSafety(false);
 
-    smp.getLocalData().exitInterrupt();
+    const local = smp.getLocalData();
+    local.exitInterrupt();
 
     enableForCpu();
     chip.eoi();
 
-    executor.onIntrExit();
+    onIntrExit(local);
 }
 
 /// Used in arch-specific code to exit from

@@ -4,9 +4,13 @@
 
 const std = @import("std");
 
-const smp = @import("../smp.zig");
+const arch = utils.arch;
 const sched = @import("../sched.zig");
+const smp = @import("../smp.zig");
+const sys = @import("../sys.zig");
 const tasks = @import("tasks.zig");
+const log = std.log.scoped(.sched);
+const intr = @import("../dev.zig").intr;
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
@@ -63,6 +67,23 @@ pub fn init(self: *Self) void {
     self.expired_queue = &self.task_queues[1];
 }
 
+pub fn begin(self: *Self) noreturn {
+    const task = self.next() orelse {
+        log.warn("No tasks to begin with. Halting core...", .{});
+        utils.halt();
+    };
+
+    self.current_task = task;
+    task.common.state = .running;
+
+    self.enablePreemtion();
+
+    std.debug.assert(intr.isEnabledForCpu());
+    sys.time.maskTimerIntr(false);
+
+    task.asUserTask().thread.context.jumpTo();
+}
+
 pub fn enqueueTask(self: *Self, task: *tasks.AnyTask) void {
     std.debug.assert(task.common.state == .free or task.common.state == .waiting);
 
@@ -117,6 +138,23 @@ pub inline fn tryPreemt(self: *Self, task: *const tasks.AnyTask) void {
     }
 }
 
+pub fn reschedule(self: *Self) void {
+    self.flags.need_resched = false;
+
+    if (self.flags.expire) self.expire();
+
+    var task = self.next();
+    if (task == null) {
+        self.schedule();
+        task = self.next();
+
+        // TODO: Check if it's correct
+        if (task == null) self.sleepTask();
+    }
+
+    self.switchTask(task.?);
+}
+
 pub inline fn next(self: *Self) ?*tasks.AnyTask {
     return self.active_queue.pop();
 }
@@ -139,4 +177,49 @@ pub inline fn enablePreemtion(self: *Self) void {
 
 pub inline fn disablePreemtion(self: *Self) void {
     self.flags.preemtion = false;
+}
+
+pub fn tick(self: *Self) void {
+    @setRuntimeSafety(false);
+    const curr_task = self.current_task;
+
+    if (curr_task.common.time_slice > 0) {
+        curr_task.common.time_slice -= 1;
+
+        if (curr_task.common.time_slice == 0) {
+            self.flags.expire = true;
+            self.planRescheduling();
+        }
+    }
+}
+
+fn sleepTask(self: *Self) noreturn {
+    const local = self.getCpuLocal();
+    self.enablePreemtion();
+
+    if (local.isInInterrupt()) local.exitInterrupt();
+
+    // sure that interrupts is enabled.
+    intr.enableForCpu();
+    while (true) arch.halt();
+
+    unreachable;
+}
+
+fn switchTask(self: *Self, task: *sched.AnyTask) void {
+    const local = self.getCpuLocal();
+
+    const curr_task = self.current_task.asKernelTask();
+    task.common.state = .running;
+
+    if (local.isInInterrupt()) local.exitInterrupt();
+    if (task.asKernelTask() == curr_task) {
+        self.enablePreemtion();
+        return;
+    }
+
+    self.current_task = task;
+    self.enablePreemtion();
+
+    curr_task.thread.context.switchTo(&task.asKernelTask().thread.context);
 }
