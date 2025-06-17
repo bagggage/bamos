@@ -24,7 +24,9 @@ pub const Operations = struct {
     const Probe = union { universal: ProbeFn, platform: PlatformProbeFn };
 
     probe: Probe,
-    remove: RemoveFn
+    remove: RemoveFn,
+
+    pub fn removeStub(_: *Device) void {}
 };
 
 name: []const u8,
