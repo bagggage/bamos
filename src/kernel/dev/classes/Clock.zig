@@ -4,34 +4,16 @@ const std = @import("std");
 
 const dev = @import("../../dev.zig");
 const log = std.log.scoped(.Clock);
+const sys = @import("../../sys.zig");
 
 const Self = @This();
+
+pub const DateTime = sys.time.DateTime;
 
 pub const Kind = enum(u8) {
     system_low,
     system_high,
     embedded,
-};
-
-pub const DateTime = extern struct {
-    seconds: u8 = 0,
-    minutes: u8 = 0,
-    hours: u8 = 0,
-    month: u8 = 0,
-    day: u8 = 0,
-    year: u16 = 0,
-
-    pub fn format(
-        self: DateTime,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        try writer.print("{:0>2}.{:0>2}.{:0>4} {:0>2}:{:0>2}:{:0>2}", .{
-            self.day, self.month, self.year,
-            self.hours, self.minutes, self.seconds
-        });
-    }
 };
 
 pub const IntrCallbackFn = *const fn(clock: *Self) void;

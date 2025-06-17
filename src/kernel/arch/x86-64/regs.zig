@@ -387,6 +387,15 @@ pub inline fn setTss(tss: u16) void {
     );
 }
 
+pub inline fn getTsc() u64 {
+    var hi: u32 = undefined;
+    var lo: u32 = undefined;
+
+    asm volatile ("rdtsc" : [hi]"={edx}"(hi),[lo]"={eax}"(lo));
+
+    return (@as(u64, hi) << 32) | lo;
+}
+
 pub inline fn stackAlloc(comptime items_num: comptime_int) void {
     asm volatile (
         "sub %[size],%rsp"

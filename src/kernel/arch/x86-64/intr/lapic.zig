@@ -56,6 +56,8 @@ pub const LvtTimer = packed struct {
     rsrvd_2: u13 = 0,
 };
 
+pub const timer = @import("../dev/lapic_timer.zig");
+
 var is_initialized = false;
 var base: usize = undefined;
 

@@ -39,9 +39,9 @@ const Cpu = struct {
 const CpuId = packed struct { a: u32, b: u32, c: u32, d: u32 };
 
 pub const Context = @import("Context.zig");
-pub const executor = @import("executor.zig");
-pub const io = @import("io.zig");
 pub const intr = @import("intr.zig");
+pub const io = @import("io.zig");
+pub const time = @import("time.zig");
 pub const vm = @import("vm.zig");
 
 pub const CpuLocalData = struct {
@@ -80,7 +80,9 @@ pub inline fn devInit() !void {
     const rtc_cmos = @import("dev/rtc_cmos.zig");
 
     try cmos.init();
-    try rtc_cmos.init();
+    rtc_cmos.init();
+
+    try lapic.timer.init();
 }
 
 pub inline fn cpuid(eax: u32, ebx: u32, ecx: u32, edx: u32) CpuId {
@@ -152,12 +154,7 @@ pub fn setupCpu(cpu_idx: u16) void {
 }
 
 pub inline fn timestamp() usize {
-    var hi: u32 = undefined;
-    var lo: u32 = undefined;
-
-    asm volatile ("rdtsc" : [hi]"={edx}"(hi),[lo]"={eax}"(lo));
-
-    return (@as(u64, hi) << 32) | lo;
+    return regs.getTsc();
 }
 
 /// Enables kernel needed CPUs extentions

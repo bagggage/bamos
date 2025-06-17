@@ -49,8 +49,7 @@ const RtcRegs = dev.regs.Group(
 const rtc_irq = 8;
 const rtc_frequency = 32768;
 
-const driver_name = "rtc_cmos";
-const device_name = driver_name;
+const device_name = "rtc_cmos";
 
 const vtable: Clock.VTable = .{
     .getDateTime = getDateTime,
@@ -59,13 +58,6 @@ const vtable: Clock.VTable = .{
     .configIrq = configIrq
 };
 
-var driver = dev.Driver.init(
-    driver_name,
-    .{
-        .probe = .{ .platform = &probe },
-        .remove = dev.Driver.Operations.removeStub
-    }
-);
 var device: *dev.Device = undefined;
 var regs: RtcRegs = .{};
 
@@ -73,20 +65,17 @@ var clock: *Clock = undefined;
 
 var intr_callback: ?Clock.IntrCallbackFn = null;
 
-pub fn init() !void {
-    try dev.registerDriver("platform", &driver);
-}
-
-fn probe(self: *const dev.Driver) dev.Driver.Operations.ProbeResult {
-    initDriver(self) catch |err| {
+pub fn init() void {
+    initDevice(dev.getKernelDriver()) catch |err| {
         log.err("initialization failed: {s}", .{@errorName(err)});
-        return .no_resources;
     };
-
-    return .success;
 }
 
-fn initDriver(self: *const dev.Driver) !void {
+pub inline fn getObject() *Clock {
+    return clock;
+}
+
+fn initDevice(self: *const dev.Driver) !void {
     regs = try RtcRegs.init();
 
     device = try self.addDevice(dev.nameOf(device_name), null);
