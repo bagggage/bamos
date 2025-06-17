@@ -7,11 +7,15 @@ const std = @import("std");
 const arch = utils.arch;
 const boot = @import("boot.zig");
 const log = std.log.scoped(.smp);
+const sys = @import("sys.zig");
 const sched = @import("sched.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
 const Spinlock = utils.Spinlock;
+
+/// Index of the CPU that boots the system.
+pub const boot_cpu = 0;
 
 pub const LocalData = struct {
     idx: u16 = 0,
@@ -92,7 +96,7 @@ pub fn initCpu() void {
     const cpu_idx = Static.curr_cpu_idx;
     Static.curr_cpu_idx += 1;
 
-    if (cpu_idx > 0) {
+    if (cpu_idx != boot_cpu) {
         arch.initCpu();
 
         vm.setPt(vm.getRootPt());
@@ -139,13 +143,8 @@ fn waitForInit() noreturn {
     initCpu();
     init_lock.unlock();
 
-    sched.executor.init() catch |err| {
-        log.err("cpu {}: executor initialization failed: {s}", .{
-            getIdx(), @errorName(err)
-        });
-    };
+    sched.init() catch unreachable;
 
     log.warn("CPU {} initialized", .{getIdx()});
-
     sched.waitStartup();
 }
