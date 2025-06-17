@@ -84,16 +84,23 @@ const AutoInit = struct {
     const modules = .{
         @import("dev/drivers/uart.zig"),
         pci,
-        @import("dev/drivers/blk/nvme.zig")
+        //@import("dev/drivers/blk/nvme.zig")
     };
 };
 
 fn platformBusRemove(_: *Device) void {}
 fn platformBusMatch(_: *const Driver, _: *const Device) bool { return true; }
 
+fn kernelDriverProbe(_: *const Driver) Driver.Operations.ProbeResult { return .success; }
+
 var platform_bus = Bus.init("platform",.{
     .match = platformBusMatch,
     .remove = platformBusRemove
+});
+
+var kernel_driver = Driver.init("kernel", .{
+    .probe = .{ .platform = kernelDriverProbe },
+    .remove = Driver.Operations.removeStub
 });
 
 pub fn preinit() !void {
@@ -101,7 +108,9 @@ pub fn preinit() !void {
     try intr.init();
 
     registerBus(&platform_bus);
+    platform_bus.data.addDriver(&kernel_driver);
 
+    try acpi.postInit();
     try utils.arch.devInit();
 }
 
@@ -156,6 +165,10 @@ pub inline fn getBus(comptime name: []const u8) !*Bus {
     const hash = comptime nameHash(&lower_name);
 
     return getBusByHash(hash) orelse error.UnsupportedBus;
+}
+
+pub inline fn getKernelDriver() *Driver {
+    return &kernel_driver.data;
 }
 
 export fn getBusByHash(hash: u32) ?*Bus {
