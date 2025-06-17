@@ -11,6 +11,7 @@ const builtin = @import("builtin");
 const arch = utils.arch;
 const serial = @import("dev/drivers/uart.zig");
 const smp = @import("smp.zig");
+const sys = @import("sys.zig");
 const terminal = video.terminal;
 const utils = @import("utils.zig");
 const video = @import("video.zig");
@@ -18,7 +19,7 @@ const video = @import("video.zig");
 const Spinlock = utils.Spinlock;
 
 const EarlyWriter = struct {
-    const buffer_size = 2048;
+    const buffer_size = arch.vm.page_size;
     const Stream = std.io.FixedBufferStream([buffer_size]u8);
 
     var stream: Stream = .{
@@ -140,7 +141,7 @@ inline fn logFmtPrint(
     };
 
     try tty_config.setColor(writer, color);
-    try writer.print("[{s}] ", .{level_str});
+    try writer.print("{us} [{s}] ", .{sys.time.getUpTime(),level_str});
 
     if (scope != std.log.default_log_scope) {
         try writer.writeAll(@tagName(scope)++": ");
