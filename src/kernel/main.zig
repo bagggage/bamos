@@ -51,7 +51,7 @@ pub export fn main() noreturn {
 
     {
         const cpu = arch.getCpuInfo();
-        log.info("CPUs detected: {}, vendor: {s}, model: {s}: {} MHz", .{
+        log.info("CPUs detected: {}, vendor: {s}, model: {s}, {} MHz", .{
             smp.getNum(),
             @tagName(cpu.vendor),
             cpu.getName(),
@@ -87,15 +87,13 @@ fn kernelStartupTask() noreturn {
         };
     }
 
-    const fake_task = sched.newKernelTask("fake_task", fakeTask).?;
-    sched.getCurrent().enqueueTask(fake_task);
-    dev.intr.enableForCpu();
+    //const fake_task = sched.newKernelTask("fake_task", fakeTask).?;
+    //sched.enqueue(fake_task);
 
     init(vfs);
     init(dev);
 
     sched.pause();
-
     unreachable;
 }
 
@@ -103,9 +101,8 @@ fn fakeTask() noreturn {
     const scheduler: *volatile sched.Scheduler = sched.getCurrent();
 
     while (true) {
-        log.debug("fake: {} - {}: {}", .{
+        log.debug("fake: {} - {}", .{
             scheduler.current_task.common.time_slice,
-            @as(u8, scheduler.current_task.common.interactivity),
             @as(u32, 32) - scheduler.current_task.common.getPriority(),
         });
 
@@ -119,7 +116,6 @@ fn fakeTask() noreturn {
 /// and run userspace after.
 fn awaitTask() noreturn {
     sched.pause();
-
     unreachable;
 }
 

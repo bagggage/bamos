@@ -409,7 +409,6 @@ pub fn init() !void {
         cpus_order.set(i, cpu);
     }
 
-    // TODO: Initialize software interrupt tasks
     try initSoftIntr(cpus_num);
 
     chip = try arch.intr.init();
