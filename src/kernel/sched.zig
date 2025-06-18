@@ -90,28 +90,57 @@ pub fn yeild() void {
     scheduler.reschedule();
 }
 
-pub fn pause() void {
+pub inline fn pause() void {
     const scheduler = getCurrent();
-    const task = scheduler.current_task;
-
-    scheduler.disablePreemtion();
-
-    task.common.yeildBonus();
-    task.common.state = .waiting;
-
-    scheduler.reschedule();
+    waitEx(scheduler, &scheduler.pause_queue);
 }
 
-pub fn awake(task: *AnyTask) void {
-    std.debug.assert(task.common.state == .waiting);
+pub inline fn wait(queue: *tasks.WaitQueue) void {
+    const scheduler = getCurrent();
+    waitEx(scheduler, queue);
+}
 
-    const sleep_bonus = 16;
-    const local = smp.getLocalData();
+/// Awake one task from wait queue.
+/// Returns awaked task or `null` if queue is empty.
+pub fn awake(queue: *tasks.WaitQueue) ?*AnyTask {
+    const scheduler = getCurrent();
+    const entry = queue.pop() orelse return null;
 
-    task.common.updateInteractivity(sleep_bonus);
-    local.scheduler.enqueueTask(task);
+    const sleep_time = sys.time.getFastTimestamp() - entry.timestamp;
+    entry.task.common.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
+
+    scheduler.enqueueTask(entry.task);
+}
+
+/// Awake all tasks in wait queue.
+pub fn awakeAll(queue: *tasks.WaitQueue) void {
+    const scheduler = getCurrent();
+    const timestamp = sys.time.getFastTimestamp();
+    const ns_per_tick = sys.time.getNsPerTick();
+
+    while (queue.pop()) |entry| {
+        const sleep_time = (timestamp - entry.timestamp) / ns_per_tick;
+        entry.task.common.sleep_time +|= @truncate(sleep_time);
+
+        scheduler.enqueueTask(entry.task);
+    }
 }
 
 pub inline fn getTimeGranuleMs() u32 {
     return time_granule_ms;
+}
+
+fn waitEx(scheduler: *Scheduler, queue: *tasks.WaitQueue) void {
+    scheduler.disablePreemtion();
+
+    const task = scheduler.current_task;
+    task.common.state = .waiting;
+
+    var entry = tasks.WaitQueue.initEntry(
+        task,
+        sys.time.getFastTimestamp()
+    );
+    queue.push(&entry);
+
+    scheduler.reschedule();
 }

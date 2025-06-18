@@ -52,6 +52,9 @@ pub const HashTable = hash_table.HashTable;
 pub const AutoHashTable = hash_table.AutoHashTable;
 pub const RefCount = @import("utils/ref-count.zig").RefCount;
 
+/// Fixed-point scale.
+pub const fp_scale = 32;
+
 pub const byte_size = 8;
 pub const kb_size = 1024;
 pub const mb_size = kb_size * 1024;

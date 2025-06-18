@@ -55,6 +55,8 @@ const TaskQueue = struct {
 task_lock: utils.Spinlock = .init(.unlocked),
 task_queues: [2]TaskQueue = .{ TaskQueue{} } ** 2,
 
+pause_queue: tasks.WaitQueue = .{},
+
 active_queue: *TaskQueue = undefined,
 expired_queue: *TaskQueue = undefined,
 
@@ -108,18 +110,17 @@ pub fn dequeueTask(self: *Self,  task: *tasks.AnyTask) void {
     task.common.state = .free;
 }
 
-pub inline fn expire(self: *Self) void {
-    self.current_task.common.expireTime();
-    self.expired_queue.push(self.current_task);
-
+pub fn expire(self: *Self) void {
     self.flags.expire = false;
-}
 
-pub fn yeild(self: *Self) void {
-    self.current_task.common.yeildBonus();
     self.current_task.common.updateBonus();
     self.current_task.common.updateTimeSlice();
 
+    self.expired_queue.push(self.current_task);
+}
+
+pub fn yeild(self: *Self) void {
+    self.current_task.common.yeildTime();
     self.expired_queue.push(self.current_task);
 }
 
@@ -183,8 +184,12 @@ pub fn tick(self: *Self) void {
     @setRuntimeSafety(false);
     const curr_task = self.current_task;
 
-    if (curr_task.common.time_slice > 0) {
+    if (
+        curr_task.common.state == .running and
+        curr_task.common.time_slice > 0
+    ) {
         curr_task.common.time_slice -= 1;
+        curr_task.common.cpu_time += 1;
 
         if (curr_task.common.time_slice == 0) {
             self.flags.expire = true;

@@ -90,7 +90,7 @@ pub const Time = extern struct {
 
     pub fn addTicks(self: *Time, ticks: usize) void {
         @setRuntimeSafety(false);
-        const ns: usize = ticks * (std.time.ns_per_s / getHz());
+        const ns: usize = ticks * (std.time.ns_per_s / sys_timer_hz);
         self.addNs(ns);
     }
 
@@ -100,6 +100,17 @@ pub const Time = extern struct {
 
         self.sec += new_ns / std.time.ns_per_s;
         self.ns = @truncate(new_ns % std.time.ns_per_s);
+    }
+
+    pub inline fn toNs(self: *const Time) u64 {
+        return (self.sec * std.time.ns_per_s) + self.ns;
+    }
+
+    pub fn fromNs(ns: u64) Time {
+        return .{
+            .sec = ns / std.time.ns_per_s,
+            .ns = ns % std.time.ns_per_s
+        };
     }
 
     pub fn format(
@@ -260,6 +271,22 @@ pub inline fn getCachedUpTime() Time {
 /// number of seconds elapsed since 1970-01-01.
 pub inline fn getEpoch() u64 {
     return keeper.time.sec;
+}
+
+/// Returns current timestamp relative
+/// to kernel uptime in nanoseconds.
+pub inline fn getTimestamp() u64 {
+    return getUpTime().toNs();
+}
+
+/// Returns timestamp relative
+/// to cached kernel uptime in nanoseconds.
+pub inline fn getFastTimestamp() u64 {
+    return getCachedUpTime().toNs();
+}
+
+pub inline fn getNsPerTick() u32 {
+    return std.time.ns_per_s / sys_timer_hz;
 }
 
 pub inline fn getHz() u32 {

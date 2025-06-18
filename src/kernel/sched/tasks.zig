@@ -7,6 +7,7 @@ const std = @import("std");
 const Process = @import("../sys/Process.zig");
 const thread = @import("thread.zig");
 const sched = @import("../sched.zig");
+const sys = @import("../sys.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
@@ -36,7 +37,6 @@ const PriorDelta: type = std.meta.Int(.signed, @bitSizeOf(Priority) - 1);
 
 const max_prior_delta = std.math.maxInt(PriorDelta) + 1;
 const base_priority = sched.max_priority / 2;
-const base_interactivity = std.math.maxInt(u8) / 2;
 
 /// Highest static priority value.
 pub const high_static_prior = std.math.minInt(PriorDelta);
@@ -53,8 +53,8 @@ pub const Common = struct {
     static_prior: PriorDelta = 0,
     bonus_prior: PriorDelta = 0,
 
-    interactivity: u8 = base_interactivity,
-    inter_delta: i8 = 0,
+    cpu_time: u16 = 0,
+    sleep_time: u16 = 0,
 
     comptime {
         const max_val = (std.math.maxInt(PriorDelta) * 2) + base_priority;
@@ -71,63 +71,47 @@ pub const Common = struct {
         return @truncate(@as(u8, @bitCast(result)));
     }
 
-    /// Apply interactivity punish and calculate new time slice.
-    pub fn expireTime(self: *Common) void {
-        std.debug.assert(self.time_slice == 0);
-
-        const given_time: i8 = @as(i8, @intCast(self.calcTimeSlice())) * 2;
-        const punish = given_time + self.inter_delta;
-
-        self.updateInteractivity(-punish);
-        self.updateTimeSlice();
-    }
-
-    pub fn yeildBonus(self: *Common) void {
-        std.debug.assert(self.time_slice > 0);
-
-        self.updateInteractivity(
-            @as(i8, @intCast(self.time_slice)) * 2
-        );
-    }
-
     /// Calculate and set time slice for the task.
     pub inline fn updateTimeSlice(self: *Common) void {
         self.time_slice = self.calcTimeSlice();
     }
 
-    /// Apply interativity bonus to the task and update
-    /// priority bonus.
-    pub fn updateInteractivity(self: *Common, bonus: i8) void {
-        @setRuntimeSafety(false);
-
-        const delta = bonus - self.inter_delta;
-        if (delta == 0) return;
-
-        if (delta > 0) { self.inter_delta +|= 1; }
-        else { self.inter_delta -|= 1; }
-
-        const new_inter: i32 = @as(i32, self.interactivity) +% delta;
-
-        self.interactivity = @intCast(std.math.clamp(new_inter, 0, 255));
-        self.updateBonus();
-    }
-
     /// Update priority bonus based on task interactivity.
     pub fn updateBonus(self: *Common) void {
-        const divisor = (base_interactivity + 1) / max_prior_delta;
-        const delta = @divTrunc(@as(i16, base_interactivity) - self.interactivity, divisor);
-        self.bonus_prior = @truncate(delta);
+        const max_inter: comptime_int = utils.fp_scale;
+        const base_inter: comptime_int = (max_inter - 1) / 2;
+        const max_bonus: comptime_int = (std.math.maxInt(Priority) + 1) / 2;
+        const norm_mul: comptime_int = (max_inter * utils.fp_scale) / max_bonus;
+
+        const interactivity: i32 = self.getInteractivity();
+        const bonus = @divFloor(-interactivity * norm_mul, utils.fp_scale);
+        self.bonus_prior = @truncate(bonus + base_inter);
+    }
+
+    pub fn yeildTime(self: *Common) void {
+        self.sleep_time +|= self.time_slice;
+
+        self.updateBonus();
+        self.updateTimeSlice();
+    }
+
+    fn getInteractivity(self: *const Common) u8 {
+        @setRuntimeSafety(false);
+        const time = @as(u32, self.cpu_time) + self.sleep_time;
+        if (time == 0) return 0;
+
+        const result = (@as(u32, self.sleep_time + 1) * utils.fp_scale) / time;
+        return @truncate(result);
     }
 
     /// Caclulate time slice for the task and return it.
     fn calcTimeSlice(self: *const Common) Ticks {
-        const percision = 16;
         const max_bonus: comptime_int = comptime calcTimeBonus(sched.max_priority);
-        const norm_mult: comptime_int = ((sched.max_slice_ticks + 1) * percision) / max_bonus;
+        const norm_mult: comptime_int = ((sched.max_slice_ticks + 1) * utils.fp_scale) / max_bonus;
 
         const reverse_prior: u32 = @as(u32, sched.max_priority) - self.getPriority();
         const bonus: u32 = calcTimeBonus(reverse_prior);
-        const norm_bonus: Ticks = @truncate((bonus * norm_mult) / percision);
+        const norm_bonus: Ticks = @truncate((bonus * norm_mult) / utils.fp_scale);
 
         return if (norm_bonus < sched.min_slice_ticks)
             sched.min_slice_ticks else norm_bonus;
@@ -140,6 +124,37 @@ pub const Common = struct {
 
 pub const List = utils.List(AnyTask);
 pub const Node = List.Node;
+
+pub const WaitQueue = struct {
+    const Entry = struct {
+        task: *AnyTask,
+        /// Timestamp of start of wait in nanoseconds.
+        timestamp: u64 = 0,
+    };
+
+    const QList = utils.SList(Entry);
+    const QNode = QList.Node;
+
+    list: QList = .{},
+
+    pub inline fn push(self: *WaitQueue, node: *QNode) void {
+        self.list.prepend(node);
+    }
+
+    pub inline fn pop(self: *WaitQueue) ?*Entry {
+        const node = self.list.popFirst() orelse return null;
+        return &node.data;
+    }
+
+    pub inline fn initEntry(task: *AnyTask, timestamp: u64) QNode {
+        return .{
+            .data = .{
+                .task = task,
+                .timestamp = timestamp
+            }  
+        };
+    }
+};
 
 pub const AnyTask = struct {
     common: Common,
