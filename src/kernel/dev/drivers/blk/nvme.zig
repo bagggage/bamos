@@ -11,6 +11,7 @@ const std = @import("std");
 const dev = @import("../../../dev.zig");
 const log = std.log.scoped(.nvme);
 const pci = dev.pci;
+const sched = @import("../../../sched.zig");
 const smp = @import("../../../smp.zig");
 const utils = @import("../../../utils.zig");
 const vm = @import("../../../vm.zig");
@@ -450,6 +451,8 @@ const Controller = struct {
     namespaces: []*NamespaceDrive = &.{},
     soft_intrs: [*]dev.intr.SoftHandler = undefined,
 
+    pci_dev: *pci.Device,
+
     pub fn init(self: *Controller, pci_dev: *pci.Device) !void {
         var pci_cmd = pci_dev.config.getAs(pci.config.Regs.Command, .command);
         pci_cmd.bus_master = 1;
@@ -466,7 +469,8 @@ const Controller = struct {
         self.* = Controller{
             .bar = regs,
             .doorbells = regs.dyn_base + 0x1000,
-            .doorbell_stride = @as(u16, 4) << cap.doorbell_stride
+            .doorbell_stride = @as(u16, 4) << cap.doorbell_stride,
+            .pci_dev = pci_dev
         };
 
         try self.reset(pci_dev, cap);
@@ -572,6 +576,26 @@ const Controller = struct {
             .submission_tail => dev.io.writel(base, num),
             .completion_head => dev.io.writel(base + self.doorbell_stride, num)
         }
+    }
+
+    /// Currently unused.
+    pub fn maskAllIntr(self: *const Controller) void {
+        if (self.pci_dev.getCurrentIntrType() == .msi_x) {
+            self.pci_dev.maskAllMsiX(true);
+            return;
+        }
+
+        self.bar.set(.intr_mask_set, @as(u32, std.math.maxInt(u32)));
+    }
+
+    /// Currently unused.
+    pub fn unmaskAllIntr(self: *const Controller) void {
+        if (self.pci_dev.getCurrentIntrType() == .msi_x) {
+            self.pci_dev.maskAllMsiX(false);
+            return;
+        }
+
+        self.bar.set(.intr_mask_clr, @as(u32, std.math.maxInt(u32)));
     }
 
     fn initAdminQueues(self: *Controller) !void {
@@ -710,9 +734,7 @@ const Controller = struct {
         const idx = (cmd_id -% 1) % self.admin_completion.size;
         const cmpl: *volatile CompletionEntry = &self.admin_completion.ptr[idx];
 
-        while (cmpl.cmd_id != cmd_id) {}
-
-        self.handleAdminCompletion();
+        while (cmpl.cmd_id != cmd_id) sched.yeild();
     }
 
     fn identify(self: *Controller) !void {
