@@ -113,6 +113,9 @@ pub fn dequeueTask(self: *Self,  task: *tasks.AnyTask) void {
 pub fn expire(self: *Self) void {
     self.flags.expire = false;
 
+    const preemt = self.savePreemtion();
+    defer self.restorePreemtion(preemt);
+
     self.current_task.common.updateBonus();
     self.current_task.common.updateTimeSlice();
 
@@ -140,6 +143,7 @@ pub inline fn tryPreemt(self: *Self, task: *const tasks.AnyTask) void {
 }
 
 pub fn reschedule(self: *Self) void {
+    std.debug.assert(intr.isEnabledForCpu());
     self.flags.need_resched = false;
 
     if (self.flags.expire) self.expire();
@@ -182,6 +186,16 @@ pub inline fn disablePreemtion(self: *Self) void {
     self.flags.preemtion = false;
 }
 
+pub inline fn savePreemtion(self: *Self) bool {
+    const preemt = self.flags.preemtion;
+    self.flags.preemtion = false;
+    return preemt;
+}
+
+pub inline fn restorePreemtion(self: *Self, preemt: bool) void {
+    self.flags.preemtion = preemt;
+}
+
 pub fn tick(self: *Self) void {
     @setRuntimeSafety(false);
     const curr_task = self.current_task;
@@ -202,13 +216,14 @@ pub fn tick(self: *Self) void {
 
 fn sleepTask(self: *Self) void {
     const local = self.getCpuLocal();
+    const task = self.current_task;
     self.enablePreemtion();
+
+    std.debug.assert(intr.isEnabledForCpu());
 
     if (local.isInInterrupt()) local.exitInterrupt();
 
-    // sure that interrupts is enabled.
-    intr.enableForCpu();
-    while (self.current_task.common.state != .running) {
+    while (task.common.state != .running) {
         arch.halt();
     }
 }
@@ -219,10 +234,16 @@ fn switchTask(self: *Self, task: *sched.AnyTask) void {
     const curr_task = self.current_task.asKernelTask();
     task.common.state = .running;
 
+    // Handle special case when `reschedule` called from `dev.intr.onIntrExit`.
     if (local.isInInterrupt()) local.exitInterrupt();
+
     if (task.asKernelTask() == curr_task) {
+        // Don't waste time on switch.
         self.enablePreemtion();
         return;
+    } else if (curr_task.common.state == .running) {
+        // Preempt current task.
+        self.active_queue.push(self.current_task);
     }
 
     self.current_task = task;
