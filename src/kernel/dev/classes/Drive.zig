@@ -113,10 +113,6 @@ pub fn init(self: *Self, name: []const u8, multi_io: bool, partitions: bool) Err
     self.lba_shift = std.math.log2_int(u16, self.lba_size);
     self.io_oma = IoOma.init(io_oma_capacity);
 
-    log.info("init: {s}; lba size: {}; capacity: {} MiB", .{
-        self.base_name, self.lba_size, self.capacity / utils.mb_size
-    });
-
     {
         root_part.data.lba_start = 0;
         root_part.data.lba_end = self.offsetToLba(self.capacity);
@@ -135,6 +131,10 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn onObjectAdd(self: *Self) void {
+    log.info("registered: {s}; lba size: {}; capacity: {} MiB", .{
+        self.base_name, self.lba_size, self.capacity / utils.mb_size
+    });
+
     if (self.is_partitionable) vfs.parts.probe(self) catch |err| {
         log.err("Failed to probe partitions: {s}", .{@errorName(err)});
         self.is_partitionable = false;
@@ -338,6 +338,8 @@ fn submitRequest(self: *Self, request: *IoQueue.Node) bool {
 fn allocRequest(self: *Self) ?*IoQueue.Node {
     const oma = &self.io_oma.oma;
 
+    // FIXME: Use another lock!
+    // Spinlocks shouldn't cover such heavy code.
     self.io_oma.lock.lock();
     defer self.io_oma.lock.unlock();
 
