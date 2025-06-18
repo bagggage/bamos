@@ -149,8 +149,10 @@ pub fn reschedule(self: *Self) void {
         self.schedule();
         task = self.next();
 
-        // TODO: Check if it's correct
-        if (task == null) self.sleepTask();
+        if (task == null) {
+            self.sleepTask();
+            return;
+        }
     }
 
     self.switchTask(task.?);
@@ -198,7 +200,7 @@ pub fn tick(self: *Self) void {
     }
 }
 
-fn sleepTask(self: *Self) noreturn {
+fn sleepTask(self: *Self) void {
     const local = self.getCpuLocal();
     self.enablePreemtion();
 
@@ -206,9 +208,9 @@ fn sleepTask(self: *Self) noreturn {
 
     // sure that interrupts is enabled.
     intr.enableForCpu();
-    while (true) arch.halt();
-
-    unreachable;
+    while (self.current_task.common.state != .running) {
+        arch.halt();
+    }
 }
 
 fn switchTask(self: *Self, task: *sched.AnyTask) void {
