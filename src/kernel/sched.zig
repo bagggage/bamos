@@ -158,8 +158,6 @@ pub inline fn getTimeGranuleMs() u32 {
 }
 
 fn waitEx(scheduler: *Scheduler, queue: *WaitQueue) void {
-    scheduler.disablePreemtion();
-
     const task = scheduler.current_task;
     task.common.state = .waiting;
 
