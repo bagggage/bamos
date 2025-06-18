@@ -4,11 +4,11 @@
 
 const std = @import("std");
 
+const log = std.log.scoped(.sched);
 const smp = @import("smp.zig");
 const sys = @import("sys.zig");
-const log = std.log.scoped(.sched);
-const vm = @import("vm.zig");
 const utils = @import("utils.zig");
+const vm = @import("vm.zig");
 
 const kernel_stack_size = 32 * utils.kb_size;
 
@@ -30,6 +30,7 @@ pub const thread = @import("sched/thread.zig");
 pub const AnyTask = tasks.AnyTask;
 pub const KernelTask = tasks.KernelTask;
 pub const UserTask = tasks.UserTask;
+pub const WaitQueue = tasks.WaitQueue;
 
 pub const PrivilegeLevel = enum(u8) {
     userspace,
@@ -82,6 +83,21 @@ pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*AnyTask 
     return @ptrCast(task);
 }
 
+pub fn freeTask(task: *AnyTask) void {
+    std.debug.assert(task.common.state == .free);
+
+    thread.deinitStack(
+        &task.asKernelTask().thread.stack,
+        kernel_stack_size
+    );
+    vm.obj.free(KernelTask, task.asKernelTask());
+}
+
+pub inline fn enqueue(task: *AnyTask) void {
+    // TODO: CPU balancing.
+    getCurrent().enqueueTask(task);
+}
+
 pub fn yeild() void {
     const scheduler = getCurrent();
     scheduler.disablePreemtion();
@@ -95,14 +111,25 @@ pub inline fn pause() void {
     waitEx(scheduler, &scheduler.pause_queue);
 }
 
-pub inline fn wait(queue: *tasks.WaitQueue) void {
+pub inline fn wait(queue: *WaitQueue) void {
     const scheduler = getCurrent();
     waitEx(scheduler, queue);
 }
 
+pub fn resumeTask(task: *AnyTask) void {
+    const scheduler = getCurrent();
+    const entry = scheduler.pause_queue.remove(task)
+        orelse @panic("trying to resume non-paused task");
+
+    const sleep_time = sys.time.getFastTimestamp() - entry.timestamp;
+    entry.task.common.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
+
+    scheduler.enqueueTask(entry.task);
+}
+
 /// Awake one task from wait queue.
 /// Returns awaked task or `null` if queue is empty.
-pub fn awake(queue: *tasks.WaitQueue) ?*AnyTask {
+pub fn awake(queue: *WaitQueue) ?*AnyTask {
     const scheduler = getCurrent();
     const entry = queue.pop() orelse return null;
 
@@ -113,7 +140,7 @@ pub fn awake(queue: *tasks.WaitQueue) ?*AnyTask {
 }
 
 /// Awake all tasks in wait queue.
-pub fn awakeAll(queue: *tasks.WaitQueue) void {
+pub fn awakeAll(queue: *WaitQueue) void {
     const scheduler = getCurrent();
     const timestamp = sys.time.getFastTimestamp();
     const ns_per_tick = sys.time.getNsPerTick();
@@ -130,17 +157,16 @@ pub inline fn getTimeGranuleMs() u32 {
     return time_granule_ms;
 }
 
-fn waitEx(scheduler: *Scheduler, queue: *tasks.WaitQueue) void {
+fn waitEx(scheduler: *Scheduler, queue: *WaitQueue) void {
     scheduler.disablePreemtion();
 
     const task = scheduler.current_task;
     task.common.state = .waiting;
 
-    var entry = tasks.WaitQueue.initEntry(
+    var entry = WaitQueue.initEntry(
         task,
         sys.time.getFastTimestamp()
     );
     queue.push(&entry);
-
     scheduler.reschedule();
 }
