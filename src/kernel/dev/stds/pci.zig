@@ -77,6 +77,21 @@ pub const Device = struct {
         return self.intr_ctrl.release();
     }
 
+    /// Mask/unmask previously allocated interrupt line.
+    /// 
+    /// Returns `true` if operation succed, `false` otherwise
+    /// (`msi` interrupts may not support masking specific line,
+    /// masking for `int_x` is not implemented yet)
+    pub inline fn maskIntr(self: *Device, idx: u8, mask: bool) bool {
+        return self.intr_ctrl.maskIdx(idx, mask);
+    }
+
+    /// Mask/unmask all `msi_x` interrupts. Other kind of interrupts
+    /// `msi` and `int_x` don't support this operation.
+    pub inline fn maskAllMsiX(self: *Device, mask: bool) void {
+        self.intr_ctrl.data.msi_x.maskAll(mask);
+    }
+
     pub inline fn from(device: *const dev.Device) *Device {
         std.debug.assert(device.bus == &bus.data);
         return device.driver_data.as(Device) orelse unreachable;

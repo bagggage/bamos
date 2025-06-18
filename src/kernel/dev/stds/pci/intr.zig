@@ -169,13 +169,13 @@ const MsiX = struct {
         self.msis = msis;
     }
 
-    pub inline fn maskAll(self: *MsiX, comptime mask: bool) void {
-        self.ctrl.func_mask = if (mask) 1 else 0;
+    pub inline fn maskAll(self: *MsiX, mask: bool) void {
+        self.ctrl.func_mask = @intFromBool(mask);
         self.ref.set(.msg_ctrl, self.ctrl);
     }
 
-    pub inline fn maskIdx(self: *MsiX, idx: u16, comptime mask: bool) void {
-        io.writel(@intFromPtr(&self.vec_table[idx].vec_ctrl), if (mask) 1 else 0);
+    pub inline fn maskIdx(self: *MsiX, idx: u16, mask: bool) void {
+        io.writel(@intFromPtr(&self.vec_table[idx].vec_ctrl), @intFromBool(mask));
     }
 
     pub inline fn setupIdx(self: *MsiX, idx: u16, msg: intr.Msi.Message) void {
@@ -366,6 +366,26 @@ pub const Control = struct {
 
                 msi_x.setupIdx(idx, intr.getMsiMessage(id));
                 msi_x.maskIdx(idx, false);
+            }
+        }
+    }
+
+    pub fn maskIdx(self: *Control, idx: u8, mask: bool) bool {
+        switch (self.data) {
+            .int_x => |*int_x| {
+                // TODO: Implement.
+                _ = int_x;
+                return false;
+            },
+            .msi => |*msi| {
+                return if (mask)
+                    msi.maskIdx(idx, true)
+                else
+                    msi.maskIdx(idx, false);
+            },
+            .msi_x => |*msi_x| {
+                msi_x.maskIdx(idx, mask);
+                return true;
             }
         }
     }
