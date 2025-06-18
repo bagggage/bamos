@@ -270,8 +270,6 @@ fn syncCallback(request: *const IoRequest, status: IoRequest.Status) void {
     const rq: *IoRequest = @constCast(request);
     rq.lba_num = @intFromEnum(status);
 
-    log.debug("awake all!", .{});
-
     sched.awakeAll(&rq.wait_queue);
 }
 
@@ -288,8 +286,6 @@ fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
     _ = self.submitRequest(rq_node);
 
     sched.wait(&rq_node.data.wait_queue);
-
-    log.warn("wakee wakee", .{});
 
     const status: IoRequest.Status = @enumFromInt(rq_node.data.lba_num);
     if (status == .failed) return error.IoFailed;
