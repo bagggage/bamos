@@ -31,7 +31,7 @@ const Cpu = struct {
     bus_frequency: u32,
 
     pub fn getName(self: *const Cpu) []const u8 {
-        const len = std.mem.indexOf(u8, &self.name, "  ") orelse unreachable;
+        const len = std.mem.indexOf(u8, &self.name, "  ") orelse max_name;
         return self.name[0..len];
     }
 };
