@@ -121,6 +121,15 @@ pub fn getTopAligned(self: *const Self, comptime alignment: u5) usize {
     return utils.alignDown(usize, top - 1, alignment);
 }
 
+pub fn format(
+    self: *const Self,
+    comptime _: []const u8,
+    _: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
+    try writer.print("0x{x}-0x{x}", .{self.base,self.base + self.size()});
+}
+
 fn allocPages(rank: u8) ?*PageNode {
     const node = page_oma.alloc() orelse return null;
     const phys = vm.PageAllocator.alloc(rank) orelse {
