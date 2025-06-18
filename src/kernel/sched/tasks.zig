@@ -146,6 +146,24 @@ pub const WaitQueue = struct {
         return &node.data;
     }
 
+    pub fn remove(self: *WaitQueue, task: *AnyTask) ?*Entry {
+        var prev: ?*QNode = null;
+        var node = self.list.first;
+        while (node) |n| : ({ prev = n; node = n.next; }) {
+            if (n.data.task == task) {
+                if (prev) |p| {
+                    _ = p.removeNext();
+                } else {
+                    self.list.first = n.next;
+                }
+
+                return &n.data;
+            }
+        }
+
+        return null;
+    }
+
     pub inline fn initEntry(task: *AnyTask, timestamp: u64) QNode {
         return .{
             .data = .{

@@ -297,9 +297,13 @@ const SoftIntrTask = struct {
         self.sched_list.prepend(&intr.node);
         self.num_pending.raw += 1;
 
-        if (self.task.common.state == .free) {
-            self.task.common.static_prior = sched.tasks.high_static_prior;
-            sched.getCurrent().enqueueTask(self.task);
+        switch (self.task.common.state) {
+            .free => {
+                self.task.common.static_prior = sched.tasks.high_static_prior;
+                sched.enqueue(self.task);
+            },
+            .waiting => sched.resumeTask(self.task),
+            else => {}
         }
     }
 
@@ -314,7 +318,7 @@ const SoftIntrTask = struct {
         disableForCpu();
         defer enableForCpu();
 
-        self.num_pending -= 1;
+        self.num_pending.raw -= 1;
         intr.pending = false;
     }
 };
@@ -396,6 +400,7 @@ pub fn init() !void {
         utils.byte_size
     ) catch unreachable;
     const bitmap_pool: [*]u8 = @ptrCast(vm.malloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
+    errdefer vm.free(bitmap_pool);
 
     for (cpus.slice(), 0..) |*cpu, i| {
         const bm_offset = i * bytes_per_bm;
@@ -405,6 +410,7 @@ pub fn init() !void {
     }
 
     // TODO: Initialize software interrupt tasks
+    try initSoftIntr(cpus_num);
 
     chip = try arch.intr.init();
 
@@ -423,9 +429,9 @@ fn initSoftIntr(cpus_num: u16) !void {
     soft_tasks.len = cpus_num;
 
     for (soft_tasks, 0..) |*soft_task, i| {
-        const task = sched.newKernelTask("soft_intr", SoftIntrTask.handler) catch |err| {
+        const task = sched.newKernelTask("soft_intr", SoftIntrTask.handler) orelse {
             for (0..i) |j| sched.freeTask(soft_tasks[j].task);
-            return err;
+            return error.NoMemory;
         };
 
         soft_task.* = .{ .task = task };
