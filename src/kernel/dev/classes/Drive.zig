@@ -7,6 +7,7 @@ const std = @import("std");
 const cache = vm.cache;
 const dev = @import("../../dev.zig");
 const log = std.log.scoped(.Drive);
+const sched = @import("../../sched.zig");
 const smp = @import("../../smp.zig");
 const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");
@@ -45,9 +46,10 @@ pub const IoRequest = struct {
     lma_buf: [*]u8,
 
     callback: CallbackFn,
+    wait_queue: sched.WaitQueue = .{},
 
     comptime {
-        std.debug.assert(@sizeOf(IoRequest) == 32);
+        std.debug.assert(@sizeOf(IoRequest) == 40);
     }
 };
 
@@ -122,11 +124,6 @@ pub fn init(self: *Self, name: []const u8, multi_io: bool, partitions: bool) Err
         self.parts = .{};
         self.parts.append(root_part);
         self.is_partitionable = partitions;
-
-        if (self.is_partitionable) vfs.parts.probe(self) catch |err| {
-            log.err("Failed to probe partitions: {s}", .{@errorName(err)});
-            self.is_partitionable = false;
-        };
     }
 }
 
@@ -135,6 +132,13 @@ pub fn deinit(self: *Self) void {
     self.io_oma.deinit();
 
     cache.deleteCtrl(self.cache_ctrl);
+}
+
+pub fn onObjectAdd(self: *Self) void {
+    if (self.is_partitionable) vfs.parts.probe(self) catch |err| {
+        log.err("Failed to probe partitions: {s}", .{@errorName(err)});
+        self.is_partitionable = false;
+    };
 }
 
 pub fn nextRequest(self: *Self) ?*const IoRequest {
@@ -213,13 +217,25 @@ pub inline fn readCached(self: *Self, offset: usize) Error!cache.Cursor {
     return cache.Cursor.from(try self.readBlock(blk_idx), offset);
 }
 
-pub fn readAsync(self: *Self, lba_offset: usize, buffer: []u8, callback: IoRequest.CallbackFn) Error!void {
-    const node = try self.makeRequest(.read, lba_offset, buffer, callback);
+pub fn readAsync(
+    self: *Self, lba_offset: usize, buffer: []u8,
+    callback: IoRequest.CallbackFn
+) Error!void {
+    const node = try self.makeRequest(
+        .read, lba_offset,
+        buffer, callback
+    );
     _ = self.submitRequest(node);
 }
 
-pub fn writeAsync(self: *Self, lba_offset: usize, buffer: []const u8, callback: IoRequest.CallbackFn) Error!void {
-    const node = try self.makeRequest(.write, lba_offset, buffer, callback);
+pub fn writeAsync(
+    self: *Self, lba_offset: usize,
+    buffer: []const u8, callback: IoRequest.CallbackFn
+) Error!void {
+    const node = try self.makeRequest(
+        .write, lba_offset,
+        buffer, callback
+    );
     _ = self.submitRequest(node);
 }
 
@@ -251,10 +267,12 @@ pub fn getPartition(self: *const Self, part: u32) ?*vfs.Partition {
 }
 
 fn syncCallback(request: *const IoRequest, status: IoRequest.Status) void {
-    const rq = @constCast(request);
-
+    const rq: *IoRequest = @constCast(request);
     rq.lba_num = @intFromEnum(status);
-    rq.id = ~request.id;
+
+    log.debug("awake all!", .{});
+
+    sched.awakeAll(&rq.wait_queue);
 }
 
 fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
@@ -263,14 +281,15 @@ fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
     const block = self.cache_ctrl.new(idx) orelse return error.NoMemory;
     const lba_idx = idx * self.offsetToLba(cache.block_size);
 
-    const rq_node = try self.makeRequest(.read, lba_idx, block.asSlice(), syncCallback);
-    const wait_id = ~rq_node.data.id;
-    const id_ptr: *volatile u16 = &rq_node.data.id;
-
+    const rq_node = try self.makeRequest(
+        .read, lba_idx,
+        block.asSlice(), syncCallback
+    );
     _ = self.submitRequest(rq_node);
 
-    // Wait; FIXME: make this async!
-    while (id_ptr.* != wait_id) {}
+    sched.wait(&rq_node.data.wait_queue);
+
+    log.warn("wakee wakee", .{});
 
     const status: IoRequest.Status = @enumFromInt(rq_node.data.lba_num);
     if (status == .failed) return error.IoFailed;
@@ -288,16 +307,20 @@ inline fn makeRequest(
 
     const node = self.allocRequest() orelse return error.NoMemory;
     { // Init
-        node.data.operation = operation;
-        node.data.lma_buf = buffer.ptr;
-        node.data.lba_offset = lba_offset;
-        node.data.lba_num = @truncate(self.offsetToLba(buffer.len));
-        node.data.callback = callback;
+        node.data = .{
+            .id = node.data.id, // id is set during allocation
+            .operation = operation,
+            .lma_buf = buffer.ptr,
+            .lba_offset = lba_offset,
+            .lba_num = @truncate(self.offsetToLba(buffer.len)),
+            .callback = callback
+        };
     }
 
     return node;
 }
 
+// TODO: implement deamon that would trigger enqueued requests submiting.
 fn submitRequest(self: *Self, request: *IoQueue.Node) bool {
     if (self.vtable.handleIo(self, &request.data) == false) {
         if (self.is_multi_io) {

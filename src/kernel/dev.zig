@@ -84,7 +84,7 @@ const AutoInit = struct {
     const modules = .{
         @import("dev/drivers/uart.zig"),
         pci,
-        //@import("dev/drivers/blk/nvme.zig")
+        @import("dev/drivers/blk/nvme.zig")
     };
 };
 

@@ -4,7 +4,7 @@
 //! 
 //! - Specification: NVM Express Base Specification, Revision 2.1
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -301,6 +301,25 @@ const Controller = struct {
         _spacing: [432]u8,
 
         namespaces_num: u32 align(2),
+
+        pub fn getSerial(self: *volatile const Info) []const u8 {
+            return retriveStringSlice(&self.serial);
+        }
+
+        pub fn getModel(self: *volatile const Info) []const u8 {
+            return retriveStringSlice(&self.model);
+        }
+
+        pub fn getFirmware(self: *volatile const Info) []const u8 {
+            return retriveStringSlice(&self.firmware);
+        }
+
+        fn retriveStringSlice(info_str: anytype) []const u8 {
+            var iter = std.mem.splitSequence(
+                u8, @volatileCast(@ptrCast(info_str)), "  "
+            );
+            return iter.first();
+        }
     };
 
     /// specs. reference: 3.1.4
@@ -429,6 +448,7 @@ const Controller = struct {
     io_queues_rank: u8 = 0,
 
     namespaces: []*NamespaceDrive = &.{},
+    soft_intrs: [*]dev.intr.SoftHandler = undefined,
 
     pub fn init(self: *Controller, pci_dev: *pci.Device) !void {
         var pci_cmd = pci_dev.config.getAs(pci.config.Regs.Command, .command);
@@ -452,7 +472,10 @@ const Controller = struct {
         try self.reset(pci_dev, cap);
     }
 
+    // TODO: Check if it's complete.
     pub fn deinit(self: *Controller) void {
+        vm.free(self.soft_intrs);
+
         for (self.namespaces) |ns| {
             Namespace.deinit(ns);
         }
@@ -518,11 +541,17 @@ const Controller = struct {
         const intr_num = try pci_dev.requestInterrupts(1, @truncate(smp.getNum()), .{ .msi_x = true });
         errdefer pci_dev.releaseInterrupts();
 
+        self.soft_intrs = @alignCast(@ptrCast(vm.malloc(
+            @as(usize, @sizeOf(dev.intr.SoftHandler)) * intr_num
+        ) orelse return error.NoMemory));
+        errdefer vm.free(self.soft_intrs);
+
         for (0..intr_num) |intr| {
             try pci_dev.setupInterrupt(
                 @truncate(intr), intrHandler,
                 .edge, @truncate(intr)
             );
+            self.soft_intrs[intr] = dev.intr.SoftHandler.init(intrSoftHandler, self);
         }
 
         try self.initIoQueues();
@@ -702,9 +731,11 @@ const Controller = struct {
             }, true);
             self.adminInitialWait(cmd_id);
 
-            log.debug("{x}:{x}; {s}; {s}; firmware: {s}; ctrl id: {}", .{
-                info.vendor_id,info.sub_vendor_id,info.serial,info.model,
-                info.firmware,
+            log.info("{x}:{x} / {s} / {s}, firmware: {s}, ctrl id: {}", .{
+                info.vendor_id,info.sub_vendor_id,
+                info.getModel(),
+                info.getSerial(),
+                info.getFirmware(),
                 info.ctrl_id
             });
         }
@@ -805,7 +836,7 @@ const Controller = struct {
 
             if (complete.status != 0) {
                 self.admin_fail = complete.status;
-                log.warn("failed admin command: {}", .{complete});
+                log.err("failed admin command: {}", .{complete});
             }
 
             self.admin_cmpl = complete.cmd_id;
@@ -817,12 +848,18 @@ const Controller = struct {
     fn intrHandler(device: *dev.Device) bool {
         const pci_dev = pci.Device.from(device);
         const controller = pci_dev.data.as(Controller) orelse return false;
+
+        dev.intr.scheduleSoft(&controller.soft_intrs[smp.getIdx()]);
+
+        return true;
+    }
+
+    fn intrSoftHandler(ctx: ?*anyopaque) void {
+        const controller: *Controller = @alignCast(@ptrCast(ctx.?));
         const cpu_idx = smp.getIdx();
 
         if (cpu_idx == 0) controller.handleAdminCompletion();
         controller.handleIoCompletion(cpu_idx);
-
-        return true;
     }
 };
 
