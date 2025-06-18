@@ -60,17 +60,18 @@ pub export fn addDevice(self: *Self, name: dev.Name, driver: ?*const Driver, dat
         .bus = self,
     };
 
-    {
-        self.dev_lock.lock();
-        defer self.dev_lock.unlock();
+    if (driver) |drv| {
+        {
+            // FIXME
+            self.dev_lock.lock();
+            defer self.dev_lock.unlock();
 
-        if (driver) |drv| {
             self.matched.append(node);
-            self.matchLog(device, drv);
         }
-        else {
-            self.matchDevice(node);
-        }
+        self.matchLog(device, drv);
+    }
+    else {
+        self.matchDevice(node);
     }
 
     return device;
@@ -79,17 +80,22 @@ pub export fn addDevice(self: *Self, name: dev.Name, driver: ?*const Driver, dat
 pub export fn removeDevice(self: *Self, device: *Device) void {
     const node: *dev.DeviceNode = @fieldParentPtr("data", device);
 
-    self.dev_lock.lock();
-    defer self.dev_lock.unlock();
-
     if (device.driver) |driver| {
         driver.removeDevice(device);
         self.ops.remove(device);
+
+        // FIXME
+        self.dev_lock.lock();
+        defer self.dev_lock.unlock();
 
         self.matched.remove(node);
     }
     else {
         self.ops.remove(device);
+
+        // FIXME
+        self.dev_lock.lock();
+        defer self.dev_lock.unlock();
 
         self.unmatched.remove(node);
     }
@@ -144,13 +150,21 @@ pub export fn removeDriver(self: *Self, driver: *dev.DriverNode) void {
 fn matchDevice(self: *Self, device: *dev.DeviceNode) void {
     const match_impl = self.ops.match;
 
+    self.dev_lock.lock();
+    defer self.dev_lock.unlock();
+
     var node = self.drivers.first;
 
     while (node) |driver| : (node = driver.next) {
-        if (
-            match_impl(&driver.data, &device.data) == false or
-            driver.data.probe(&device.data) == .missmatch
-        ) continue;
+        {   // FIXME: Use different lock mechanism.
+            self.dev_lock.unlock();
+            defer self.dev_lock.lock();
+
+            if (
+                match_impl(&driver.data, &device.data) == false or
+                driver.data.probe(&device.data) == .missmatch
+            ) continue;
+        }
 
         device.data.driver = &driver.data;
         self.matched.append(device);
@@ -175,7 +189,12 @@ fn matchDriver(self: *Self, driver: *Driver) void {
         node = device.next;
 
         if (match_impl(driver, &device.data)) {
-            if (driver.probe(&device.data) == .missmatch) continue;
+            {   // FIXME: Use different lock mechanism.
+                self.dev_lock.unlock();
+                defer self.dev_lock.lock();
+
+                if (driver.probe(&device.data) == .missmatch) continue;
+            }
 
             device.data.driver = driver;
 
@@ -202,9 +221,15 @@ fn onRemoveDriver(self: *Self, driver: *const Driver) void {
 
         if (device.data.driver != driver) continue;
 
-        driver.removeDevice(&device.data);
-
         self.matched.remove(device);
+
+        {   // FIXME: Use different lock mechanism.
+            self.dev_lock.unlock();
+            defer self.dev_lock.lock();
+
+            driver.removeDevice(&device.data);
+        }
+
         self.unmatched.append(device);
     }
 }
