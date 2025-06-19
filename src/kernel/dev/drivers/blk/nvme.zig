@@ -734,7 +734,7 @@ const Controller = struct {
         const idx = (cmd_id -% 1) % self.admin_completion.size;
         const cmpl: *volatile CompletionEntry = &self.admin_completion.ptr[idx];
 
-        while (cmpl.cmd_id != cmd_id) sched.yeild();
+        while (cmpl.cmd_id != cmd_id) sched.yield();
     }
 
     fn identify(self: *Controller) !void {

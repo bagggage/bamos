@@ -51,11 +51,10 @@ pub export fn main() noreturn {
 
     {
         const cpu = arch.getCpuInfo();
-        log.info("CPUs detected: {}, vendor: {s}, model: {s}, {} MHz", .{
+        log.info("CPUs detected: {}, vendor: {s}, model: {s}", .{
             smp.getNum(),
             @tagName(cpu.vendor),
             cpu.getName(),
-            cpu.base_frequency
         });
     }
 
@@ -106,7 +105,7 @@ fn fakeTask() noreturn {
             @as(u32, 32) - scheduler.current_task.common.getPriority(),
         });
 
-        for (0..10) |_| sched.yeild();
+        for (0..10) |_| sched.yield();
     }
 
     unreachable;

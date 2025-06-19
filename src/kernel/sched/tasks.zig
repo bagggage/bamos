@@ -73,6 +73,7 @@ pub const Common = struct {
 
     /// Calculate and set time slice for the task.
     pub inline fn updateTimeSlice(self: *Common) void {
+        std.debug.assert(self.state != .running);
         self.time_slice = self.calcTimeSlice();
     }
 
@@ -88,11 +89,9 @@ pub const Common = struct {
         self.bonus_prior = @truncate(bonus + base_inter);
     }
 
-    pub fn yeildTime(self: *Common) void {
+    pub fn yieldTime(self: *Common) void {
         self.sleep_time +|= self.time_slice;
-
         self.updateBonus();
-        self.updateTimeSlice();
     }
 
     fn getInteractivity(self: *const Common) u8 {
@@ -133,7 +132,7 @@ pub const WaitQueue = struct {
     };
 
     const QList = utils.SList(Entry);
-    const QNode = QList.Node;
+    pub const QNode = QList.Node;
 
     list: QList = .{},
 

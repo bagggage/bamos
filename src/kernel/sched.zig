@@ -54,7 +54,7 @@ pub inline fn getCurrent() *Scheduler {
 
 pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     const scheduler = getScheduler(cpu_idx);
-    const task = newKernelTask("Startup", taskHandler) orelse return error.NoMemory;
+    const task = newKernelTask("startup", taskHandler) orelse return error.NoMemory;
 
     scheduler.init();
     scheduler.enqueueTask(task);
@@ -98,11 +98,15 @@ pub inline fn enqueue(task: *AnyTask) void {
     getCurrent().enqueueTask(task);
 }
 
-pub fn yeild() void {
+/// Yield current task time.
+pub fn yield() void {
     const scheduler = getCurrent();
-    scheduler.disablePreemtion();
 
-    scheduler.yeild();
+    // Don't disable preemtion because task is pushed
+    // into queue under spinlock, so interrupts would be disabled.
+    // After lock release, task wouldn't be in `.running` state
+    // so cannot be preempted.
+    scheduler.yield();
     scheduler.reschedule();
 }
 
@@ -158,13 +162,7 @@ pub inline fn getTimeGranuleMs() u32 {
 }
 
 fn waitEx(scheduler: *Scheduler, queue: *WaitQueue) void {
-    const task = scheduler.current_task;
-    task.common.state = .waiting;
-
-    var entry = WaitQueue.initEntry(
-        task,
-        sys.time.getFastTimestamp()
-    );
+    var entry = scheduler.initWait();
     queue.push(&entry);
-    scheduler.reschedule();
+    scheduler.doWait();
 }
