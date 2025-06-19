@@ -311,7 +311,7 @@ export fn sleepTask(self: *Self) void {
     const local = self.getCpuLocal();
     const task = self.current_task;
 
-    if (local.isInInterrupt()) local.exitInterrupt();
+    local.tryExitInterrupt(1);
 
     while (task.common.state != .running) {
         arch.halt();
@@ -342,5 +342,5 @@ inline fn switchEnd(self: *Self, local: *smp.LocalData) void {
     self.enablePreemtion();
     self.current_task.common.state = .running;
 
-    if (local.isInInterrupt()) local.exitInterrupt();
+    local.tryExitInterrupt(1);
 }

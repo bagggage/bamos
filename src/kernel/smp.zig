@@ -47,6 +47,14 @@ pub const LocalData = struct {
     pub inline fn exitInterrupt(self: *LocalData) void {
         self.nested_intr.raw -= 1;
     }
+
+    /// Do atomic compare and change if is in interrupt on expected level.
+    pub inline fn tryExitInterrupt(self: *LocalData, expected: u8) void {
+        _ = self.nested_intr.cmpxchgWeak(
+            expected, expected - 1,
+            .monotonic, .monotonic
+        );
+    }
 };
 
 var init_lock = Spinlock.init(.unlocked);
