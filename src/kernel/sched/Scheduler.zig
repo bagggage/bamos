@@ -268,8 +268,8 @@ pub inline fn doWait(self: *Self) void {
 }
 
 inline fn next(self: *Self) ?*tasks.AnyTask {
-    //intr.disableForCpu();
-    //defer intr.enableForCpu();
+    intr.disableForCpu();
+    defer intr.enableForCpu();
 
     return self.active_queue.pop();
 }
