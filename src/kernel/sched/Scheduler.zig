@@ -29,6 +29,7 @@ const TaskQueue = struct {
 
     lists: [len]tasks.List = .{ tasks.List{} } ** len,
     last_min: u8 = 0,
+    size: u8 = 0,
 
     pub fn push(self: *TaskQueue, task: *tasks.AnyTask) void {
         task.common.state = .scheduled;
@@ -37,11 +38,15 @@ const TaskQueue = struct {
         if (priority < self.last_min) self.last_min = priority;
 
         self.lists[priority].append(task.asNode());
+        self.size +%= 1;
     }
 
     pub fn pop(self: *TaskQueue) ?*tasks.AnyTask {
         for (self.lists[self.last_min..len]) |*list| {
-            if (list.popFirst()) |node| return &node.data;
+            if (list.popFirst()) |node| {
+                self.size -%= 1;
+                return &node.data;
+            }
 
             self.last_min += 1;
         }
@@ -139,14 +144,12 @@ pub fn yield(self: *Self) void {
 /// Preemt current task by provided task only in case:
 /// current task priority is less and preemtion is enabled.
 pub fn tryPreemt(self: *Self, task: *const tasks.AnyTask) void {
-    const can_preempt =
-        self.flags.sleep or
-        (self.flags.preemtion and self.current_task.common.state == .running)
-    ;
-
     if (
-        can_preempt and
-        self.current_task.common.getPriority() > task.common.getPriority()
+        self.flags.sleep or
+        (
+            self.flags.preemtion and self.current_task.common.state == .running and
+            self.current_task.common.getPriority() > task.common.getPriority()
+        )
     ) {
         self.flags.sleep = false;
         self.planRescheduling();
@@ -296,12 +299,17 @@ inline fn schedule(self: *Self) void {
     self.active_queue = temp_queue;
 }
 
-fn sleepTask(self: *Self) void {
+export fn sleepTask(self: *Self) void {
+    {   // Safe sleep enter.
+        intr.disableForCpu();
+        defer intr.enableForCpu();
+
+        self.flags.sleep = true;
+        if (self.expired_queue.size > 0) self.planRescheduling();
+    }
+
     const local = self.getCpuLocal();
     const task = self.current_task;
-
-    std.debug.assert(intr.isEnabledForCpu());
-    self.flags.sleep = true;
 
     if (local.isInInterrupt()) local.exitInterrupt();
 
