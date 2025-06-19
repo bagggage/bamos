@@ -18,9 +18,9 @@ exclusion: atomic.Value(State) = .init(.unlocked),
 
 /// Represents the lock state.
 pub const State = enum(u8) {
-    unlocked = 0,
-    locked_no_intr = 1,
-    locked_intr = 2
+    locked_no_intr = 0,
+    locked_intr = 1,
+    unlocked = 2,
 };
 
 /// Initializes a new spinlock with the specified initial state.
@@ -39,9 +39,14 @@ pub inline fn init(init_state: enum{locked,unlocked}) Self {
 /// Attempts to acquire the lock. 
 /// Will spin in a loop until the lock is successfully acquired.
 pub fn lock(self: *Self) void {
-    const state: State = if (intr.saveAndDisableForCpu())
-        .locked_intr else .locked_no_intr;
+    const state: State = @enumFromInt(@intFromBool(intr.saveAndDisableForCpu()));
     self.rawLock(state);
+}
+
+/// Acquire the lock, disable local interrupts.
+pub inline fn lockIntr(self: *Self) void {
+    intr.disableForCpu();
+    self.rawLock(.locked_intr);
 }
 
 /// Attempts to acquire the lock. 
@@ -60,7 +65,13 @@ pub fn unlock(self: *Self) void {
     intr.restoreForCpu(intr_enable);
 }
 
-/// Releases the lock.
+/// Release the lock, enable local interrupts.
+pub inline fn unlockIntr(self: *Self) void {
+    self.unlockAtomic();
+    intr.enableForCpu();
+}
+
+/// Release the lock.
 /// 
 /// Can be called **only** in atomic context (aka interrupts disabled)
 pub inline fn unlockAtomic(self: *Self) void {
