@@ -27,7 +27,7 @@ extern "C" var bootboot: c.BOOTBOOT;
 extern "C" const mmio: u32;
 
 pub extern "C" var fb: u32;
-pub extern "C" const environment: u32;
+pub extern "C" const environment: [4096]u8;
 pub extern "C" const initstack: u32;
 pub extern "C" const kernel_elf_start: u32;
 pub extern "C" const kernel_elf_end: u32;
@@ -77,7 +77,7 @@ pub const MemMap = struct {
 
         if (idx == self.len) return;
 
-        for (0..self.len) |i| {
+        for (idx..self.len) |i| {
             self.entries[i] = self.entries[i + 1];
         }
     }
@@ -208,6 +208,10 @@ pub inline fn getArchData() ArchDataType() {
 pub inline fn getInitrd() []const u8 {
     const ptr: [*]const u8 = @ptrFromInt(vm.getVirtLma(bootboot.initrd_ptr));
     return ptr[0..bootboot.initrd_size];
+}
+
+pub inline fn getEnvironment() [*:0]const u8 {
+    return @ptrCast(&environment);
 }
 
 fn ArchDataType() type {
