@@ -278,8 +278,6 @@ const SoftIntrTask = struct {
             while (self.isPending()) {
                 const soft_intr = self.pickSoftIntr();
                 soft_intr.func(soft_intr.ctx);
-
-                self.completeSoftIntr(soft_intr);
             }
 
             sched.pause();
@@ -311,15 +309,12 @@ const SoftIntrTask = struct {
         disableForCpu();
         defer enableForCpu();
 
-        return SoftHandler.fromNode(self.sched_list.popFirst().?);
-    }
-
-    inline fn completeSoftIntr(self: *SoftIntrTask, intr: *SoftHandler) void {
-        disableForCpu();
-        defer enableForCpu();
+        const intr = SoftHandler.fromNode(self.sched_list.popFirst().?);
 
         self.num_pending.raw -= 1;
         intr.pending = false;
+
+        return intr;
     }
 };
 
