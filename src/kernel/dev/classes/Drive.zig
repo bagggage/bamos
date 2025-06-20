@@ -283,9 +283,19 @@ fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
         .read, lba_idx,
         block.asSlice(), syncCallback
     );
-    _ = self.submitRequest(rq_node);
 
-    sched.wait(&rq_node.data.wait_queue);
+    {   // Safe wait: put task into queue first, only then
+        // submit request to device and wait.
+        const scheduler = sched.getCurrent();
+        var wait = scheduler.initWait();
+        rq_node.data.wait_queue.push(&wait);
+
+        if (self.submitRequest(rq_node) == false) {
+            log.warn("request: {} is cached", .{idx});
+        }
+    
+        scheduler.doWait();
+    }
 
     const status: IoRequest.Status = @enumFromInt(rq_node.data.lba_num);
     if (status == .failed) return error.IoFailed;
