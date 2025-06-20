@@ -44,6 +44,14 @@ pub const AllocatorConfig = struct {
         none,
         single_list_node,
         list_node,
+
+        pub fn listNode(comptime T: type) Wrapper {
+            const is_node = @hasField(T, "next") and @hasField(T, "data");
+            if (comptime is_node == false)
+                @compileError("Expected list node type, found: '"++@typeName(T)++"'");
+
+            return if (@hasField(T, "prev")) .list_node else .single_list_node;
+        }
     };
 
     allocator: Allocator,

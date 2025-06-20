@@ -192,7 +192,7 @@ pub const AnyTask = struct {
 pub const UserTask = struct {
     pub const alloc_config = vm.obj.AllocatorConfig{
         .allocator = .safe_oma,
-        .wrapper = .single_list_node,
+        .wrapper = .listNode(Node),
         .capacity = 256
     };
 
@@ -205,7 +205,7 @@ pub const UserTask = struct {
 pub const KernelTask = struct {
     pub const alloc_config = vm.obj.AllocatorConfig{
         .allocator = .safe_oma,
-        .wrapper = .single_list_node,
+        .wrapper = .listNode(Node),
         .capacity = 16
     };
 
