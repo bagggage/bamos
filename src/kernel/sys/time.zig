@@ -4,6 +4,7 @@ const std = @import("std");
 
 const arch = utils.arch;
 const dev = @import("../dev.zig");
+const epoch = std.time.epoch;
 const log = std.log.scoped(.@"sys.time");
 const smp = @import("../smp.zig");
 const utils = @import("../utils.zig");
@@ -14,14 +15,22 @@ pub const Timer = dev.classes.Timer;
 pub const epoch_per_year = 31_556_926;
 pub const epoch_per_month = 2_629_743;
 
+/// Represents date and time with an accuracy of seconds.
 pub const DateTime = extern struct {
+    /// Seconds: 0-59.
     seconds: u8 = 0,
+    /// Minutes: 0-59.
     minutes: u8 = 0,
+    /// Hours: 0-23.
     hours: u8 = 0,
+    /// Month: 1-12.
     month: u8 = 1,
+    /// Day: 1-31.
     day: u8 = 1,
+    /// Year: 0-65535.
     year: u16 = 0,
 
+    /// Format date time: DD.MM.YYYY-hh:mm:ss.
     pub fn format(
         self: DateTime,
         comptime _: []const u8,
@@ -33,45 +42,71 @@ pub const DateTime = extern struct {
         });
     }
 
-    pub fn fromTime(time: *const Time) DateTime {
+    /// Converts `Time` to `DateTime`.
+    pub fn fromTime(time: Time) DateTime {
         @setRuntimeSafety(false);
 
-        var sec = time.sec;
-        var result: DateTime = undefined;
+        const secs: epoch.EpochSeconds = .{ .secs = time.sec };
+        const day_secs = secs.getDaySeconds();
+        const year_day = secs.getEpochDay().calculateYearDay();
+        const month_day = year_day.calculateMonthDay();
 
-        result.year = @truncate(sec / epoch_per_year);
-        result.year += std.time.epoch.epoch_year;
-        sec %= epoch_per_year;
+        return .{
+            .year = year_day.year,
+            .month = month_day.month.numeric(),
+            .day = month_day.day_index + 1,
+            .hours = day_secs.getHoursIntoDay(),
+            .minutes = day_secs.getMinutesIntoHour(),
+            .seconds = day_secs.getSecondsIntoMinute(),
+        };
+    }
 
-        result.month = @truncate((sec / epoch_per_month) + 1);
-        sec %= epoch_per_month;
+    /// Returns the day number of the year.
+    pub fn getYearDay(self: DateTime) u16 {
+        const month: epoch.Month = @enumFromInt(self.month);
+        const is_leap = epoch.isLeapYear(self.year);
+        const days_in_feb: u16 = if (is_leap) 29 else 28;
 
-        result.day = @truncate((sec / std.time.s_per_day) + 1);
-        sec %= std.time.s_per_day;
-
-        result.hours = @truncate(sec / std.time.s_per_hour);
-        sec %= std.time.s_per_hour;
-
-        result.minutes = @truncate(sec / std.time.s_per_min);
-        result.seconds = @truncate(sec % std.time.s_per_min);
-
-        return result;
+        const elapsed_since_year: u16 = switch (month) {
+            .jan => 0,
+            .feb => 31,
+            .mar => 31 + days_in_feb,
+            .apr => 62 + days_in_feb,
+            .may => 92 + days_in_feb,
+            .jun => 123 + days_in_feb,
+            .jul => 153 + days_in_feb,
+            .aug => 184 + days_in_feb,
+            .sep => 215 + days_in_feb,
+            .oct => 245 + days_in_feb,
+            .nov => 276 + days_in_feb,
+            .dec => 306 + days_in_feb,
+        };
+        
+        return elapsed_since_year + self.day;
     }
 };
 
+/// Represents time relative to UTC 1970-01-01,
+/// with an accuracy of nanoseconds.
 pub const Time = extern struct {
+    /// Seconds elapsed since UTC 1970-01-01 (POSIX time).
     sec: u64 = 0,
+    /// Nanoseconds elapsed since the beginning of the second.
     ns: u32 = 0,
 
     pub fn fromDateTime(date_time: DateTime) Time {
-        var sec: u64 = @as(u64, date_time.year - std.time.epoch.epoch_year) * epoch_per_year;
-        sec += @as(u64, date_time.month - 1) * epoch_per_month;
-        sec += @as(u64, date_time.day - 1) * std.time.s_per_day;
-        sec += @as(u64, date_time.hours) * std.time.s_per_hour;
-        sec += @as(u64, date_time.minutes) * std.time.s_per_min;
-        sec += date_time.seconds;
+        var elapsed_days: u32 = 0;
+        for (epoch.epoch_year..date_time.year) |year| {
+            elapsed_days += epoch.getDaysInYear(@truncate(year));
+        }
 
-        return .{ .sec = sec, .ns = 0 };
+        const days = elapsed_days + date_time.getYearDay() - 1;
+        var secs: u64 = @as(u64, days) * std.time.s_per_day;
+        secs += @as(u64, date_time.hours) * std.time.s_per_hour;
+        secs += @as(u64, date_time.minutes) * std.time.s_per_min;
+        secs += date_time.seconds;
+
+        return .{ .sec = secs };
     }
 
     pub fn fromTicks(ticks: usize) Time {
@@ -102,7 +137,7 @@ pub const Time = extern struct {
         self.ns = @truncate(new_ns % std.time.ns_per_s);
     }
 
-    pub inline fn toNs(self: *const Time) u64 {
+    pub inline fn toNs(self: Time) u64 {
         return (self.sec * std.time.ns_per_s) + self.ns;
     }
 
@@ -113,6 +148,12 @@ pub const Time = extern struct {
         };
     }
 
+    /// Format time as `{date_time}.{us}` by default.
+    /// If `fmt` is set to:
+    /// - `dt`: format as `{date_time}`.
+    /// - `us`: write `{sec}.{us}`.
+    /// - `ns`: write `{sec}.{ns}`.
+    /// - `s`: write only `{sec}`.
     pub fn format(
         self: Time,
         comptime fmt: []const u8,
@@ -123,15 +164,15 @@ pub const Time = extern struct {
         if (comptime std.mem.eql(u8, fmt, "us")) {
             try writer.print("{:>5}.{:0>6}", .{ self.sec, self.ns / std.time.ns_per_us });
             return;
-        } else if (comptime std.mem.eql(u8, fmt, "s")) {
-            try writer.print("{:>5}", .{ self.sec });
-            return;
-        } else if (comptime std.mem.eql(u8, fmt, "d")) {
+        } else if (comptime std.mem.eql(u8, fmt, "ns")) {
             try writer.print("{}.{}", .{ self.sec, self.ns });
+            return;
+        }  else if (comptime std.mem.eql(u8, fmt, "s")) {
+            try writer.print("{:>5}", .{ self.sec });
             return;
         }
 
-        const date_time = DateTime.fromTime(&self);
+        const date_time = DateTime.fromTime(self);
 
         if (comptime std.mem.eql(u8, fmt, "dt")) {
             try writer.print("{}", .{ date_time });
@@ -147,7 +188,7 @@ const default_hz = 500;
 const max_hz = 1000;
 
 /// Internal timekeeper structure.
-/// Responsible for maintaining the time in an up-to-date state.
+/// Responsible for maintaining system time in actual state.
 const Keeper = struct {
     time: Time = .{},
     uptime: Time = .{},
@@ -213,7 +254,7 @@ pub fn init() !void {
 
     log.info("clock: {}, timer: {}", .{ sys_clock.device.name, sys_timer.device.name });
     log.info("sched timer: {}", .{sched_timer.device.name});
-    log.info("{dt}", .{keeper.time});
+    log.info("{dt}, epoch: {s}", .{keeper.time,keeper.time});
 }
 
 pub fn initPerCpu() void {
