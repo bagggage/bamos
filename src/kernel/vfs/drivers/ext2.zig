@@ -2,7 +2,7 @@
 
 //! # Ext2 filesystem driver
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -297,16 +297,17 @@ const DentryStubOps = vfs.internals.DentryStubOps(.ext2);
 
 var fs = vfs.FileSystem.init(
     "ext2",
-    .device,
-    .{
+    .{ .drive = .{
         .mount = mount,
         .unmount = undefined
-    },
+    }},
     .{
         .lookup = dentryLookup,
         .makeDirectory = DentryStubOps.makeDirectory,
         .createFile = DentryStubOps.createFile,
-        .ioHandler = undefined
+
+        .read = undefined,
+        .write = undefined
     }
 );
 
@@ -349,8 +350,7 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
         const dentry = vfs.Dentry.new() orelse return error.NoMemory;
         errdefer dentry.free();
 
-        dentry.init("/", super, try inode.cache(root_inode), &fs.data.dentry_ops) catch unreachable;
-        super.root = dentry;
+        dentry.init("/", undefined, try inode.cache(root_inode), &fs.data.dentry_ops) catch unreachable;
     }
 
     log.info("mounting on drive: {s}", .{drive.base_name});
@@ -398,7 +398,7 @@ fn readDirectory(super: *vfs.Superblock, inode: *vfs.Inode, cursor: *cache.Curso
 }
 
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
-    const super = parent.super;
+    const super = parent.ctx.super;
 
     var cache_cursor = cache.Cursor.blank();
     defer super.drive.putCache(&cache_cursor);
@@ -416,7 +416,7 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
 
     // Init new vfs dentry
     const child_dentry = vfs.Dentry.new() orelse return null;
-    child_dentry.init(ext_dent.name(), super, undefined, &fs.data.dentry_ops) catch {
+    child_dentry.init(ext_dent.name(), parent.ctx, undefined, &fs.data.dentry_ops) catch {
         child_dentry.free();
         return null;
     };

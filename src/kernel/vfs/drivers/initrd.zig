@@ -78,16 +78,17 @@ const max_name = 256;
 
 var fs = vfs.FileSystem.init(
     "initramfs",
-    .virtual,
-    .{
+    .{ .virt = .{
         .mount = mount,
         .unmount = undefined
-    },
+    }},
     .{
         .lookup = dentryLookup,
         .makeDirectory = DentryStubOps.makeDirectory,
         .createFile = DentryStubOps.createFile,
-        .ioHandler = undefined
+
+        .read = undefined,
+        .write = undefined
     }
 );
 
@@ -96,15 +97,18 @@ var initrd: []const u8 = &.{};
 var file_name: [max_name]u8 = .{ 0 } ** max_name;
 var link_name: [max_name]u8 = .{ 0 } ** max_name;
 
+pub const fs_name = "initramfs";
+pub const mount_dir_name: []const u8 = "initrd";
+
 pub fn init() !void {
     if (!vfs.registerFs(&fs)) return error.RegisterFailed;
 
-    const mount_dir = vfs.getRoot().makeDirectory("initrd") catch |err| {
+    const mount_dir = vfs.getRoot().makeDirectory(mount_dir_name) catch |err| {
         log.err("failed to create mount point: {}", .{err});
         return error.MountFailed;
     };
 
-    vfs.mount(mount_dir, "initramfs", null, undefined) catch |err| {
+    vfs.mount(mount_dir, fs_name, null, undefined) catch |err| {
         log.err("while mounting: {}", .{err});
         return error.MountFailed;
     };
@@ -123,32 +127,24 @@ inline fn getStream() std.io.StreamSource {
     };
 }
 
-fn mount(_: *vfs.Drive, _: *vfs.Partition) vfs.Error!*vfs.Superblock {
+fn mount() vfs.Error!vfs.Context.Virt {
     // Already mounted
     if (initrd.len != 0) return error.Busy;
-
-    const super = vfs.Superblock.new() orelse return error.NoMemory;
-    errdefer super.free();
 
     const inode = vfs.Inode.new() orelse return error.NoMemory;
     errdefer inode.free();
 
     const dentry = vfs.Dentry.new() orelse return error.NoMemory;
-
-    super.init(null, null, 512, null);
-    super.root = dentry;
-
     inode.* = .{
         .index = 0,
         .type = .directory,
         .perm = 0
     };
 
-    dentry.init("/", super, inode, &fs.data.dentry_ops) catch unreachable;
-
+    dentry.init("/", undefined, inode, &fs.data.dentry_ops) catch unreachable;
     initrd = boot.getInitrd();
 
-    return super;
+    return .{ .root = dentry };
 }
 
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
@@ -170,7 +166,7 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
 
 fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8) !?*vfs.Dentry {
     // Skip parent file itself
-    const is_parent_root = parent == parent.super.root;
+    const is_parent_root = parent == parent.ctx.virt.root;
 
     if (!is_parent_root) {
         if (try tar_iter.next() == null) return null;
@@ -200,7 +196,7 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
 
             initInode(inode, &file, tar_iter.reader.context.getPos() catch unreachable);
 
-            try dentry.init(entry_name, parent.super, inode, &fs.data.dentry_ops);
+            try dentry.init(entry_name, parent.ctx, inode, &fs.data.dentry_ops);
 
             return dentry;
         }

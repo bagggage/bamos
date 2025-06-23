@@ -49,17 +49,18 @@ const File = struct {
 
 var fs = vfs.FileSystem.init(
     "tmpfs",
-    .virtual,
-    .{
+    .{ .virt = .{
         .mount = mount,
         .unmount = undefined
-    },
+    }},
     .{
         .lookup = dentryLookup,
         .makeDirectory = dentryMakeDirectory,
         .createFile = dentryCreateFile,
         .deinitInode = deinitInode,
-        .ioHandler = undefined
+
+        .read = undefined,
+        .write = undefined
     }
 );
 
@@ -71,16 +72,9 @@ pub fn deinit() void {
     vfs.unregisterFs(&fs);
 }
 
-fn mount(_: *vfs.Drive, _: *const vfs.Partition) vfs.Error!*vfs.Superblock {
-    const super = vfs.Superblock.new() orelse return error.NoMemory;
-    errdefer super.free();
-
-    const root = try createDentry(super, "/", .directory);
-
-    super.init(null, null, vm.page_size * 4, null);
-    super.root = root;
-
-    return super;
+fn mount() vfs.Error!vfs.Context.Virt {
+    const root = try createDentry(undefined, "/", .directory);
+    return .{ .root = root };
 }
 
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
@@ -103,14 +97,14 @@ fn dentryCreateFile(_: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
     child.inode = inode;
 }
 
-fn createDentry(super: *vfs.Superblock, name: []const u8, comptime kind: EntryKind) !*vfs.Dentry {
+fn createDentry(ctx: vfs.Context.Ptr, name: []const u8, comptime kind: EntryKind) !*vfs.Dentry {
     const dentry = vfs.Dentry.new() orelse return error.NoMemory;
     errdefer dentry.free();
 
     const inode = try createInode(kind);
     errdefer inode.free();
 
-    try dentry.init(name, super, inode, &fs.data.dentry_ops);
+    try dentry.init(name, ctx, inode, &fs.data.dentry_ops);
 
     // Prevent auto-freeing dentry
     dentry.ref();

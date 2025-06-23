@@ -1,9 +1,10 @@
 //! # Directory Entry
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
+const Context = vfs.Context;
 const Error = vfs.Error;
 const Inode = vfs.Inode;
 const log = std.log.scoped(.@"vfs.Dentry");
@@ -22,22 +23,23 @@ pub const List = utils.SList(Dentry);
 pub const Node = List.Node;
 
 pub const Operations = struct {
-    const IoKind = enum {
-        read,
-        write
-    };
-
     pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
     pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry) Error!void;
     pub const CreateFileFn = *const fn(*const Dentry, *Dentry) Error!void;
     pub const DeinitInodeFn = *const fn(*const Inode) void;
-    pub const IoHandlerFn = *const fn(*const Dentry, IoKind, u32, u32) Error!void;
+
+    pub const ReadFn = *const fn(*const Dentry, usize, []u8) Error!usize;
+    pub const WriteFn = *const fn(*Dentry, usize, []const u8) Error!usize;
+    pub const IoctlFn = *const fn(*Dentry, c_uint, usize) Error!void;
 
     lookup: LookupFn,
     makeDirectory: MakeDirectoryFn,
     createFile: CreateFileFn,
     deinitInode: DeinitInodeFn = vfs.internals.DentryNoneOps.deinitInode,
-    ioHandler: IoHandlerFn,
+
+    read: ReadFn,
+    write: WriteFn,
+    ioctl: IoctlFn = undefined,
 };
 
 pub const Name = struct {
@@ -45,7 +47,7 @@ pub const Name = struct {
         const short_len = 32;
 
         short: [short_len:0]u8,
-        long: []u8,
+        long: [*]u8,
     };
 
     value: Union = undefined,
@@ -62,7 +64,7 @@ pub const Name = struct {
             const buffer: [*]u8 = @ptrCast(vm.malloc(name.len) orelse return error.NoMemory);
             @memcpy(buffer[0..name.len], name);
 
-            self.value = .{ .long = buffer[0..name.len] };
+            self.value = .{ .long = buffer };
         }
 
         self.len = @truncate(name.len);
@@ -85,18 +87,20 @@ pub const Name = struct {
     }
 
     pub fn deinit(self: *Name) void {
-        if (self.len >= Union.short_len) vm.free(self.value.long.ptr);
+        if (self.len >= Union.short_len) vm.free(self.value.long);
     }
 
     pub inline fn str(self: *const Name) []const u8 {
-        return if (self.len >= Union.short_len) self.value.long else self.value.short[0..self.len];
+        return if (self.len >= Union.short_len)
+            self.value.long[0..self.len] else
+            self.value.short[0..self.len];
     }
 };
 
 name: Name,
 
 parent: *Dentry,
-super: *Superblock,
+ctx: Context.Ptr,
 inode: *Inode,
 ops: *Operations,
 
@@ -112,7 +116,7 @@ pub inline fn new() ?*Dentry {
     dentry.* = .{
         .name = undefined,
         .parent = undefined,
-        .super = undefined,
+        .ctx = undefined,
         .inode = undefined,
         .ops = undefined
     };
@@ -133,11 +137,22 @@ pub inline fn getCacheEntry(self: *Dentry) *lookup_cache.Entry {
     return @fieldParentPtr("data", entry);
 }
 
-pub fn init(self: *Dentry, name: []const u8, super: *Superblock, inode: *Inode, ops: *Operations) !void {
+pub inline fn getSuper(self: *Dentry) *Superblock {
+    return self.ctx.super;
+}
+
+pub inline fn getVirtualCtx(self: *Dentry) *Context.Virt {
+    return self.ctx.virt;
+}
+
+pub fn init(
+    self: *Dentry, name: []const u8,
+    ctx: Context.Ptr, inode: *Inode, ops: *Operations
+) !void {
     try self.name.init(name);
 
     self.parent = self;
-    self.super = super;
+    self.ctx = ctx;
     self.inode = inode;
     self.ops = ops;
 }
@@ -219,6 +234,20 @@ pub fn removeChild(self: *Dentry, child: *Dentry) void {
     }
 }
 
+pub inline fn read(self: *const Dentry, offset: usize, buf: []u8) Error!usize {
+    return self.ops.read(self, offset, buf);
+}
+
+pub inline fn write(self: *Dentry, offset: usize, buf: []const u8) Error!usize {
+    std.debug.assert(self.inode.type != .directory);
+    return self.ops.write(self, offset, buf);
+}
+
+pub inline fn ioctl(self: *Dentry, cmd: c_uint, arg: usize) Error!void {
+    if (true) return Error.BadOperation;
+    return self.ops.ioctl(self, cmd, arg);
+}
+
 pub inline fn path(self: *const Dentry) Path {
     return Path{ .dentry = self };
 }
@@ -238,7 +267,7 @@ fn createLike(self: *const Dentry, name: []const u8) !*Dentry {
     try dentry.name.init(name);
     errdefer dentry.name.deinit();
 
-    dentry.super = self.super;
+    dentry.ctx = self.ctx;
     dentry.ops = self.ops;
 
     return dentry;
