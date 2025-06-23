@@ -1,19 +1,20 @@
 //! # Virtual file system
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
 const api = utils.api.scoped(@This());
 const dev = @import("dev.zig");
 const log = std.log.scoped(.vfs);
-const tmpfs = @import("vfs/drivers//tmpfs.zig");
+const tmpfs = @import("vfs/drivers/tmpfs.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
 const hashFn = std.hash.Fnv1a_32.hash;
 
 //pub const devfs = @import("vfs/drivers//devfs.zig");
+pub const initrd = @import("vfs/drivers/initrd.zig");
 pub const internals = @import("vfs/internals.zig");
 pub const lookup_cache = @import("vfs/lookup-cache.zig");
 pub const parts = @import("vfs/parts.zig");
@@ -37,30 +38,72 @@ pub const Error = error {
     BadSuperblock,
 };
 
+/// Filesystem context.
+/// 
+/// Contains unique FS data per each moutn point.
+pub const Context = union(enum) {
+    pub const Ptr = union {
+        super: *Superblock,
+        virt: *Context.Virt,
+    };
+
+    /// Represents virtual filesystem context.
+    pub const Virt = struct {
+        root: *Dentry,
+        data: utils.AnyData = .{},
+
+        pub inline fn getMountPoint(self: *Virt) *MountPoint {
+            return @fieldParentPtr("virt", self);
+        }
+    };
+
+    super: *Superblock,
+    virt: Virt,
+
+    pub fn getMountPoint(self: *Context) *MountPoint {
+        return switch (self.*) {
+            .super => |s| s.mount_point,
+            .virt => |v| v.getMountPoint()
+        };
+    }
+
+    pub fn getFsRoot(self: *Context) *Dentry {
+        return switch (self.*) {
+            .super => |s| s.root,
+            .virt => |v| v.root
+        };
+    }
+};
+
 pub const FileSystem = struct {
-    pub const Operations = struct {
+    pub const DriveOperations = struct {
         pub const MountFn = *const fn(*Drive, *Partition) Error!*Superblock;
         pub const UnmountFn = *const fn(*Superblock) void;
 
         mount: MountFn,
         unmount: UnmountFn
     };
-    pub const Type = enum {
-        virtual,
-        device
+    pub const VirtualOperations = struct {
+        pub const MountFn = *const fn() Error!Context.Virt;
+        pub const UnmountFn = *const fn(*Context.Virt) void;
+
+        mount: MountFn,
+        unmount: UnmountFn,
+    };
+
+    pub const Operations = union(enum) {
+        drive: DriveOperations,
+        virt: VirtualOperations,
     };
 
     name: []const u8,
     hash: u32,
-
-    kind: Type,
 
     ops: Operations = undefined,
     dentry_ops: Dentry.Operations = undefined,
 
     pub fn init(
         comptime name: []const u8,
-        kind: Type,
         ops: Operations,
         dentry_ops: Dentry.Operations
     ) FsNode {
@@ -72,19 +115,29 @@ pub const FileSystem = struct {
             .data = .{
                 .name = name,
                 .hash = hash,
-                .kind = kind,
                 .ops = ops,
                 .dentry_ops = dentry_ops,
             }
         };
     }
 
-    pub inline fn mount(
+    pub inline fn mountDrive(
         self: *const FileSystem,
         drive: *Drive,
         part: *Partition
     ) Error!*Superblock {
-        return self.ops.mount(drive, part);
+        return self.ops.drive.mount(drive, part);
+    }
+
+    pub inline fn mountVirtual(self: *const FileSystem) Error!Context.Virt {
+        return self.ops.virt.mount();
+    }
+
+    pub inline fn kind(self: *const FileSystem) enum{virtual,device} {
+        return switch (self.ops) {
+            .drive => .device,
+            .virt => .virtual,
+        };
     }
 };
 
@@ -104,7 +157,7 @@ pub const MountPoint = struct {
     fs: *FileSystem,
     dentry: *Dentry,
 
-    super: *Superblock,
+    ctx: Context,
 };
 
 const MountList = utils.List(MountPoint);
@@ -199,8 +252,26 @@ pub inline fn lookup(dir: ?*Dentry, path: []const u8) Error!*Dentry {
     return api.externFn(lookupEx, .lookupEx)(dir, path);
 }
 
+/// Same as `vfs.lookup`, but returns `null` if dentry not found.
+/// If any other error occurs, prints error message.
+pub fn tryLookup(dir: ?*Dentry, path: []const u8) ?*Dentry {
+    return lookup(dir, path) catch |err| {
+        if (err != Error.NoEnt) {
+            log.err("lookup for \"{s}\" failed: {s}", .{path, @errorName(err)});
+        }
+        return null;
+    };
+}
+
+/// Returns the actual root dentry of the entire VFS.
 pub inline fn getRoot() *Dentry {
     return root_dentry;
+}
+
+/// Returns root dentry of initrd filesystem if mounted,
+/// `null` otherwise.
+pub fn getInitRamDisk() ?*Dentry {
+    return tryLookup(root_dentry, initrd.mount_dir_name);
 }
 
 fn getFsEx(name: []const u8) ?*FileSystem {
@@ -227,7 +298,7 @@ fn mountEx(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) 
     const fs = getFs(fs_name) orelse return error.NoFs;
 
     if (
-        fs.kind == .device and
+        fs.kind() == .device and
         (drive == null or part_idx >= drive.?.parts.len)
     ) return error.InvalidArgs;
 
@@ -235,27 +306,20 @@ fn mountEx(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) 
     errdefer vm.free(node);
 
     // Init mount point
+    const fs_root = switch (fs.kind()) {
+        .device => try mountDriveFs(fs, dentry, node, drive.?, part_idx),
+        .virtual => try mountVirtualFs(fs, dentry, node),
+    };
+
+    // Swap entries
     {
-        const super = switch (fs.kind) {
-            .device => try fs.mount(drive.?, drive.?.getPartition(part_idx).?),
-            .virtual => try fs.mount(undefined, undefined)
-        };
-
-        node.data = .{
-            .dentry = dentry,
-            .fs = fs,
-            .super = super,
-        };
-        super.mount_point = &node.data;
-
-        // Swap entries
         const parent = dentry.parent;
-        super.root.parent = parent;
+        parent.addChild(fs_root);
 
         const hash = lookup_cache.calcHash(parent, dentry.name.str());
 
         _ = lookup_cache.remove(hash);
-        lookup_cache.insert(hash, super.root);
+        lookup_cache.insert(hash, fs_root);
     }
 
     if (drive) |d| {
@@ -270,6 +334,34 @@ fn mountEx(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) 
     defer mount_lock.unlock();
 
     mount_list.append(node);
+}
+
+fn mountDriveFs(
+    fs: *FileSystem, dentry: *Dentry,
+    node: *MountNode, drive: *Drive, part_idx: u32
+) !*Dentry {
+    const super = try fs.mountDrive(drive, drive.getPartition(part_idx).?);
+    node.data = .{
+        .dentry = dentry,
+        .fs = fs,
+        .ctx = .{ .super = super },
+    };
+    super.root.ctx = .{ .super = super };
+    super.mount_point = &node.data;
+
+    return super.root;
+}
+
+fn mountVirtualFs(fs: *FileSystem, dentry: *Dentry, node: *MountNode) !*Dentry {
+    const virt = try fs.mountVirtual();
+    node.data = .{
+        .dentry = dentry,
+        .fs = fs,
+        .ctx = .{ .virt = virt },
+    };
+    virt.root.ctx = .{ .virt = &node.data.ctx.virt };
+
+    return virt.root;
 }
 
 fn lookupEx(dir: ?*Dentry, path: []const u8) Error!*Dentry {
@@ -310,9 +402,9 @@ fn initRoot() !void {
     try tmpfs.init();
 
     const tmp_fs = getFs("tmpfs") orelse return error.NoTmpfs;
-    const super = try tmp_fs.mount(undefined, undefined);
+    const virt = try tmp_fs.mountVirtual();
 
-    root_dentry = super.root;
+    root_dentry = virt.root;
     root_dentry.ref();
 
     log.info("tmpfs was mounted as \"{s}\"", .{root_dentry.name.str()});
