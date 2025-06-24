@@ -87,8 +87,9 @@ var fs = vfs.FileSystem.init(
         .makeDirectory = DentryStubOps.makeDirectory,
         .createFile = DentryStubOps.createFile,
 
-        .read = undefined,
-        .write = undefined
+        // FIXME !!!
+        .open = undefined,
+        .close = undefined
     }
 );
 
@@ -138,7 +139,6 @@ fn mount() vfs.Error!vfs.Context.Virt {
     inode.* = .{
         .index = 0,
         .type = .directory,
-        .perm = 0
     };
 
     dentry.init("/", undefined, inode, &fs.data.dentry_ops) catch unreachable;
@@ -195,7 +195,6 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
             errdefer inode.free();
 
             initInode(inode, &file, tar_iter.reader.context.getPos() catch unreachable);
-
             try dentry.init(entry_name, parent.ctx, inode, &fs.data.dentry_ops);
 
             return dentry;
@@ -219,7 +218,6 @@ fn initInode(inode: *vfs.Inode, file: *const TarFile, pos: usize) void {
             .file => .regular_file,
             .sym_link => .symbolic_link
         },
-        .perm = 0,
         .size = file.size,
 
         // Data pointer

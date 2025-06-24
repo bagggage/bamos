@@ -306,8 +306,8 @@ var fs = vfs.FileSystem.init(
         .makeDirectory = DentryStubOps.makeDirectory,
         .createFile = DentryStubOps.createFile,
 
-        .read = undefined,
-        .write = undefined
+        .open = undefined,
+        .close = undefined
     }
 );
 
