@@ -7,7 +7,7 @@ const std = @import("std");
 const api = utils.api.scoped(@This());
 const dev = @import("dev.zig");
 const log = std.log.scoped(.vfs);
-const tmpfs = @import("vfs/drivers/tmpfs.zig");
+const sys = @import("sys.zig");
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
@@ -18,9 +18,11 @@ pub const initrd = @import("vfs/drivers/initrd.zig");
 pub const internals = @import("vfs/internals.zig");
 pub const lookup_cache = @import("vfs/lookup-cache.zig");
 pub const parts = @import("vfs/parts.zig");
+pub const tmpfs = @import("vfs/drivers/tmpfs.zig");
 
 pub const Dentry = @import("vfs/Dentry.zig");
 pub const Drive = dev.classes.Drive;
+pub const File = @import("vfs/File.zig");
 pub const Inode = @import("vfs/Inode.zig");
 pub const Partition = parts.Partition;
 pub const Superblock = @import("vfs/Superblock.zig");
@@ -204,6 +206,17 @@ pub inline fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_i
     return api.externFn(mountEx, .mountEx)(dentry, fs_name, drive, part_idx);
 }
 
+pub fn open(dentry: *Dentry) Error!*File {
+    const file = vm.obj.new(File) orelse return error.NoMemory;
+    try dentry.open(file);
+    return file;
+}
+
+pub inline fn close(file: *File) void {
+    file.close();
+    vm.obj.free(File, file);
+}
+
 pub fn registerFs(fs: *FsNode) bool {
     if (fs.next != null or fs.prev != null) return false;
 
@@ -272,6 +285,12 @@ pub inline fn getRoot() *Dentry {
 /// `null` otherwise.
 pub fn getInitRamDisk() ?*Dentry {
     return tryLookup(root_dentry, initrd.mount_dir_name);
+}
+
+/// Returns current system time that might be
+/// used for files timestamps.
+pub inline fn getTime() sys.time.Time {
+    return sys.time.getCachedTime();
 }
 
 fn getFsEx(name: []const u8) ?*FileSystem {

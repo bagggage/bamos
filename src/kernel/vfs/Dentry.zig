@@ -6,6 +6,7 @@ const std = @import("std");
 
 const Context = vfs.Context;
 const Error = vfs.Error;
+const File = vfs.File;
 const Inode = vfs.Inode;
 const log = std.log.scoped(.@"vfs.Dentry");
 const lookup_cache = vfs.lookup_cache;
@@ -28,18 +29,16 @@ pub const Operations = struct {
     pub const CreateFileFn = *const fn(*const Dentry, *Dentry) Error!void;
     pub const DeinitInodeFn = *const fn(*const Inode) void;
 
-    pub const ReadFn = *const fn(*const Dentry, usize, []u8) Error!usize;
-    pub const WriteFn = *const fn(*Dentry, usize, []const u8) Error!usize;
-    pub const IoctlFn = *const fn(*Dentry, c_uint, usize) Error!void;
+    pub const OpenFn = *const fn(*const Dentry, *File) Error!void;
+    pub const CloseFn = *const fn(*const Dentry, *File) void;
 
     lookup: LookupFn,
     makeDirectory: MakeDirectoryFn,
     createFile: CreateFileFn,
     deinitInode: DeinitInodeFn = vfs.internals.DentryNoneOps.deinitInode,
 
-    read: ReadFn,
-    write: WriteFn,
-    ioctl: IoctlFn = undefined,
+    open: OpenFn,
+    close: CloseFn,
 };
 
 pub const Name = struct {
@@ -150,6 +149,7 @@ pub fn init(
     ctx: Context.Ptr, inode: *Inode, ops: *Operations
 ) !void {
     try self.name.init(name);
+    inode.ref();
 
     self.parent = self;
     self.ctx = ctx;
@@ -217,6 +217,18 @@ pub fn createFile(self: *Dentry, name: []const u8) Error!*Dentry {
     return file_dentry;
 }
 
+pub inline fn open(self: *Dentry, file: *File) Error!void {
+    file.assignDentry(self);
+    errdefer file.releaseDentry();
+
+    try self.ops.open(self, file);
+}
+
+pub inline fn close(self: *const Dentry, file: *File) void {
+    self.ops.close(self, file);
+    file.releaseDentry();
+}
+
 pub fn addChild(self: *Dentry, child: *Dentry) void {
     self.ref();
 
@@ -234,22 +246,17 @@ pub fn removeChild(self: *Dentry, child: *Dentry) void {
     }
 }
 
-pub inline fn read(self: *const Dentry, offset: usize, buf: []u8) Error!usize {
-    return self.ops.read(self, offset, buf);
-}
-
-pub inline fn write(self: *Dentry, offset: usize, buf: []const u8) Error!usize {
-    std.debug.assert(self.inode.type != .directory);
-    return self.ops.write(self, offset, buf);
-}
-
-pub inline fn ioctl(self: *Dentry, cmd: c_uint, arg: usize) Error!void {
-    if (true) return Error.BadOperation;
-    return self.ops.ioctl(self, cmd, arg);
-}
-
 pub inline fn path(self: *const Dentry) Path {
     return Path{ .dentry = self };
+}
+
+pub inline fn assignInode(self: *Dentry, inode: *Inode) void {
+    inode.ref();
+    self.inode = inode;
+}
+
+pub inline fn releaseInode(self: *Dentry) void {
+    self.inode.deref();
 }
 
 pub inline fn ref(self: *Dentry) void {

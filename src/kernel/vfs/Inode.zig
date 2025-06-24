@@ -22,7 +22,7 @@ pub const Type = enum(u8) {
 
 index: u32,
 type: Type,
-perm: u16,
+perm: u16 = 0o0644,
 size: u64 = 0, // In bytes
 
 access_time: u32 = 0,

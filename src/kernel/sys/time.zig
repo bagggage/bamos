@@ -141,6 +141,10 @@ pub const Time = extern struct {
         return (self.sec * std.time.ns_per_s) + self.ns;
     }
 
+    pub inline fn posix(self: Time) u64 {
+        return self.sec;
+    }
+
     pub fn fromNs(ns: u64) Time {
         return .{
             .sec = ns / std.time.ns_per_s,
