@@ -47,6 +47,12 @@ const File = struct {
     }
 };
 
+pub const DentryOps = opaque {
+    pub const lookup = dentryLookup;
+    pub const makeDirectory = dentryMakeDirectory;
+    pub const createFile = dentryCreateFile;
+};
+
 var fs = vfs.FileSystem.init(
     "tmpfs",
     .{ .virt = .{
@@ -59,9 +65,10 @@ var fs = vfs.FileSystem.init(
         .createFile = dentryCreateFile,
         .deinitInode = deinitInode,
 
-        .read = undefined,
-        .write = undefined
-    }
+        // FIXME !!!
+        .open = undefined,
+        .close = undefined
+    },
 );
 
 pub fn init() !void {
@@ -73,7 +80,7 @@ pub fn deinit() void {
 }
 
 fn mount() vfs.Error!vfs.Context.Virt {
-    const root = try createDentry(undefined, "/", .directory);
+    const root = try createDirectory("/", undefined);
     return .{ .root = root };
 }
 
@@ -89,46 +96,60 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
 
 fn dentryMakeDirectory(_: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
     const inode = try createInode(.directory);
-    child.inode = inode;
+    child.assignInode(inode);
 }
 
 fn dentryCreateFile(_: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
-    const inode = try createInode(.file);
-    child.inode = inode;
+    const inode = try createInode(.regular_file);
+    child.assignInode(inode);
 }
 
-fn createDentry(ctx: vfs.Context.Ptr, name: []const u8, comptime kind: EntryKind) !*vfs.Dentry {
+pub fn createRegularFile(name: []const u8, ctx: vfs.Context.Ptr) !*vfs.Dentry {
+    const file = File.new() orelse return error.NoMemory;
+    errdefer file.free();
+    const inode = try createInode(.regular_file);
+    errdefer inode.free();
+
+    const dentry = try createDentry(name, inode, ctx);
+    inode.fs_data.set(file);
+
+    return dentry;
+}
+
+pub inline fn createDirectory(name: []const u8, ctx: vfs.Context.Ptr) !*vfs.Dentry {
+    const inode = try createInode(.directory);
+    errdefer inode.free();
+
+    const dentry = try createDentry(name, inode, ctx);
+    return dentry;
+}
+
+pub fn createDentry(
+    name: []const u8, inode: *vfs.Inode,
+    ctx: vfs.Context.Ptr
+) !*vfs.Dentry {
     const dentry = vfs.Dentry.new() orelse return error.NoMemory;
     errdefer dentry.free();
 
-    const inode = try createInode(kind);
-    errdefer inode.free();
-
     try dentry.init(name, ctx, inode, &fs.data.dentry_ops);
-
     // Prevent auto-freeing dentry
     dentry.ref();
 
     return dentry;
 }
 
-fn createInode(comptime kind: EntryKind) !*vfs.Inode {
+pub fn createInode(kind: vfs.Inode.Type) !*vfs.Inode {
     const inode = vfs.Inode.new() orelse return error.NoMemory;
     errdefer inode.free();
 
+    const time = vfs.getTime().posix();
     inode.* = .{
         .index = 0,
-        .type = switch (kind) {
-            .directory => .directory,
-            .file => .regular_file
-        },
-        .perm = 0
+        .type = kind,
+        .access_time = @intCast(time),
+        .create_time = @intCast(time),
+        .modify_time = @intCast(time)
     };
-
-    if (kind == .file) {
-        const file = File.new() orelse return error.NoMemory;
-        inode.fs_data.set(file);
-    }
 
     return inode;
 }
