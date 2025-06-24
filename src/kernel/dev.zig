@@ -30,45 +30,101 @@ pub const DriverList = utils.List(Driver);
 pub const DriverNode = DriverList.Node;
 
 pub const Name = extern struct {
-    ptr: [*]const u8 = undefined,
-    len: u16 = 0,
+    const Meta = packed struct {
+        const Length = u7;
 
-    allocated: bool = false,
+        len: Length = 0,
+        is_alloc: bool = false,
+
+        comptime { std.debug.assert(@sizeOf(Meta) == 1); }
+    };
+
+    pub const max_len = std.math.maxInt(Meta.Length);
+    const local_size = @sizeOf(Name) - 1;
+
+    ptr: [*]const u8 = undefined,
+    pad_0: if (@sizeOf([*]u8) == 4) u32 else void = undefined,
+
+    pad_1: u32 = undefined, // 4-bytes
+    pad_2: u16 = undefined, // 2-bytes
+    pad_3: u8 = undefined,  // 1-byte
+                            // = 15 bytes
+
+    meta: u8 = 0,           // + 1 = 16 bytes
 
     comptime { std.debug.assert(@sizeOf(Name) == @sizeOf(usize) * 2); }
 
-    pub inline fn str(self: *const Name) []const u8 {
-        return self.ptr[0..self.len];
+    pub fn str(self: *const Name) []const u8 {
+        const len = self.length();
+        if (self.isAllocated() or len > max_len) return self.ptr[0..len];
+        return self.localBuffer()[0..len];
     }
 
     pub fn print(comptime fmt: []const u8, args: anytype) !Name {
+        var result: Name = undefined;
+
         const len: u16 = @truncate(std.fmt.count(fmt, args));
-        const buffer: [*]u8 = @ptrCast(vm.malloc(len) orelse return error.NoMemory);
+        const alloc: bool = len > local_size;
 
-        _ = try std.fmt.bufPrint(buffer[0..len], fmt, args);
-
-        return .{
-            .ptr = buffer,
-            .len = len,
-            .allocated = true
+        const buf: []u8 = blk: {
+            if (alloc) {
+                result.ptr = @ptrCast(vm.malloc(len) orelse return error.NoMemory);
+                break :blk result.localBuffer()[0..len];
+            } else {
+                break :blk result.localBuffer()[0..len];
+            }
         };
+
+        _ = try std.fmt.bufPrint(buf, fmt, args);
+
+        result.meta = @bitCast(Meta{
+            .len = @truncate(len),
+            .is_alloc = alloc
+        });
+        return result;
     }
 
-    pub inline fn init(val: []const u8) Name {
-        return .{
+    pub fn init(val: []const u8) Name {
+        var result: Name = .{
             .ptr = val.ptr,
-            .len = @truncate(val.len)
         };
+
+        result.meta = @bitCast(Meta{
+            .len = @truncate(val.len),
+        });
+
+        if (val.len <= local_size) @memcpy(
+            result.localBuffer()[0..val.len],
+            val
+        );
+        return result;
+    }
+
+    export fn devNameInit(value: [*]const u8, len: usize) Name {
+        return Name.init(value[0..len]);
     }
 
     pub inline fn deinit(self: *Name) void {
-        if (self.allocated) vm.free(@constCast(self.ptr));
-
-        self.len = 0;
+        if (self.isAllocated()) vm.free(@constCast(self.ptr));
+        self.meta = 0;
     }
 
     pub fn format(self: *const Name, _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{s}", .{ self.str() });
+    }
+
+    pub inline fn length(self: *const Name) u7 {
+        const meta: Meta = @bitCast(self.meta);
+        return meta.len;
+    }
+
+    inline fn isAllocated(self: *const Name) bool {
+        const meta: Meta = @bitCast(self.meta);
+        return meta.is_alloc;
+    }
+
+    inline fn localBuffer(self: *const Name) *[local_size]u8 {
+        return @ptrCast(@constCast(self));
     }
 };
 
