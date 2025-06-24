@@ -43,6 +43,20 @@ fn DentryOps(comptime fs: @Type(.enum_literal), comptime kind: Kind) type{
             }
             return error.BadOperation;
         }
+
+        pub fn open(_: *const vfs.Dentry, _: *vfs.File) vfs.Error!void {
+            const msg = comptime message("open");
+            switch (kind) {
+                .panic => @panic(msg),
+                .stub => std.log.warn(msg, .{})
+            }
+            return error.BadOperation;
+        }
+
+        pub fn close(_: *const vfs.Dentry, _: *vfs.File) void {
+            const msg = comptime message("open");
+            if (comptime kind == .panic) @panic(msg);
+        }
     };
 }
 
