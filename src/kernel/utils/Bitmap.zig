@@ -35,20 +35,19 @@ pub inline fn toggle(self: *Self, bit_idx: usize) void {
 }
 
 pub fn find(self: *Self, comptime is_setted: bool) ?usize {
-    const byte_val = if (is_setted) 0x00 else 0xFF;
+    @setRuntimeSafety(false);
 
-    for (0..self.bits.len) |byte_idx| {
-        const byte = self.bits[byte_idx];
+    const bytes_num = self.bits.len & (@bitSizeOf(usize) - 1);
+    const words_num = (self.bits.len - bytes_num) / @bitSizeOf(usize);
 
-        if (byte == byte_val) continue;
+    const words: [*]align(1) const usize = @ptrCast(self.bits.ptr);
+    const bytes = self.bits.ptr;
 
-        for (0..utils.byte_size) |i| {
-            const is_curr_setted = (byte & bitmask(i)) != 0;
-            if (is_curr_setted == is_setted) return (byte_idx * utils.byte_size) + i;
-        }
-    }
+    if (findGranulated(usize, is_setted, words[0..words_num])) |bit|
+        return bit;
 
-    return null;
+    const begin = self.bits.len & (~@as(usize, @bitSizeOf(usize) - 1));
+    return findGranulated(u8, is_setted, bytes[begin..bytes_num]);
 }
 
 pub fn rfind(self: *Self, comptime is_setted: bool) ?usize {
@@ -59,13 +58,9 @@ pub fn rfind(self: *Self, comptime is_setted: bool) ?usize {
         byte_idx -= 1;
 
         const byte = self.bits[byte_idx];
-
         if (byte == byte_val) continue;
 
-        for (0..utils.byte_size) |i| {
-            const is_curr_setted = (byte & bitmask(i)) != 0;
-            if (is_curr_setted == is_setted) return (byte_idx * utils.byte_size) + i;
-        }
+        return (byte_idx * utils.byte_size) + if (comptime is_setted) @ctz(byte) else @ctz(~byte);
     }
 
     return null;
@@ -73,4 +68,21 @@ pub fn rfind(self: *Self, comptime is_setted: bool) ?usize {
 
 inline fn bitmask(bit_idx: usize) u8 {
     return @as(u8,1) << @truncate(@mod(bit_idx, utils.byte_size));
+}
+
+inline fn findGranulated(
+    comptime Int: type,
+    comptime is_setted: bool,
+    ints: []align(1) const Int
+) ?usize {
+    const int_val = if (comptime is_setted) 0x00 else std.math.maxInt(Int);
+
+    for (ints[0..], 0..) |int, idx| {
+        if (int == int_val) continue;
+
+        const bit_idx = if (comptime is_setted) @ctz(int) else @ctz(~int);
+        return idx * @bitSizeOf(Int) + bit_idx;
+    }
+
+    return null;
 }
