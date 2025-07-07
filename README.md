@@ -10,7 +10,7 @@ BamOS does not introduce new standards but strives for the **best** possible imp
 
 ## Overview
 
-The main feature and goal of this project is to develop a **lightweight** and **extremely fast** operating system with a **well-documented**, **concise**, and **simple** codebase, as much as possible.
+The main feature and goal of this project is to develop a **lightweight** and **fast** operating system with a **well-documented**, **concise**, and **simple** codebase, as much as possible.
 
 It aims to include native support for multiple system ABIs between the kernel and user space (GNU/Linux, Windows NT, etc.) simultaneously. This should significantly improve the user experience and simplify the work for software developers.
 
@@ -24,27 +24,7 @@ Despite the familiar and established languages like C/C++ or the possibly safer 
 
 Zig is simple enough to be more maintainable than Rust while offering a safer and more functional alternative to C/C++. Zig allows generating high-speed and optimized machine code, and one of its main advantages is the build system, which makes the compilation process seamless and incredibly simple.
 
-To create a kernel executable, all you need is the source code, the Zig compiler, and the command `zig build kernel`.
-
-## Documentation
-
-- The general **OS** documentation is available on [this page](https://bagggage.github.io/bamos-book/).
-
-- The code documentation is available on [this page](https://bagggage.github.io/bamos/).
-If you want to generate the documentation locally, run the following command:
-
-  ```sh
-  zig build docs
-  ```
-  
-  A static site will be placed in the `docs` directory, which can then be launched using:
-
-  ```sh
-  cd docs
-  python -m http.server
-  ```
-
-The Zig language description and documentation for its standard library can be found on the [official website](https://ziglang.org/).
+To create a bootable image, all you need is the source code, the Zig compiler, and the command `zig build`.
 
 ## Contributing
 
@@ -55,37 +35,59 @@ See information on [contributing](./CONTRIBUTING.md).
 
 ## Building from Source
 
-The build process is quite straightforward:
+Before you begin, ensure that the Zig compiler version [**0.14.1**](https://ziglang.org/download/) is installed on your workstation.
 
-- Before you begin, ensure that the Zig compiler version [**0.14.0**](https://ziglang.org/download/) is installed on your workstation.
+The build process is quite straightforward:
 
 ```sh
 git clone https://github.com/bagggage/bamos.git
 cd bamos
-zig build kernel --release=[small|safe|fast]
+zig build --release=[off|small|safe|fast]
 ```
 
-By default, the build result will be located in the `.zig-out` directory. To specify a different path, use the `--prefix=[path]` option during the build.
+This will build the kernel `bamos.elf` and create a bootable image `bamos.iso`. By default, the build result will be located in the `zig-out` directory.
+To specify a different path, use the `--prefix=[path]` option during the build.
 
-## Creating an Image
+### Options
 
-Currently, the OS relies on the third-party [BOOTBOOT](https://gitlab.com/bztsrc/bootboot) bootloader, and the `bootboot/mkbootimg` utility is used to create the image. In the future, this stage is planned to be simplified and made more cross-platform. However, for now, to create an image, you need to:
+- `zig build kernel`  : build kernel executable
+- `zig build iso`     : create bootable image
+- `zig build qemu`    : run image in QEMU
+- `zig build docs`    : generate kernel documentation (destination: `/docs`)
 
-- Obtain precompiled [BOOTBOOT](https://github.com/bagggage/bootboot-bin) binaries. And unzip `mkbootimg` for your host OS.
-- Specify the path to the `bootboot-bin` directory by setting the `BOOTBOOT` variable in `env.sh`.
-- Run `iso.sh`.
+Use `zig build -h` to learn more.
 
-By default, the image will be placed in the `dist` directory.
-
-## Running
+### Running and testing
 
 For quick OS testing and launch, it is recommended to use the [QEMU](https://www.qemu.org) emulator.  
 On **Windows**, you should also add the `qemu` directory in the `PATH` environment variable beforehand.
 
-In the project's root directory, there are the `qemu.sh` and `debug.sh` scripts:
+```sh
+zig build qemu --release=safe
+```
 
-- `qemu.sh` runs a pre-built system image (by default `dist/bamos.iso`) in the emulator.
-- `debug.sh` compiles, creates the image, and runs the system in the emulator.
+You can configure virtual machine by passing different options `-Dqemu-*`,
+use `zig build -h` to learn more.
+
+## Documentation
+
+The general **OS** documentation is available on [this page](https://bagggage.github.io/bamos-book/).
+
+The code documentation is available on [this page](https://bagggage.github.io/bamos/).
+If you want to generate the documentation locally, run the following command:
+
+```sh
+zig build docs
+```
+
+A static site will be placed in the `/docs` directory, which can then be launched using:
+
+```sh
+cd docs
+python -m http.server
+```
+
+The Zig language description and documentation for its standard library can be found on the [official website](https://ziglang.org/).
 
 ## Details
 
