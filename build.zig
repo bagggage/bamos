@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) void {
     const qemu = runQemu(b, arch, image);
     qemu_step.dependOn(&qemu.step);
 
-    const docs_install = makeDocs(b);
+    const docs_install = makeDocs(b, kernel);
     docs_step.dependOn(docs_install);
 
     // Make `zig build [install]` same as `zig build iso`
@@ -110,7 +110,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     return kernel_install;
 }
 
-fn makeDocs(b: *std.Build) *std.Build.Step {
+fn makeDocs(b: *std.Build, kernel: *std.Build.Step.InstallArtifact) *std.Build.Step {
     const docs_dir: std.Build.InstallDir = .{ .custom = "../docs" };
     const html_file = b.addInstallFileWithDir(
         b.path(src_dir++"/docs/index.html"),
@@ -128,38 +128,11 @@ fn makeDocs(b: *std.Build) *std.Build.Step {
         "main.js"
     );
 
-    const wasm = b.addExecutable(.{
-        .name = "main",
-        .root_source_file = b.path(src_dir++"/docs/wasm/main.zig"),
-        .target = b.resolveTargetQuery(.{
-            .cpu_arch = .wasm32,
-            .os_tag = .freestanding,
-            .cpu_features_add = std.Target.wasm.featureSet(&.{
-                .atomics,
-                .bulk_memory,
-                // .extended_const, not supported by Safari
-                .multivalue,
-                .mutable_globals,
-                .nontrapping_fptoint,
-                .reference_types,
-                //.relaxed_simd, not supported by Firefox or Safari
-                .sign_ext,
-                // observed to cause Error occured during wast conversion :
-                // Unknown operator: 0xfd058 in Firefox 117
-                //.simd128,
-                // .tail_call, not supported by Safari
-            })
-        }),
-        .optimize = .ReleaseSmall,
-        .strip = false
-    });
-    wasm.rdynamic = true;
-    wasm.entry = std.Build.Step.Compile.Entry.disabled;
-
-    const wasm_install = b.addInstallArtifact(wasm, .{
-        .dest_dir = .{ .override = docs_dir },
-        .dest_sub_path = "main.wasm",
-    });
+    const kernel_docs = kernel.artifact.getEmittedDocs();
+    const wasm_install = b.addInstallFile(
+        kernel_docs.path(b, "main.wasm"),
+        "../docs/main.wasm"
+    );
 
     var tar_run = b.addRunArtifact(tar_exe);
     tar_run.setCwd(b.path(""));
@@ -219,6 +192,9 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
         "-m", b.fmt("{}M", .{mem_mb})
     });
 
+    qemu_run.addArg("-bios");
+    qemu_run.addFileArg(b.path("third-party/uefi/OVMF-efi.fd"));
+
     if (enable_gdb) qemu_run.addArg("-s");
     if (enable_trace) qemu_run.addArgs(&.{"-d", "int"});
 
@@ -237,6 +213,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     qemu_run.addArg("-drive");
     qemu_run.addPrefixedFileArg("id=boot,format=raw,if=none,file=", image.source);
     qemu_run.addArgs(&.{"-device", "ide-hd,drive=boot,bootindex=0"});
+    qemu_run.step.dependOn(&image.step);
 
     // Add additional drives as NVMe devices
     for (drives, 0..) |drive, i| {

@@ -254,6 +254,23 @@
         cursor: default;
       }
 
+      #errors {
+        background-color: #faa;
+        position: fixed;
+        left: 0;
+        bottom: 0;
+        width: 100%;
+        max-height: min(20em, 50vh);
+        padding: 0.5em;
+        overflow: auto;
+      }
+      #errors h1 {
+        font-size: 1.5em;
+      }
+      #errors pre {
+        background-color: #fcc;
+      }
+
       #listSearchResults li.selected {
         background-color: #93e196;
       }
@@ -382,6 +399,14 @@
         #listFields code a, #listParams code a, #fnProto code a {
           color: #34ceaf;
         }
+        #errors {
+          background-color: #800;
+          color: #fff;
+        }
+        #errors pre {
+          background-color: #a00;
+          color: #fff;
+        }
         .tok-kw {
           color: #398dd3;
         }
@@ -503,6 +528,10 @@
       <dl><dt><kbd>↑</kbd></dt><dd>Move up in search results</dd></dl>
       <dl><dt><kbd>↓</kbd></dt><dd>Move down in search results</dd></dl>
       <dl><dt><kbd>⏎</kbd></dt><dd>Go to active search result</dd></dl>
+    </div>
+    <div id="errors" class="hidden">
+      <h1>Errors</h1>
+      <pre id="errorsText"></pre>
     </div>
     <script src="main.js"></script>
   </body>

@@ -47,6 +47,54 @@ const CfgInitError = error {
     unknownArg,
 };
 
+const FileReader = struct {
+    file: std.fs.File,
+    pos: u64 = 0,
+    size: u64,
+    need_new_line: bool,
+
+    pub const Error = std.fs.File.ReadError;
+
+    pub inline fn init(file: std.fs.File) !FileReader {
+        const size = try file.getEndPos();
+        var buf: [1]u8 = undefined;
+
+        try file.seekTo(size - 1);
+
+        _ = try file.read(&buf);
+        try file.seekTo(0);
+
+        std.log.err("file end: {any}", .{buf[0]});
+
+        return .{
+            .file = file,
+            .size = size,
+            .need_new_line = (buf[0] != '\n')
+        };
+    }
+
+    pub fn read(self: *FileReader, buf: []u8) Error!usize {
+        const readed = try self.file.read(buf);
+        self.pos += readed;
+
+        if (buf.len > readed) std.log.err("some strage: {}/{} - {}=>{}", .{buf.len,readed,self.pos,self.size});
+
+        if (self.pos == self.size and self.need_new_line) {
+            std.log.err("insert '\\n'", .{});
+            buf[readed] = '\n';
+            self.pos += 1;
+
+            return readed + 1;
+        }
+
+        return readed;
+    }
+
+    pub fn getSize(self: *const FileReader) usize {
+        return if (self.need_new_line) self.size + 1 else self.size;
+    }
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{.safety = true}){};
     defer _ = gpa.deinit();
@@ -109,6 +157,8 @@ fn writeDir(src_dir: std.fs.Dir, name: []const u8, tar_writer: anytype, allocato
     var buffer: [512]u8 = undefined;
 
     while (try src_walker.next()) |entry| {
+        std.log.err("{s}", .{entry.path});
+
         switch (entry.kind) {
             .file => {
                 if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
@@ -121,7 +171,14 @@ fn writeDir(src_dir: std.fs.Dir, name: []const u8, tar_writer: anytype, allocato
         const file = try src_dir.openFile(entry.path, .{});
         defer file.close();
 
+        var file_reader = try FileReader.init(file);
+        const reader: std.io.GenericReader(*FileReader, FileReader.Error, FileReader.read) = .{ .context = &file_reader };
         const sub_path = try std.fmt.bufPrint(&buffer, "{s}/{s}", .{name, entry.path});
-        try tar_writer.writeFile(sub_path, file);
+
+        try tar_writer.writeFileStream(
+            sub_path,
+            file_reader.getSize(), reader,
+            .{ .mode = 0o0644, }
+        );
     }
 }
