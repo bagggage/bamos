@@ -1,0 +1,28 @@
+.{
+    .name = .bamos,
+    .version = "0.0.1",
+
+    .fingerprint = 0xcd2c4ccb5b1efab1, // Changing this has security and trust implications.
+
+    .minimum_zig_version = "0.14.1",
+
+    .dependencies = .{
+        .bootboot_bin = .{
+            .url = "git+https://gitlab.com/bztsrc/bootboot#binaries",
+            .hash = "N-V-__8AAA4RqgAEiQ7oQTlMBFe4ajBVxQj39MUUnuAl7QZ4",
+            .lazy = true,
+        },
+    },
+
+    .paths = .{
+        "build.zig.zon",
+        "build.zig",
+        "config",
+        "LICENSE",
+        "logo.svg",
+        "README.md",
+        "screenshot.png",
+        "src",
+        "third_party"
+    },
+}

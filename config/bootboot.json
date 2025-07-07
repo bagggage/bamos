@@ -1,9 +1,9 @@
 {
-    "config": "boot/bamos/config",
+    "config": "boot.env",
     "initrd": {
         "type": "tar",
         "gzip": true,
-        "directory": ["boot"]
+        "directory": ["bin"]
     },
     "iso9660": true,
     "partitions": [
