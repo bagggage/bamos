@@ -236,14 +236,14 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
 fn makeTools(b: *std.Build) void {
     tar_exe = b.addExecutable(.{
         .name = "tar",
-        .root_source_file = b.path(src_dir++"/tools/tar/main.zig"),
+        .root_source_file = b.path("build-tools/tar/main.zig"),
         .target = b.graph.host,
         .optimize = .ReleaseFast,
         .strip = true
     });
     zip_exe = b.addExecutable(.{
         .name = "zip",
-        .root_source_file = b.path(src_dir++"/tools/zip/main.zig"),
+        .root_source_file = b.path("build-tools/zip/main.zig"),
         .target = b.graph.host,
         .optimize = .ReleaseFast,
         .strip = true
