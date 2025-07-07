@@ -1,3 +1,18 @@
+// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+
+//! # TAR Archive utilty
+//! 
+//! Used as part of the build chain to
+//! create tar archives.
+//!
+//! Usage:
+//! `tar -o <output dir> -s <source dir> [-n <path prefix>]`
+//! 
+//! Arguments:
+//! - `-o <path>`   output archive name
+//! - `-s <path>`   source directory
+//! - `-n <name>`   optional archived files root path
+
 const std = @import("std");
 
 const Config = struct {
@@ -12,7 +27,7 @@ const Config = struct {
             if (std.mem.eql(u8, arg, "-o")) {
                 result.output = args.next() orelse return CfgInitError.expectedArg;
             }
-            else if (std.mem.eql(u8, arg, "-src")) {
+            else if (std.mem.eql(u8, arg, "-s")) {
                 result.src_dir = args.next() orelse return CfgInitError.expectedArg;
             }
             else if (std.mem.eql(u8, arg, "-n")) {
@@ -46,39 +61,52 @@ pub fn main() !void {
 
     const config = Config.init(&args) catch |err| {
         switch (err) {
-            CfgInitError.unknownArg => std.log.err("Unknown input argument found", .{}),
-            CfgInitError.expectedArg => std.log.err("Expected file/directory path or name after '-o'/'-src'/'-n", .{})
+            CfgInitError.unknownArg => std.log.err("unknown input argument found", .{}),
+            CfgInitError.expectedArg => std.log.err("expected file/directory path or name after '-o'/'-s'/'-n", .{})
         }
-        return;
+        return error.failed;
     };
 
     if (config.output == null) {
-        std.log.err("Output directory not specified, please specify path using '-o'", .{});
-        return;
+        std.log.err("output directory not specified, please specify path using '-o'", .{});
+        return error.failed;
     }
     if (config.src_dir == null) {
-        std.log.err("Source directory not specified, please specify path using '-src'", .{});
-        return;
+        std.log.err("source directory not specified, please specify path using '-s'", .{});
+        return error.failed;
     }
 
     try makeSrcTar(config, allocator);
 }
 
 fn makeSrcTar(config: Config, allocator: std.mem.Allocator) !void {
-    var src_dir = try std.fs.openDirAbsolute(config.src_dir.?, .{ .iterate = true }) ;
+    var src_dir =
+        if (config.src_dir.?[0] == '/')
+            try std.fs.openDirAbsolute(config.src_dir.?, .{ .iterate = true })
+        else 
+            try std.fs.cwd().openDir(config.src_dir.?, .{ .iterate = true });
     defer src_dir.close();
 
-    const tar_file = try std.fs.createFileAbsolute(config.output.?, .{});
+    const tar_file = 
+        if (config.output.?[0] == '/')
+            try std.fs.createFileAbsolute(config.output.?, .{})
+        else
+            try std.fs.cwd().createFile(config.output.?, .{});
     defer tar_file.close();
 
-    try writeDir(src_dir, config.name orelse "", tar_file, allocator);
+    var file_writer = tar_file.writer();
+
+    var tar_writer = std.tar.writer(file_writer.any());
+    try writeDir(src_dir, config.name orelse "", &tar_writer, allocator);
+
+    return tar_writer.finish();
 }
 
-fn writeDir(src_dir: std.fs.Dir, name: []const u8, tar_file: std.fs.File, allocator: std.mem.Allocator) !void {
+fn writeDir(src_dir: std.fs.Dir, name: []const u8, tar_writer: anytype, allocator: std.mem.Allocator) !void {
     var src_walker = try src_dir.walk(allocator);
     defer src_walker.deinit();
 
-    const padding_buffer = [1]u8{0} ** 512;
+    var buffer: [512]u8 = undefined;
 
     while (try src_walker.next()) |entry| {
         switch (entry.kind) {
@@ -93,31 +121,7 @@ fn writeDir(src_dir: std.fs.Dir, name: []const u8, tar_file: std.fs.File, alloca
         const file = try src_dir.openFile(entry.path, .{});
         defer file.close();
 
-        const stat = try file.stat();
-
-        var file_header = std.tar.output.Header.init();
-        file_header.typeflag = .regular;
-
-        try file_header.setPath(name, entry.path);
-        try file_header.setSize(stat.size);
-        try file_header.updateChecksum();
-
-        const header_bytes = std.mem.asBytes(&file_header);
-        const padding = p: {
-            const remainder: u16 = @intCast(stat.size % 512);
-            const n = if (remainder > 0) 512 - remainder else 0;
-            break :p padding_buffer[0..n];
-        };
-
-        var header_and_trailer: [2]std.posix.iovec_const = .{
-            .{ .base = header_bytes.ptr, .len = header_bytes.len },
-            .{ .base = padding.ptr, .len = padding.len },
-        };
-
-        try tar_file.writeFileAll(file, .{
-            .in_len = stat.size,
-            .headers_and_trailers = &header_and_trailer,
-            .header_count = 1,
-        });
+        const sub_path = try std.fmt.bufPrint(&buffer, "{s}/{s}", .{name, entry.path});
+        try tar_writer.writeFile(sub_path, file);
     }
 }
