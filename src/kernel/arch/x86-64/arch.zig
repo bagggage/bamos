@@ -127,14 +127,11 @@ pub inline fn setCpuLocalData(local_data: *smp.LocalData) void {
 }
 
 pub inline fn getCpuLocalData() *smp.LocalData {
-    var local_data: *smp.LocalData = undefined;
-    asm(std.fmt.comptimePrint(
-        "mov %gs:{},%[ptr]",
+    return asm(std.fmt.comptimePrint(
+        "mov %gs:{},%[ret]",
         .{@offsetOf(smp.LocalData, "arch_specific") + @offsetOf(CpuLocalData, "self_ptr")})
-        :[ptr]"=r"(local_data)
+        : [ret] "=r" (-> *smp.LocalData)
     );
-
-    return local_data;
 }
 
 /// This function initializes the CPU's essential features and settings, such as enabling the

@@ -4,6 +4,7 @@
 
 const std = @import("std");
 
+const arch = @import("arch.zig");
 const Clock = dev.classes.Clock;
 const dev = @import("../../dev.zig");
 const lapic = @import("intr/apic.zig").lapic;
@@ -51,6 +52,14 @@ fn timerIntrRoutin() callconv(.naked) noreturn {
     asm volatile("call isr.entry");
     defer asm volatile("jmp isr.exit");
 
+    const local = arch.getCpuLocalData();
+    asm volatile("push %[local]" :: [local] "r" (local));
+
+    dev.intr.handlerEnter(local);
+    defer asm volatile(
+        \\ pop %rdi
+        \\ call intrHandlerExit
+    );
+
     asm volatile("call timerIntrHandler");
-    defer asm volatile("call intrHandlerExit");
 }

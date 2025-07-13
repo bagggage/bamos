@@ -19,8 +19,7 @@ const Self = @This();
 
 const Flags = packed struct {
     need_resched: bool = false,
-    expire: bool = false,
-    preemtion: bool = false,
+    need_preempt: bool = false,
     sleep: bool = false,
 };
 
@@ -70,6 +69,7 @@ expired_queue: *TaskQueue = undefined,
 
 current_task: *tasks.AnyTask = undefined,
 
+preemption: u16 = 1,
 flags: Flags = .{},
 
 pub fn init(self: *Self) void {
@@ -88,7 +88,7 @@ pub fn begin(self: *Self) noreturn {
     self.current_task = task;
     task.common.state = .running;
 
-    self.enablePreemtion();
+    self.enablePreemptionRaw();
 
     std.debug.assert(intr.isEnabledForCpu());
     sys.time.maskTimerIntr(false);
@@ -106,7 +106,14 @@ pub fn enqueueTask(self: *Self, task: *tasks.AnyTask) void {
     task.common.updateBonus();
     task.common.updateTimeSlice();
 
-    defer self.tryPreemt(task);
+    defer if (self.flags.sleep) {
+        @branchHint(.unlikely);
+
+        self.flags.sleep = false;
+        self.planRescheduling();
+    } else {
+        self.tryPreempt(task);
+    };
 
     self.task_lock.lock();
     defer self.task_lock.unlock();
@@ -135,76 +142,77 @@ pub fn yield(self: *Self) void {
     self.current_task.common.yieldTime();
     defer self.current_task.common.updateTimeSlice();
 
-    self.task_lock.lock();
-    defer self.task_lock.unlock();
+    self.task_lock.lockIntr();
+    defer self.task_lock.unlockIntr();
 
     self.expired_queue.push(self.current_task);
 }
 
 /// Preemt current task by provided task only in case:
 /// current task priority is less and preemtion is enabled.
-pub fn tryPreemt(self: *Self, task: *const tasks.AnyTask) void {
+pub fn tryPreempt(self: *Self, task: *const tasks.AnyTask) void {
     if (
-        self.flags.sleep or
-        (
-            self.flags.preemtion and self.current_task.common.state == .running and
-            self.current_task.common.getPriority() > task.common.getPriority()
-        )
-    ) {
-        self.flags.sleep = false;
-        self.planRescheduling();
+        self.current_task.common.state == .running and
+        self.current_task.common.getPriority() > task.common.getPriority()
+    ) self.preempt();
+}
+
+pub inline fn preempt(self: *Self) void {
+    self.current_task.common.state = .unscheduled;
+
+    if (self.isPreemptive()) {
+        self.reschedule();
+        return;
     }
+
+    self.delayPreemption();
+}
+
+pub inline fn delayPreemption(self: *Self) void {
+    self.flags.need_preempt = true;
 }
 
 /// Scheduler main function. Switches to next task from queue,
 /// or fall into sleep if no tasks are scheduled.
 /// 
 /// **Call this function only in kernel context!**
-/// 
-/// Details:
-/// 1. First disables preemtion, to make sure that when interrupt happens,
-/// `need_resched` flag is wouldn't be set.
-/// 2. Expire current task if `expire` flag is set (see. `expire`).
-/// 3. Trying to get next task from `active_queue`.
-///    - if there are no tasks in queue, swap `active` and `expired` queues
-///      and repeat again.
-/// 4. If there are no scheduled tasks at all, fall into sleep (see `sleepTask`)
-/// and return from function after awake.
-/// 5. Switch from current task to next task from queue (see `switchTask`).
-///    - change next task state to `.running`;
-///    - if next task is current task, return (it happens when `active` and `expired`
-///      queues swaped and current task expired);
-///    - set `current_task` to next task from queue;
-///    - switch context.
-/// 
-/// To prevent bugs make sure that `current_task`'s data changes in proper way:
-///   - when time slice is changing make sure that `tick()` wouldn't affect it:
-///     set task state before to any state except `.running`;
-///   - when change task state make sure that `reschedule` wouldn't be called
-///     by any interrupt before you complete whole scheduling operation:
-///     1. Disable preemptions.
-///     2. Make sure that task can't be expired by timer interrupt (task status != `.running`).
-///     3. Or just disable interrupts (be carefull with it).
 pub fn reschedule(self: *Self) void {
-    std.debug.assert(intr.isEnabledForCpu());
+    std.debug.assert(intr.isEnabledForCpu() and self.current_task.common.state != .running);
 
-    self.disablePreemtion();
     self.flags.need_resched = false;
 
-    if (self.flags.expire) self.expire();
+    const is_expire = self.current_task.common.time_slice == 0;
+    const is_preempted = !is_expire and self.current_task.common.state == .unscheduled;
+
+    if (is_expire) self.onTimeExpired();
 
     var task = self.next();
     if (task == null) {
+        intr.disableForCpu();
+
         self.schedule();
-        task = self.next();
+        task = self.active_queue.pop();
 
         if (task == null) {
             self.sleepTask();
             return;
         }
+
+        intr.enableForCpu();
     }
 
+    if (is_preempted) self.onPreempt();
+
     self.switchTask(task.?);
+}
+
+inline fn schedule(self: *Self) void {
+    self.task_lock.lockAtomic();
+    defer self.task_lock.unlockAtomic();
+
+    const temp_queue = self.expired_queue;
+    self.expired_queue = self.active_queue;
+    self.active_queue = temp_queue;
 }
 
 pub inline fn planRescheduling(self: *Self) void {
@@ -219,22 +227,38 @@ pub inline fn getCpuLocal(self: *Self) *smp.LocalData {
     return @fieldParentPtr("scheduler", self);
 }
 
-pub inline fn enablePreemtion(self: *Self) void {
-    self.flags.preemtion = true;
+pub fn enablePreemption(self: *Self) void {
+    if (self.preemption == 1 and self.flags.need_preempt) {
+        self.flags.need_preempt = false;
+
+        self.enablePreemptionRaw();
+        self.reschedule();
+    } else {
+        self.enablePreemptionRaw();
+    }
 }
 
-pub inline fn disablePreemtion(self: *Self) void {
-    self.flags.preemtion = false;
+pub fn enablePreemptionNoResched(self: *Self) void {
+    if (self.preemption == 1 and self.flags.need_preempt) {
+        self.flags.need_preempt = false;
+
+        self.enablePreemptionRaw();
+        self.planRescheduling();
+    } else {
+        self.enablePreemptionRaw();
+    }
 }
 
-pub inline fn savePreemtion(self: *Self) bool {
-    const preemt = self.flags.preemtion;
-    self.flags.preemtion = false;
-    return preemt;
+inline fn enablePreemptionRaw(self: *Self) void {
+    _ = @atomicRmw(u16, &self.preemption, .Sub, 1, .release);
 }
 
-pub inline fn restorePreemtion(self: *Self, preemt: bool) void {
-    self.flags.preemtion = preemt;
+pub inline fn disablePreemption(self: *Self) void {
+    _ = @atomicRmw(u16, &self.preemption, .Add, 1, .release);
+}
+
+pub inline fn isPreemptive(self: *const Self) bool {
+    return self.preemption == 0;
 }
 
 pub fn tick(self: *Self) void {
@@ -249,9 +273,8 @@ pub fn tick(self: *Self) void {
         curr_task.common.cpu_time += 1;
 
         if (curr_task.common.time_slice == 0) {
-            curr_task.common.state = .unscheduled;
-            self.flags.expire = true;
-            self.planRescheduling();
+            self.current_task.common.state = .unscheduled;
+            self.delayPreemption();
         }
     }
 }
@@ -278,9 +301,7 @@ inline fn next(self: *Self) ?*tasks.AnyTask {
 }
 
 /// Handles the case when the current task's time has expired.
-fn expire(self: *Self) void {
-    self.flags.expire = false;
-
+inline fn onTimeExpired(self: *Self) void {
     self.current_task.common.updateBonus();
     defer self.current_task.common.updateTimeSlice();
 
@@ -290,29 +311,22 @@ fn expire(self: *Self) void {
     self.expired_queue.push(self.current_task);
 }
 
-inline fn schedule(self: *Self) void {
-    self.task_lock.lockIntr();
-    defer self.task_lock.unlockIntr();
-
-    const temp_queue = self.expired_queue;
-    self.expired_queue = self.active_queue;
-    self.active_queue = temp_queue;
+inline fn onPreempt(self: *Self) void {
+    self.active_queue.push(self.current_task);
 }
 
 export fn sleepTask(self: *Self) void {
-    {   // Safe sleep enter.
-        intr.disableForCpu();
-        defer intr.enableForCpu();
-
-        self.flags.sleep = true;
-        if (self.expired_queue.size > 0) self.planRescheduling();
-    }
+    std.debug.assert(intr.isEnabledForCpu() == false);
 
     const local = self.getCpuLocal();
     const task = self.current_task;
 
     local.tryExitInterrupt(1);
 
+    self.flags.sleep = true;
+    intr.enableForCpu();
+
+    // Waiting for awake.
     while (task.common.state != .running) {
         arch.halt();
     }
@@ -326,21 +340,22 @@ fn switchTask(self: *Self, task: *sched.AnyTask) void {
         // Don't waste time on switch.
         self.switchEnd(local);
         return;
-    } else if (curr_task.common.state == .running) {
-        // Preempt current task.
-        self.active_queue.push(self.current_task);
     }
 
     self.current_task = task;
-    self.switchEnd(local);
-
     curr_task.thread.context.switchTo(&task.asKernelTask().thread.context);
 }
 
 inline fn switchEnd(self: *Self, local: *smp.LocalData) void {
     // Handle special case when `reschedule` called from `dev.intr.onIntrExit`.
-    self.enablePreemtion();
-    self.current_task.common.state = .running;
-
     local.tryExitInterrupt(1);
+    self.current_task.common.state = .running;
+}
+
+/// Used from arch-specific implementation to complete swtiching.
+export fn switchEndEx() void {
+    const self = sched.getCurrent();
+    const local = self.getCpuLocal();
+
+    self.switchEnd(local);
 }

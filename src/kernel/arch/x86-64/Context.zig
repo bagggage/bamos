@@ -91,5 +91,7 @@ export fn switchToEx(_: *Self, _: *Self) callconv(.naked) void {
     asm volatile(
         \\ mov %rsp, (%rdi)
         \\ mov (%rsi), %rsp
+        \\ call switchEndEx
+        ::: "memory"
     );
 }

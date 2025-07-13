@@ -340,7 +340,6 @@ pub inline fn getHz() u32 {
 
 export fn timerIntrHandler(_: *Timer) void {
     const local = smp.getLocalData();
-    local.enterInterrupt();
 
     if (local.idx == smp.boot_cpu) {
         _ = sys_up_ticks.fetchAdd(1, .monotonic);

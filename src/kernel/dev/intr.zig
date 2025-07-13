@@ -471,22 +471,23 @@ pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
 
 pub export fn handleIrq(pin: u8) void {
     @setRuntimeSafety(false);
+    const local = smp.getLocalData();
 
-    _ = smp.getLocalData().enterInterrupt();
+    handlerEnter(local);
+    defer handlerExit(local);
+
     _ = irqs.buffer[pin].handle();
-
-    handlerExit();
 }
 
 pub export fn handleMsi(idx: u8) void {
     @setRuntimeSafety(false);
+    const local = smp.getLocalData();
 
-    _ = smp.getLocalData().enterInterrupt();
+    handlerEnter(local);
+    defer handlerExit(local);
 
     const handler = &msis.buffer[idx].handler;
     _ = handler.func(handler.device);
-
-    handlerExit();
 }
 
 pub inline fn requestMsi(
@@ -713,21 +714,29 @@ fn onIntrExit(local: *smp.LocalData) void {
     }
 }
 
+/// Used only in `handleMsi`, `handleIrq` and in
+/// arch-specific timer interrupt routine.
+pub inline fn handlerEnter(local: *smp.LocalData) void {
+    local.scheduler.disablePreemption();
+    local.enterInterrupt();
+}
+
 /// Used only in `handleMsi`, `handleIrq` and `intrHandlerExit`.
-fn handlerExit() void {
+fn handlerExit(local: *smp.LocalData) void {
     @setRuntimeSafety(false);
 
-    const local = smp.getLocalData();
     local.exitInterrupt();
 
     enableForCpu();
     chip.eoi();
 
+    local.scheduler.enablePreemptionNoResched();
     onIntrExit(local);
 }
 
 /// Used in arch-specific code to exit from
 /// timer interrupt routin.
 export fn intrHandlerExit() callconv(.c) void {
-    handlerExit();
+    const local = smp.getLocalData();
+    handlerExit(local);
 }

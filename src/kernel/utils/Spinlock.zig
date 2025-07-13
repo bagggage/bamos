@@ -10,6 +10,7 @@
 const atomic = std.atomic;
 const std = @import("std");
 const smp = @import("../smp.zig");
+const sched = @import("../sched.zig");
 const intr = @import("../dev.zig").intr;
 
 const Self = @This();
@@ -35,10 +36,22 @@ pub inline fn init(init_state: enum{locked,unlocked}) Self {
     };
 }
 
+/// Disable preemtion.
+/// Will spin in a loop until the lock is successfully acquired.
+pub fn lock(self: *Self) void {
+    sched.getCurrent().disablePreemption();
+    self.rawLock(.locked_no_intr);
+}
+
 /// Saves the local state of interrupts and disables them on the current CPU.
 /// Attempts to acquire the lock. 
 /// Will spin in a loop until the lock is successfully acquired.
-pub fn lock(self: *Self) void {
+pub fn lockSaveIntr(self: *Self) void {
+    comptime {
+        std.debug.assert(@intFromBool(false) == @intFromEnum(State.locked_no_intr));
+        std.debug.assert(@intFromBool(true) == @intFromEnum(State.locked_intr));
+    }
+
     const state: State = @enumFromInt(@intFromBool(intr.saveAndDisableForCpu()));
     self.rawLock(state);
 }
@@ -57,8 +70,14 @@ pub inline fn lockAtomic(self: *Self) void {
     self.rawLock(.locked_no_intr);
 }
 
+/// Release the lock, enable preemtion.
+pub inline fn unlock(self: *Self) void {
+    self.unlockAtomic();
+    sched.getCurrent().enablePreemption();
+}
+
 /// Restore local interrupt state and releases the lock.
-pub fn unlock(self: *Self) void {
+pub fn unlockSaveIntr(self: *Self) void {
     const intr_enable = self.exclusion.raw == .locked_intr;
 
     self.unlockAtomic();

@@ -66,7 +66,7 @@ pub fn preinit() void {
         var is_boot_cpu = true;
     };
 
-    init_lock.lock();
+    init_lock.lockAtomic();
 
     if (Static.is_boot_cpu) {
         Static.is_boot_cpu = false;
@@ -93,7 +93,7 @@ pub fn init() !void {
 
 /// @noexport
 pub inline fn initAll() void {
-    init_lock.unlock();
+    init_lock.unlockAtomic();
 }
 
 pub fn initCpu() void {
@@ -149,7 +149,7 @@ pub inline fn getIdx() u16 {
 
 fn waitForInit() noreturn {
     initCpu();
-    init_lock.unlock();
+    init_lock.unlockAtomic();
 
     sched.init() catch unreachable;
 

@@ -57,6 +57,8 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     const task = newKernelTask("startup", taskHandler) orelse return error.NoMemory;
 
     scheduler.init();
+    scheduler.current_task = task;
+
     scheduler.enqueueTask(task);
 
     if (cpu_idx == smp.getIdx()) scheduler.begin();
@@ -103,7 +105,7 @@ pub fn yield() void {
     const scheduler = getCurrent();
 
     // Don't disable preemtion because task is pushed
-    // into queue under spinlock, so interrupts would be disabled.
+    // into queue under spinlock, so preemtion would be disabled.
     // After lock release, task wouldn't be in `.running` state
     // so cannot be preempted.
     scheduler.yield();
