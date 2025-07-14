@@ -13,7 +13,7 @@ const vm = @import("vm.zig");
 
 const hashFn = std.hash.Fnv1a_32.hash;
 
-//pub const devfs = @import("vfs/drivers//devfs.zig");
+pub const devfs = @import("vfs/drivers//devfs.zig");
 pub const initrd = @import("vfs/drivers/initrd.zig");
 pub const internals = @import("vfs/internals.zig");
 pub const lookup_cache = @import("vfs/lookup-cache.zig");
@@ -27,7 +27,7 @@ pub const Inode = @import("vfs/Inode.zig");
 pub const Partition = parts.Partition;
 pub const Superblock = @import("vfs/Superblock.zig");
 
-pub const Error = error {
+pub const Error = parts.Error || error {
     InvalidArgs,
     IoFailed,
     Busy,
@@ -177,6 +177,7 @@ var fs_lock = utils.Spinlock.init(.unlocked);
 
 const AutoInit = opaque {
     pub var file_systems = .{
+        devfs,
         @import("vfs/drivers/initrd.zig"),
         @import("vfs/drivers/ext2.zig")
     };

@@ -3,21 +3,51 @@
 const std = @import("std");
 
 const dev = @import("../dev.zig");
+const devfs = vfs.devfs;
 const Drive = dev.classes.Drive;
 const log = std.log.scoped(.parts);
 const utils = @import("../utils.zig");
+const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
-
-const PartNode = List.Node;
-const Oma = vm.SafeOma(PartNode);
-
-pub const List = utils.List(Partition);
 
 pub const Error = Drive.Error;
 
+pub const Node = List.Node;
+pub const List = utils.List(Partition);
+
 pub const Partition = struct {
+    pub const alloc_config: vm.obj.AllocatorConfig = .{
+        .allocator = .safe_oma,
+        .capacity = 128,
+        .wrapper = .listNode(Node)
+    };
+
     lba_start: usize,
     lba_end: usize,
+
+    dev_file: devfs.DevFile = undefined,
+
+    pub inline fn asNode(self: *Partition) *Node {
+        return @fieldParentPtr("data", self);
+    }
+
+    pub fn init(self: *Partition, lba_start: usize, lba_end: usize) !void {
+        self.lba_start = lba_start;
+        self.lba_end = lba_end;
+    }
+
+    pub fn registerDevice(
+        self: *Partition, name: dev.Name, num: devfs.DevNum,
+        fops: *const vfs.File.Operations, data: ?*anyopaque
+    ) !void {
+        self.dev_file = .{
+            .name = name,
+            .num = num,
+            .fops = fops,
+            .data = .from(data)
+        };
+        try devfs.registerBlockDev(&self.dev_file);
+    }
 };
 
 pub const GuidPartitionTable = extern struct {
@@ -84,8 +114,6 @@ pub const GuidPartitionTable = extern struct {
 
 pub const Gpt = GuidPartitionTable;
 
-var parts_oma = Oma.init(32);
-
 pub fn probe(drive: *Drive) Error!void {
     std.debug.assert(drive.parts.len == 1);
 
@@ -104,6 +132,9 @@ pub fn probe(drive: *Drive) Error!void {
 
     if (parts_num == 0) return;
 
+    const drive_name = drive.base_name.str();
+    const dev_name_letter = std.ascii.isAlphabetic(drive_name[drive_name.len - 1]);
+
     // Entries
     const base_offset = gpt.array_lba * lba_size;
     var name: [36]u8 = .{ 0 } ** 36;
@@ -116,24 +147,43 @@ pub fn probe(drive: *Drive) Error!void {
 
         if (std.mem.eql(u8, &entry.guid.val, &Gpt.Entry.unused_guid.val)) break;
 
+        const dev_num = drive.dev_region.alloc() orelse return Error.DevMinorLimit;
+        errdefer drive.dev_region.free(dev_num);
+
+        var dev_name = try blk: {
+            if (dev_name_letter)
+                break :blk dev.Name.print("{s}{}", .{drive_name, i + 1});
+
+            break :blk dev.Name.print("{s}p{}", .{drive_name, i + 1});
+        };
+        errdefer dev_name.deinit();
+
         _ = std.unicode.utf16LeToUtf8(&name, &entry.name) catch {};
-        log.info("type: {} guid: {}: \"{s}\"", .{
-            entry.type_guid, entry.guid, name[0..std.mem.len(@as([*:0]u8, @ptrCast(&name)))]
+        log.info("{s}: type: {}, guid: {}: \"{s}\"", .{
+            dev_name.str(), entry.type_guid,
+            entry.guid, name[0..std.mem.len(@as([*:0]u8, @ptrCast(&name)))]
         });
 
         const part = try new();
+        errdefer delete(part);
 
-        part.data.lba_start = entry.start_lba;
-        part.data.lba_end = entry.end_lba;
+        part.* = .{
+            .lba_start = entry.start_lba,
+            .lba_end = entry.end_lba
+        };
 
-        drive.parts.append(part);
+        drive.parts.append(part.asNode());
+        errdefer drive.parts.remove(part.asNode());
+
+        try part.registerDevice(dev_name, dev_num, &Drive.file_operations, drive);
     }
 }
 
-pub fn new() Error!*PartNode {
-    return parts_oma.alloc() orelse return error.NoMemory;
+pub inline fn new() Error!*Partition {
+    const part = vm.obj.new(Partition) orelse return error.NoMemory;
+    return part;
 }
 
-pub fn delete(part: *PartNode) void {
-    parts_oma.free(part);
+pub inline fn delete(part: *Partition) void {
+    vm.obj.free(Partition, part);
 }
