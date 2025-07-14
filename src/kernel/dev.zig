@@ -30,6 +30,11 @@ pub const DriverList = utils.List(Driver);
 pub const DriverNode = DriverList.Node;
 
 pub const Name = extern struct {
+    pub const Error = error {
+        NoMemory,
+        BadName
+    };
+
     const Meta = packed struct {
         const Length = u7;
 
@@ -60,11 +65,13 @@ pub const Name = extern struct {
         return self.localBuffer()[0..len];
     }
 
-    pub fn print(comptime fmt: []const u8, args: anytype) !Name {
+    pub fn print(comptime fmt: []const u8, args: anytype) Error!Name {
         var result: Name = undefined;
 
         const len: u16 = @truncate(std.fmt.count(fmt, args));
         const alloc: bool = len > local_size;
+
+        if (len == 0 or len > max_len) return error.BadName;
 
         const buf: []u8 = blk: {
             if (alloc) {
@@ -75,7 +82,7 @@ pub const Name = extern struct {
             }
         };
 
-        _ = try std.fmt.bufPrint(buf, fmt, args);
+        _ = std.fmt.bufPrint(buf, fmt, args) catch return error.NoMemory;
 
         result.meta = @bitCast(Meta{
             .len = @truncate(len),
@@ -85,6 +92,8 @@ pub const Name = extern struct {
     }
 
     pub fn init(val: []const u8) Name {
+        std.debug.assert(val.len > 0 and val.len < max_len);
+
         var result: Name = .{
             .ptr = val.ptr,
         };
