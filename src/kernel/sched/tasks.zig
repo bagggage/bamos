@@ -215,4 +215,8 @@ pub const KernelTask = struct {
     name: []const u8,
 };
 
+comptime {
+    std.debug.assert(@offsetOf(KernelTask, "common") == @offsetOf(AnyTask, "common"));
+}
+
 
