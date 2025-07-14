@@ -6,6 +6,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const log = std.log.scoped(.utils);
+const num_alloc = @import("utils/num-alloc.zig");
 
 pub const api = @import("utils/api.zig");
 pub const algorithm = @import("utils/algorithm.zig");
@@ -43,14 +44,21 @@ pub fn CmpFnType(comptime T: type) type {
     return fn(*const T, *const T) CmpResult;
 }
 
+pub const AutoHashTable = hash_table.AutoHashTable;
+pub const config = @import("utils/config.zig");
+pub const hash_table = @import("utils/hash-table.zig");
+pub const HashTable = hash_table.HashTable;
+pub const Heap = @import("utils/Heap.zig");
 pub const List = std.DoublyLinkedList;
+pub const NumberAlloc = num_alloc.NumberAlloc;
+pub const NumberAllocCeil = num_alloc.NumberAllocCeil;
+pub const NumberAllocFloor = num_alloc.NumberAllocFloor;
+pub const NumberAllocRanged = num_alloc.NumberAllocRanged;
+pub const RefCount = @import("utils/ref-count.zig").RefCount;
 pub const SList = std.SinglyLinkedList;
 pub const Spinlock = @import("utils/Spinlock.zig");
-pub const hash_table = @import("utils/hash-table.zig");
-pub const Heap = @import("utils/Heap.zig");
-pub const HashTable = hash_table.HashTable;
-pub const AutoHashTable = hash_table.AutoHashTable;
-pub const RefCount = @import("utils/ref-count.zig").RefCount;
+
+pub const is_debug = (builtin.mode == .Debug or builtin.mode == .ReleaseSafe);
 
 /// Fixed-point scale.
 pub const fp_scale = 32;
