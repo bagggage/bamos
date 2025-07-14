@@ -31,7 +31,7 @@ pub const alloc_config: vm.obj.AllocatorConfig = .{
 };
 
 dentry: *Dentry,
-ops: *Operations,
+ops: *const Operations,
 offset: usize = 0,
 
 pub inline fn assignDentry(self: *File, dentry: *Dentry) void {

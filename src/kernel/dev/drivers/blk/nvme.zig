@@ -9,6 +9,7 @@
 const std = @import("std");
 
 const dev = @import("../../../dev.zig");
+const devfs = @import("../../../vfs.zig").devfs;
 const log = std.log.scoped(.nvme);
 const pci = dev.pci;
 const sched = @import("../../../sched.zig");
@@ -201,7 +202,14 @@ const Namespace = struct {
         self.base.vtable = &vtable;
 
         try identify(self, buffer);
-        try self.base.init("nvme", true, true);
+
+        var name: dev.Name = try .print("nvme{}n{}", .{ctrl_idx,nsid});
+        errdefer name.deinit();
+
+        try self.base.init(
+            name, &dev_region,
+            true, true
+        );
     }
 
     pub fn deinit(self: *NamespaceDrive) void {
@@ -896,7 +904,13 @@ var pci_driver = pci.Driver.init("nvme-ctrl",
     }
 );
 
+var ctrl_idx: u32 = 0;
+var dev_region: devfs.Region = undefined;
+
 pub fn init() !void {
+    dev_region = try .init();
+    errdefer dev_region.deinit();
+
     try dev.registerDriver("pci", &pci_driver.base);
 }
 
@@ -915,6 +929,7 @@ fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {
 
         return .failed;
     };
+    ctrl_idx += 1;
 
     return .success;
 }
@@ -924,6 +939,7 @@ fn remove(device: *dev.Device) void {
     const controller = pci_dev.data.as(Controller) orelse return;
 
     controller.deinit();
+    ctrl_idx -= 1;
 
     vm.free(controller);
 }
