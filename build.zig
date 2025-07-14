@@ -158,6 +158,7 @@ fn makeImage(b: *std.Build, step: *std.Build.Step, kernel: *std.Build.Step.Insta
     mk_run.setCwd(.{ .cwd_relative = b.install_path });
     mk_run.addFileArg(mkbootimg);
     mk_run.addFileArg(mk_cfg_path);
+    mk_run.addFileInput(kernel.artifact.getEmittedBin());
     mk_run.step.dependOn(&bt_cfg_install.step);
     mk_run.step.dependOn(&kernel.step);
 
@@ -165,7 +166,6 @@ fn makeImage(b: *std.Build, step: *std.Build.Step, kernel: *std.Build.Step.Insta
     const image_install = b.addInstallFile(image_path, "bamos.iso");
 
     image_install.step.dependOn(&mk_cfg_install.step);
-    image_install.step.dependOn(&bt_cfg_install.step);
 
     return image_install;
 }
