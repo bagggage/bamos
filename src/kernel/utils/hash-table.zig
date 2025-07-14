@@ -29,6 +29,11 @@ pub fn AutoContext(K: type) type {
     };
 }
 
+pub const StringContext = opaque {
+    pub const hash = std.hash_map.hashString;
+    pub const eql = std.hash_map.eqlString;
+};
+
 /// Hash table structure.
 /// 
 /// - `K`: type of key.
@@ -42,7 +47,7 @@ pub fn HashTable(K: type, V: type, Context: type) type {
 
         pub const Entry = struct {
             value: V,
-            hash: u64
+            hash: u64 = undefined
         };
 
         pub const EntryList = utils.SList(Entry);
@@ -133,5 +138,11 @@ pub fn HashTable(K: type, V: type, Context: type) type {
 }
 
 pub fn AutoHashTable(K: type, V: type) type {
-    return HashTable(K, V, std.hash_map.AutoContext(K));
+    return HashTable(
+        K, V,
+        if (K != []const u8)
+            std.hash_map.AutoContext(K)
+        else
+            StringContext
+    );
 }
