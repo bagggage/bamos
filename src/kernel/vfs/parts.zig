@@ -123,8 +123,8 @@ pub fn probe(drive: *Drive) Error!void {
 
     if (gpt.checkSign() == false) return;
 
-    log.info("GPT found: {s}; patritions: {}; entry size: {}", .{
-        drive.base_name, gpt.parts_num, gpt.ent_size
+    log.info("GPT found: {}; patritions: {}; entry size: {}", .{
+        drive.getName(), gpt.parts_num, gpt.ent_size
     });
 
     const parts_num = gpt.parts_num;
@@ -132,7 +132,7 @@ pub fn probe(drive: *Drive) Error!void {
 
     if (parts_num == 0) return;
 
-    const drive_name = drive.base_name.str();
+    const drive_name = drive.getName().str();
     const dev_name_letter = std.ascii.isAlphabetic(drive_name[drive_name.len - 1]);
 
     // Entries

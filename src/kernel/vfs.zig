@@ -343,8 +343,8 @@ fn mountEx(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) 
     }
 
     if (drive) |d| {
-        log.info("{s} on {s}:part:{} is mounted to \"{s}\"", .{
-            fs.name, d.base_name, part_idx, dentry.path()
+        log.info("{s} on {}:part:{} is mounted to \"{s}\"", .{
+            fs.name, d.getName(), part_idx, dentry.path()
         });
     } else {
         log.info("{s} is mounted to \"{s}\"", .{fs.name, dentry.path()});

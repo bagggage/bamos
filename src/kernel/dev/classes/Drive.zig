@@ -82,7 +82,7 @@ const Io = union {
     single: SingleIo,
 };
 
-base_name: dev.Name,
+base_part: vfs.parts.Node,
 
 lba_size: u16,
 lba_shift: u4 = undefined,
@@ -107,9 +107,6 @@ fn checkIo(self: *const Self, lba_offset: usize, buffer: []const u8) void {
 }
 
 pub fn init(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: bool, partitions: bool) Error!void {
-    const root_part = try vfs.parts.new();
-    errdefer vfs.parts.delete(root_part);
-
     self.cache_ctrl = try cache.newCtrl();
     errdefer cache.deleteCtrl(self.cache_ctrl);
 
@@ -126,13 +123,13 @@ pub fn init(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: bo
 
     errdefer if (multi_io) vm.free(self.io.multi);
 
-    self.base_name = name;
     self.dev_region = dev_region;
     self.lba_shift = std.math.log2_int(u16, self.lba_size);
     self.io_oma = IoOma.init(io_oma_capacity);
 
     {
-        root_part.* = .{
+        const base_part = &self.base_part.data;
+        base_part.* = .{
             .lba_start = 0,
             .lba_end = self.offsetToLba(self.capacity)
         };
@@ -140,15 +137,15 @@ pub fn init(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: bo
         const dev_num = self.dev_region.alloc() orelse return Error.DevMinorLimit;
         errdefer self.dev_region.free(dev_num);
 
-        try root_part.registerDevice(
-            self.base_name,
+        try base_part.registerDevice(
+            name,
             dev_num,
             &file_operations,
             self
         );
 
         self.parts = .{};
-        self.parts.append(root_part.asNode());
+        self.parts.append(base_part.asNode());
         self.flags.is_partitionable = partitions;
     }
 }
@@ -161,14 +158,18 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn onObjectAdd(self: *Self) void {
-    log.info("registered: {s}; lba size: {}; capacity: {} MiB", .{
-        self.base_name, self.lba_size, self.capacity / utils.mb_size
+    log.info("registered: {}; lba size: {}; capacity: {} MiB", .{
+        self.getName(), self.lba_size, self.capacity / utils.mb_size
     });
 
     if (self.flags.is_partitionable) vfs.parts.probe(self) catch |err| {
         log.err("Failed to probe partitions: {s}", .{@errorName(err)});
         self.flags.is_partitionable = false;
     };
+}
+
+pub inline fn getName(self: *Self) *const dev.Name {
+    return &self.base_part.data.dev_file.name;
 }
 
 pub fn nextRequest(self: *Self) ?*const IoRequest {

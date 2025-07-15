@@ -353,8 +353,6 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
         dentry.init("/", undefined, try inode.cache(root_inode), &fs.data.dentry_ops) catch unreachable;
     }
 
-    log.info("mounting on drive: {s}", .{drive.base_name});
-
     return super;
 }
 
