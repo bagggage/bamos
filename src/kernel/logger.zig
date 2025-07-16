@@ -49,18 +49,29 @@ const KernelWriter = struct {
     fn setup() std.io.AnyWriter {
         const early_logs = EarlyWriter.getPrinted();
 
-        terminal.write(early_logs);
+        if (terminal.isInitialized()) {
+            terminal.write(early_logs);
+            return .{
+                .context = undefined,
+                .writeFn = writeBoth
+            };
+        }
 
         return .{
             .context = undefined,
-            .writeFn = write
+            .writeFn = writeSerial
         };
     }
 
-    fn write(_: *const anyopaque, bytes: []const u8) anyerror!usize {
+    fn writeBoth(_: *const anyopaque, bytes: []const u8) anyerror!usize {
         serial.write(bytes);
         terminal.write(bytes);
 
+        return bytes.len;
+    }
+
+    fn writeSerial(_: *const anyopaque, bytes: []const u8) anyerror!usize {
+        serial.write(bytes);
         return bytes.len;
     }
 };

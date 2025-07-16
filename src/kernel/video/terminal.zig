@@ -11,6 +11,9 @@ const std = @import("std");
 const cc = std.ascii.control_code;
 
 const boot = @import("../boot.zig");
+const config = utils.config;
+const log = std.log.scoped(.@"video.terminal");
+const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 const Color = Framebuffer.Color;
@@ -18,6 +21,7 @@ const Framebuffer = @import("Framebuffer.zig");
 const text_output = @import("text-output.zig");
 
 const use_buffers = true;
+const fb_display = "fb0";
 
 const Cursor = struct {
     const tab_size = 6;
@@ -85,7 +89,20 @@ var char_buf_rank: u32 = undefined;
 var color_buffer: []u32 = undefined;
 var color_buf_rank: u32 = undefined;
 
+var is_initialized = false;
+
 pub fn init() !void {
+    const display = config.getAs(?[]const u8, "display") orelse fb_display;
+
+    if (display) |disp| {
+        if (std.mem.eql(u8, disp, fb_display) == false) {
+            log.warn("unknown display: {s}: skip initialization", .{disp});
+        }
+    } else {
+        log.warn("no display: skip initialization", .{});
+        return;
+    }
+
     boot.getFb(&framebuffer);
 
     try text_output.init(&framebuffer);
@@ -117,16 +134,23 @@ pub fn init() !void {
         color_buffer.ptr = @ptrFromInt(vm.getVirtLma(color_buf_phys));
         @memset(color_buffer, curr_col);
     }
+
+    is_initialized = true;
 }
 
 pub fn deinit() void {
     if (comptime use_buffers == false) return;
+    if (is_initialized == false) return;
 
     const char_buf_phys = vm.getPhysLma(char_buffer.ptr);
     const color_buf_phys = vm.getPhysLma(color_buffer.ptr);
 
     vm.PageAllocator.free(@intFromPtr(char_buf_phys), char_buf_rank);
     vm.PageAllocator.free(@intFromPtr(color_buf_phys), color_buf_rank);
+}
+
+pub inline fn isInitialized() bool {
+    return is_initialized;
 }
 
 /// Sets the cursor position to the specified row and column.
@@ -138,6 +162,10 @@ pub inline fn setCursor(row: u16, col: u16) void {
 /// Sets the current color used for text rendering.
 pub inline fn setColor(color: Color) void {
     curr_col = color.pack(framebuffer.format);
+}
+
+pub inline fn getCursor() Cursor {
+    return cursor;
 }
 
 /// Returns the current color used for text rendering.
