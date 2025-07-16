@@ -9,6 +9,7 @@ const builtin = @import("builtin");
 
 const arch = utils.arch;
 const boot = @import("boot.zig");
+const config = utils.config;
 const dev = @import("dev.zig");
 const logger = @import("logger.zig");
 const log = std.log;
@@ -61,6 +62,8 @@ pub export fn main() noreturn {
     init(vm);
     log.warn("Used memory: {} KB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / utils.kb_size});
 
+    init(config);
+
     preinit(dev);
 
     init(sys.time);
@@ -86,11 +89,15 @@ fn kernelStartupTask() noreturn {
         };
     }
 
-    //const fake_task = sched.newKernelTask("fake_task", fakeTask).?;
+    //const fake_task = sched.newKernelTask("fake", fakeTask).?;
     //sched.enqueue(fake_task);
+    //const other_task = sched.newKernelTask("other_task", fakeTask).?;
+    //sched.enqueue(other_task);
 
     init(vfs);
     init(dev);
+
+    init(sys);
 
     sched.pause();
     unreachable;
@@ -100,7 +107,8 @@ fn fakeTask() noreturn {
     const scheduler: *volatile sched.Scheduler = sched.getCurrent();
 
     while (true) {
-        log.debug("fake: {} - {}", .{
+        log.debug("{s}: {} - {}", .{
+            scheduler.current_task.asKernelTask().name,
             scheduler.current_task.common.time_slice,
             @as(u32, 32) - scheduler.current_task.common.getPriority(),
         });
