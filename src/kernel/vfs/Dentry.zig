@@ -186,7 +186,7 @@ pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
     if (child == null) {
         const new_child = self.ops.lookup(self, child_name) orelse return null;
 
-        self.addChild(new_child);
+        if (new_child.parent != self) self.addChild(new_child);
 
         log.debug("new: {s}: inode: {}", .{new_child.name.str(), new_child.inode.index});
 
