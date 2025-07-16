@@ -31,6 +31,10 @@ pub const Partition = struct {
         return @fieldParentPtr("data", self);
     }
 
+    pub inline fn fromDevFile(dev_file: *devfs.DevFile) *Partition {
+        return @fieldParentPtr("dev_file", dev_file);
+    }
+
     pub fn init(self: *Partition, lba_start: usize, lba_end: usize) !void {
         self.lba_start = lba_start;
         self.lba_end = lba_end;

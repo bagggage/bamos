@@ -71,6 +71,10 @@ pub const DevFile = struct {
     pub inline fn fromNode(node: *Node) *DevFile {
         return @fieldParentPtr("node", node);
     }
+
+    pub inline fn fromDentry(dentry: *const vfs.Dentry) *DevFile {
+        return dentry.inode.fs_data.as(DevFile).?;
+    }
 };
 
 const DevList = struct {
@@ -149,7 +153,7 @@ pub inline fn registerCharDev(devf: *DevFile) Error!void {
     _ = try registerDevice(devf, .char_device);
 }
 
-pub inline fn getDevData(dentry: *vfs.Dentry) utils.AnyData {
+pub inline fn getDevData(dentry: *const vfs.Dentry) utils.AnyData {
     return dentry.inode.fs_data.as(DevFile).?.data;
 }
 
@@ -158,6 +162,8 @@ fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
     errdefer vfs.Inode.free(inode);
 
     const dentry = try tmpfs.createDentry(devf.name.str(), inode, root.ctx);
+    dentry.ops = &fs.data.dentry_ops;
+
     inode.fs_data.set(devf);
     root.addChild(dentry);
 
