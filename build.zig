@@ -177,6 +177,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     const core_num = b.option(u5, "qemu-cores", "QEMU machine cores number (default: 4)") orelse qemu_cores_default;
     const mem_mb = b.option(u16, "qemu-ram-mb", "QEMU machine RAM size in megabytes (default: 16)") orelse qemu_mem_mb_default;
     const drives = b.option([]const []const u8, "qemu-drives", "QEMU additional NVMe drives (paths to images)") orelse &.{};
+    const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse false;
 
     const qemu_name = switch (arch) {
         .x86,
@@ -198,12 +199,14 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     if (enable_gdb) qemu_run.addArg("-s");
     if (enable_trace) qemu_run.addArgs(&.{"-d", "int"});
 
-    if (enable_serial) {
+    if (enable_serial and !no_gui) {
         qemu_run.addArgs(&.{
             "-chardev", "stdio,id=char0",
             "-serial",  "chardev:char0",
         });
     }
+
+    if (no_gui) qemu_run.addArg("-nographic");
 
     if (core_num > 1) {
         qemu_run.addArgs(&.{"-smp", b.fmt("cores={}", .{core_num})});
