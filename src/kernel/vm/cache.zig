@@ -405,6 +405,10 @@ pub inline fn offsetToBlock(offset: usize) u32 {
     return @truncate(offset / block_size);
 }
 
+pub inline fn offsetModBlock(offset: usize) u32 {
+    return @truncate(offset % block_size);
+}
+
 pub inline fn blockToOffset(block: u32) usize {
     return @as(usize, block) * block_size;
 }
