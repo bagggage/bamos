@@ -178,6 +178,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     const mem_mb = b.option(u16, "qemu-ram-mb", "QEMU machine RAM size in megabytes (default: 16)") orelse qemu_mem_mb_default;
     const drives = b.option([]const []const u8, "qemu-drives", "QEMU additional NVMe drives (paths to images)") orelse &.{};
     const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse false;
+    const no_uefi = b.option(bool, "qemu-noefi", "Legacy BIOS firmware") orelse false;
 
     const qemu_name = switch (arch) {
         .x86,
@@ -193,8 +194,10 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
         "-m", b.fmt("{}M", .{mem_mb})
     });
 
-    qemu_run.addArg("-bios");
-    qemu_run.addFileArg(b.path("third-party/uefi/OVMF-efi.fd"));
+    if (no_uefi == false) {
+        qemu_run.addArg("-bios");
+        qemu_run.addFileArg(b.path("third-party/uefi/OVMF-efi.fd"));
+    }
 
     if (enable_gdb) qemu_run.addArg("-s");
     if (enable_trace) qemu_run.addArgs(&.{"-d", "int"});
