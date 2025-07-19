@@ -134,7 +134,7 @@ pub fn init() !intr.Chip {
     };
 }
 
-pub inline fn setupCpu(cpu_idx: u8) void {
+pub inline fn setupCpu(cpu_idx: u16) void {
     useIdt(&idts[cpu_idx]);
     regs.setTss(gdt.getTssOffset(cpu_idx));
 }

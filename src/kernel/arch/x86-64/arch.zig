@@ -146,7 +146,7 @@ pub inline fn initCpu() void {
 pub fn setupCpu(cpu_idx: u16) void {
     gdt.setupCpu();
 
-    intr.setupCpu(@truncate(cpu_idx));
+    intr.setupCpu(cpu_idx);
     intr.enableForCpu();
 }
 
