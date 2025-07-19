@@ -75,7 +75,7 @@ pub fn init() vm.Error!void {
     const mem_pool = boot.alloc(bitmap_pages) orelse return vm.Error.NoMemory;
     const virt_pool = vm.getVirtLma(mem_pool);
 
-    log.warn("mem pool size: {} KB", .{@as(usize, bitmap_pages) * (vm.page_size / utils.kb_size)});
+    log.warn("mem pool size: {} bytes ~ {} KB", .{bitmap_size, @as(usize, bitmap_pages) * (vm.page_size / utils.kb_size)});
 
     initAreas(virt_pool, bitmap_size);
 
@@ -231,7 +231,7 @@ fn initAreas(bitmap_base: usize, bitmap_size: u32) void {
     const mem_map = boot.getMemMap();
 
     var curr_bitmap_base = bitmap_base;
-    var curr_bitmap_size = bitmap_size / 2;
+    var curr_bitmap_size = math.divCeil(u32, bitmap_size, 2) catch unreachable;
 
     // Initialize bitmaps
     for (0..max_areas) |i| {
