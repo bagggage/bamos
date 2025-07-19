@@ -135,6 +135,9 @@ pub fn init() !intr.Chip {
 }
 
 pub inline fn setupCpu(cpu_idx: u16) void {
+    // 2048 - because of `gdt.getTssOffset` (see it for details).
+    comptime std.debug.assert(smp.max_cpus == 2048);
+
     useIdt(&idts[cpu_idx]);
     regs.setTss(gdt.getTssOffset(cpu_idx));
 }

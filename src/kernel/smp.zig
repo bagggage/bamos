@@ -16,6 +16,8 @@ const Spinlock = utils.Spinlock;
 
 /// Index of the CPU that boots the system.
 pub const boot_cpu = 0;
+/// Max supported number of CPUs.
+pub const max_cpus = 2048;
 
 pub const LocalData = struct {
     idx: u16 = 0,
@@ -71,7 +73,12 @@ pub fn preinit() void {
     if (Static.is_boot_cpu) {
         Static.is_boot_cpu = false;
 
-        cpus_data.len = boot.getCpusNum();
+        const cpus_num = boot.getCpusNum();
+        if (cpus_num > max_cpus) {
+            @panic("The number of CPUs is bigger then maximum supported number!");
+        }
+
+        cpus_data.len = cpus_num;
     } else {
         waitForInit();
     }
