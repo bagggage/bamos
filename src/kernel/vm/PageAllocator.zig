@@ -21,6 +21,12 @@ const FreeArea = struct {
     pub const List_t = utils.SList(void);
 
     list: List_t = List_t{},
+    /// Bitmap for tracking if neighbour pages (buddies) are
+    /// at the same state `0` or not `1`.
+    /// 
+    /// There are two states: allocated and free.
+    /// But for optimization purposes state not stored directly within the bitmap.
+    /// Each bit represents the difference of states between two neighbour pages.
     bitmap: utils.Bitmap = undefined,
 
     pub fn format(value: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -52,14 +58,13 @@ const max_areas = 14;
 pub const max_rank = max_areas;
 pub const max_alloc_pages = 1 << (max_rank - 1);
 
-var free_areas: [max_areas]FreeArea = .{FreeArea{}} ** max_areas;
-
 export var allocated_pages: u32 = 0;
 export var total_pages: usize = 0;
 
+var free_areas: [max_areas]FreeArea = .{FreeArea{}} ** max_areas;
 var lock = Spinlock.init(.unlocked);
 
-var is_init = false;
+var is_initialized = false;
 
 /// Initializes the page allocator by setting up memory pools and free areas.
 /// Lookup the memory map from the `boot` module and initializes the free areas.
@@ -91,7 +96,7 @@ pub fn init() vm.Error!void {
         log.warn("total mem: {} KB ({} MB)", .{ total_kb, total_kb / utils.kb_size });
     }
 
-    is_init = true;
+    is_initialized = true;
 }
 
 /// Allocates a linear block of physical memory of the specified rank (size).
@@ -212,7 +217,7 @@ pub fn free(base: usize, rank: u32) void {
 ///
 /// @noexport
 pub inline fn isInitialized() bool {
-    return is_init;
+    return is_initialized;
 }
 
 /// Returns the total number of pages managed by the allocator.
