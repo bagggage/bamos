@@ -17,6 +17,10 @@ pub fn RefCount(comptime UintType: type) type {
 
         value: std.atomic.Value(UintType) = .{ .raw = 1 },
 
+        pub inline fn init(value: UintType) Self {
+            return .{ .value = .{ .raw = value } };
+        }
+
         pub inline fn set(self: *Self, value: UintType) void {
             self.value.store(value, .acquire);
         }
