@@ -351,6 +351,7 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
         errdefer dentry.free();
 
         dentry.init("/", undefined, try inode.cache(root_inode), &fs.data.dentry_ops) catch unreachable;
+        super.root = dentry;
     }
 
     return super;
