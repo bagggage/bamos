@@ -4,7 +4,10 @@
 
 const std = @import("std");
 
+const config = utils.config;
+const devfs = vfs.devfs;
 const log = std.log.scoped(.sys);
+const utils = @import("utils.zig");
 const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
 
@@ -39,6 +42,8 @@ fn startInit() !void {
 
 fn findInit() !*vfs.Dentry {
     const root = getInitRoot() orelse return error.NoRootFs;
+    defer root.deref();
+
     var init_dent: ?*vfs.Dentry = null;
 
     for (init_paths) |path| {
@@ -58,10 +63,62 @@ fn findInit() !*vfs.Dentry {
 }
 
 fn getInitRoot() ?*vfs.Dentry {
+    if (config.get("root")) |root_path| blk: {
+        const dentry = findRoot(root_path) catch |err| {
+            log.err(
+                "Root file system at \"{s}\" not found: {s}",
+                .{root_path,@errorName(err)}
+            );
+            break :blk;
+        };
+        defer dentry.deref();
+
+        return resolveRoot(dentry) catch |err| {
+            log.err(
+                "Root file system at \"{s}\" cannot be resolved: {s}",
+                .{root_path,@errorName(err)}
+            );
+            break :blk;
+        };
+    }
+
     log.warn("No root file system is configured, fallback to \""++vfs.initrd.fs_name++"\"", .{});
 
     return vfs.getInitRamDisk() orelse {
         log.err("The fallback root file system \""++vfs.initrd.fs_name++"\" is not accessible.",.{});
         return null;
+    };
+}
+
+fn findRoot(root_path: []const u8) !*vfs.Dentry {
+    const dev_path = "/dev/";
+
+    if (std.mem.startsWith(u8, root_path, dev_path)) {
+        const blk_path = root_path[dev_path.len..];
+        return try vfs.lookup(devfs.getRoot(), blk_path);
+    }
+
+    return try vfs.lookup(null, root_path);
+}
+
+fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
+    return switch (dentry.inode.type) {
+        .directory => {
+            if (vfs.isMountPoint(dentry) == false) return error.BadDentry;
+
+            return dentry;
+        },
+        .block_device => blk: {
+            const blk_dev = devfs.BlockDev.fromDentry(dentry);
+
+            const mnt_dir = try vfs.getRoot().makeDirectory("rootfs");
+            defer mnt_dir.deref();
+
+            break :blk try if (config.get("rootfs")) |fs_name|
+                vfs.mount(mnt_dir, fs_name, blk_dev) 
+            else vfs.tryMount(mnt_dir, blk_dev);
+        },
+        .symbolic_link => resolveRoot(try vfs.resolveSymLink(dentry)),
+        else => return error.BadDentry
     };
 }
