@@ -31,12 +31,12 @@ pub fn tryReadLock(self: *Self) bool {
 
     const scheduler = sched.getCurrent();
     scheduler.disablePreemption();
-    self.readers.fetchAdd(1, .release);
+    _ = self.readers.fetchAdd(1, .release);
 
     if (self.lock.isLocked()) {
         @branchHint(.unlikely);
 
-        self.readers.fetchSub(1, .acquire);
+        _ = self.readers.fetchSub(1, .acquire);
         scheduler.enablePreemption();
         return false;
     }
@@ -45,14 +45,14 @@ pub fn tryReadLock(self: *Self) bool {
 }
 
 pub fn readUnlock(self: *Self) void {
-    self.readers.fetchSub(1, .acquire);
+    _ = self.readers.fetchSub(1, .acquire);
     sched.getCurrent().enablePreemption();
 }
 
 pub fn writeLock(self: *Self) void {
     self.lock.lock();
 
-    while (self.readers.load(.release) > 0) {
+    while (self.readers.load(.acquire) > 0) {
         @branchHint(.unlikely);
         atomic.spinLoopHint();
     }
