@@ -73,7 +73,37 @@ pub const DevFile = struct {
     }
 
     pub inline fn fromDentry(dentry: *const vfs.Dentry) *DevFile {
+        std.debug.assert(
+            dentry.inode.type == .block_device or
+            dentry.inode.type == .char_device
+        );
         return dentry.inode.fs_data.as(DevFile).?;
+    }
+};
+
+pub const BlockDev = struct {
+    dev_file: DevFile,
+
+    pub inline fn fromDevFile(dev_file: *DevFile) *BlockDev {
+        std.debug.assert(dev_file.data.ptr != null);
+        return @ptrCast(dev_file);
+    }
+
+    pub inline fn fromDentry(dentry: *const vfs.Dentry) *BlockDev {
+        std.debug.assert(dentry.inode.type == .block_device);
+        return @ptrCast(DevFile.fromDentry(dentry));
+    }
+
+    pub inline fn getPartition(self: *BlockDev) *vfs.Partition {
+        return vfs.Partition.fromDevFile(&self.dev_file);
+    }
+
+    pub inline fn getDrive(self: *BlockDev) *vfs.Drive {
+        return self.dev_file.data.as(vfs.Drive).?;
+    }
+
+    pub inline fn getName(self: *const BlockDev) *const dev.Name {
+        return &self.dev_file.name;
     }
 };
 
