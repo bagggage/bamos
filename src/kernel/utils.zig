@@ -56,6 +56,7 @@ pub const NumberAllocFloor = num_alloc.NumberAllocFloor;
 pub const NumberAllocRanged = num_alloc.NumberAllocRanged;
 pub const RefCount = @import("utils/ref-count.zig").RefCount;
 pub const SList = std.SinglyLinkedList;
+pub const RwLock = @import("utils/RwLock.zig");
 pub const Spinlock = @import("utils/Spinlock.zig");
 
 pub const is_debug = (builtin.mode == .Debug or builtin.mode == .ReleaseSafe);
