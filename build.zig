@@ -9,8 +9,9 @@ const qemu_cores_default = 4;
 const qemu_mem_mb_default = 64;
 
 // Build tools
-var zip_exe: *std.Build.Step.Compile = undefined;
+var dbg_make_exe: *std.Build.Step.Compile = undefined;
 var tar_exe: *std.Build.Step.Compile = undefined;
+var zip_exe: *std.Build.Step.Compile = undefined;
 
 pub fn build(b: *std.Build) void {
     const kernel_step = b.step("kernel", "Build the kernel");
@@ -49,11 +50,11 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     });
 
     const dbg_module = b.addModule("dbg-info", .{
-        .root_source_file = b.path(src_dir++"/debug-maker/dbg.zig"),
+        .root_source_file = b.path("build-tools/dbg-make/dbg.zig"),
+        .target = target,
         .optimize = optimize,
         .strip = true,
         .red_zone = false,
-        .target = target,
     });
     const kernel_obj = b.addObject(.{
         .name = "bamos",
@@ -68,14 +69,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
     kernel_obj.addIncludePath(b.path("third-party/boot"));
 
-    const dbg_maker = b.addExecutable(.{
-        .name = "dbg-maker",
-        .root_source_file = b.path(src_dir++"/debug-maker/main.zig"),
-        .optimize = .ReleaseFast,
-        .target = b.graph.host,
-    });
-
-    const maker_run = b.addRunArtifact(dbg_maker);
+    const maker_run = b.addRunArtifact(dbg_make_exe);
     maker_run.addArtifactArg(kernel_obj);
     maker_run.addArg("-o");
     const maker_sym = maker_run.addOutputFileArg("debug.sym");
@@ -241,6 +235,13 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
 }
 
 fn makeTools(b: *std.Build) void {
+    dbg_make_exe = b.addExecutable(.{
+        .name = "dbg-make",
+        .root_source_file = b.path("build-tools/dbg-make/main.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseFast,
+        .strip = true
+    });
     tar_exe = b.addExecutable(.{
         .name = "tar",
         .root_source_file = b.path("build-tools/tar/main.zig"),
