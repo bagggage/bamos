@@ -109,7 +109,7 @@ pub fn init() !void {
         return error.MountFailed;
     };
 
-    vfs.mount(mount_dir, fs_name, null, undefined) catch |err| {
+    _ = vfs.mount(mount_dir, fs_name, null) catch |err| {
         log.err("while mounting: {}", .{err});
         return error.MountFailed;
     };

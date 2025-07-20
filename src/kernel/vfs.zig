@@ -51,13 +51,21 @@ pub const Context = union(enum) {
 
     /// Represents virtual filesystem context.
     pub const Virt = struct {
-        root: *Dentry,
+        root: *Dentry = bad_root,
         data: utils.AnyData = .{},
 
         pub inline fn getMountPoint(self: *Virt) *MountPoint {
             return @fieldParentPtr("virt", self);
         }
+
+        pub inline fn validateRoot(self: *const Virt) bool {
+            return self.root != bad_root;
+        }
     };
+
+    /// Fake dentry pointer. It's initial value of `root` field.
+    /// Used to check if this field was set by a driver during mounting.
+    pub const bad_root: *Dentry = @ptrFromInt(0xA0A0_0000_C0FF_0000);
 
     super: *Superblock,
     virt: Virt,
@@ -101,6 +109,8 @@ pub const FileSystem = struct {
     name: []const u8,
     hash: u32,
 
+    ref_count: utils.RefCount(u32) = .init(0),
+
     ops: Operations = undefined,
     dentry_ops: Dentry.Operations = undefined,
 
@@ -141,6 +151,14 @@ pub const FileSystem = struct {
             .virt => .virtual,
         };
     }
+
+    pub inline fn ref(self: *FileSystem) void {
+        self.ref_count.inc();
+    }
+
+    pub inline fn deref(self: *FileSystem) void {
+        self.ref_count.dec();
+    }
 };
 
 pub const Path = struct {
@@ -160,6 +178,26 @@ pub const MountPoint = struct {
     dentry: *Dentry,
 
     ctx: Context,
+
+    pub inline fn new() ?*MountPoint {
+        return &(vm.alloc(MountNode) orelse return null).data;
+    }
+
+    pub inline fn free(self: *MountPoint) void {
+        vm.free(self.asNode());
+    }
+
+    pub inline fn asNode(self: *MountPoint) *MountNode {
+        return @fieldParentPtr("data", self);
+    }
+
+    pub inline fn getHiddenDentry(self: *MountPoint) *Dentry {
+        return self.dentry;
+    }
+
+    pub inline fn getRootDentry(self: *MountPoint) *Dentry {
+        return self.ctx.getFsRoot();
+    }
 };
 
 const MountList = utils.List(MountPoint);
@@ -170,10 +208,10 @@ const FsNode = FsList.Node;
 export var root_dentry: *Dentry = undefined;
 
 var mount_list: MountList = .{};
-var mount_lock = utils.Spinlock.init(.unlocked);
+var mount_lock: utils.RwLock = .{};
 
 var fs_list: FsList = .{};
-var fs_lock = utils.Spinlock.init(.unlocked);
+var fs_lock: utils.RwLock = .{};
 
 const AutoInit = opaque {
     pub var file_systems = .{
@@ -203,8 +241,28 @@ pub fn deinit() void {
     tmpfs.deinit();
 }
 
-pub inline fn mount(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) Error!void {
-    return api.externFn(mountEx, .mountEx)(dentry, fs_name, drive, part_idx);
+pub inline fn mount(dentry: *Dentry, fs_name: []const u8, blk_dev: ?*devfs.BlockDev) Error!*Dentry {
+    return api.externFn(mountEx, .mountEx)(dentry, fs_name, blk_dev);
+}
+
+pub fn tryMount(dentry: *Dentry, blk_dev: *devfs.BlockDev) Error!*Dentry {
+    var node = getFirstFs();
+
+    while (node) |fs| : (node = getNextFs(fs)) {
+        if (fs.data.kind() == .virtual) continue;
+
+        const fs_root = mountFs(dentry, &fs.data, blk_dev) catch |err| {
+            if (err == error.BadSuperblock) continue;
+
+            fs.data.deref();
+            return err;
+        };
+
+        fs.data.deref();
+        return fs_root;
+    }
+
+    return error.BadSuperblock;
 }
 
 pub fn open(dentry: *Dentry) Error!*File {
@@ -222,8 +280,8 @@ pub fn registerFs(fs: *FsNode) bool {
     if (fs.next != null or fs.prev != null) return false;
 
     {
-        fs_lock.lock();
-        defer fs_lock.unlock();
+        fs_lock.writeLock();
+        defer fs_lock.writeUnlock();
 
         // Check if fs with same name exists
         {
@@ -271,10 +329,39 @@ pub inline fn lookup(dir: ?*Dentry, path: []const u8) Error!*Dentry {
 pub fn tryLookup(dir: ?*Dentry, path: []const u8) ?*Dentry {
     return lookup(dir, path) catch |err| {
         if (err != Error.NoEnt) {
+            @branchHint(.unlikely);
             log.err("lookup for \"{s}\" failed: {s}", .{path, @errorName(err)});
         }
         return null;
     };
+}
+
+pub fn resolveSymLink(sym_dent: *Dentry) Error!*Dentry {
+    if (sym_dent.inode.type != .symbolic_link) {
+        @branchHint(.unlikely);
+        return error.BadDentry;
+    }
+
+    // TODO: Implement.
+    return error.BadOperation;
+}
+
+pub fn changeRoot(new: *Dentry) void {
+    // TODO: Implement
+    _ = new;
+}
+
+pub fn isMountPoint(dentry: *const Dentry) bool {
+    mount_lock.readLock();
+    defer mount_lock.readUnlock();
+
+    var node = mount_list.first;
+
+    while (node) |n| : (node = n.next) {
+        if (n.data.getRootDentry() == dentry) return true;
+    }
+
+    return false;
 }
 
 /// Returns the actual root dentry of the entire VFS.
@@ -294,44 +381,76 @@ pub inline fn getTime() sys.time.Time {
     return sys.time.getCachedTime();
 }
 
+fn getFirstFs() ?*FsNode {
+    fs_lock.readLock();
+    defer fs_lock.readUnlock();
+
+    const node = fs_list.first orelse return null;
+    node.data.ref();
+
+    return node;
+}
+
+fn getNextFs(node: *FsNode) ?*FsNode {
+    defer node.data.deref();
+
+    fs_lock.readLock();
+    defer fs_lock.readUnlock();
+
+    const next = node.next orelse return null;
+    next.data.ref();
+
+    return next;
+}
+
 fn getFsEx(name: []const u8) ?*FileSystem {
     const hash = hashFn(name);
 
-    fs_lock.lock();
-    defer fs_lock.unlock();
+    fs_lock.readLock();
+    defer fs_lock.readUnlock();
 
     var node = fs_list.first;
 
     while (node) |fs| : (node = fs.next) {
-        if (fs.data.hash == hash) return &fs.data;
+        if (fs.data.hash == hash) {
+            fs.data.ref();
+            return &fs.data;
+        }
     }
 
     return null;
 }
 
-fn mountEx(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) Error!void {
+fn mountEx(dentry: *Dentry, fs_name: []const u8, blk_dev: ?*devfs.BlockDev) Error!*Dentry {
     if (
         dentry.inode.type != .directory or
         (dentry == root_dentry)
     ) return error.BadDentry;
 
     const fs = getFs(fs_name) orelse return error.NoFs;
+    defer fs.deref();
 
+    return mountFs(dentry, fs, blk_dev);
+}
+
+fn mountFs(dentry: *Dentry, fs: *FileSystem, blk_dev: ?*devfs.BlockDev) Error!*Dentry {
     if (
         fs.kind() == .device and
-        (drive == null or part_idx >= drive.?.parts.len)
-    ) return error.InvalidArgs;
+        blk_dev == null
+    ) {
+        @branchHint(.unlikely);
+        return error.InvalidArgs;
+    }
 
-    const node = vm.alloc(MountNode) orelse return error.NoMemory;
-    errdefer vm.free(node);
+    const mnt_point = MountPoint.new() orelse return error.NoMemory;
+    errdefer mnt_point.free();
 
-    // Init mount point
     const fs_root = switch (fs.kind()) {
-        .device => try mountDriveFs(fs, dentry, node, drive.?, part_idx),
-        .virtual => try mountVirtualFs(fs, dentry, node),
+        .device => try mountDriveFs(fs, dentry, mnt_point, blk_dev.?),
+        .virtual => try mountVirtualFs(fs, dentry, mnt_point),
     };
 
-    // Swap entries
+    // Swap dentries
     {
         const parent = dentry.parent;
         parent.addChild(fs_root);
@@ -342,44 +461,64 @@ fn mountEx(dentry: *Dentry, fs_name: []const u8, drive: ?*Drive, part_idx: u32) 
         lookup_cache.insert(hash, fs_root);
     }
 
-    if (drive) |d| {
-        log.info("{s} on {}:part:{} is mounted to \"{s}\"", .{
-            fs.name, d.getName(), part_idx, dentry.path()
+    if (blk_dev) |blk| {
+        log.info("{s} on {} is mounted to \"{s}\"", .{
+            fs.name, blk.getName(), dentry.path()
         });
     } else {
         log.info("{s} is mounted to \"{s}\"", .{fs.name, dentry.path()});
     }
 
-    mount_lock.lock();
-    defer mount_lock.unlock();
+    mount_lock.writeLock();
+    defer mount_lock.writeUnlock();
 
-    mount_list.append(node);
+    mount_list.append(mnt_point.asNode());
+
+    return fs_root;
 }
 
 fn mountDriveFs(
     fs: *FileSystem, dentry: *Dentry,
-    node: *MountNode, drive: *Drive, part_idx: u32
+    mnt_point: *MountPoint, blk_dev: *devfs.BlockDev
 ) !*Dentry {
-    const super = try fs.mountDrive(drive, drive.getPartition(part_idx).?);
-    node.data = .{
+    const super = try fs.mountDrive(blk_dev.getDrive(), blk_dev.getPartition());
+    if (!super.validateRoot()) {
+        @branchHint(.cold);
+        log.err(
+            "\"{s}\" driver don't set a valid root dentry on mount!",
+            .{fs.name}
+        );
+        return error.BadSuperblock;
+    }
+
+    mnt_point.* = .{
         .dentry = dentry,
         .fs = fs,
         .ctx = .{ .super = super },
     };
     super.root.ctx = .{ .super = super };
-    super.mount_point = &node.data;
+    super.mount_point = mnt_point;
 
     return super.root;
 }
 
-fn mountVirtualFs(fs: *FileSystem, dentry: *Dentry, node: *MountNode) !*Dentry {
+fn mountVirtualFs(fs: *FileSystem, dentry: *Dentry, mnt_point: *MountPoint) !*Dentry {
     const virt = try fs.mountVirtual();
-    node.data = .{
+    if (!virt.validateRoot()) {
+        @branchHint(.cold);
+        log.err(
+            "\"{s}\" driver don't set a valid root dentry on mount!",
+            .{fs.name}
+        );
+        return error.BadSuperblock;
+    }
+
+    mnt_point.* = .{
         .dentry = dentry,
         .fs = fs,
         .ctx = .{ .virt = virt },
     };
-    virt.root.ctx = .{ .virt = &node.data.ctx.virt };
+    virt.root.ctx = .{ .virt = &mnt_point.ctx.virt };
 
     return virt.root;
 }
@@ -421,11 +560,29 @@ fn lookupEx(dir: ?*Dentry, path: []const u8) Error!*Dentry {
 fn initRoot() !void {
     try tmpfs.init();
 
+    const mnt_point = MountPoint.new() orelse return error.NoMemory;
+    errdefer mnt_point.free();
+
     const tmp_fs = getFs("tmpfs") orelse return error.NoTmpfs;
+    defer tmp_fs.deref();
+
     const virt = try tmp_fs.mountVirtual();
 
     root_dentry = virt.root;
     root_dentry.ref();
+
+    {
+        mnt_point.* = .{
+            .fs = tmp_fs,
+            .dentry = root_dentry,
+            .ctx = .{ .virt = virt },
+        };
+
+        mount_lock.writeLock();
+        defer mount_lock.writeUnlock();
+
+        mount_list.prepend(mnt_point.asNode());
+    }
 
     log.info("tmpfs was mounted as \"{s}\"", .{root_dentry.name.str()});
 }

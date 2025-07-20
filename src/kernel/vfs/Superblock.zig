@@ -24,7 +24,7 @@ part_offset: usize,
 block_size: u16,
 block_shift: u4,
 
-root: *Dentry = undefined,
+root: *Dentry = vfs.Context.bad_root,
 mount_point: *MountPoint = undefined,
 
 fs_data: utils.AnyData,
@@ -41,18 +41,18 @@ pub inline fn free(self: *Superblock) void {
 
 pub fn init(
     self: *Superblock,
-    drive: ?*Drive,
-    part: ?*const Partition,
+    drive: *Drive,
+    part: *const Partition,
     block_size: u16,
     fs_data: ?*anyopaque
 ) void {
     self.* = .{
-        .drive = drive orelse undefined,
-        .part = part orelse undefined,
-        .part_offset = if (part) |p| drive.?.lbaToOffset(p.lba_start) else 0,
+        .drive = drive,
+        .part = part,
+        .part_offset = drive.lbaToOffset(part.lba_start),
         .block_size = block_size,
         .block_shift = std.math.log2_int(u16, block_size),
-        .fs_data = utils.AnyData.from(fs_data)
+        .fs_data = .from(fs_data)
     };
 }
 
@@ -67,4 +67,8 @@ pub inline fn offsetToBlock(self: *const Superblock, offset: usize) usize {
 pub inline fn offsetModBlock(self: *const Superblock, offset: usize) u16 {
     const mask = comptime ~@as(u16, 0);
     return offset & ~(mask << self.block_shift);
+}
+
+pub inline fn validateRoot(self: *const Superblock) bool {
+    return self.root != vfs.Context.bad_root;
 }
