@@ -145,9 +145,9 @@ pub fn init() !void {
 
     const phys_pool = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
     const vm_pool: [*]u8 = @ptrFromInt(vm.getVirtLma(phys_pool));
+    errdefer vm.PageAllocator.free(phys_pool, 0);
 
     major_bitmap = .init(vm_pool[0..vm.page_size], false);
-    errdefer unmount(undefined);
 
     root = try tmpfs.createDirectory("/", undefined);
 }
@@ -185,6 +185,10 @@ pub inline fn registerCharDev(devf: *DevFile) Error!void {
 
 pub inline fn getDevData(dentry: *const vfs.Dentry) utils.AnyData {
     return dentry.inode.fs_data.as(DevFile).?.data;
+}
+
+pub inline fn getRoot() *vfs.Dentry {
+    return root;
 }
 
 fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
