@@ -96,6 +96,11 @@ pub const CalleeRegs = extern struct {
     r15: u64 = 0
 };
 
+pub const State = extern struct {
+    callee: CalleeRegs,
+    scratch: ScratchRegs,
+};
+
 /// Stack frame that is automatically pushed
 /// when a hardware interrupt occurs.
 pub const InterruptFrame = extern struct {
@@ -189,21 +194,15 @@ pub inline fn setGdtr(gdtr: GDTR) void {
 }
 
 pub inline fn getCr2() u64 {
-    var result: u64 = undefined;
-    asm volatile ("mov %%cr2,%[res]"
-        : [res] "=r" (result),
+    return asm volatile ("mov %%cr2,%[res]"
+        : [res] "=r" (-> u64),
     );
-
-    return result;
 }
 
 pub inline fn getCr3() u64 {
-    var result: u64 = undefined;
-    asm volatile ("mov %%cr3,%[res]"
-        : [res] "=r" (result),
+    return asm volatile ("mov %%cr3,%[res]"
+        : [res] "=r" (-> u64),
     );
-
-    return result;
 }
 
 pub inline fn setCr3(cr3: u64) void {
@@ -214,21 +213,15 @@ pub inline fn setCr3(cr3: u64) void {
 }
 
 pub inline fn getCr4() u64 {
-    var result: u64 = undefined;
-    asm volatile ("mov %%cr4,%[res]"
-        : [res] "=r" (result),
+    return asm volatile ("mov %%cr4,%[res]"
+        : [res] "=r" (-> u64),
     );
-
-    return result;
 }
 
 pub inline fn getCs() u16 {
-    var cs: u16 = undefined;
-    asm volatile ("mov %%cs,%[res]"
-        : [res] "=r" (cs),
+    return asm volatile ("mov %%cs,%[res]"
+        : [res] "=r" (-> u16),
     );
-
-    return cs;
 }
 
 pub inline fn setGs(selector: u16) void {
@@ -238,12 +231,9 @@ pub inline fn setGs(selector: u16) void {
 }
 
 pub inline fn getSs() u16 {
-    var ss: u16 = undefined;
-    asm volatile ("mov %%ss,%[res]"
-        : [res] "=r" (ss),
+    return asm volatile ("mov %%ss,%[res]"
+        : [res] "=r" (-> u16),
     );
-
-    return ss;
 }
 
 pub inline fn setSs(selector: u16) void {
@@ -253,15 +243,13 @@ pub inline fn setSs(selector: u16) void {
 }
 
 pub inline fn getFlags() Flags {
-    var flags: Flags = undefined;
-    asm volatile(
+    return asm volatile(
         \\pushfq
         \\pop %rax
-        : [out] "={rax}" (flags)
+        : [out] "={rax}" (-> Flags)
         :
         : "memory"
     );
-    return flags;
 }
 
 pub inline fn swapgs() void {
