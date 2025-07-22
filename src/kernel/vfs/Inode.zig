@@ -34,7 +34,7 @@ uid: u16 = 0,
 
 links_num: u16 = 1,
 
-ref_count: utils.RefCount(u32) = .{},
+ref_count: utils.RefCount(u32) = .init(0),
 
 fs_data: utils.AnyData = .{},
 

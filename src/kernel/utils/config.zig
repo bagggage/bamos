@@ -29,7 +29,7 @@ fn EnumParser(comptime T: type) type {
 const Map = utils.AutoHashTable([]const u8, []const u8);
 
 var map: Map = .{};
-var oma: vm.ObjectAllocator = .init(Map.Entry);
+var oma: vm.ObjectAllocator = .init(Map.EntryNode);
 
 var env: []const u8 = undefined;
 

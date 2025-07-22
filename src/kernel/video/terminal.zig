@@ -97,6 +97,7 @@ pub fn init() !void {
     if (display) |disp| {
         if (std.mem.eql(u8, disp, fb_display) == false) {
             log.warn("unknown display: {s}: skip initialization", .{disp});
+            return;
         }
     } else {
         log.warn("no display: skip initialization", .{});
