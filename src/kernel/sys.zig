@@ -42,17 +42,19 @@ fn startInit() !void {
 
 fn findInit() !*vfs.Dentry {
     const root = getInitRoot() orelse return error.NoRootFs;
-    defer root.deref();
 
     var init_dent: ?*vfs.Dentry = null;
 
     for (init_paths) |path| {
-        const dentry = vfs.lookup(root, path) catch |err| {
+        const dentry = vfs.lookup(root, path[1..]) catch |err| {
             if (err == vfs.Error.NoEnt) continue;
             return err;
         };
 
-        if (dentry.inode.type != .regular_file) continue;
+        if (dentry.inode.type != .regular_file) {
+            dentry.deref();
+            continue;
+        }
 
         init_dent = dentry;
         break;
@@ -105,7 +107,6 @@ fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
     return switch (dentry.inode.type) {
         .directory => {
             if (vfs.isMountPoint(dentry) == false) return error.BadDentry;
-
             return dentry;
         },
         .block_device => blk: {
