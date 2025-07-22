@@ -414,15 +414,17 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     };
 
     // Init new vfs dentry
+    const child_inode = readInode(super, ext_dent.inode, &cache_cursor) catch return null;
+
     const child_dentry = vfs.Dentry.new() orelse return null;
-    child_dentry.init(ext_dent.name(), parent.ctx, undefined, &fs.data.dentry_ops) catch {
+    const vfs_inode = child_inode.cache(ext_dent.inode) catch {
         child_dentry.free();
         return null;
     };
 
-    const child_inode = readInode(super, ext_dent.inode, &cache_cursor) catch return null;
-    child_dentry.inode = child_inode.cache(ext_dent.inode) catch {
+    child_dentry.init(name, parent.ctx, vfs_inode, &fs.data.dentry_ops) catch {
         child_dentry.free();
+        vfs_inode.free();
         return null;
     };
 
