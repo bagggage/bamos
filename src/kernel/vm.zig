@@ -358,11 +358,17 @@ pub inline fn heapRelease(base: usize, pages: u32) void {
 }
 
 pub fn pageFaultHandler(addr: usize, cause: FaultCause, userspace: bool) bool {
+    const sys = @import("sys.zig");
+
     log.warn(
-        \\Page Fault (CPU {}): 
-        \\ address: 0x{x:>16}; cause: {s}
+        \\{raw-log}Page Fault (CPU {}) - {}: 
+        \\ address: 0x{x:.>16}; cause: {s}
         \\ userspace: {}
-        , .{smp.getIdx(), addr, @tagName(cause), userspace}
+        ++ "\n"
+        , .{
+            smp.getIdx(), sys.time.getTime(), addr,
+            @tagName(cause), userspace
+        }
     );
 
     return false;
