@@ -142,6 +142,8 @@ inline fn logFmtPrint(
     comptime format: []const u8,
     args: anytype
 ) !void {
+    const raw_prefix = "{raw-log}";
+    const raw_log = comptime std.mem.startsWith(u8, format, raw_prefix);
     const level_str = levelToString(level);
 
     const color: std.io.tty.Color = switch (level) {
@@ -152,13 +154,15 @@ inline fn logFmtPrint(
     };
 
     try tty_config.setColor(writer, color);
-    try writer.print("{us} [{s}] ", .{sys.time.getUpTime(),level_str});
+
+    if (!raw_log) try writer.print("{us} [{s}] ", .{sys.time.getUpTime(),level_str});
 
     if (scope != std.log.default_log_scope) {
         try writer.writeAll(@tagName(scope)++": ");
     }
 
-    try writer.print(format ++ new_line, args);
+    const fmt = if (comptime raw_log) format[raw_prefix.len..] else format;
+    try writer.print(fmt ++ new_line, args);
 }
 
 inline fn levelToString(comptime level: std.log.Level) []const u8 {
