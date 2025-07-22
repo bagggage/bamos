@@ -136,9 +136,6 @@ pub inline fn getCpuLocalData() *smp.LocalData {
 
 /// This function initializes the CPU's essential features and settings, such as enabling the
 /// No-Execute bit, system call extensions, and AVX.
-///
-/// If the CPU is the initial CPU, it also performs additional
-/// preinitializing the virtual memory system, the interrupt system, and etc.
 pub inline fn initCpu() void {
     enableExtentions();
 }
@@ -148,6 +145,19 @@ pub fn setupCpu(cpu_idx: u16) void {
 
     intr.setupCpu(cpu_idx);
     intr.enableForCpu();
+}
+
+/// Set new stack pointer and jump to the return address.
+pub inline fn setupStack(stack: usize, ret: *const fn() noreturn) noreturn {
+    @setRuntimeSafety(false);
+    defer unreachable;
+
+    asm volatile(
+        \\ mov %rdi, %rsp
+        \\ mov %rdi, %rbp
+        \\ jmp *%rsi
+        :: [stack] "{rdi}" (stack), [ret] "{rsi}" (ret)
+    );
 }
 
 pub inline fn timestamp() usize {

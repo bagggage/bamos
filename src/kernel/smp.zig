@@ -3,6 +3,7 @@
 // Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const arch = utils.arch;
 const boot = @import("boot.zig");
@@ -18,6 +19,9 @@ const Spinlock = utils.Spinlock;
 pub const boot_cpu = 0;
 /// Max supported number of CPUs.
 pub const max_cpus = 2048;
+
+/// Size of the initial stack in memory pages.
+pub const init_stack_pages = if (builtin.mode == .Debug) 4 else 1; 
 
 pub const LocalData = struct {
     idx: u16 = 0,
@@ -60,6 +64,7 @@ pub const LocalData = struct {
 };
 
 var init_lock = Spinlock.init(.unlocked);
+var init_cpu_idx: u16 = 0;
 
 var cpus_data: []LocalData = undefined;
 
@@ -80,7 +85,7 @@ pub fn preinit() void {
 
         cpus_data.len = cpus_num;
     } else {
-        waitForInit();
+        initCpu(&waitForInit);
     }
 }
 
@@ -103,15 +108,12 @@ pub inline fn initAll() void {
     init_lock.unlockAtomic();
 }
 
-pub fn initCpu() void {
-    const Static = struct{
-        pub var curr_cpu_idx: u16 = 0;
-    };
+pub fn initCpu(ret: *const fn() noreturn) void {
+    const cpu_idx = init_cpu_idx;
+    const is_boot = cpu_idx == boot_cpu;
+    init_cpu_idx += 1;
 
-    const cpu_idx = Static.curr_cpu_idx;
-    Static.curr_cpu_idx += 1;
-
-    if (cpu_idx != boot_cpu) {
+    if (!is_boot) {
         arch.initCpu();
 
         vm.setPt(vm.getRootPt());
@@ -129,6 +131,8 @@ pub fn initCpu() void {
 
     arch.setCpuLocalData(local_data);
     arch.setupCpu(cpu_idx);
+    
+    initStack(is_boot, ret);
 }
 
 /// Returns the number of CPUs managed and detected by kernel.
@@ -154,8 +158,27 @@ pub inline fn getIdx() u16 {
     return arch.getCpuLocalData().idx;
 }
 
+/// Boot CPU: allocates initial stack to continue kernel initialization.
+/// Other: sets stack pointer to the top of the current stack (to free some memory).
+/// 
+/// Returns to the address specified in `ret`.
+inline fn initStack(is_boot: bool, ret: *const fn() noreturn) noreturn {
+    if (is_boot) {
+        @branchHint(.unlikely);
+
+        const phys = boot.alloc(init_stack_pages) orelse {
+            @panic("Initialization failed: no memory for initial stack!");
+        };
+        const virt = vm.getVirtLma(phys);
+        const top = virt + (init_stack_pages * vm.page_size) - @sizeOf(usize);
+
+        arch.setupStack(top, ret);
+    }
+
+    arch.setupStack(@frameAddress() + @alignOf(usize), ret);
+}
+
 fn waitForInit() noreturn {
-    initCpu();
     init_lock.unlockAtomic();
 
     sched.init() catch unreachable;

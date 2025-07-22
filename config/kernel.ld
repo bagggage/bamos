@@ -4,7 +4,7 @@ mmio        = 0xfffffffff8000000;
 fb          = 0xfffffffffc000000;
 bootboot    = 0xffffffffff000000; /* default = 0xffffffffffe00000 */
 environment = 0xffffffffff001000; /* default = 0xffffffffffe01000 */
-initstack   = 0x4000;
+initstack   = 0x1000;
 
 PHDRS
 {

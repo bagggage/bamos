@@ -48,7 +48,14 @@ pub export fn main() noreturn {
 
     init(smp);
 
-    smp.initCpu();
+    smp.initCpu(&main2);
+}
+
+/// `main` second half.
+/// 
+/// Main function is divided into two, because of stack switch.
+fn main2() noreturn {
+    defer @panic("reached end of the main2");
 
     {
         const cpu = arch.getCpuInfo();

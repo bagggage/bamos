@@ -43,13 +43,14 @@ pub const KernelThread = struct {
 
 pub fn initStack(stack: *vm.VirtualRegion, stack_size: usize) ?usize {
     const pages = std.math.divCeil(usize, stack_size, vm.page_size) catch unreachable;
+    const rank = std.math.log2_int_ceil(usize, pages) - 1;
     const virt = vm.heapReserve(@truncate(pages));
 
     stack.* = .init(virt);
 
     // TODO: FIXME!
     // Stack must grow down and starts from top.
-    if (stack.grow(1, kernel_stack_map_flags) == false) {
+    if (stack.grow(rank, kernel_stack_map_flags) == false) {
         vm.heapRelease(virt, @truncate(pages));
         return null;
     }
