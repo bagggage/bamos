@@ -17,28 +17,7 @@ const kernel_stack_map_flags = vm.MapFlags{
 
 const user_stack_map_flags = vm.MapFlags{
     .user = true,
-    .global = true,
     .write = true,
-};
-
-pub const UserThread = struct {
-    /// Architechture specific context
-    context: arch.Context,
-
-    stack: vm.VirtualRegion,
-    kernel_stack: vm.VirtualRegion,
-};
-
-pub const KernelThread = struct {
-    const STACK_MMAP_FLAGS = vm.MapFlags{
-        .global = true,
-        .write = true,
-    };
-
-    /// Architechture specific context
-    context: arch.Context,
-
-    stack: vm.VirtualRegion,
 };
 
 pub fn initStack(stack: *vm.VirtualRegion, stack_size: usize) ?usize {

@@ -265,7 +265,7 @@ const Cpu = struct {
 };
 
 const SoftIntrTask = struct {
-    task: *sched.AnyTask,
+    task: *sched.Task,
 
     sched_list: SoftHandler.List = .{},
     num_pending: std.atomic.Value(u8) = .init(0),
@@ -295,9 +295,9 @@ const SoftIntrTask = struct {
         self.sched_list.prepend(&intr.node);
         self.num_pending.raw += 1;
 
-        switch (self.task.common.state) {
+        switch (self.task.stats.state) {
             .free => {
-                self.task.common.static_prior = sched.tasks.high_static_prior;
+                self.task.stats.static_prior = sched.Task.high_static_prior;
                 sched.enqueue(self.task);
             },
             .waiting => sched.resumeTask(self.task),

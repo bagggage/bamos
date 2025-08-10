@@ -24,17 +24,62 @@ pub const Priority = u5;
 pub const Ticks = u4;
 
 pub const Scheduler = @import("sched/Scheduler.zig");
-pub const tasks = @import("sched/tasks.zig");
 pub const thread = @import("sched/thread.zig");
 
-pub const AnyTask = tasks.AnyTask;
-pub const KernelTask = tasks.KernelTask;
-pub const UserTask = tasks.UserTask;
-pub const WaitQueue = tasks.WaitQueue;
+pub const Task = @import("sched/Task.zig");
 
 pub const PrivilegeLevel = enum(u8) {
     userspace,
     kernel
+};
+
+pub const WaitQueue = struct {
+    const Entry = struct {
+        task: *Task,
+        /// Timestamp of start of wait in nanoseconds.
+        timestamp: u64 = 0,
+    };
+
+    const QList = utils.SList(Entry);
+    pub const QNode = QList.Node;
+
+    list: QList = .{},
+
+    pub inline fn push(self: *WaitQueue, node: *QNode) void {
+        self.list.prepend(node);
+    }
+
+    pub inline fn pop(self: *WaitQueue) ?*Entry {
+        const node = self.list.popFirst() orelse return null;
+        return &node.data;
+    }
+
+    pub fn remove(self: *WaitQueue, task: *Task) ?*Entry {
+        var prev: ?*QNode = null;
+        var node = self.list.first;
+        while (node) |n| : ({ prev = n; node = n.next; }) {
+            if (n.data.task == task) {
+                if (prev) |p| {
+                    _ = p.removeNext();
+                } else {
+                    self.list.first = n.next;
+                }
+
+                return &n.data;
+            }
+        }
+
+        return null;
+    }
+
+    pub inline fn initEntry(task: *Task, timestamp: u64) QNode {
+        return .{
+            .data = .{
+                .task = task,
+                .timestamp = timestamp
+            }  
+        };
+    }
 };
 
 /// Minimal timer interrupt interval in milliseconds.
@@ -68,16 +113,16 @@ pub inline fn waitStartup() noreturn {
     getCurrent().begin();
 }
 
-pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*AnyTask {
-    const task = vm.obj.new(KernelTask) orelse return null;
-    const stack_top = thread.initStack(&task.thread.stack, kernel_stack_size) orelse {
-        vm.obj.free(KernelTask, task);
+pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*Task {
+    const task = vm.obj.new(Task) orelse return null;
+    const stack_top = thread.initStack(&task.kernel_stack, kernel_stack_size) orelse {
+        vm.obj.free(Task, task);
         return null;
     };
 
-    task.common = .{};
-    task.name = name;
-    task.thread.context.init(
+    task.stats = .{};
+    task.spec = .{ .kernel = .{ .name = name } };
+    task.context.init(
         stack_top,
         @intFromPtr(handler),
     );
@@ -85,17 +130,17 @@ pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*AnyTask 
     return @ptrCast(task);
 }
 
-pub fn freeTask(task: *AnyTask) void {
-    std.debug.assert(task.common.state == .free);
+pub fn freeTask(task: *Task) void {
+    std.debug.assert(task.stats.state == .free);
 
     thread.deinitStack(
-        &task.asKernelTask().thread.stack,
+        &task.kernel_stack,
         kernel_stack_size
     );
-    vm.obj.free(KernelTask, task.asKernelTask());
+    vm.obj.free(Task, task);
 }
 
-pub inline fn enqueue(task: *AnyTask) void {
+pub inline fn enqueue(task: *Task) void {
     // TODO: CPU balancing.
     getCurrent().enqueueTask(task);
 }
@@ -122,25 +167,25 @@ pub inline fn wait(queue: *WaitQueue) void {
     waitEx(scheduler, queue);
 }
 
-pub fn resumeTask(task: *AnyTask) void {
+pub fn resumeTask(task: *Task) void {
     const scheduler = getCurrent();
     const entry = scheduler.pause_queue.remove(task)
         orelse @panic("trying to resume non-paused task");
 
     const sleep_time = sys.time.getFastTimestamp() - entry.timestamp;
-    entry.task.common.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
+    entry.task.stats.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
 
     scheduler.enqueueTask(entry.task);
 }
 
 /// Awake one task from wait queue.
 /// Returns awaked task or `null` if queue is empty.
-pub fn awake(queue: *WaitQueue) ?*AnyTask {
+pub fn awake(queue: *WaitQueue) ?*Task {
     const scheduler = getCurrent();
     const entry = queue.pop() orelse return null;
 
     const sleep_time = sys.time.getFastTimestamp() - entry.timestamp;
-    entry.task.common.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
+    entry.task.stats.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
 
     scheduler.enqueueTask(entry.task);
 }
@@ -153,7 +198,7 @@ pub fn awakeAll(queue: *WaitQueue) void {
 
     while (queue.pop()) |entry| {
         const sleep_time = (timestamp - entry.timestamp) / ns_per_tick;
-        entry.task.common.sleep_time +|= @truncate(sleep_time);
+        entry.task.stats.sleep_time +|= @truncate(sleep_time);
 
         scheduler.enqueueTask(entry.task);
     }

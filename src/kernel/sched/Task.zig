@@ -4,36 +4,38 @@
 
 const std = @import("std");
 
-const Process = @import("../sys/Process.zig");
+const arch = utils.arch;
 const thread = @import("thread.zig");
 const sched = @import("../sched.zig");
 const sys = @import("../sys.zig");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
-const UserThread = thread.UserThread;
-const KernelThread = thread.KernelThread;
+pub const Self = @This();
 
-const VTable = struct {
-    onContinue: *const fn(self: *anyopaque) void = &stub,
-    onYeild: *const fn(self: *anyopaque) void = &stub,
+pub const List = utils.List(Self);
+pub const Node = List.Node;
 
-    fn stub(_: *anyopaque) void {}
-};
-
-const stub_vtable: VTable = .{};
-
-const State = enum(u8) {
+pub const State = enum(u8) {
+    /// Task is not in any linked list.
     free,
+    /// Task is in use but not ready for execution.
     unscheduled,
+    /// Task is ready for execution and stored in
+    /// scheduler's linked list.
     scheduled,
+    /// Task is currently running or switching.
     running,
+    /// Task is stored in wait queue and waiting for awake.
     waiting,
 };
 
 const Priority = sched.Priority;
+const PriorDelta: type = std.meta.Int(
+    .signed,
+    @bitSizeOf(Priority) - 1
+);
 const Ticks = sched.Ticks;
-const PriorDelta: type = std.meta.Int(.signed, @bitSizeOf(Priority) - 1);
 
 const max_prior_delta = std.math.maxInt(PriorDelta) + 1;
 const base_priority = sched.max_priority / 2;
@@ -43,9 +45,10 @@ pub const high_static_prior = std.math.minInt(PriorDelta);
 /// Lower static priority value.
 pub const low_static_prior = std.math.maxInt(PriorDelta);
 
-pub const Common = struct {
-    vtable: *const VTable = &stub_vtable,
-
+/// Struct contains all data used to calculate task's
+/// dynamic priority, time slice and provide execution stats
+/// like CPU time or sleep time.
+pub const Stats = struct {
     /// Number of scheduler ticks allocated to task.
     time_slice: sched.Ticks = 0,
     state: State = .free,
@@ -65,20 +68,20 @@ pub const Common = struct {
     }
 
     /// Returns task priotiry in range 0-31. Less is better.
-    pub inline fn getPriority(self: *const Common) sched.Priority {
+    pub inline fn getPriority(self: *const Stats) sched.Priority {
         @setRuntimeSafety(false);
         const result: i8 = @as(i8, base_priority) +% self.static_prior +% self.bonus_prior;
         return @truncate(@as(u8, @bitCast(result)));
     }
 
     /// Calculate and set time slice for the task.
-    pub inline fn updateTimeSlice(self: *Common) void {
+    pub inline fn updateTimeSlice(self: *Stats) void {
         std.debug.assert(self.state != .running);
         self.time_slice = self.calcTimeSlice();
     }
 
     /// Update priority bonus based on task interactivity.
-    pub fn updateBonus(self: *Common) void {
+    pub fn updateBonus(self: *Stats) void {
         const max_inter: comptime_int = utils.fp_scale;
         const base_inter: comptime_int = (max_inter - 1) / 2;
         const max_bonus: comptime_int = (std.math.maxInt(Priority) + 1) / 2;
@@ -89,12 +92,12 @@ pub const Common = struct {
         self.bonus_prior = @truncate(bonus + base_inter);
     }
 
-    pub fn yieldTime(self: *Common) void {
+    pub fn yieldTime(self: *Stats) void {
         self.sleep_time +|= self.time_slice;
         self.updateBonus();
     }
 
-    fn getInteractivity(self: *const Common) u8 {
+    fn getInteractivity(self: *const Stats) u8 {
         @setRuntimeSafety(false);
         const time = @as(u32, self.cpu_time) + self.sleep_time;
         if (time == 0) return 0;
@@ -104,7 +107,7 @@ pub const Common = struct {
     }
 
     /// Caclulate time slice for the task and return it.
-    fn calcTimeSlice(self: *const Common) Ticks {
+    fn calcTimeSlice(self: *const Stats) Ticks {
         const max_bonus: comptime_int = comptime calcTimeBonus(sched.max_priority);
         const norm_mult: comptime_int = ((sched.max_slice_ticks + 1) * utils.fp_scale) / max_bonus;
 
@@ -121,102 +124,45 @@ pub const Common = struct {
     }
 };
 
-pub const List = utils.List(AnyTask);
-pub const Node = List.Node;
-
-pub const WaitQueue = struct {
-    const Entry = struct {
-        task: *AnyTask,
-        /// Timestamp of start of wait in nanoseconds.
-        timestamp: u64 = 0,
-    };
-
-    const QList = utils.SList(Entry);
-    pub const QNode = QList.Node;
-
-    list: QList = .{},
-
-    pub inline fn push(self: *WaitQueue, node: *QNode) void {
-        self.list.prepend(node);
-    }
-
-    pub inline fn pop(self: *WaitQueue) ?*Entry {
-        const node = self.list.popFirst() orelse return null;
-        return &node.data;
-    }
-
-    pub fn remove(self: *WaitQueue, task: *AnyTask) ?*Entry {
-        var prev: ?*QNode = null;
-        var node = self.list.first;
-        while (node) |n| : ({ prev = n; node = n.next; }) {
-            if (n.data.task == task) {
-                if (prev) |p| {
-                    _ = p.removeNext();
-                } else {
-                    self.list.first = n.next;
-                }
-
-                return &n.data;
-            }
-        }
-
-        return null;
-    }
-
-    pub inline fn initEntry(task: *AnyTask, timestamp: u64) QNode {
-        return .{
-            .data = .{
-                .task = task,
-                .timestamp = timestamp
-            }  
-        };
-    }
+/// Kernel task specific data.
+pub const KernelSpecific = struct {
+    name: []const u8
 };
 
-pub const AnyTask = struct {
-    common: Common,
+/// User task specific data.
+pub const UserSpecific = struct {
+    pub const UList = utils.SList(void);
+    pub const UNode = UList.Node;
 
-    pub inline fn asNode(self: *AnyTask) *Node {
-        return @fieldParentPtr("data", self);
-    }
+    process: *sys.Process,
+    user_stack: *sys.AddressSpace.MapUnit,
 
-    pub inline fn asUserTask(self: *AnyTask) *UserTask {
-        return @ptrCast(self);
-    }
-
-    pub inline fn asKernelTask(self: *AnyTask) *KernelTask {
-        return @ptrCast(self);
-    } 
+    /// Used by `sys.Process` to put task in list.
+    node: UNode,
 };
 
-pub const UserTask = struct {
-    pub const alloc_config = vm.obj.AllocatorConfig{
-        .allocator = .safe_oma,
-        .wrapper = .listNode(Node),
-        .capacity = 256
-    };
-
-    common: Common = .{},
-
-    thread: UserThread,
-    process: *Process,
+pub const alloc_config: vm.obj.AllocatorConfig = .{
+    .allocator = .safe_oma,
+    .capacity = 128,
+    .wrapper = .listNode(Node)
 };
 
-pub const KernelTask = struct {
-    pub const alloc_config = vm.obj.AllocatorConfig{
-        .allocator = .safe_oma,
-        .wrapper = .listNode(Node),
-        .capacity = 16
-    };
+stats: Stats = .{},
+/// Arch-specific context used for context switching.
+context: arch.Context,
 
-    common: Common = .{},
+/// Kernel stack is not appear as
+/// map unit and hidden from userspace,
+/// so it handles different via `vm.VirtualRegion`.
+kernel_stack: vm.VirtualRegion,
 
-    thread: KernelThread,
-    name: []const u8,
-};
+/// Specific data which is different for
+/// kernel and user tasks.
+spec: union {
+    kernel: KernelSpecific,
+    user: UserSpecific,
+},
 
-comptime {
-    std.debug.assert(@offsetOf(KernelTask, "common") == @offsetOf(AnyTask, "common"));
+pub inline fn asNode(self: *Self) *Node {
+    return @fieldParentPtr("data", self);
 }
-
-
