@@ -8,7 +8,7 @@ const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
-const List_t = utils.SList(Range);
+const List = utils.SList(Range);
 const Range = struct {
     base: usize = undefined,
     pages: u32 = undefined,
@@ -21,9 +21,9 @@ const Range = struct {
 base: usize = undefined,
 top: usize = undefined,
 
-free_list: List_t = undefined,
+free_list: List = .{},
 
-var nodes_oma = vm.ObjectAllocator.initSized(@sizeOf(List_t.Node), 1);
+var nodes_oma = vm.ObjectAllocator.initSized(@sizeOf(List.Node), 1);
 
 pub inline fn init(base: usize) Self {
     return Self{ .base = base, .top = base };
@@ -33,7 +33,7 @@ pub fn reserve(self: *Self, pages: u32) usize {
     std.debug.assert(pages > 0);
 
     var result: usize = undefined;
-    var suitable_range: ?*List_t.Node = null;
+    var suitable_range: ?*List.Node = null;
 
     if (self.free_list.first != null) {
         var curr_range = self.free_list.first;
@@ -87,7 +87,7 @@ pub fn release(self: *Self, base: usize, pages: u32) void {
     }
 
     if (curr_range == null) {
-        const range = nodes_oma.alloc(List_t.Node) orelse unreachable;
+        const range = nodes_oma.alloc(List.Node) orelse unreachable;
         range.data.base = base;
         range.data.pages = pages;
 
@@ -121,7 +121,7 @@ pub fn release(self: *Self, base: usize, pages: u32) void {
     }
 }
 
-inline fn removeRange(self: *Self, node: *List_t.Node, pages: u32) void {
+inline fn removeRange(self: *Self, node: *List.Node, pages: u32) void {
     if (node.data.pages > pages) {
         node.data.base += pages * vm.page_size;
         node.data.pages -= pages;
