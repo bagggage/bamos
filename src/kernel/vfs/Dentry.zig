@@ -218,8 +218,8 @@ pub fn createFile(self: *Dentry, name: []const u8) Error!*Dentry {
 }
 
 pub inline fn open(self: *Dentry, file: *File) Error!void {
-    file.assignDentry(self);
-    errdefer file.releaseDentry();
+    file.init(self);
+    errdefer file.deinit();
 
     try self.ops.open(self, file);
 }

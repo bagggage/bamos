@@ -31,8 +31,17 @@ pub const alloc_config: vm.obj.AllocatorConfig = .{
 };
 
 dentry: *Dentry,
-ops: *const Operations,
+ops: *const Operations = undefined,
 offset: usize = 0,
+
+pub inline fn init(self: *File, dentry: *Dentry) void {
+    dentry.ref();
+    self.* = .{ .dentry = dentry };
+}
+
+pub inline fn deinit(self: *File) void {
+    self.releaseDentry();
+}
 
 pub inline fn assignDentry(self: *File, dentry: *Dentry) void {
     dentry.ref();
