@@ -47,6 +47,17 @@ pub const Block = packed struct {
         return @as(*T, @ptrFromInt(self.getVirtBase() + inner_offset));
     }
 
+    pub inline fn asArray(self: Block, comptime T: type) []T {
+        const len = comptime block_size / @sizeOf(T);
+        return @as([*]T, @ptrFromInt(self.getVirtBase()))[0..len];
+    }
+
+    pub inline fn asArrayOffset(self: Block, comptime T: type, offset: usize) []T {
+        const inner_offset = offset % block_size;
+        const len = (block_size - inner_offset) / @sizeOf(T);
+        return @as([*]T, @ptrFromInt(self.getVirtBase() + inner_offset))[0..len];
+    }
+
     pub inline fn isLocked(self: Block) bool {
         return self.ref_count != 0;
     }
@@ -80,6 +91,14 @@ pub const Cursor = struct {
 
     pub inline fn asSliceAbsolute(self: *const Cursor) []u8 {
         return self.blk.?.asSlice();
+    }
+
+    pub inline fn asArray(self: *const Cursor, T: type) []T {
+        return self.blk.?.asArrayOffset(T, self.offset);
+    }
+
+    pub inline fn asArrayAbsolute(self: *const Cursor, T: type) []T {
+        return self.blk.?.asArray(T);
     }
 
     pub inline fn isValid(self: *const Cursor) bool {
@@ -240,6 +259,7 @@ pub const ControlBlock = struct {
     node_oma: NodeOma = NodeOma.init(256),
 
     pub inline fn init(self: *ControlBlock) Error!void {
+        self.* = .{};
         try self.hash_table.init();
     }
 
@@ -355,8 +375,6 @@ var ctrl_oma = CtrlOma.init(32);
 pub fn newCtrl() Error!*ControlBlock {
     const node = ctrl_oma.alloc() orelse return error.NoMemory;
     errdefer ctrl_oma.free(node);
-
-    node.data = .{};
 
     try node.data.init();
 
