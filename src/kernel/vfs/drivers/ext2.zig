@@ -45,10 +45,10 @@ const Superblock = extern struct {
 
     sb_block: u32,
 
-    // log2(block size) - 10
+    /// log2(block size) - 10
     block_shift: u32,
 
-    // log2(frag size) - 10
+    /// log2(frag size) - 10
     frag_shift: u32,
 
     blocks_per_group: u32,
@@ -78,7 +78,7 @@ const Superblock = extern struct {
     uid: u16,
     gid: u16,
 
-    // Extended fields (major_ver > 1)
+    // Extended fields (major_ver >= 1)
 
     first_inode: u32,
 
@@ -148,6 +148,8 @@ const DentryType = enum(u8) {
 };
 
 const Inode = extern struct {
+    const direct_ptrs_num = 12;
+
     const Type = enum(u4) {
         fifo = 0x1,
         char_dev = 0x2,
@@ -184,10 +186,8 @@ const Inode = extern struct {
 
     os_specific: u32,
 
-    direct_ptrs: [12]u32,
-    single_ptr: u32,
-    double_ptr: u32,
-    triple_ptr: u32,
+    direct_ptrs: [direct_ptrs_num]u32,
+    indir_ptrs: [3]u32,
 
     generation_num: u32,
     ext_attr_block: u32,
@@ -203,7 +203,205 @@ const Inode = extern struct {
         std.debug.assert(@sizeOf(Inode) == 128);
     }
 
-    pub fn cache(self: *const Inode, idx: u32) !*vfs.Inode {
+    /// Data block iterator
+    const BlockIter = struct {
+        const Location = struct {
+            inner_idx: u32,
+            indir_level: u2,
+        };
+
+        inner_idx: u32,
+        indir_level: u2,
+
+        cursor: cache.Cursor = .blank(),
+
+        ptrs: [*]u32 = undefined,
+        ptr_stack: [2]u32 = .{ 0, 0 },
+
+        ptr_per_blk_shift: u5,
+
+        super: *vfs.Superblock,
+        inode: *const Inode,
+
+        pub inline fn init(begin_idx: u32, super: *vfs.Superblock, inode: *const Inode) !BlockIter {
+            const ptr_per_blk_shift = super.block_shift - std.math.log2(@sizeOf(u32));
+            const location = calcPtrStartLocation(
+                begin_idx, ptr_per_blk_shift
+            );
+
+            var self: BlockIter = .{
+                .inner_idx = location.inner_idx,
+                .indir_level = location.indir_level,
+                .ptr_per_blk_shift = ptr_per_blk_shift,
+                .super = super,
+                .inode = inode
+            };
+            try self.decomposeStartLocation();
+
+            return self;
+        }
+
+        pub inline fn deinit(self: *BlockIter) void {
+            self.super.drive.putCache(&self.cursor);
+        }
+
+        pub inline fn next(self: *BlockIter) !u32 {
+            if (self.indir_level == 0) return self.nextDirectPtr();
+
+            return self.nextIndirPtr();
+        }
+
+        inline fn ptrsPerBlock(self: *const BlockIter) u32 {
+            return @as(u32, 1) << self.ptr_per_blk_shift;
+        }
+
+        fn nextDirectPtr(self: *BlockIter) !u32 {
+            const ptr = self.inode.direct_ptrs[self.inner_idx];
+            self.inner_idx +%= 1;
+
+            log.debug("{}", .{self.inode});
+
+            if (self.inner_idx >= Inode.direct_ptrs_num) {
+                @branchHint(.unlikely);
+                self.indir_level = 1;
+                self.inner_idx = 0;
+
+                try self.readPtrBlock(self.inode.indir_ptrs[0]);
+            }
+
+            return ptr;
+        }
+
+        fn nextIndirPtr(self: *BlockIter) !u32 {
+            // Have to process next pointers block ?
+            if (self.inner_idx >= self.ptrsPerBlock()) {
+                @branchHint(.unlikely);
+                try self.nextIndirBlock();
+            }
+
+            const ptr = self.ptrs[self.inner_idx];
+            self.inner_idx +%= 1;
+
+            return ptr;
+        }
+
+        fn nextIndirBlock(self: *BlockIter) !void {
+            self.inner_idx = 0;
+
+            var carry: u1 = 1;
+            var n = self.indir_level - 1;
+            while (n > 0) : (n -= 1) {
+                const idx = self.ptr_stack[n - 1] +% carry;
+
+                if (idx >= self.ptrsPerBlock()) {
+                    @branchHint(.unlikely);
+
+                    self.ptr_stack[n - 1] = 0;
+                    carry = 1;
+                } else {
+                    self.ptr_stack[n - 1] = idx;
+                    carry = 0;
+                    break;
+                }
+            }
+
+            if (carry > 0) {
+                @branchHint(.unlikely);
+                self.indir_level += 1;
+            }
+
+            try self.readPtrBlock(self.inode.indir_ptrs[self.indir_level - 1]);
+
+            for (0..self.indir_level - 1) |i| {
+                const idx = self.ptr_stack[i];
+                try self.readPtrBlock(self.ptrs[idx]);
+            }
+        }
+
+        fn decomposeStartLocation(self: *BlockIter) !void {
+            if (self.indir_level == 0) return;
+
+            try self.readPtrBlock(self.inode.indir_ptrs[self.indir_level - 1]);
+
+            // Shift to get number of ptrs that we skip buy 
+            var shift = self.ptr_per_blk_shift * (self.indir_level - 1);
+            for (0..self.indir_level - 1) |i| {
+                self.ptr_stack[i] = utils.divByPowerOfTwo(u32, self.inner_idx, shift);
+                self.inner_idx = utils.modByPowerOfTwo(u32, self.inner_idx, shift);
+
+                shift -= self.ptr_per_blk_shift;
+
+                try self.readPtrBlock(self.ptrs[self.ptr_stack[i]]);
+            }
+        }
+
+        fn readPtrBlock(self: *BlockIter, block: u32) !void {
+            const blk_data = try readBlock(
+                self.super,
+                block,
+                &self.cursor
+            );
+            self.ptrs = @ptrCast(@alignCast(blk_data.ptr));
+        }
+
+        fn calcPtrStartLocation(begin_idx: u32, ptr_per_blk_shift: u5) Location {
+            if (begin_idx < Inode.direct_ptrs_num) {
+                return .{
+                    .indir_level = 0,
+                    .inner_idx = begin_idx
+                };
+            }
+
+            var idx = begin_idx - Inode.direct_ptrs_num;
+            var shift = ptr_per_blk_shift;
+            var level: u2 = 1;
+
+            while (level < 3) : (level += 1) {
+                // calculate modulo
+                const ptrs_per_level = @as(u32, 1) << shift;
+
+                if (ptrs_per_level > idx) break;
+
+                // ptrs_per_blk^2
+                shift += shift;
+                idx -= ptrs_per_level;
+            }
+
+            return .{
+                .indir_level = level,
+                .inner_idx = idx
+            };
+        }
+
+        test "Inode.calcPtrStartLocation" {
+            // 128 pointers per block
+            const ptr_per_blk_shift = 7;
+            const expect = std.testing.expect;
+
+            var loc = calcPtrStartLocation(0, ptr_per_blk_shift);
+            try expect(loc.indir_level == 0 and loc.inner_idx == 0);
+
+            loc = calcPtrStartLocation(10, ptr_per_blk_shift);
+            try expect(loc.indir_level == 0 and loc.inner_idx == 10);
+
+            loc = calcPtrStartLocation(127 + 12, ptr_per_blk_shift);
+            try expect(loc.indir_level == 1 and loc.inner_idx == 127);
+
+            loc = calcPtrStartLocation(128 + 12, ptr_per_blk_shift);
+            try expect(loc.indir_level == 2 and loc.inner_idx == 0);
+
+            loc = calcPtrStartLocation(1024, ptr_per_blk_shift);
+            try expect(loc.indir_level == 2 and loc.inner_idx == 884);
+
+            loc = calcPtrStartLocation(16534, ptr_per_blk_shift);
+            try expect(loc.indir_level == 3 and loc.inner_idx == 10);
+
+            loc = calcPtrStartLocation(2113676, ptr_per_blk_shift);
+            try expect(loc.indir_level == 3 and loc.inner_idx == 2097152);
+        }
+    };
+
+    pub fn makeCache(self: *const Inode, idx: u32) !*vfs.Inode {
         const inode = vfs.Inode.new() orelse return error.NoMemory;
 
         inode.* = .{
@@ -295,6 +493,13 @@ const Dentry = extern struct {
 
 const DentryStubOps = vfs.internals.DentryStubOps(.ext2);
 
+const file_ops: vfs.File.Operations = .{
+    .ioctl = undefined,
+    .mmap = undefined,
+    .read = fileRead,
+    .write = undefined
+};
+
 var fs = vfs.FileSystem.init(
     "ext2",
     .{ .drive = .{
@@ -306,8 +511,8 @@ var fs = vfs.FileSystem.init(
         .makeDirectory = DentryStubOps.makeDirectory,
         .createFile = DentryStubOps.createFile,
 
-        .open = undefined,
-        .close = undefined
+        .open = dentryOpen,
+        .close = dentryClose
     }
 );
 
@@ -330,6 +535,11 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
     const ext_super = super_cache.asObject(Superblock);
     if (!ext_super.check()) return error.BadSuperblock;
 
+    log.debug("ver: {}.{}", .{ext_super.major_ver, ext_super.minor_ver});
+    log.debug("optional: 0x{x}, required: 0x{x}, read-only: 0x{x}", .{
+        ext_super.optional_feat, ext_super.required_feat, ext_super.readonly_feat
+    });
+
     const super = vfs.Superblock.new() orelse return error.NoMemory;
     errdefer super.free();
 
@@ -350,7 +560,7 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
         const dentry = vfs.Dentry.new() orelse return error.NoMemory;
         errdefer dentry.free();
 
-        dentry.init("/", undefined, try inode.cache(root_inode), &fs.data.dentry_ops) catch unreachable;
+        dentry.init("/", undefined, try inode.makeCache(root_inode), &fs.data.dentry_ops) catch unreachable;
         super.root = dentry;
     }
 
@@ -417,7 +627,7 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     const child_inode = readInode(super, ext_dent.inode, &cache_cursor) catch return null;
 
     const child_dentry = vfs.Dentry.new() orelse return null;
-    const vfs_inode = child_inode.cache(ext_dent.inode) catch {
+    const vfs_inode = child_inode.makeCache(ext_dent.inode) catch {
         child_dentry.free();
         return null;
     };
@@ -429,4 +639,56 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     };
 
     return child_dentry;
+}
+
+fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
+    file.ops = &file_ops;
+}
+
+fn dentryClose(_: *const vfs.Dentry, _: *vfs.File) void {}
+
+fn fileRead(dentry: *const vfs.Dentry, offset: usize, buffer: []u8) vfs.Error!usize {
+    const inode = dentry.inode;
+    const super = dentry.ctx.super;
+
+    if (offset >= inode.size) return 0;
+
+    const end = std.mem.min(usize, &.{ offset + buffer.len, inode.size });
+
+    const begin_blk = super.offsetToBlock(offset);
+    const end_blk = super.offsetToBlock(end - 1) + 1;
+
+    var inode_cache = cache.Cursor.blank();
+    defer super.drive.putCache(&inode_cache);
+
+    const ext_inode = try readInode(super, inode.index, &inode_cache);
+
+    var ptr_iter: Inode.BlockIter = try .init(@truncate(begin_blk), super, ext_inode);
+    defer ptr_iter.deinit();
+
+    var blk_cache = cache.Cursor.blank();
+    defer super.drive.putCache(&blk_cache);
+
+    log.debug("blocks: {} - {}", .{begin_blk, end_blk});
+
+    var buf_offset: usize = 0;
+    for (begin_blk..end_blk) |i| {
+        const blk_ptr = try ptr_iter.next();
+        var data = try readBlock(super, blk_ptr, &blk_cache);
+
+        log.debug("read block: {}", .{blk_ptr});
+
+        const buf_start = if (i == begin_blk) super.offsetModBlock(offset) else 0;
+        const buf_end = if (i == end_blk - 1) super.offsetModBlock(end - 1) + 1 else super.block_size;
+        const buf_size = buf_end - buf_start;
+
+        @memcpy(
+            buffer[buf_offset..buf_offset + buf_size],
+            data[buf_start..buf_end]
+        );
+
+        buf_offset += buf_size;
+    }
+
+    return buf_offset;
 }

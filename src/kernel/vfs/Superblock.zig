@@ -66,7 +66,7 @@ pub inline fn offsetToBlock(self: *const Superblock, offset: usize) usize {
 
 pub inline fn offsetModBlock(self: *const Superblock, offset: usize) u16 {
     const mask = comptime ~@as(u16, 0);
-    return offset & ~(mask << self.block_shift);
+    return @as(u16, @truncate(offset)) & ~(mask << self.block_shift);
 }
 
 pub inline fn validateRoot(self: *const Superblock) bool {
