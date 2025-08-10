@@ -24,15 +24,14 @@ pub fn initStack(stack: *vm.VirtualRegion, stack_size: usize) ?usize {
     const pages = std.math.divCeil(usize, stack_size, vm.page_size) catch unreachable;
     const rank = std.math.log2_int_ceil(usize, pages) - 1;
     const virt = vm.heapReserve(@truncate(pages));
+    const top = virt + (pages * vm.page_size);
 
-    stack.* = .init(virt);
+    stack.* = .init(top);
 
-    // TODO: FIXME!
-    // Stack must grow down and starts from top.
-    if (stack.grow(rank, kernel_stack_map_flags) == false) {
+    stack.growDown(rank, kernel_stack_map_flags) catch {
         vm.heapRelease(virt, @truncate(pages));
         return null;
-    }
+    };
 
     return stack.getTopAligned(stack_alignment);
 }

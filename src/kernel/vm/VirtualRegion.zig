@@ -57,25 +57,25 @@ pub fn deinit(self: *Self) void {
     }
 }
 
-pub fn grow(self: *Self, rank: u8, map_flags: vm.MapFlags) bool {
-    const node = allocPages(rank) orelse return false;
+pub fn growUp(self: *Self, rank: u8, map_flags: vm.MapFlags) !void {
+    const node = allocPages(rank) orelse return error.NoMemory;
+    errdefer freePages(node);
+
     const pages = @as(u24, 1) << @truncate(rank);
+    const base = self.base + self.size();
 
-    vm.mmap(
-        self.base + self.size(),
-        node.data.getPhysBase(),
-        pages,
-        map_flags,
-        vm.getPt(),
-    ) catch {
-        freePages(node);
-        return false;
-    };
+    try self.map(base, node, pages, map_flags);
+}
 
-    node.data.idx = pages + if (self.page_list.first) |n| n.data.idx else 0;
-    self.page_list.prepend(node);
+pub fn growDown(self: *Self, rank: u8, map_flags: vm.MapFlags) !void {
+    const node = allocPages(rank) orelse return error.NoMemory;
+    errdefer freePages(node);
 
-    return true;
+    const pages = @as(u24, 1) << @truncate(rank);
+    const base = self.base - (pages * vm.page_size);
+
+    try self.map(base, node, pages, map_flags);
+    self.base = base;
 }
 
 pub inline fn shrink(self: *Self) ?u8 {
@@ -128,6 +128,22 @@ pub fn format(
     writer: anytype,
 ) !void {
     try writer.print("0x{x}-0x{x}", .{self.base,self.base + self.size()});
+}
+
+fn map(
+    self: *Self, base: usize,
+    node: *PageNode, pages: u24, map_flags: vm.MapFlags
+) !void {
+    try vm.mmap(
+        base,
+        node.data.getPhysBase(),
+        pages,
+        map_flags,
+        vm.getPt(),
+    );
+
+    node.data.idx = pages + if (self.page_list.first) |n| n.data.idx else 0;
+    self.page_list.prepend(node);
 }
 
 fn allocPages(rank: u8) ?*PageNode {
