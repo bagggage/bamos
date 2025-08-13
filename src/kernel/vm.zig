@@ -27,6 +27,11 @@ pub const lma_end = arch.vm.lma_end;
 /// The start address of the kernel heap.
 pub const heap_start = arch.vm.heap_start;
 
+pub const max_user_heap_addr = arch.vm.max_user_heap_addr;
+pub const max_userspace_addr = arch.vm.max_userspace_addr;
+
+pub const max_phys_pages = std.math.maxInt(u32);
+
 pub const PageTable = arch.vm.PageTable;
 pub const VirtualRegion = @import("vm/VirtualRegion.zig");
 
@@ -175,6 +180,7 @@ pub const FaultCause = enum {
 pub const Error = error {
     Uninitialized,
     NoMemory,
+    MaxSize,
 };
 
 var root_pt: *PageTable = undefined;

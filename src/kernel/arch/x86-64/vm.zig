@@ -22,6 +22,9 @@ pub const lma_end = lma_start + lma_size;
 
 pub const heap_start = lma_end + utils.gb_size;
 
+pub const max_user_head_addr = 0x0000_8FFF_FFFF_FFFF - utils.gb_size;
+pub const max_userspace_addr = 0x0000_8FFF_FFFF_FFFF;
+
 const pt_pool_pages = 512;
 const pages_per_2mb = (utils.mb_size * 2) / page_size;
 
