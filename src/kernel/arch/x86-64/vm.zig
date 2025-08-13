@@ -15,12 +15,6 @@ pub const page_table_size = 512;
 
 /// Linear Memory Access (LMA) region start address.
 pub const lma_start = 0xFFFF800000000000;
-/// Linear Memory Access (LMA) region size address.
-pub const lma_size = utils.gb_size * 256;
-/// Linear Memory Access (LMA) region end address.
-pub const lma_end = lma_start + lma_size;
-
-pub const heap_start = lma_end + utils.gb_size;
 
 pub const max_user_head_addr = 0x0000_8FFF_FFFF_FFFF - utils.gb_size;
 pub const max_userspace_addr = 0x0000_8FFF_FFFF_FFFF;
@@ -84,10 +78,13 @@ const PageTableEntry = packed struct {
 
 pub const PageTable = [page_table_size]PageTableEntry;
 
+var lma_end: usize = 0;
+var heap_start: usize = 0;
+
 var pt_oma: vm.ObjectAllocator = undefined;
 
 pub fn preinit() void {
-    earlyMmapDma();
+    earlyMapLma();
     boot.switchToLma();
 }
 
@@ -97,6 +94,10 @@ pub fn init() vm.Error!void {
 
     pt_oma = try vm.ObjectAllocator.initRaw(@sizeOf(PageTable), oma_pool, pt_pool_pages);
 }
+
+pub inline fn lmaEnd() usize { return lma_end; }
+
+pub inline fn heapStart() usize { return heap_start; }
 
 pub inline fn allocPt() ?*PageTable {
     const pt = pt_oma.alloc(PageTable) orelse return null;
@@ -122,11 +123,11 @@ pub inline fn setPt(pt: *const PageTable) void {
 }
 
 pub inline fn clonePt(src_pt: *const PageTable, dest_pt: *PageTable) void {
-    const dma_pte_idx = comptime getPxeIdx(3, lma_start);
-    const heap_pte_idx = comptime getPxeIdx(3, heap_start);
+    const lma_pte_idx = comptime getPxeIdx(3, lma_start);
+    const heap_pte_idx = getPxeIdx(3, heap_start);
     const kernel_pte_idx = getPxeIdx(3, @intFromPtr(&init));
 
-    dest_pt[dma_pte_idx] = src_pt[dma_pte_idx];
+    dest_pt[lma_pte_idx] = src_pt[lma_pte_idx];
     dest_pt[heap_pte_idx] = src_pt[heap_pte_idx];
     dest_pt[kernel_pte_idx] = src_pt[kernel_pte_idx];
 }
@@ -197,9 +198,14 @@ fn logPte(pte: *const PageTableEntry, len: u16, level: u3) void {
     }
 }
 
-fn earlyMmapDma() void {
+fn earlyMapLma() void {
+    const lma_size = calcLmaSize();
+
+    lma_end = lma_start + lma_size;
+    heap_start = lma_end + utils.gb_size;
+
     const pt = vm.getPhysLma(getPt());
-    const p4_idx = getPxeIdx(3, lma_start);
+    const p4_idx = comptime getPxeIdx(3, lma_start);
 
     const pt3: *PageTable = @ptrFromInt(boot.alloc(1).?);
     @memset(@as(*[page_table_size]u64, @ptrCast(pt3))[0..page_table_size], 0);
@@ -218,6 +224,14 @@ fn earlyMmapDma() void {
         entry.* = template_pte;
         template_pte.base += gb_pages;
     }
+}
+
+fn calcLmaSize() usize {
+    // TODO: implement this to ensure that
+    // all physical memory is accessible via LMA.
+
+    // Currently just return 256 GB.
+    return 256 * utils.gb_size;
 }
 
 inline fn getPxeIdx(pt_idx: u8, virt: usize) u16 {

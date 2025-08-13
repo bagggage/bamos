@@ -21,11 +21,8 @@ pub const page_size = arch.vm.page_size;
 pub const kernel_start = &boot.kernel_elf_start;
 /// @noexport
 pub const kernel_end = &boot.kernel_elf_end;
+
 pub const lma_start = arch.vm.lma_start;
-pub const lma_size = arch.vm.lma_size;
-pub const lma_end = arch.vm.lma_end;
-/// The start address of the kernel heap.
-pub const heap_start = arch.vm.heap_start;
 
 pub const max_user_heap_addr = arch.vm.max_user_heap_addr;
 pub const max_userspace_addr = arch.vm.max_userspace_addr;
@@ -97,6 +94,11 @@ pub const logPt = arch.vm.logPt;
 /// - `flags`: flags to specify (see `vm.MapFlags` structure).
 /// - `page_table`: target page table.
 pub const mmap = arch.vm.mmap;
+
+pub inline fn lmaSize() usize { return lmaEnd() - lma_start; }
+
+pub const lmaEnd = arch.vm.lmaEnd;
+pub const heapStart = arch.vm.heapStart;
 
 /// General-purpose kernel memory allocation function.
 pub const malloc = UniversalAllocator.alloc;
@@ -186,7 +188,7 @@ pub const Error = error {
 var root_pt: *PageTable = undefined;
 
 /// The kernel heap used for allocation virtual address ranges.
-var heap = Heap.init(heap_start);
+var heap: Heap = undefined;
 var heap_lock = utils.Spinlock.init(.unlocked);
 
 /// Initializes the virtual memory management system. Must be called only once.
@@ -196,6 +198,8 @@ var heap_lock = utils.Spinlock.init(.unlocked);
 /// 
 /// - Returns: An error if the initialization fails.
 pub fn init() Error!void {
+    heap = .init(heapStart());
+
     try ObjectAllocator.initOmaSystem();
     try PageAllocator.init();
 
@@ -267,7 +271,7 @@ pub inline fn getPhysPt(address: anytype, pt: *const PageTable) ?@TypeOf(address
         else => address,
     };
 
-    if (virt >= lma_start and virt < lma_end) return getPhysLma(address);
+    if (virt >= lma_start and virt < lmaEnd()) return getPhysLma(address);
 
     const phys = arch.vm.getPhys(virt, pt) orelse return null;
 
@@ -315,7 +319,7 @@ pub inline fn mmio(phys: usize, pages: u32) Error!usize {
 /// - `virt`: The virtual address returned by `mmio`.
 /// - `pages`: The number of pages, must be the same as in `mmio` call.
 pub inline fn unmmio(virt: usize, pages: u32) void {
-    std.debug.assert(virt >= heap_start and pages > 0);
+    std.debug.assert(virt >= heapStart() and pages > 0);
 
     heap_lock.lock();
     defer heap_lock.unlock();
