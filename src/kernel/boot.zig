@@ -325,10 +325,23 @@ fn initMemMap() void {
             continue;
         }
 
-        const base: u32 = @truncate(c.MMapEnt_Ptr(boot_ent) / vm.page_size);
+        const base = c.MMapEnt_Ptr(boot_ent) / vm.page_size;
+        var pages = c.MMapEnt_Size(boot_ent) / vm.page_size;
+        if (base + pages >= vm.max_phys_pages) {
+            @branchHint(.cold);
+            if (base >= vm.max_phys_pages) {
+                log.err(
+                    "Maximum physical memory size is reached, ignore {} memory map entries!",
+                    .{ mem_map.len - i }
+                );
+                break;
+            }
 
-        ent.base = base;
-        ent.pages = @truncate(c.MMapEnt_Size(boot_ent) / vm.page_size);
+            pages = vm.max_phys_pages - base;
+        }
+
+        ent.base = @truncate(base);
+        ent.pages = @truncate(pages);
         ent.type = switch (c.MMapEnt_Type(boot_ent)) {
             c.MMAP_ACPI, c.MMAP_MMIO => .dev,
             c.MMAP_USED => .used,
