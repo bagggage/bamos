@@ -102,7 +102,7 @@ const MappingEntry = struct {
 };
 
 /// A null mapping entry used as a placeholder.
-const mapNull = MappingEntry.init(0, 0, 0, .{});
+const map_null = MappingEntry.init(0, 0, 0, .{});
 
 var mem_map: MemMap = undefined;
 
@@ -134,13 +134,15 @@ pub fn getFb(fb_ptr: *Framebuffer) void {
 /// - Returns: array of `MappingEntry` or `vm.Error` if memory allocation fails.
 pub fn getMappings() vm.Error![]MappingEntry {
     const MMap = MappingEntry;
-    const Order = enum { DMA, Fb, Boot, Kernel, Envir, Stack };
+    const Order = enum { LMA, Fb, Boot, Kernel, Envir, Stack };
 
     const buffer = vm.PageAllocator.alloc(0) orelse return vm.Error.NoMemory;
     const mappings: [*]MMap = @ptrFromInt(vm.getVirtLma(buffer));
 
-    mappings[@intFromEnum(Order.DMA)] = MMap.init(
-        vm.lma_start, 0x0, vm.lma_size,
+    log.info("LMA size: {} GB", .{vm.lmaSize() / utils.gb_size});
+
+    mappings[@intFromEnum(Order.LMA)] = MMap.init(
+        vm.lma_start, 0x0, vm.lmaSize(),
         .{ .write = true, .global = true, .large = true }
     );
     mappings[@intFromEnum(Order.Fb)] = MMap.init(
@@ -230,7 +232,7 @@ fn ArchDataType() type {
 pub fn alloc(pages: u32) ?usize {
     if (vm.PageAllocator.isInitialized()) {
         @panic(
-            \\Using boot memory allocator is not available after initialization,
+            \\Boot memory allocator is not available after initialization,
             \\use page allocator instead.
         );
     }
@@ -273,7 +275,7 @@ pub fn debug() void {
 }
 
 /// Calculates the size of the memory map by determining the number of entries.
-inline fn calcMmapSize() usize {
+inline fn calcMemMapSize() usize {
     return (@as(usize, bootboot.size) -
         (@intFromPtr(&bootboot.mmap) -
         @intFromPtr(&bootboot))) / @sizeOf(c.MMapEnt);
@@ -282,7 +284,7 @@ inline fn calcMmapSize() usize {
 
 /// Allocates memory early in the boot process before the full memory map is initialized.
 fn earlyAlloc(pages: u32) ?usize {
-    const len = calcMmapSize();
+    const len = calcMemMapSize();
     const entries: [*]c.MMapEnt = @ptrCast(&bootboot.mmap);
 
     for (entries[0..len]) |*entry| {
@@ -301,7 +303,7 @@ fn earlyAlloc(pages: u32) ?usize {
 
 /// Initializes the memory map by processing entries provided by the bootloader.
 fn initMemMap() void {
-    mem_map.len = @truncate(calcMmapSize());
+    mem_map.len = @truncate(calcMemMapSize());
 
     const page = earlyAlloc(1);
     mem_map.entries = @ptrFromInt(page.?);
