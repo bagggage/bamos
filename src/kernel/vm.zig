@@ -94,6 +94,7 @@ pub const logPt = arch.vm.logPt;
 /// - `flags`: flags to specify (see `vm.MapFlags` structure).
 /// - `page_table`: target page table.
 pub const mmap = arch.vm.mmap;
+pub const unmap = arch.vm.unmap;
 
 pub inline fn lmaSize() usize { return lmaEnd() - lma_start; }
 
