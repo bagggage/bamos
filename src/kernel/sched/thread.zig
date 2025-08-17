@@ -40,5 +40,5 @@ pub fn deinitStack(stack: *vm.VirtualRegion, stack_size: usize) void {
     const pages = std.math.divCeil(usize, stack_size, vm.page_size) catch unreachable;
 
     vm.heapRelease(stack.base, @truncate(pages));
-    stack.deinit();
+    stack.deinit(true);
 }

@@ -10,13 +10,31 @@ const std = @import("std");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
-const PageList = utils.SList(Page);
-const PageNode = PageList.Node;
+pub const Page = packed struct {
+    pub const List = utils.SList(Page);
+    pub const Node = List.Node;
 
-const Page = packed struct {
+    pub const alloc_config: vm.obj.AllocatorConfig = .{
+        .allocator = .safe_oma,
+        .capacity = 256,
+        .wrapper = .listNode(Node)
+    };
+
+    pub const max_index = std.math.maxInt(u24);
+
     base: u32,
     idx: u24 = 0,
     rank: u8 = 0,
+
+    comptime {
+        std.debug.assert(@sizeOf(Page) == 8);
+        // Make sure that `base` can store any physical page index.
+        std.debug.assert(vm.max_phys_pages <= std.math.maxInt(u32));
+    }
+
+    pub inline fn getOffset(self: Page) usize {
+        return @as(usize, self.idx) * vm.page_size;
+    }
 
     pub inline fn getPhysBase(self: Page) usize {
         return @as(usize, self.base) * vm.page_size;
@@ -26,20 +44,22 @@ const Page = packed struct {
         return @as(u32, 1) << @truncate(self.rank);
     }
 
-    comptime {
-        std.debug.assert(@sizeOf(Page) == 8);
+    pub inline fn asNode(self: *Page) *Node {
+        return @fieldParentPtr("data", self);
+    }
+
+    pub inline fn unmap(self: *Page, base: usize, pt: *vm.PageTable) void {
+        vm.unmap(base + self.getOffset(), self.pagesNum(), pt);
     }
 };
 
 const Self = @This();
 
-var page_oma = vm.SafeOma(PageNode).init(128);
-
 /// Virtual base address
 base: usize,
 
 /// Physical pages list
-page_list: PageList = .{},
+page_list: Page.List = .{},
 
 pub fn init(virt: usize) Self {
     // Check alignment
@@ -48,53 +68,96 @@ pub fn init(virt: usize) Self {
     return .{ .base = virt };
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Self, free_phys: bool) void {
     var node = self.page_list.first;
 
     while (node) |n| {
         node = n.next;
-        freePages(n);
+        freePages(n, free_phys);
     }
 }
 
+pub fn unmap(self: *Self, page_table: *vm.PageTable, free_phys: bool) void {
+    var node = self.page_list.first;
+
+    while (node) |n| {
+        n.data.unmap(self.base, page_table);
+
+        node = n.next;
+        freePages(n, free_phys);
+    }
+
+    self.page_list.first = null;
+}
+
 pub fn growUp(self: *Self, rank: u8, map_flags: vm.MapFlags) !void {
+    const pages = @as(u32, 1) << @truncate(rank);
+    const pages_num = self.pagesNum();
+    if (pages_num > Page.max_index) return error.MaxSize;
+
     const node = allocPages(rank) orelse return error.NoMemory;
-    errdefer freePages(node);
+    errdefer freePages(node, true);
 
-    const pages = @as(u24, 1) << @truncate(rank);
-    const base = self.base + self.size();
+    const base = self.base + (pages_num * vm.page_size);
+    try map(base, node, pages, map_flags);
 
-    try self.map(base, node, pages, map_flags);
+    node.data.idx = @truncate(pages_num);
+    self.page_list.prepend(node);
 }
 
 pub fn growDown(self: *Self, rank: u8, map_flags: vm.MapFlags) !void {
+    const pages = @as(u32, 1) << @truncate(rank);
+    const pages_num = self.pagesNum();
+    if (pages_num > Page.max_index) return error.MaxSize;
+
     const node = allocPages(rank) orelse return error.NoMemory;
-    errdefer freePages(node);
+    errdefer freePages(node, true);
 
-    const pages = @as(u24, 1) << @truncate(rank);
-    const base = self.base - (pages * vm.page_size);
+    const new_base = self.base - (pages * vm.page_size);
+    try map(new_base, node, pages, map_flags);
 
-    try self.map(base, node, pages, map_flags);
-    self.base = base;
+    node.data.idx = @truncate(pages_num);
+    self.page_list.prepend(node);
+    self.base = new_base;
 }
 
-pub inline fn shrink(self: *Self) ?u8 {
-    freePages(self.page_list.popFirst());
+pub fn shrinkTop(self: *Self) ?u8 {
+    const node = self.page_list.popFirst() orelse return null;
+    const rank = node.data.rank;
+
+    freePages(node, true);
+    return rank;
+}
+
+pub fn shrinkBottom(self: *Self) ?u8 {
+    const node = self.page_list.popFirst() orelse return null;
+    const rank = node.data.rank;
+
+    const new_base = self.base + (node.data.pagesNum() * vm.page_size);
+    freePages(node, true);
+
+    self.base = new_base;
+    return rank;
 }
 
 pub inline fn size(self: *const Self) usize {
     return self.pagesNum() * vm.page_size;
 }
 
-pub inline fn pagesNum(self: *const Self) u32 {
-    return if (self.page_list.first) |n| n.data.idx else 0;
+pub fn pagesNum(self: *const Self) u32 {
+    if (self.page_list.first) |n| {
+        @branchHint(.likely);
+        return n.data.pagesNum() + n.data.idx;
+    }
+
+    return 0;
 }
 
 pub fn getPage(self: *const Self, idx: u32) ?*Page {
     var node = self.page_list.first;
 
     while (node) |n| : (node = n.next) {
-        const begin = n.data.idx;
+        const begin: u32 = n.data.idx;
         const end = begin + n.data.pagesNum();
 
         if (begin == idx or idx < end) return &n.data;
@@ -105,9 +168,10 @@ pub fn getPage(self: *const Self, idx: u32) ?*Page {
 
 pub fn getPhys(self: *const Self, offset: usize) ?usize {
     const page_idx: u32 = @truncate(offset / vm.page_size);
-    const page = self.getPage(offset / vm.page_size) orelse return null;
+    const page = self.getPage(page_idx) orelse return null;
 
-    const page_base = page.getPhysBase() + ((page_idx - page.idx) * vm.page_size);
+    const page_offset = (page_idx - page.idx) * vm.page_size;
+    const page_base = page.getPhysBase() + page_offset;
 
     return page_base + (offset % vm.page_size); 
 }
@@ -116,9 +180,12 @@ pub inline fn getVirtLma(self: *const Self, offset: usize) ?usize {
     return vm.getVirtLma(self.getPhys(offset) orelse return null);
 }
 
+pub fn getTop(self: *const Self) usize {
+    return self.base + self.size();
+}
+
 pub fn getTopAligned(self: *const Self, comptime alignment: u5) usize {
-    const top = self.base + self.size();
-    return utils.alignDown(usize, top - 1, alignment);
+    return utils.alignDown(usize, self.getTop() - 1, alignment);
 }
 
 pub fn format(
@@ -127,13 +194,15 @@ pub fn format(
     _: std.fmt.FormatOptions,
     writer: anytype,
 ) !void {
-    try writer.print("0x{x}-0x{x}", .{self.base,self.base + self.size()});
+    try writer.print("0x{x}-0x{x}", .{self.base, self.base + self.size()});
 }
 
 fn map(
-    self: *Self, base: usize,
-    node: *PageNode, pages: u24, map_flags: vm.MapFlags
+    base: usize, node: *Page.Node,
+    pages: u32, map_flags: vm.MapFlags
 ) !void {
+    if (map_flags.none) return;
+
     try vm.mmap(
         base,
         node.data.getPhysBase(),
@@ -141,15 +210,14 @@ fn map(
         map_flags,
         vm.getPt(),
     );
-
-    node.data.idx = pages + if (self.page_list.first) |n| n.data.idx else 0;
-    self.page_list.prepend(node);
 }
 
-fn allocPages(rank: u8) ?*PageNode {
-    const node = page_oma.alloc() orelse return null;
+fn allocPages(rank: u8) ?*Page.Node {
+    const page = vm.obj.new(Page) orelse return null;
+    const node = page.asNode();
+
     const phys = vm.PageAllocator.alloc(rank) orelse {
-        page_oma.free(node);
+        vm.obj.free(Page, page);
         return null;
     };
 
@@ -161,7 +229,13 @@ fn allocPages(rank: u8) ?*PageNode {
     return node;
 }
 
-fn freePages(node: *PageNode) void {
-    vm.PageAllocator.free(node.data.getPhysBase(), node.data.rank);
-    page_oma.free(node);
+inline fn freePages(node: *Page.Node, free_phys: bool) void {
+    if (free_phys) {
+        vm.PageAllocator.free(
+            node.data.getPhysBase(),
+            node.data.rank
+        );
+    }
+
+    vm.obj.free(Page, &node.data);
 }
