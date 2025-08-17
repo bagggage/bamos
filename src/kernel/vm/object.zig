@@ -6,6 +6,8 @@ const vm = @import("../vm.zig");
 const List = utils.List;
 const SList = utils.SList;
 
+const default_oma_capacity = 128;
+
 fn AllocType(T: type) type {
     const wrapper: AllocatorConfig.Wrapper = T.alloc_config.wrapper;
 
@@ -18,7 +20,9 @@ fn AllocType(T: type) type {
 
 fn getSafeOma(T: type, AllocatableType: type) *vm.SafeOma(AllocatableType) {
     const Static = struct {
-        pub var oma: vm.SafeOma(AllocatableType) = .init(T.alloc_config.capacity.?);
+        pub var oma: vm.SafeOma(AllocatableType) = .init(
+            T.alloc_config.capacity orelse default_oma_capacity
+        );
     };
 
     return &Static.oma;
@@ -27,7 +31,8 @@ fn getSafeOma(T: type, AllocatableType: type) *vm.SafeOma(AllocatableType) {
 fn getOma(T: type, AllocatableType: type) *vm.ObjectAllocator {
     const Static = struct {
         pub var oma: vm.ObjectAllocator = .initCapacity(
-            @sizeOf(AllocatableType), T.alloc_config.capacity.?
+            @sizeOf(AllocatableType),
+            T.alloc_config.capacity orelse default_oma_capacity
         );
     };
 
