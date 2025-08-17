@@ -16,8 +16,8 @@ pub const page_table_size = 512;
 /// Linear Memory Access (LMA) region start address.
 pub const lma_start = 0xFFFF800000000000;
 
-pub const max_user_head_addr = 0x0000_8FFF_FFFF_FFFF - utils.gb_size;
 pub const max_userspace_addr = 0x0000_8FFF_FFFF_FFFF;
+pub const max_user_heap_addr = max_userspace_addr - utils.gb_size + 1;
 
 const pt_pool_pages = 512;
 const pages_per_2mb = (utils.mb_size * 2) / page_size;
@@ -367,6 +367,88 @@ pub fn mmap(virt: usize, phys: usize, pages: u32, flags: vm.MapFlags, page_table
     }
 
     unreachable;
+}
+
+pub fn unmap(virt: usize, pages: u32, page_table: *PageTable) void {
+    var pt_stack: [4]?[*]PageTableEntry = .{null} ** 4;
+
+    var pte_idx = getPxeIdx(3, virt);
+    var pte: [*]PageTableEntry = page_table[pte_idx..].ptr;
+
+    var mapped_pages: u28 = 0;
+    var pt_idx: u32 = 0;
+
+    while (pt_idx < 4) {
+        if (pt_idx < 3) {
+            // Just lookup next entry in next page table
+            if (pte[0].present == 0) {
+                // Page table not present, nothing to unmap
+                return;
+            } else if (pte[0].size != 0) {
+                // Remap large page
+                remapLarge(&pte[0], pt_idx == 1) catch {
+                    // TODO: fix it!
+                    return;
+                };
+            }
+
+            // Push next to the current pte on the stack
+            if (pte_idx == 511) {
+                pt_stack[pt_idx] = null;
+            } else {
+                pt_stack[pt_idx] = pte + 1;
+            }
+
+            // Go to the next pte in the next page table
+            pte_idx = if (mapped_pages == 0) getPxeIdx(@truncate(2 - pt_idx), virt) else 0;
+            pte = pte[0].nextPt()[pte_idx..].ptr;
+            pt_idx += 1;
+        } else {
+            // Begin unmapping
+            var entries_to_unmap = pages - mapped_pages;
+            var pages_step: u28 = 1;
+
+            // Check if this is a large page
+            if (pte[0].size == 1) {
+                // Determine if this is a 1GB or 2MB page
+                const is_1gb = (pt_idx == 1);
+                pages_step = if (is_1gb) 
+                    (utils.gb_size / page_size) 
+                else 
+                    pages_per_2mb;
+                
+                entries_to_unmap = 1; // Large page covers all remaining entries
+            }
+
+            while (entries_to_unmap > 0 and pte_idx < page_table_size) : ({
+                pte_idx += 1;
+                entries_to_unmap -= 1;
+            }) {
+                pte[0].present = 0;
+                mapped_pages += pages_step;
+                pte += 1;
+            }
+
+            if (entries_to_unmap == 0) {
+                if (mapped_pages == pages) return;
+            }
+
+            std.debug.assert(pte_idx == 512);
+
+            // Go back up the stack
+            while (pt_idx > 0 and pt_stack[pt_idx - 1] == null) {
+                pt_idx -= 1;
+            }
+
+            if (pt_idx == 0) return;
+
+            pt_idx -= 1;
+            pte = pt_stack[pt_idx].?;
+            pte_idx = @truncate((@intFromPtr(pte) & 0xFFF) / @sizeOf(PageTableEntry));
+
+            std.debug.assert(pte_idx > 0);
+        }
+    }
 }
 
 fn correctMmapFlags(flags: vm.MapFlags, virt: usize, phys: usize, pages: u32) vm.MapFlags {
