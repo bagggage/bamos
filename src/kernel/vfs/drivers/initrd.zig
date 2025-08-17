@@ -104,10 +104,11 @@ pub const mount_dir_name: []const u8 = "initrd";
 pub fn init() !void {
     if (!vfs.registerFs(&fs)) return error.RegisterFailed;
 
-    const mount_dir = vfs.getRoot().makeDirectory(mount_dir_name) catch |err| {
+    const mount_dir = vfs.getRootWeak().makeDirectory(mount_dir_name) catch |err| {
         log.err("failed to create mount point: {}", .{err});
         return error.MountFailed;
     };
+    defer mount_dir.deref();
 
     _ = vfs.mount(mount_dir, fs_name, null) catch |err| {
         log.err("while mounting: {}", .{err});

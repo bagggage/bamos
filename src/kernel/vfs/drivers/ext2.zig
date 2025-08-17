@@ -259,8 +259,6 @@ const Inode = extern struct {
             const ptr = self.inode.direct_ptrs[self.inner_idx];
             self.inner_idx +%= 1;
 
-            log.debug("{}", .{self.inode});
-
             if (self.inner_idx >= Inode.direct_ptrs_num) {
                 @branchHint(.unlikely);
                 self.indir_level = 1;

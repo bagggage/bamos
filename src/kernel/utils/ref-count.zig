@@ -15,7 +15,7 @@ pub fn RefCount(comptime UintType: type) type {
     return struct {
         const Self = @This();
 
-        value: std.atomic.Value(UintType) = .{ .raw = 1 },
+        value: std.atomic.Value(UintType) = .{ .raw = 0 },
 
         pub inline fn init(value: UintType) Self {
             return .{ .value = .{ .raw = value } };

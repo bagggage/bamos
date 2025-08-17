@@ -185,6 +185,7 @@ pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
 
     if (child == null) {
         const new_child = self.ops.lookup(self, child_name) orelse return null;
+        new_child.ref();
 
         if (new_child.parent != self) self.addChild(new_child);
 
@@ -203,6 +204,7 @@ pub fn makeDirectory(self: *Dentry, name: []const u8) Error!*Dentry {
 
     try self.ops.makeDirectory(self, dir_dentry);
     self.addChild(dir_dentry);
+    dir_dentry.ref();
 
     return dir_dentry;
 }
@@ -213,6 +215,7 @@ pub fn createFile(self: *Dentry, name: []const u8) Error!*Dentry {
 
     try self.ops.createFile(self, file_dentry);
     self.addChild(file_dentry);
+    file_dentry.ref();
 
     return file_dentry;
 }

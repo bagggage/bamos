@@ -27,13 +27,13 @@ pub const Inode = @import("vfs/Inode.zig");
 pub const Partition = parts.Partition;
 pub const Superblock = @import("vfs/Superblock.zig");
 
-pub const Error = parts.Error || error {
+pub const Error = vm.Error || parts.Error || error {
     InvalidArgs,
     IoFailed,
     Busy,
-    NoMemory,
     NoFs,
     NoEnt,
+    NoAccess,
     BadOperation,
     BadDentry,
     BadInode,
@@ -70,14 +70,14 @@ pub const Context = union(enum) {
     super: *Superblock,
     virt: Virt,
 
-    pub fn getMountPoint(self: *Context) *MountPoint {
+    pub fn getMountPoint(self: *const Context) *MountPoint {
         return switch (self.*) {
             .super => |s| s.mount_point,
             .virt => |v| v.getMountPoint()
         };
     }
 
-    pub fn getFsRoot(self: *Context) *Dentry {
+    pub fn getFsRoot(self: *const Context) *Dentry {
         return switch (self.*) {
             .super => |s| s.root,
             .virt => |v| v.root
@@ -165,8 +165,11 @@ pub const Path = struct {
     dentry: *const Dentry,
 
     pub fn format(self: Path, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        if (self.dentry.parent != root_dentry) {
-            try format(.{.dentry = self.dentry.parent}, "", .{}, writer);
+        const parent = self.dentry.parent;
+        if (!std.mem.eql(u8, parent.name.str(), "/")) {
+            try format(
+                .{ .dentry = self.dentry.parent },&.{}, .{}, writer
+            );
         }
 
         try writer.print("/{s}", .{self.dentry.name.str()});
@@ -178,6 +181,25 @@ pub const MountPoint = struct {
     dentry: *Dentry,
 
     ctx: Context,
+
+    pub fn init(
+        self: *MountPoint, fs: *FileSystem,
+        dentry: *Dentry, ctx: Context
+    ) void {
+        dentry.ref();
+        ctx.getFsRoot().ref();
+
+        self.* = .{
+            .fs = fs,
+            .dentry = dentry,
+            .ctx = ctx
+        };
+    }
+
+    pub inline fn deinit(self: *MountPoint) void {
+        self.ctx.getFsRoot().deref();
+        self.dentry.deref();
+    }
 
     pub inline fn new() ?*MountPoint {
         return &(vm.alloc(MountNode) orelse return null).data;
@@ -364,15 +386,23 @@ pub fn isMountPoint(dentry: *const Dentry) bool {
     return false;
 }
 
-/// Returns the actual root dentry of the entire VFS.
+/// Returns the actual root of the entire VFS
+/// and increments reference counter.
 pub inline fn getRoot() *Dentry {
+    root_dentry.ref();
+    return root_dentry;
+}
+
+/// Returns the actual root of the entire VFS,
+/// but don't increments reference counter.
+pub inline fn getRootWeak() *Dentry {
     return root_dentry;
 }
 
 /// Returns root dentry of initrd filesystem if mounted,
 /// `null` otherwise.
 pub fn getInitRamDisk() ?*Dentry {
-    return tryLookup(root_dentry, initrd.mount_dir_name);
+    return tryLookup(getRoot(), initrd.mount_dir_name);
 }
 
 /// Returns current system time that might be
@@ -491,11 +521,7 @@ fn mountDriveFs(
         return error.BadSuperblock;
     }
 
-    mnt_point.* = .{
-        .dentry = dentry,
-        .fs = fs,
-        .ctx = .{ .super = super },
-    };
+    mnt_point.init(fs, dentry, .{ .super = super });
     super.root.ctx = .{ .super = super };
     super.mount_point = mnt_point;
 
@@ -513,11 +539,7 @@ fn mountVirtualFs(fs: *FileSystem, dentry: *Dentry, mnt_point: *MountPoint) !*De
         return error.BadSuperblock;
     }
 
-    mnt_point.* = .{
-        .dentry = dentry,
-        .fs = fs,
-        .ctx = .{ .virt = virt },
-    };
+    mnt_point.init(fs, dentry, .{ .virt = virt });
     virt.root.ctx = .{ .virt = &mnt_point.ctx.virt };
 
     return virt.root;
@@ -528,30 +550,41 @@ fn lookupEx(dir: ?*Dentry, path: []const u8) Error!*Dentry {
 
     log.debug("lookup for: \"{s}\"", .{path});
 
-    var ent: ?*Dentry = if (path[0] == '/') root_dentry else dir orelse root_dentry;
+    const start_dent = if (path[0] == '/') root_dentry else dir orelse root_dentry;
+
+    var ent: ?*Dentry = start_dent;
     var it = std.mem.splitScalar(
         u8,
         if (path[0] == '/') path[1..] else path[0..],
         '/'
     );
 
-    while (it.next()) |element| {
-        if (element.len == 0 or ent == null) break;
-        if (ent.?.inode.type != .directory) return error.BadDentry;
+    start_dent.ref();
+    defer if (ent == start_dent) start_dent.deref();
 
+    while (it.next()) |element| {
+        const dentry = ent.?;
+        errdefer dentry.deref();
+
+        if (element.len == 0) continue;
         if (element[0] == '.') {
-            if (element.len == 1) {
-                continue;
-            } else if (element.ptr[1] == '.' and element.len == 2) {
-                ent = ent.?.parent;
+            if (element.len == 1) continue;
+
+            if (element.ptr[1] == '.' and element.len == 2) {
+                dentry.parent.ref();
+                defer dentry.deref();
+
+                ent = dentry.parent;
                 continue;
             }
         }
+    
+        if (dentry.inode.type != .directory) return error.BadDentry;
 
-        const child = ent.?.lookup(element);
-        ent.?.deref();
+        ent = dentry.lookup(element);
+        dentry.deref();
 
-        ent = child;
+        if (ent == null) break;
     }
 
     return ent orelse error.NoEnt;
@@ -566,17 +599,11 @@ fn initRoot() !void {
     const tmp_fs = getFs("tmpfs") orelse return error.NoTmpfs;
     defer tmp_fs.deref();
 
-    const virt = try tmp_fs.mountVirtual();
-
-    root_dentry = virt.root;
-    root_dentry.ref();
-
     {
-        mnt_point.* = .{
-            .fs = tmp_fs,
-            .dentry = root_dentry,
-            .ctx = .{ .virt = virt },
-        };
+        const virt = try tmp_fs.mountVirtual();
+        defer root_dentry = virt.root;
+
+        mnt_point.init(tmp_fs, virt.root, .{ .virt = virt });
 
         mount_lock.writeLock();
         defer mount_lock.writeUnlock();
