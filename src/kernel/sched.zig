@@ -97,6 +97,10 @@ pub inline fn getCurrent() *Scheduler {
     return &smp.getLocalData().scheduler;
 }
 
+pub inline fn getCurrentTask() *Task {
+    return getCurrent().current_task;
+}
+
 pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     const scheduler = getScheduler(cpu_idx);
     const task = newKernelTask("startup", taskHandler) orelse return error.NoMemory;
