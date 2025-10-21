@@ -33,22 +33,9 @@ pub const alloc_config: vm.obj.AllocatorConfig = .{
 
 dentry: *Dentry,
 ops: *const Operations = undefined,
-ref_count: utils.RefCount(u16) = .{},
+ref_count: utils.RefCount(u32) = .init(0),
+perm: vfs.Permissions = .none,
 offset: usize = 0,
-
-pub inline fn init(self: *File, dentry: *Dentry) void {
-    dentry.ref();
-    self.* = .{ .dentry = dentry };
-}
-
-pub inline fn deinit(self: *File) void {
-    self.releaseDentry();
-}
-
-pub inline fn assignDentry(self: *File, dentry: *Dentry) void {
-    dentry.ref();
-    self.dentry = dentry;
-}
 
 pub inline fn get(self: *File) bool {
     return self.ref_count.get();
@@ -58,12 +45,12 @@ pub inline fn put(self: *File) bool {
     return self.ref_count.put();
 }
 
-pub inline fn releaseDentry(self: *File) void {
-    self.dentry.deref();
+pub inline fn ref(self: *File) void {
+    self.ref_count.inc();
 }
 
-pub inline fn close(self: *File) void {
-    self.dentry.close(self);
+pub inline fn deref(self: *File) void {
+    if (self.ref_count.put()) self.dentry.onClose(self);
 }
 
 pub fn read(self: *File, buf: []u8) Error!usize {

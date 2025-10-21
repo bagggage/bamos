@@ -93,6 +93,7 @@ pub const FileSystem = struct {
         mount: MountFn,
         unmount: UnmountFn
     };
+
     pub const VirtualOperations = struct {
         pub const MountFn = *const fn() Error!Context.Virt;
         pub const UnmountFn = *const fn(*Context.Virt) void;
@@ -222,6 +223,42 @@ pub const MountPoint = struct {
     }
 };
 
+pub const Permissions = enum(u16) {
+    none = 0b000_000_000,
+    x    = 0b001_001_001,
+    w    = 0b010_010_010,
+    r    = 0b100_100_100,
+    rw   = 0b110_110_110,
+    wx   = 0b011_011_011,
+    rx   = 0b101_101_101,
+    rwx  = 0b111_111_111,
+    _,
+
+    pub inline fn makeInt(user: Permissions, group: Permissions, others: Permissions) u16 {
+        return
+            @intFromEnum(user) & @intFromEnum(Role.user)   |
+            @intFromEnum(group) & @intFromEnum(Role.group) |
+            @intFromEnum(others) & @intFromEnum(Role.others)
+        ;
+    }
+
+    pub inline fn mask(perm: Permissions, role: Role) u16 {
+        return @intFromEnum(perm) & @intFromEnum(role);
+    }
+};
+
+pub const Role = enum(u16) {
+    others  = 0b111,
+    group   = 0b111_000,
+    user    = 0b111_000_000,
+
+    group_others = 0b000_111_111,
+    user_others  = 0b111_000_111,
+    user_group   = 0b111_111_000,
+
+    all = 0b111_111_111
+};
+
 const MountList = utils.List(MountPoint);
 const MountNode = MountList.Node;
 const FsList = utils.List(FileSystem);
@@ -285,17 +322,6 @@ pub fn tryMount(dentry: *Dentry, blk_dev: *devfs.BlockDev) Error!*Dentry {
     }
 
     return error.BadSuperblock;
-}
-
-pub fn open(dentry: *Dentry) Error!*File {
-    const file = vm.obj.new(File) orelse return error.NoMemory;
-    try dentry.open(file);
-    return file;
-}
-
-pub inline fn close(file: *File) void {
-    file.close();
-    vm.obj.free(File, file);
 }
 
 pub fn registerFs(fs: *FsNode) bool {

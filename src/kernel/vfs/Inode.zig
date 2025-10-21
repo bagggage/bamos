@@ -3,6 +3,7 @@
 // Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
 
 const utils = @import("../utils.zig");
+const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 const Inode = @This();
@@ -22,7 +23,7 @@ pub const Type = enum(u8) {
 
 index: u32,
 type: Type,
-perm: u16 = 0o0644,
+perm: u16 = vfs.Permissions.makeInt(.rw, .r, .r),
 size: u64 = 0, // In bytes
 
 access_time: u32 = 0,
@@ -57,4 +58,21 @@ pub inline fn ref(self: *Inode) void {
 
 pub inline fn deref(self: *Inode) bool {
     return self.ref_count.put();
+}
+
+pub fn getRole(self: *const Inode, uid: u32, gid: u32) vfs.Role {
+    if (uid == 0 or self.uid == uid) return .user;
+    if (self.gid == gid) return .group;
+
+    return .others;
+}
+
+pub inline fn checkAccess(self: *const Inode, perm: vfs.Permissions, role: vfs.Role) bool {
+    const perm_mask = perm.mask(role);
+    return (self.perm & perm_mask) == perm_mask;
+}
+
+pub inline fn anyAccess(self: *const Inode, perm: vfs.Permissions, role: vfs.Role) bool {
+    const perm_mask = perm.mask(role);
+    return (self.perm & perm_mask) != 0;
 }

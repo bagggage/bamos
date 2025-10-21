@@ -220,16 +220,25 @@ pub fn createFile(self: *Dentry, name: []const u8) Error!*Dentry {
     return file_dentry;
 }
 
-pub inline fn open(self: *Dentry, file: *File) Error!void {
-    file.init(self);
-    errdefer file.deinit();
+pub fn open(self: *Dentry, perm: vfs.Permissions) Error!*File {
+    self.ref();
+    errdefer self.deref();
+
+    const file = vm.obj.new(File) orelse return error.NoMemory;
+    file.* = .{
+        .dentry = self,
+        .perm = perm
+    };
 
     try self.ops.open(self, file);
 }
 
-pub inline fn close(self: *const Dentry, file: *File) void {
+pub fn onClose(self: *Dentry, file: *File) void {
+    std.debug.assert(file.dentry == self and file.ref_count.count() == 0);
+
     self.ops.close(self, file);
-    file.releaseDentry();
+    self.deref();
+    vm.obj.free(File, file);
 }
 
 pub fn addChild(self: *Dentry, child: *Dentry) void {
