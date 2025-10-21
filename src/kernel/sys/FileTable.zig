@@ -1,0 +1,100 @@
+//! # File Table
+//! 
+//! This is a structrue that is embedded to the `Process` struct and
+//! used for handling and managment all open files within a process.
+
+// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+
+const std = @import("std");
+
+const utils = @import("../utils.zig");
+const vfs = @import("../vfs.zig");
+const vm = @import("../vm.zig");
+
+const Self = @This();
+
+pub const max_files_default = vm.page_size / @sizeOf(*vfs.File);
+
+files: [*]?*vfs.File = undefined,
+bitmap: utils.Bitmap = .{},
+lock: utils.Spinlock = .{},
+
+// Capacity.
+max_files: u32 = max_files_default,
+// Current number of allocated FDs.
+num_files: std.atomic.Value(u32) = .init(0),
+
+const Descriptor = struct {
+    idx: u32,
+    file: *vfs.File,
+};
+
+pub inline fn init(self: *Self, max_files: u32) void {
+    self.* = .{ .max_files = max_files };
+}
+
+pub fn deinit(self: *Self) void {
+    var num_files = blk: {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        // prevent further allocations
+        break :blk self.num_files.fetchOr(self.max_files, .release);
+    };
+
+    var i: u32 = 0;
+    while (num_files > 0) : (i += 1) {
+        if (self.files[i]) |f| {
+            self.files[i] = null;
+            f.deref();
+
+            num_files -= 1;
+        }
+    }
+}
+
+pub fn open(self: *Self, dentry: *vfs.Dentry, perm: vfs.Permissions) !Descriptor {
+    const idx = blk: {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        if (self.num_files.load(.acquire) >= self.max_files) {
+            @branchHint(.unlikely);
+            return error.MaxSize;
+        }
+
+        _ = self.num_files.fetchAdd(1, .release);
+        const idx = self.bitmap.find(false) orelse unreachable;
+        self.bitmap.set(idx);
+
+        break :blk idx;
+    };
+    errdefer self.num_files.fetchSub(1, .acquire);
+    errdefer self.bitmap.clear(idx);
+
+    const file = try dentry.open(perm);
+    return .{
+        .idx = idx,
+        .file = file,
+    };
+}
+
+pub fn close(self: *Self, idx: u32) void {
+    const file = self.files[idx].?;
+    self.files[idx] = null;
+
+    self.bitmap.clear(idx);
+    self.num_files.fetchSub(1, .acquire);
+
+    file.deref();
+}
+
+pub fn get(self: *Self, idx: u32) ?*vfs.File {
+    if (idx >= self.max_files) {
+        @branchHint(.unlikely);
+        return null;
+    }
+
+    const file = self.files[idx] orelse return null;
+    return if (file.get()) file else null;
+}
