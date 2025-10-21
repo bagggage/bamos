@@ -121,6 +121,28 @@ pub fn growDown(self: *Self, rank: u8, map_flags: vm.MapFlags) !void {
     self.base = new_base;
 }
 
+pub fn insertNewPage(
+    self: *Self, page_offset: u32,
+    rank: u8, map_flags: vm.MapFlags
+) !void {
+    const node = allocPages(rank) orelse return error.NoMemory;
+    errdefer freePages(node, true);
+
+    const page_base = self.base + (page_offset * vm.page_size);
+    const pages = @as(u32, 1) << @truncate(rank);
+
+    try vm.mmap(
+        page_base,
+        node.data.getPhysBase(),
+        pages,
+        map_flags,
+        vm.getPt(),
+    );
+
+    node.data.idx = @truncate(page_offset);
+    self.page_list.prepend(node);
+}
+
 pub fn shrinkTop(self: *Self) ?u8 {
     const node = self.page_list.popFirst() orelse return null;
     const rank = node.data.rank;
