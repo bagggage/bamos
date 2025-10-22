@@ -100,6 +100,8 @@ pub inline fn lmaSize() usize { return lmaEnd() - lma_start; }
 
 pub const lmaEnd = arch.vm.lmaEnd;
 pub const heapStart = arch.vm.heapStart;
+/// Checks if an address belongs to the userspace virtual memory range.
+pub const isUserVirtAddr = arch.vm.isUserVirtAddr;
 
 /// General-purpose kernel memory allocation function.
 pub const malloc = UniversalAllocator.alloc;
@@ -184,6 +186,7 @@ pub const Error = error {
     Uninitialized,
     NoMemory,
     MaxSize,
+    SegFault,
 };
 
 var root_pt: *PageTable = undefined;
@@ -370,6 +373,11 @@ pub inline fn heapRelease(base: usize, pages: u32) void {
 
 pub fn pageFaultHandler(addr: usize, cause: FaultCause, userspace: bool) bool {
     const sys = @import("sys.zig");
+
+    if (userspace) {
+        sys.Process.getCurrent().pageFault(addr, cause);
+        return true;
+    }
 
     log.warn(
         \\{raw-log}Page Fault (CPU {}) - {}: 

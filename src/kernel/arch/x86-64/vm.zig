@@ -99,6 +99,10 @@ pub inline fn lmaEnd() usize { return lma_end; }
 
 pub inline fn heapStart() usize { return heap_start; }
 
+pub inline fn isUserVirtAddr(virt: usize) bool {
+    return (virt & 0xFFFF_0000_0000_0000) == 0;
+}
+
 pub inline fn allocPt() ?*PageTable {
     const pt = pt_oma.alloc(PageTable) orelse return null;
     @memset(pt, PageTableEntry{});
