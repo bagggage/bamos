@@ -114,8 +114,6 @@ const DevList = struct {
     lock: utils.Spinlock = .{},
 };
 
-const StubOps = vfs.internals.DentryStubOps(.devtmpfs);
-
 const init_inode_idx = 1;
 
 var fs = vfs.FileSystem.init(
@@ -130,7 +128,6 @@ var fs = vfs.FileSystem.init(
         .makeDirectory = tmpfs.DentryOps.makeDirectory,
 
         .open = dentryOpen,
-        .close = StubOps.close,
     },
 );
 

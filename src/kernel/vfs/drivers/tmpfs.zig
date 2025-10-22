@@ -64,10 +64,6 @@ var fs = vfs.FileSystem.init(
         .makeDirectory = dentryMakeDirectory,
         .createFile = dentryCreateFile,
         .deinitInode = deinitInode,
-
-        // FIXME !!!
-        .open = undefined,
-        .close = undefined
     },
 );
 
@@ -134,7 +130,6 @@ pub fn createDentry(
     try dentry.init(name, ctx, inode, &fs.data.dentry_ops);
     // Prevent auto-freeing dentry
     dentry.ref();
-
     return dentry;
 }
 

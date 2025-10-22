@@ -14,15 +14,17 @@ const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 pub const Operations = struct {
+    const default = vfs.internals.file.default;
+
     pub const ReadFn = *const fn(*const Dentry, usize, []u8) Error!usize;
     pub const WriteFn = *const fn(*Dentry, usize, []const u8) Error!usize;
     pub const MmapFn = *const fn(*const Dentry, *sys.AddressSpace.MapUnit) Error!void;
     pub const IoctlFn = *const fn(*Dentry, c_uint, usize) Error!void;
 
-    read: ReadFn,
-    write: WriteFn,
-    mmap: MmapFn,
-    ioctl: IoctlFn = undefined,
+    read: ReadFn = &default.read,
+    write: WriteFn = &default.write,
+    mmap: MmapFn = &default.mmap,
+    ioctl: IoctlFn = &default.ioctl,
 };
 
 pub const alloc_config: vm.obj.AllocatorConfig = .{
@@ -32,7 +34,7 @@ pub const alloc_config: vm.obj.AllocatorConfig = .{
 };
 
 dentry: *Dentry,
-ops: *const Operations = undefined,
+ops: *const Operations = &Operations.default.ops,
 ref_count: utils.RefCount(u32) = .init(0),
 perm: vfs.Permissions = .none,
 offset: usize = 0,

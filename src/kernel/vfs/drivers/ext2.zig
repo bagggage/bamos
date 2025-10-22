@@ -489,13 +489,8 @@ const Dentry = extern struct {
     }
 };
 
-const DentryStubOps = vfs.internals.DentryStubOps(.ext2);
-
 const file_ops: vfs.File.Operations = .{
-    .ioctl = undefined,
-    .mmap = undefined,
     .read = fileRead,
-    .write = undefined
 };
 
 var fs = vfs.FileSystem.init(
@@ -506,8 +501,6 @@ var fs = vfs.FileSystem.init(
     }},
     .{
         .lookup = dentryLookup,
-        .makeDirectory = DentryStubOps.makeDirectory,
-        .createFile = DentryStubOps.createFile,
 
         .open = dentryOpen,
         .close = dentryClose

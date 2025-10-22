@@ -24,6 +24,8 @@ pub const List = utils.SList(Dentry);
 pub const Node = List.Node;
 
 pub const Operations = struct {
+    const default = vfs.internals.dentry_ops.debug;
+
     pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
     pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry) Error!void;
     pub const CreateFileFn = *const fn(*const Dentry, *Dentry) Error!void;
@@ -32,13 +34,13 @@ pub const Operations = struct {
     pub const OpenFn = *const fn(*const Dentry, *File) Error!void;
     pub const CloseFn = *const fn(*const Dentry, *File) void;
 
-    lookup: LookupFn,
-    makeDirectory: MakeDirectoryFn,
-    createFile: CreateFileFn,
-    deinitInode: DeinitInodeFn = vfs.internals.DentryNoneOps.deinitInode,
+    lookup: LookupFn = &default.lookup,
+    makeDirectory: MakeDirectoryFn = &default.makeDirectory,
+    createFile: CreateFileFn = &default.createFile,
+    deinitInode: DeinitInodeFn = &default.deinitInode,
 
-    open: OpenFn,
-    close: CloseFn,
+    open: OpenFn = &default.open,
+    close: CloseFn = &default.close,
 };
 
 pub const Name = struct {
@@ -101,7 +103,7 @@ name: Name,
 parent: *Dentry,
 ctx: Context.Ptr,
 inode: *Inode,
-ops: *Operations,
+ops: *const Operations = &Operations.default.ops,
 
 child: List = .{},
 
@@ -117,7 +119,6 @@ pub inline fn new() ?*Dentry {
         .parent = undefined,
         .ctx = undefined,
         .inode = undefined,
-        .ops = undefined
     };
 
     return dentry;
@@ -231,6 +232,7 @@ pub fn open(self: *Dentry, perm: vfs.Permissions) Error!*File {
     };
 
     try self.ops.open(self, file);
+    return file;
 }
 
 pub fn onClose(self: *Dentry, file: *File) void {

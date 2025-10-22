@@ -13,8 +13,6 @@ const vfs = @import("../../vfs.zig");
 const TarIterator = tar.Iterator(std.io.StreamSource.Reader);
 const TarFile = TarIterator.File;
 
-const DentryStubOps = vfs.internals.DentryStubOps(.ext2);
-
 /// A struct that is exactly 512 bytes and matches tar file format. This is
 /// intended to be used for outputting tar files; for parsing there is
 /// `std.tar.Header`.
@@ -84,12 +82,6 @@ var fs = vfs.FileSystem.init(
     }},
     .{
         .lookup = dentryLookup,
-        .makeDirectory = DentryStubOps.makeDirectory,
-        .createFile = DentryStubOps.createFile,
-
-        // FIXME !!!
-        .open = undefined,
-        .close = undefined
     }
 );
 
