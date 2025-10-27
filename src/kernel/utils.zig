@@ -55,6 +55,7 @@ pub const NumberAllocCeil = num_alloc.NumberAllocCeil;
 pub const NumberAllocFloor = num_alloc.NumberAllocFloor;
 pub const NumberAllocRanged = num_alloc.NumberAllocRanged;
 pub const rb = @import("utils/rb-tree.zig");
+pub const rcu = @import("utils/rcu.zig");
 pub const RefCount = @import("utils/ref-count.zig").RefCount;
 pub const SList = std.SinglyLinkedList;
 pub const RwLock = @import("utils/RwLock.zig");
