@@ -7,20 +7,19 @@
 
 const std = @import("std");
 
+const sys = @import("../sys.zig");
 const utils = @import("../utils.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
 
-pub const max_files_default = vm.page_size / @sizeOf(*vfs.File);
-
 files: [*]?*vfs.File = undefined,
 bitmap: utils.Bitmap = .{},
 lock: utils.Spinlock = .{},
 
 // Capacity.
-max_files: u32 = max_files_default,
+max_files: u32 = 0,
 // Current number of allocated FDs.
 num_files: std.atomic.Value(u32) = .init(0),
 
@@ -29,8 +28,11 @@ const Descriptor = struct {
     file: *vfs.File,
 };
 
-pub inline fn init(self: *Self, max_files: u32) void {
-    self.* = .{ .max_files = max_files };
+pub fn init(max_files: u32) vm.Error!Self {
+    return .{
+        .files = undefined,
+        .max_files = max_files
+    };
 }
 
 pub fn deinit(self: *Self) void {
@@ -53,7 +55,14 @@ pub fn deinit(self: *Self) void {
     }
 }
 
-pub fn open(self: *Self, dentry: *vfs.Dentry, perm: vfs.Permissions) !Descriptor {
+pub fn clone(self: *const Self) vfs.Error!Self {
+    var new: Self = undefined;
+    try new.init(self.max_files);
+
+    return error.BadOperation;
+}
+
+pub fn open(self: *Self, dentry: *vfs.Dentry, perm: vfs.Permissions) vfs.Error!Descriptor {
     const idx = blk: {
         self.lock.lock();
         defer self.lock.unlock();
