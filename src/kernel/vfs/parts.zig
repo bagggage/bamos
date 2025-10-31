@@ -35,9 +35,8 @@ pub const Partition = struct {
         return @fieldParentPtr("dev_file", dev_file);
     }
 
-    pub fn init(self: *Partition, lba_start: usize, lba_end: usize) !void {
-        self.lba_start = lba_start;
-        self.lba_end = lba_end;
+    pub fn init(lba_start: usize, lba_end: usize) Partition {
+        return .{ .lba_start = lba_start, .lba_end = lba_end };
     }
 
     pub fn registerDevice(
