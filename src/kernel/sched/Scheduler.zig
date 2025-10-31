@@ -72,7 +72,7 @@ current_task: *Task = undefined,
 preemption: u16 = 1,
 flags: Flags = .{},
 
-pub fn init(self: *Self) void {
+pub fn preinit(self: *Self) void {
     self.active_queue = &self.task_queues[0];
     self.expired_queue = &self.task_queues[1];
 }

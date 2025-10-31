@@ -105,7 +105,7 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     const scheduler = getScheduler(cpu_idx);
     const task = newKernelTask("startup", taskHandler) orelse return error.NoMemory;
 
-    scheduler.init();
+    scheduler.preinit();
     scheduler.current_task = task;
 
     scheduler.enqueueTask(task);
