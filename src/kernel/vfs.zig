@@ -8,12 +8,13 @@ const api = utils.api.scoped(@This());
 const dev = @import("dev.zig");
 const log = std.log.scoped(.vfs);
 const sys = @import("sys.zig");
+const rcu = utils.rcu;
 const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
 const hashFn = std.hash.Fnv1a_32.hash;
 
-pub const devfs = @import("vfs/drivers//devfs.zig");
+pub const devfs = @import("vfs/drivers/devfs.zig");
 pub const initrd = @import("vfs/drivers/initrd.zig");
 pub const internals = @import("vfs/internals.zig");
 pub const lookup_cache = @import("vfs/lookup-cache.zig");
@@ -115,22 +116,22 @@ pub const FileSystem = struct {
     ops: Operations = undefined,
     dentry_ops: Dentry.Operations = undefined,
 
+    node: rcu.List.Node = .{},
+
     pub fn init(
         comptime name: []const u8,
         ops: Operations,
         dentry_ops: Dentry.Operations
-    ) FsNode {
+    ) FileSystem {
         comptime var buffer: [name.len]u8 = .{0} ** name.len;
         const lower = comptime std.ascii.lowerString(&buffer, name);
         const hash = comptime hashFn(lower);
 
         return .{
-            .data = .{
-                .name = name,
-                .hash = hash,
-                .ops = ops,
-                .dentry_ops = dentry_ops,
-            }
+            .name = name,
+            .hash = hash,
+            .ops = ops,
+            .dentry_ops = dentry_ops,
         };
     }
 
@@ -151,6 +152,10 @@ pub const FileSystem = struct {
             .drive => .device,
             .virt => .virtual,
         };
+    }
+
+    pub inline fn fromNode(node: *rcu.List.Node) *FileSystem {
+        return @fieldParentPtr("node", node);
     }
 
     pub inline fn ref(self: *FileSystem) void {
@@ -182,6 +187,7 @@ pub const MountPoint = struct {
     dentry: *Dentry,
 
     ctx: Context,
+    node: rcu.List.Node = .{},
 
     pub fn init(
         self: *MountPoint, fs: *FileSystem,
@@ -203,15 +209,15 @@ pub const MountPoint = struct {
     }
 
     pub inline fn new() ?*MountPoint {
-        return &(vm.alloc(MountNode) orelse return null).data;
+        return vm.alloc(MountPoint);
     }
 
     pub inline fn free(self: *MountPoint) void {
-        vm.free(self.asNode());
+        vm.free(self);
     }
 
-    pub inline fn asNode(self: *MountPoint) *MountNode {
-        return @fieldParentPtr("data", self);
+    pub inline fn fromNode(node: *rcu.List.Node) *MountPoint {
+        return @fieldParentPtr("node", node);
     }
 
     pub inline fn getHiddenDentry(self: *MountPoint) *Dentry {
@@ -259,18 +265,10 @@ pub const Role = enum(u16) {
     all = 0b111_111_111
 };
 
-const MountList = utils.List(MountPoint);
-const MountNode = MountList.Node;
-const FsList = utils.List(FileSystem);
-const FsNode = FsList.Node;
-
 export var root_dentry: *Dentry = undefined;
 
-var mount_list: MountList = .{};
-var mount_lock: utils.RwLock = .{};
-
-var fs_list: FsList = .{};
-var fs_lock: utils.RwLock = .{};
+var mount_list: rcu.List = .{};
+var fs_list: rcu.List = .{};
 
 const AutoInit = opaque {
     pub var file_systems = .{
@@ -305,63 +303,57 @@ pub inline fn mount(dentry: *Dentry, fs_name: []const u8, blk_dev: ?*devfs.Block
 }
 
 pub fn tryMount(dentry: *Dentry, blk_dev: *devfs.BlockDev) Error!*Dentry {
-    var node = getFirstFs();
+    const gen = fs_list.ctrl.readLock();
+    defer fs_list.ctrl.readUnlock(gen);
 
-    while (node) |fs| : (node = getNextFs(fs)) {
-        if (fs.data.kind() == .virtual) continue;
+    var curr_fs = getFirstFs();
+    while (curr_fs) |fs| : (curr_fs = getNextFs(fs)) {
+        if (fs.kind() == .virtual) continue;
 
-        const fs_root = mountFs(dentry, &fs.data, blk_dev) catch |err| {
+        const fs_root = mountFs(dentry, fs, blk_dev) catch |err| {
             if (err == error.BadSuperblock) continue;
 
-            fs.data.deref();
+            fs.deref();
             return err;
         };
 
-        fs.data.deref();
+        fs.deref();
         return fs_root;
     }
 
     return error.BadSuperblock;
 }
 
-pub fn registerFs(fs: *FsNode) bool {
-    if (fs.next != null or fs.prev != null) return false;
+pub fn registerFs(fs: *FileSystem) bool {
+    if (fs.node.next != null or fs.node.prev != null) return false;
 
     {
-        fs_lock.writeLock();
-        defer fs_lock.writeUnlock();
+        fs_list.ctrl.writeLock();
+        defer fs_list.ctrl.writeUnlock();
 
         // Check if fs with same name exists
         {
-            var fs_node = fs_list.first;
+            var node = fs_list.first.raw;
 
-            while (fs_node) |other_fs| : (fs_node = other_fs.next) {
-                if (other_fs.data.hash == fs.data.hash) return false;
+            while (node) |n| : (node = n.next) {
+                const other_fs = FileSystem.fromNode(n);
+                if (other_fs.hash == fs.hash) return false;
             }
         }
 
-        fs_list.append(fs);
+        fs_list.appendRaw(&fs.node);
     }
 
-    log.info("{s} was registered", .{fs.data.name});
+    log.info("{s} was registered", .{fs.name});
 
     return true;
 }
 
-pub fn unregisterFs(fs: *FsNode) void {
+pub fn unregisterFs(fs: *FileSystem) void {
     comptime api.exportFn(unregisterFs);
+    fs_list.remove(&fs.node);
 
-    {
-        fs_lock.lock();
-        defer fs_lock.unlock();
-
-        fs_list.remove(fs);
-    }
-
-    fs.next = null;
-    fs.prev = null;
-
-    log.info("{s} was removed", .{fs.data.name});
+    log.info("{s} was removed", .{fs.name});
 }
 
 pub inline fn getFs(name: []const u8) ?*FileSystem {
@@ -400,13 +392,13 @@ pub fn changeRoot(new: *Dentry) void {
 }
 
 pub fn isMountPoint(dentry: *const Dentry) bool {
-    mount_lock.readLock();
-    defer mount_lock.readUnlock();
+    const gen = mount_list.ctrl.readLock();
+    defer mount_list.ctrl.readUnlock(gen);
 
-    var node = mount_list.first;
-
+    var node = mount_list.first.load(.acquire);
     while (node) |n| : (node = n.next) {
-        if (n.data.getRootDentry() == dentry) return true;
+        const mnt_point = MountPoint.fromNode(n);
+        if (mnt_point.getRootDentry() == dentry) return true;
     }
 
     return false;
@@ -437,24 +429,19 @@ pub inline fn getTime() sys.time.Time {
     return sys.time.getCachedTime();
 }
 
-fn getFirstFs() ?*FsNode {
-    fs_lock.readLock();
-    defer fs_lock.readUnlock();
+fn getFirstFs() ?*FileSystem {
+    const node = fs_list.first.load(.acquire) orelse return null;
+    const fs = FileSystem.fromNode(node);
 
-    const node = fs_list.first orelse return null;
-    node.data.ref();
-
-    return node;
+    fs.ref();
+    return fs;
 }
 
-fn getNextFs(node: *FsNode) ?*FsNode {
-    defer node.data.deref();
+fn getNextFs(fs: *FileSystem) ?*FileSystem {
+    defer fs.deref();
 
-    fs_lock.readLock();
-    defer fs_lock.readUnlock();
-
-    const next = node.next orelse return null;
-    next.data.ref();
+    const next = FileSystem.fromNode(fs.node.next orelse return null);
+    next.ref();
 
     return next;
 }
@@ -462,15 +449,15 @@ fn getNextFs(node: *FsNode) ?*FsNode {
 fn getFsEx(name: []const u8) ?*FileSystem {
     const hash = hashFn(name);
 
-    fs_lock.readLock();
-    defer fs_lock.readUnlock();
+    const gen = fs_list.ctrl.readLock();
+    defer fs_list.ctrl.readUnlock(gen);
 
-    var node = fs_list.first;
-
-    while (node) |fs| : (node = fs.next) {
-        if (fs.data.hash == hash) {
-            fs.data.ref();
-            return &fs.data;
+    var node = fs_list.first.load(.acquire);
+    while (node) |n| : (node = n.next) {
+        const fs = FileSystem.fromNode(n);
+        if (fs.hash == hash) {
+            fs.ref();
+            return fs;
         }
     }
 
@@ -525,11 +512,7 @@ fn mountFs(dentry: *Dentry, fs: *FileSystem, blk_dev: ?*devfs.BlockDev) Error!*D
         log.info("{s} is mounted to \"{s}\"", .{fs.name, dentry.path()});
     }
 
-    mount_lock.writeLock();
-    defer mount_lock.writeUnlock();
-
-    mount_list.append(mnt_point.asNode());
-
+    mount_list.append(&mnt_point.node);
     return fs_root;
 }
 
@@ -630,11 +613,7 @@ fn initRoot() !void {
         defer root_dentry = virt.root;
 
         mnt_point.init(tmp_fs, virt.root, .{ .virt = virt });
-
-        mount_lock.writeLock();
-        defer mount_lock.writeUnlock();
-
-        mount_list.prepend(mnt_point.asNode());
+        mount_list.prepend(&mnt_point.node);
     }
 
     log.info("tmpfs was mounted as \"{s}\"", .{root_dentry.name.str()});

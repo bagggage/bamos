@@ -193,7 +193,7 @@ fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
     errdefer vfs.Inode.free(inode);
 
     const dentry = try tmpfs.createDentry(devf.name.str(), inode, root.ctx);
-    dentry.ops = &fs.data.dentry_ops;
+    dentry.ops = &fs.dentry_ops;
 
     inode.fs_data.set(devf);
     root.addChild(dentry);
