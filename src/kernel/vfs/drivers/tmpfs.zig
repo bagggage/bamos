@@ -127,7 +127,7 @@ pub fn createDentry(
     const dentry = vfs.Dentry.new() orelse return error.NoMemory;
     errdefer dentry.free();
 
-    try dentry.init(name, ctx, inode, &fs.data.dentry_ops);
+    try dentry.setup(name, ctx, inode, &fs.dentry_ops);
     // Prevent auto-freeing dentry
     dentry.ref();
     return dentry;

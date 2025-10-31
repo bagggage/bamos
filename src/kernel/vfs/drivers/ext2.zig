@@ -551,7 +551,7 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
         const dentry = vfs.Dentry.new() orelse return error.NoMemory;
         errdefer dentry.free();
 
-        dentry.init("/", undefined, try inode.makeCache(root_inode), &fs.data.dentry_ops) catch unreachable;
+        dentry.setup("/", undefined, try inode.makeCache(root_inode), &fs.dentry_ops) catch unreachable;
         super.root = dentry;
     }
 
@@ -623,7 +623,7 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
         return null;
     };
 
-    child_dentry.init(name, parent.ctx, vfs_inode, &fs.data.dentry_ops) catch {
+    child_dentry.setup(name, parent.ctx, vfs_inode, &fs.dentry_ops) catch {
         child_dentry.free();
         vfs_inode.free();
         return null;

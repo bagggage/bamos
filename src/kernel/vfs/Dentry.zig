@@ -54,7 +54,8 @@ pub const Name = struct {
     value: Union = undefined,
     len: u8 = 0,
 
-    pub fn init(self: *Name, name: []const u8) !void {    
+    pub fn init(name: []const u8) !Name {
+        var self: Name = .{};
         if (name.len < Union.short_len) {
             self.value = .{ .short = undefined };
 
@@ -69,6 +70,7 @@ pub const Name = struct {
         }
 
         self.len = @truncate(name.len);
+        return self;
     }
 
     pub fn move(self: *Name, other: *Name) void {
@@ -145,17 +147,20 @@ pub inline fn getVirtualCtx(self: *Dentry) *Context.Virt {
     return self.ctx.virt;
 }
 
-pub fn init(
+pub fn setup(
     self: *Dentry, name: []const u8,
     ctx: Context.Ptr, inode: *Inode, ops: *Operations
 ) !void {
-    try self.name.init(name);
+    const dent_name: Name = try .init(name);
     inode.ref();
 
-    self.parent = self;
-    self.ctx = ctx;
-    self.inode = inode;
-    self.ops = ops;
+    self.* = .{
+        .name = dent_name,
+        .parent = self,
+        .ctx = ctx,
+        .inode = inode,
+        .ops = ops
+    };
 }
 
 pub fn deinit(self: *Dentry) void {
@@ -285,9 +290,7 @@ fn createLike(self: *const Dentry, name: []const u8) !*Dentry {
     const dentry = Dentry.new() orelse return error.NoMemory;
     errdefer dentry.free();
 
-    try dentry.name.init(name);
-    errdefer dentry.name.deinit();
-
+    dentry.name = try .init(name);
     dentry.ctx = self.ctx;
     dentry.ops = self.ops;
 

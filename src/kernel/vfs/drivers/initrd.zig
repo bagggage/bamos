@@ -134,7 +134,7 @@ fn mount() vfs.Error!vfs.Context.Virt {
         .type = .directory,
     };
 
-    dentry.init("/", undefined, inode, &fs.data.dentry_ops) catch unreachable;
+    dentry.setup("/", undefined, inode, &fs.dentry_ops) catch unreachable;
     initrd = boot.getInitrd();
 
     return .{ .root = dentry };
@@ -187,8 +187,8 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
             const inode = vfs.Inode.new() orelse return error.NoMemory;
             errdefer inode.free();
 
-            initInode(inode, &file, tar_iter.reader.context.getPos() catch unreachable);
-            try dentry.init(entry_name, parent.ctx, inode, &fs.data.dentry_ops);
+            setupInode(inode, &file, tar_iter.reader.context.getPos() catch unreachable);
+            try dentry.setup(entry_name, parent.ctx, inode, &fs.dentry_ops);
 
             return dentry;
         }
@@ -201,7 +201,7 @@ fn handleErr(err: anyerror) void {
     log.err("while parsing tar: {s}", .{@errorName(err)});
 }
 
-fn initInode(inode: *vfs.Inode, file: *const TarFile, pos: usize) void {
+fn setupInode(inode: *vfs.Inode, file: *const TarFile, pos: usize) void {
     inode.* = .{
         // Offset in tar
         .index = @truncate(pos - @sizeOf(TarHeader)),
