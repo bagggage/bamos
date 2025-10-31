@@ -38,8 +38,8 @@ base_frequency: u32,
 /// Kind of clock, used by kernel to choose system clock.
 kind: Kind,
 
-pub fn init(self: *Self, device: *const dev.Device, vt: *const VTable, base_frequency: u32, kind: Kind) void {
-    self.* = .{
+pub fn init(device: *const dev.Device, vt: *const VTable, base_frequency: u32, kind: Kind) Self {
+    return .{
         .device = device,
         .vtable = vt,
         .base_frequency = base_frequency,

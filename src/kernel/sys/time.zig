@@ -194,20 +194,19 @@ const max_hz = 1000;
 /// Internal timekeeper structure.
 /// Responsible for maintaining system time in actual state.
 const Keeper = struct {
-    time: Time = .{},
+    time: Time,
     uptime: Time = .{},
 
-    last_count: usize = 0,
-    ns_per_ticks: usize = 0,
+    last_count: usize,
+    ns_per_ticks: usize,
 
-    pub fn init(self: *Keeper) void {
+    pub fn init() Keeper {
         const date_time = sys_clock.getDateTime();
-
-        self.time = Time.fromDateTime(date_time);
-        self.last_count = sys_timer.getCounter();
-        self.ns_per_ticks = std.time.ns_per_s / sys_timer.base_frequency;
-
-        log.debug("count: {}, ns per tick: {}", .{self.last_count,self.ns_per_ticks});
+        return .{
+            .time = Time.fromDateTime(date_time),
+            .last_count = sys_timer.getCounter(),
+            .ns_per_ticks = std.time.ns_per_s / sys_timer.base_frequency
+        };
     }
 
     pub fn update(self: *Keeper) void {
@@ -242,7 +241,7 @@ var sys_timer: *Timer = undefined;
 /// Timer used as a tick interrupt source.
 var sched_timer: *Timer = undefined;
 
-var keeper: Keeper = .{};
+var keeper: Keeper = undefined;
 
 /// System timer frequency.
 var sys_timer_hz: u32 = default_hz;
@@ -254,7 +253,8 @@ pub fn init() !void {
     sys_timer = try chooseSysTimer();
     sched_timer = try chooseSchedTimer();
 
-    keeper.init();
+    keeper = .init();
+    log.debug("count: {}, ns per tick: {}", .{keeper.last_count,keeper.ns_per_ticks});
 
     log.info("clock: {}, timer: {}", .{ sys_clock.device.name, sys_timer.device.name });
     log.info("sched timer: {}", .{sched_timer.device.name});

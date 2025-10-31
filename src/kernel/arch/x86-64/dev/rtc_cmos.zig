@@ -97,7 +97,7 @@ fn initDevice(self: *const dev.Driver) !void {
     // Then write to CMOS/RTC RAM.
     cmos.write(0x8A, 0x20);
 
-    clock.init(device, &vtable, rtc_frequency, .system_low);
+    clock.* = .init(device, &vtable, rtc_frequency, .system_low);
     try dev.obj.add(Clock, clock);
 }
 
