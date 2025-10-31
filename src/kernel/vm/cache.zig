@@ -183,8 +183,8 @@ const HashTable = struct {
     pages: PageList = .{},
     buckets: []Bucket = &.{},
 
-    pub fn init(self: *HashTable) Error!void {
-        std.debug.assert(self.buckets.len == 0);
+    pub fn init() Error!HashTable {
+        var self: HashTable = .{};
 
         const phys = try self.allocPages(initial_rank);
         errdefer self.freePages();
@@ -200,6 +200,7 @@ const HashTable = struct {
         self.buckets.len = (initial_pages * vm.page_size) / @sizeOf(Bucket);
 
         @memset(self.buckets, Bucket{});
+        return self;
     }
 
     pub fn deinit(self: *HashTable) void {
@@ -258,9 +259,8 @@ pub const ControlBlock = struct {
 
     node_oma: NodeOma = NodeOma.init(256),
 
-    pub inline fn init(self: *ControlBlock) Error!void {
-        self.* = .{};
-        try self.hash_table.init();
+    pub inline fn init() Error!ControlBlock {
+        return .{ .hash_table = try .init() };
     }
 
     pub fn deinit(self: *ControlBlock) void {
@@ -376,13 +376,12 @@ pub fn newCtrl() Error!*ControlBlock {
     const node = ctrl_oma.alloc() orelse return error.NoMemory;
     errdefer ctrl_oma.free(node);
 
-    try node.data.init();
+    node.data = try .init();
 
     ctrl_lock.lock();
     defer ctrl_lock.unlock();
 
     ctrl_list.append(node);
-
     return &node.data;
 }
 
