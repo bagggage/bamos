@@ -68,7 +68,7 @@ pub const Flags = packed struct {
 pub const file_operations: vfs.File.Operations = .{
     .ioctl = undefined,
     .mmap = undefined,
-    .read = undefined,
+    .read = filePartitionRead,
     .write = undefined
 };
 
@@ -87,6 +87,7 @@ base_part: vfs.parts.Node,
 lba_size: u16,
 lba_shift: u4 = undefined,
 
+/// Drive capacity in bytes.
 capacity: usize,
 
 flags: Flags = .{},
@@ -406,6 +407,46 @@ fn allocRequest(self: *Self) ?*IoQueue.Node {
     return null;
 }
 
-//fn addPartition(self: *Self, lba_start: usize, lba_end: usize) !void {
-//    //devfs
-//}
+fn calcPartitionRegion(self: *const Self, part: *const vfs.Partition, offset: usize, len: usize) [2]usize {
+    const part_start = self.lbaToOffset(part.lba_start);
+    const part_end = self.lbaToOffset(part.lba_end);
+
+    const start = part_start + offset;
+    const end = start + len;
+
+    return .{
+        std.mem.min(usize, &.{start, part_end}),
+        std.mem.min(usize, &.{end, part_end})
+    };
+}
+
+fn filePartitionRead(dentry: *const vfs.Dentry, offset: usize, buffer: []u8) vfs.Error!usize {
+    const dev_file = devfs.DevFile.fromDentry(dentry);
+    const part = vfs.Partition.fromDevFile(dev_file);
+    const self = dev_file.data.as(Self).?;
+
+    const region = self.calcPartitionRegion(part, offset, buffer.len);
+    if (region[0] == region[1]) return 0;
+
+    const blk_start = cache.offsetToBlock(region[0]);
+    const blk_end = cache.offsetToBlock(region[1] - 1) + 1;
+
+    var buf_offset: usize = 0;
+    for (blk_start..blk_end) |idx| {
+        const blk = try self.readBlock(@truncate(idx));
+        defer blk.release();
+
+        const buf_start = if (idx == blk_start) cache.offsetModBlock(region[0]) else 0;
+        const buf_end = if (idx == blk_end - 1) cache.offsetModBlock(region[1] - 1) + 1 else cache.block_size;
+        const buf_size = buf_end - buf_start;
+
+        @memcpy(
+            buffer[buf_offset..buf_offset + buf_size],
+            blk.asSlice()[buf_start..buf_end]
+        );
+
+        buf_offset += buf_size;
+    }
+
+    return region[1] - region[0];
+}
