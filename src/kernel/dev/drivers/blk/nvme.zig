@@ -194,7 +194,7 @@ const Namespace = struct {
     ctrl: *Controller,
     id: u32,
 
-    pub fn init(self: *NamespaceDrive, ctrl: *Controller, nsid: u32, buffer: *[vm.page_size]u8) !void {
+    pub fn setup(self: *NamespaceDrive, ctrl: *Controller, nsid: u32, buffer: *[vm.page_size]u8) !void {
         self.derived = .{
             .ctrl = ctrl,
             .id = nsid,
@@ -206,7 +206,7 @@ const Namespace = struct {
         var name: dev.Name = try .print("nvme{}n{}", .{ctrl_idx,nsid});
         errdefer name.deinit();
 
-        try self.base.init(
+        try self.base.setup(
             name, &dev_region,
             true, true
         );
@@ -797,7 +797,7 @@ const Controller = struct {
 
                 self.namespaces[i] = drive;
 
-                try Namespace.init(drive, self, nsid, @ptrFromInt(virt + vm.page_size));
+                try Namespace.setup(drive, self, nsid, @ptrFromInt(virt + vm.page_size));
                 errdefer Namespace.deinit(drive);
 
                 try dev.obj.add(Drive, &drive.base);

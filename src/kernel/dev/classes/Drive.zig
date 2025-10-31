@@ -107,7 +107,7 @@ fn checkIo(self: *const Self, lba_offset: usize, buffer: []const u8) void {
     std.debug.assert(self.lbaToOffset(lba_offset) + buffer.len <= self.capacity);
 }
 
-pub fn init(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: bool, partitions: bool) Error!void {
+pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: bool, partitions: bool) Error!void {
     self.cache_ctrl = try cache.newCtrl();
     errdefer cache.deleteCtrl(self.cache_ctrl);
 
