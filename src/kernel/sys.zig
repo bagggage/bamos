@@ -11,6 +11,10 @@ const utils = @import("utils.zig");
 const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
 
+pub const AddressSpace = Process.AddressSpace;
+pub const exe = @import("sys/exe.zig");
+pub const limits = @import("sys/limits.zig");
+pub const Process = @import("sys/Process.zig");
 pub const time = @import("sys/time.zig");
 
 const init_paths: []const []const u8 = &.{
@@ -29,24 +33,29 @@ pub fn init() !void {
 }
 
 fn startInit() !void {
-    const init_dent = try findInit();
-    const buf: [*]u8 = @ptrFromInt(vm.getVirtLma(
-        vm.PageAllocator.alloc(0) orelse return error.NoMemory
-    ));
+    const root = getInitRoot() orelse return error.NoRootFs;
+    defer root.deref();
 
-    const init_fd = try vfs.open(init_dent);
-    _ = try init_fd.read(buf[0..vm.page_size]);
+    const init_dent = try findInit(root);
+    
+    const init_proc = try Process.create(
+        limits.default_stack_size,
+        root, root
+    );
+    errdefer init_proc.delete();
 
-    log.info("readed:\n{s}", .{buf[0..vm.page_size]});
+    var exe_file = try exe.load(init_dent, init_proc);
+    exe_file.deinit();
+
+    //const process = try sys.loadProcess(init_dent);
 }
 
-fn findInit() !*vfs.Dentry {
-    const root = getInitRoot() orelse return error.NoRootFs;
-
+fn findInit(root: *vfs.Dentry) !*vfs.Dentry {
     var init_dent: ?*vfs.Dentry = null;
 
     for (init_paths) |path| {
-        const dentry = vfs.lookup(root, path[1..]) catch |err| {
+        const temp_path = if (path[0] == '/') path[1..] else path;
+        const dentry = vfs.lookup(root, temp_path) catch |err| {
             if (err == vfs.Error.NoEnt) continue;
             return err;
         };

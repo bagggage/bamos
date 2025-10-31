@@ -55,12 +55,12 @@ pub fn rfind(self: *Self, comptime is_setted: bool) ?usize {
     var byte_idx = self.bits.len;
 
     while (byte_idx > 0) {
-        byte_idx -= 1;
+        byte_idx -%= 1;
 
         const byte = self.bits[byte_idx];
         if (byte == byte_val) continue;
 
-        return (byte_idx * utils.byte_size) + if (comptime is_setted) @ctz(byte) else @ctz(~byte);
+        return (byte_idx *% utils.byte_size) + if (comptime is_setted) @ctz(byte) else @ctz(~byte);
     }
 
     return null;
