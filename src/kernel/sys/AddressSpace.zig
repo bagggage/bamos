@@ -38,8 +38,8 @@ heap_unit: ?*MapUnit = null,
 /// Stack size in pages.
 stack_pages: u16,
 
-pub fn init(self: *Self, pt: *vm.PageTable, stack_pages: u16) void {
-    self.* = .{
+pub fn init(pt: *vm.PageTable, stack_pages: u16) Self {
+    return .{
         .page_table = pt,
         .stack_pages = stack_pages
     };
@@ -50,7 +50,7 @@ pub fn create(stack_pages: u16) !*Self {
     errdefer vm.obj.free(Self, self);
 
     const pt = vm.newPt() orelse return error.NoMemory;
-    self.init(pt, stack_pages);
+    self.* = .init(pt, stack_pages);
 
     return self;
 }
@@ -147,9 +147,7 @@ pub fn pageFault(self: *Self, addr: usize, cause: vm.FaultCause) !void {
         self.map_lock.readLock();
         defer self.map_lock.readUnlock();
 
-        break :blk self.lookupMapUnit(
-            addr, base, top
-        ) orelse return error.NoEnt;
+        break :blk self.lookupMapUnit(base, top) orelse return error.NoEnt;
     };
 
     try map_unit.ops.pageFault(map_unit, addr, cause);
@@ -178,7 +176,7 @@ pub fn format(
 }
 
 fn lookupMapUnit(self: *Self, base: usize, top: usize) ?*MapUnit {
-    const rb_node = self.rb_tree.root;
+    var rb_node = self.rb_tree.root;
 
     while (rb_node) |n| {
         const map_unit = MapUnit.fromRbNode(n);
