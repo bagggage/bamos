@@ -70,7 +70,7 @@ pub fn HashTable(K: type, V: type, Context: type) type {
         buckets: []Bucket = &.{},
         len: usize = 0,
 
-        pub fn init(self: *Self, capacity: u32) !void {
+        pub fn init(capacity: u32) !Self {
             std.debug.assert(capacity > 0);
 
             const pages = std.math.divCeil(u32, capacity, vm.page_size) catch unreachable;
@@ -79,11 +79,13 @@ pub fn HashTable(K: type, V: type, Context: type) type {
             const phys = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
             const virt = vm.getVirtLma(phys);
 
-            self.buckets.ptr = @ptrFromInt(virt);
-            self.buckets.len = (pages * vm.page_size) / @sizeOf(Bucket);
-            self.len = 0;
+            var buckets: []Bucket = undefined;
+            buckets.ptr = @ptrFromInt(virt);
+            buckets.len = (pages * vm.page_size) / @sizeOf(Bucket);
 
-            @memset(self.buckets, Bucket{});
+            @memset(buckets, Bucket{});
+
+            return .{ .buckets = buckets, .len = 0 };
         }
 
         pub fn deinit(self: *Self) void {

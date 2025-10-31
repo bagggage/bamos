@@ -32,8 +32,7 @@ pub fn init() !void {
     );
     const table_capacity = std.math.divCeil(usize, table_size, @sizeOf(Table.Bucket)) catch unreachable;
 
-    try table.init(@truncate(table_capacity));
-
+    table = try .init(@truncate(table_capacity));
     log.info("table: capacity: {}, size: {} KB", .{table_capacity,table_size / utils.kb_size});
 }
 

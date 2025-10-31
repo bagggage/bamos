@@ -28,7 +28,7 @@ fn EnumParser(comptime T: type) type {
 
 const Map = utils.AutoHashTable([]const u8, []const u8);
 
-var map: Map = .{};
+var map: Map = undefined;
 var oma: vm.ObjectAllocator = .init(Map.EntryNode);
 
 var env: []const u8 = undefined;
@@ -37,7 +37,7 @@ pub fn init() !void {
     const raw_env = boot.getEnvironment();
     env = raw_env[0..std.mem.len(raw_env)];
 
-    try map.init(vm.page_size * 2);
+    map = try .init(vm.page_size * 2);
     try parseConfig();
 }
 
