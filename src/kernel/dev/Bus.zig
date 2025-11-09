@@ -19,21 +19,24 @@ pub const Operations = struct {
     remove: RemoveFn
 };
 
+pub const List = utils.List;
+pub const Node = List.Node;
+
 name: []const u8,
 type: u32,
 
-matched: dev.DeviceList = .{},
-unmatched: dev.DeviceList = .{},
-drivers: dev.DriverList = .{},
+node: Node = .{},
+
+matched_devs: Device.List = .{},
+unmatched_devs: Device.List = .{},
+drivers: Driver.List = .{},
 
 dri_lock: utils.Spinlock = .{},
 dev_lock: utils.Spinlock = .{},
 
 ops: Operations,
 
-var device_oma = vm.SafeOma(dev.DeviceNode).init(64);
-
-pub fn init(comptime name: []const u8, ops: Operations) dev.BusNode {
+pub fn init(comptime name: []const u8, ops: Operations) Self {
     comptime var lower_name: [name.len]u8 = undefined;
     _ = comptime std.ascii.lowerString(&lower_name, name);
 
@@ -41,45 +44,35 @@ pub fn init(comptime name: []const u8, ops: Operations) dev.BusNode {
     const hash = comptime dev.nameHash(&temp_name);
 
     return .{
-        .data = .{
-            .name = name,
-            .type = hash,
-            .ops = ops
-        }
+        .name = name,
+        .type = hash,
+        .ops = ops
     };
 }
 
+pub inline fn fromNode(node: *Node) *Self {
+    return @fieldParentPtr("node", node);
+}
+
 pub export fn addDevice(self: *Self, name: dev.Name, driver: ?*const Driver, data: ?*anyopaque) ?*Device {
-    const node = device_oma.alloc() orelse return null;
-    const device = &node.data;
-
-    device.* = .{
-        .name = name,
-        .driver = driver,
-        .driver_data = utils.AnyData.from(data),
-        .bus = self,
-    };
-
+    const device = Device.new(name, self, driver, data) orelse return null;
     if (driver) |drv| {
         {
             // FIXME
             self.dev_lock.lock();
             defer self.dev_lock.unlock();
 
-            self.matched.append(node);
+            self.matched_devs.append(&device.node);
         }
         self.matchLog(device, drv);
-    }
-    else {
-        self.matchDevice(node);
+    } else {
+        self.matchDevice(device);
     }
 
     return device;
 }
 
 pub export fn removeDevice(self: *Self, device: *Device) void {
-    const node: *dev.DeviceNode = @fieldParentPtr("data", device);
-
     if (device.driver) |driver| {
         driver.removeDevice(device);
         self.ops.remove(device);
@@ -88,148 +81,134 @@ pub export fn removeDevice(self: *Self, device: *Device) void {
         self.dev_lock.lock();
         defer self.dev_lock.unlock();
 
-        self.matched.remove(node);
-    }
-    else {
+        self.matched_devs.remove(&device.node);
+    } else {
         self.ops.remove(device);
 
         // FIXME
         self.dev_lock.lock();
         defer self.dev_lock.unlock();
 
-        self.unmatched.remove(node);
+        self.unmatched_devs.remove(&device.node);
     }
 
-    node.data.deinit();
-    device_oma.free(node);
+    device.delete();
 }
 
-pub export fn addDriver(self: *Self, driver: *dev.DriverNode) void {
+pub export fn addDriver(self: *Self, driver: *Driver) void {
     {
+        driver.bus = self;
+
         self.dri_lock.lock();
         defer self.dri_lock.unlock();
 
-        self.drivers.prepend(driver);
+        self.drivers.prepend(&driver.node);
     }
 
-    driver.data.bus = self;
-
-    log.info("{s}: {s} driver was attached", .{self.name,driver.data.name});
+    log.info("{s}: {s} driver was attached", .{self.name,driver.name});
 
     if (self.type == comptime dev.nameHash("platform")) {
-        const result = driver.data.platformProbe();
-
-        if (result == .success) return;
-        switch (result) {
+        switch (driver.platformProbe()) {
             .missmatch => log.warn("{s}: device not presented or not supported", .{self.name}),
             .failed => log.err("{s}: not enough resources to initialize device", .{self.name}),
             .no_resources => log.err("{s}: probing failed", .{self.name}),
-            .success => unreachable
+            .success => return
         }
 
         self.removeDriver(driver);
     } else {
-        self.matchDriver(&driver.data);
+        self.matchDriver(driver);
     }
 }
 
-pub export fn removeDriver(self: *Self, driver: *dev.DriverNode) void {
+pub export fn removeDriver(self: *Self, driver: *Driver) void {
     {
         self.dri_lock.lock();
         defer self.dri_lock.unlock();
 
-        self.drivers.remove(driver);
+        self.drivers.remove(&driver.node);
     }
 
-    self.onRemoveDriver(&driver.data);
-    driver.data.bus = undefined;
+    self.onRemoveDriver(driver);
+    driver.bus = undefined;
 
-    log.info("{s}: {s} driver was removed", .{self.name,driver.data.name});
+    log.info("{s}: {s} driver was removed", .{self.name,driver.name});
 }
 
-fn matchDevice(self: *Self, device: *dev.DeviceNode) void {
-    const match_impl = self.ops.match;
-
+fn matchDevice(self: *Self, device: *Device) void {
     self.dev_lock.lock();
     defer self.dev_lock.unlock();
 
     var node = self.drivers.first;
-
-    while (node) |driver| : (node = driver.next) {
+    while (node) |n| : (node = n.next) {
+        const driver = Driver.fromNode(n);
         {   // FIXME: Use different lock mechanism.
             self.dev_lock.unlock();
             defer self.dev_lock.lock();
 
             if (
-                match_impl(&driver.data, &device.data) == false or
-                driver.data.probe(&device.data) == .missmatch
+                self.ops.match(driver, device) == false or
+                driver.probe(device) == .missmatch
             ) continue;
         }
 
-        device.data.driver = &driver.data;
-        self.matched.append(device);
+        device.driver = driver;
+        self.matched_devs.append(&device.node);
 
-        self.matchLog(&device.data, &driver.data);
+        self.matchLog(device, driver);
         return;
     }
 
-    self.unmatched.append(device);
+    self.unmatched_devs.append(&device.node);
 }
 
 
 fn matchDriver(self: *Self, driver: *Driver) void {
-    const match_impl = self.ops.match;
-
     self.dev_lock.lock();
     defer self.dev_lock.unlock();
 
-    var node = self.unmatched.first;
-
-    while (node) |device| {
-        node = device.next;
-
-        if (match_impl(driver, &device.data)) {
+    var node = self.unmatched_devs.first;
+    while (node) |n| : (node = n.next) {
+        const device = Device.fromNode(n);
+        if (self.ops.match(driver, device)) {
             {   // FIXME: Use different lock mechanism.
                 self.dev_lock.unlock();
                 defer self.dev_lock.lock();
 
-                if (driver.probe(&device.data) == .missmatch) continue;
+                if (driver.probe(device) == .missmatch) continue;
             }
 
-            device.data.driver = driver;
+            device.driver = driver;
 
-            self.unmatched.remove(device);
-            self.matched.append(device);
+            self.unmatched_devs.remove(&device.node);
+            self.matched_devs.append(&device.node);
 
-            self.matchLog(&device.data, driver);
+            self.matchLog(device, driver);
         }
     }
 }
 
 inline fn matchLog(self: *const Self, device: *const Device, driver: *const Driver) void {
-    log.info("{s}: '{}' matches the {s} driver", .{self.name, device.name, driver.name});
+    log.info("{s}: '{f}' matches the {s} driver", .{self.name, device.name, driver.name});
 }
 
 fn onRemoveDriver(self: *Self, driver: *const Driver) void {
     self.dev_lock.lock();
     defer self.dev_lock.unlock();
 
-    var node = self.matched.first;
+    var node = self.matched_devs.first;
+    while (node) |n| : (node = n.next) {
+        const device = Device.fromNode(n);
+        if (device.driver != driver) continue;
 
-    while (node) |device| {
-        node = device.next;
-
-        if (device.data.driver != driver) continue;
-
-        self.matched.remove(device);
+        self.matched_devs.remove(&device.node);
+        defer self.matchDevice(device);
 
         {   // FIXME: Use different lock mechanism.
             self.dev_lock.unlock();
             defer self.dev_lock.lock();
 
-            driver.removeDevice(&device.data);
+            driver.removeDevice(device);
         }
-
-        self.unmatched.append(device);
     }
 }

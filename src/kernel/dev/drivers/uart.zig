@@ -98,5 +98,5 @@ fn initDevice(self: *const dev.Driver) !void {
     initPort();
     if (!testPort()) return; // COM port is unavailable.
 
-    device = try self.addDevice(dev.nameOf("UART RS-232"), null);
+    device = try self.addDevice(dev.Name.init("UART RS-232"), null);
 }

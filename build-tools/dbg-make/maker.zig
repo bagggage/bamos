@@ -28,38 +28,43 @@ const DebugEntry = struct {
 const DebugEntArray = std.ArrayList(DebugEntry);
 
 pub fn makeDebugInfo(config: *const Config, allocator: std.mem.Allocator) !void {
-    var debug_entries = DebugEntArray.init(allocator);
-    defer debug_entries.deinit();
+    var debug_entries: DebugEntArray = .{};
+    defer debug_entries.deinit(allocator);
 
     const elf_file = try std.fs.openFileAbsolute(config.input, .{});
     defer elf_file.close();
 
-    var header = try std.elf.Header.read(elf_file);
-    const strtab_offset = try elfGetStrtabOffset(elf_file, &header);
+    var buffer: [1024]u8 = undefined;
+    var reader = elf_file.reader(&buffer);
+    var header = try std.elf.Header.read(&reader.interface);
+    const strtab_offset = try elfGetStrtabOffset(&reader, &header);
 
-    var section = header.section_header_iterator(elf_file);
+    var section = header.iterateSectionHeaders(&reader);
 
     while (try section.next()) |sect| {
         if (sect.sh_type != std.elf.SHT_SYMTAB) continue;
 
-        try elf_file.seekTo(sect.sh_offset);
+        try reader.seekTo(sect.sh_offset);
 
         for (0..(sect.sh_size / sect.sh_entsize)) |_| {
             var symbol: std.elf.Sym = undefined;
-            const buffer = @as([*]u8, @ptrCast(&symbol))[0..@sizeOf(std.elf.Sym)];
+            const sym_buffer = @as([*]u8, @ptrCast(&symbol))[0..@sizeOf(std.elf.Sym)];
 
-            _ = elf_file.read(buffer) catch break;
+            reader.interface.readSliceAll(sym_buffer) catch break;
 
             if (symbol.st_type() != std.elf.STT_FUNC) continue;
 
             var symbol_name: [64]u8 = undefined;
             const name: [*:0]u8 = @ptrCast(&symbol_name);
 
-            try elfReadName(elf_file, strtab_offset, symbol.st_name, symbol_name[0..]);
+            try elfReadName(&reader, strtab_offset, symbol.st_name, symbol_name[0..]);
 
             if (std.mem.eql(u8, name[0..2], "__")) continue;
 
-            try debug_entries.append(DebugEntry.init(symbol.st_value, @truncate(symbol.st_size), &symbol_name));
+            try debug_entries.append(
+                allocator,
+                DebugEntry.init(symbol.st_value, @truncate(symbol.st_size), &symbol_name)
+            );
         }
 
         break;
@@ -75,6 +80,7 @@ fn makeDebugScript(path: []const u8, allocator: std.mem.Allocator) !void {
 
     const out_file = try std.fs.createFileAbsolute(script_path, .{});
     var correct_path = path;
+    var writer = out_file.writer(&.{});
 
     if (builtin.os.tag == .windows) {
         const add_size = std.mem.count(u8, script_path, "\\");
@@ -86,8 +92,7 @@ fn makeDebugScript(path: []const u8, allocator: std.mem.Allocator) !void {
     }
     defer if (builtin.os.tag == .windows) allocator.free(correct_path);
 
-    try std.fmt.format(
-        out_file.writer(),
+    try writer.interface.print(
         \\const dbg = @import("dbg-info");
         \\
         \\const debug_syms = @embedFile("{s}");
@@ -97,6 +102,7 @@ fn makeDebugScript(path: []const u8, allocator: std.mem.Allocator) !void {
         \\}}
         , .{correct_path}
     );
+    try writer.interface.flush();
 }
 
 fn saveDebugInfo(path: []const u8, debug_entries: *const DebugEntArray) !void {
@@ -147,28 +153,27 @@ fn writeStruct(comptime T: type, file: std.fs.File, strct: *const T) !void {
     _ = try file.write(buffer[0..]);
 }
 
-fn elfReadName(file: std.fs.File, strtab_offset: usize, st_idx: u32, buffer: []u8) !void {
-    const prev_pos = try file.getPos();
+fn elfReadName(reader: *std.fs.File.Reader, strtab_offset: usize, st_idx: u32, buffer: []u8) !void {
+    const prev_pos = reader.logicalPos();
 
-    try file.seekTo(strtab_offset + st_idx);
-    _ = try file.read(buffer);
+    try reader.seekTo(strtab_offset + st_idx);
+    try reader.interface.readSliceAll(buffer);
 
-    try file.seekTo(prev_pos);
+    try reader.seekTo(prev_pos);
 }
 
-fn elfGetStrtabOffset(file: std.fs.File, hdr: *const std.elf.Header) !usize {
-    var section = hdr.section_header_iterator(file);
+fn elfGetStrtabOffset(reader: *std.fs.File.Reader, hdr: *const std.elf.Header) !usize {
+    var section = hdr.iterateSectionHeaders(reader);
     const shstrtab_name = ".shstrtab";
     var shstrtab_buff: [shstrtab_name.len]u8 = undefined;
 
     while (try section.next()) |sect| {
         if (sect.sh_type == std.elf.SHT_STRTAB) {
-            const prev_pos = try file.getPos();
+            const prev_pos = reader.logicalPos();
 
-            try file.seekTo(sect.sh_offset + sect.sh_name);
-            _ = try file.read(shstrtab_buff[0..]);
-    
-            try file.seekTo(prev_pos);
+            try reader.seekTo(sect.sh_offset + sect.sh_name);
+            try reader.interface.readSliceAll(shstrtab_buff[0..]);
+            try reader.seekTo(prev_pos);
 
             if (std.mem.eql(u8, shstrtab_name[0..], shstrtab_buff[0..])) continue;
 

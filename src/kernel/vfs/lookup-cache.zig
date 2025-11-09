@@ -10,7 +10,7 @@ const utils = @import("../utils.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
-const Table = utils.HashTable(u64, Dentry.Node, opaque{
+const Table = utils.HashTable(u64, opaque{
     pub fn hash(key: u64) u64 { return key; } 
     pub fn eql(a: u64, b: u64) bool { return a == b; }
 });
@@ -18,7 +18,7 @@ const Table = utils.HashTable(u64, Dentry.Node, opaque{
 const max_table_size = utils.mb_size * 16;
 const min_table_size = utils.mb_size;
 
-pub const Entry = Table.EntryNode;
+pub const Entry = Table.Entry;
 
 var table: Table = .{};
 var lock = utils.Spinlock.init(.unlocked);
@@ -30,7 +30,7 @@ pub fn init() !void {
         min_table_size,
         max_table_size
     );
-    const table_capacity = std.math.divCeil(usize, table_size, @sizeOf(Table.Bucket)) catch unreachable;
+    const table_capacity = std.math.divCeil(usize, table_size, @sizeOf(utils.hash_table.Bucket)) catch unreachable;
 
     table = try .init(@truncate(table_capacity));
     log.info("table: capacity: {}, size: {} KB", .{table_capacity,table_size / utils.kb_size});
@@ -40,8 +40,7 @@ pub fn get(hash: u64) ?*Dentry {
     lock.lock();
     defer lock.unlock();
 
-    const dentry = &(table.get(hash) orelse return null).data;
-
+    const dentry = Dentry.fromCache(table.get(hash) orelse return null);
     return if (dentry.ref_count.get()) dentry else null;
 }
 
@@ -49,14 +48,14 @@ pub fn insert(hash: u64, dentry: *Dentry) void {
     lock.lock();
     defer lock.unlock();
 
-    table.insert(hash, dentry.getCacheEntry());
+    table.insert(hash, &dentry.cache_ent);
 }
 
 pub fn remove(hash: u64) ?*Dentry {
     lock.lock();
     defer lock.unlock();
 
-    return &(table.remove(hash) orelse return null).data.value.data;
+    return Dentry.fromCache(table.remove(hash) orelse return null);
 }
 
 pub fn calcHash(parent: *const Dentry, name: []const u8) u64 {

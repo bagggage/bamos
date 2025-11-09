@@ -13,7 +13,7 @@ const vm = @import("../vm.zig");
 
 pub const Self = @This();
 
-pub const List = utils.List(Self);
+pub const List = utils.List;
 pub const Node = List.Node;
 
 pub const State = enum(u8) {
@@ -131,7 +131,7 @@ pub const KernelSpecific = struct {
 
 /// User task specific data.
 pub const UserSpecific = struct {
-    pub const UList = utils.SList(void);
+    pub const UList = utils.SList;
     pub const UNode = UList.Node;
 
     process: *sys.Process,
@@ -144,12 +144,12 @@ pub const UserSpecific = struct {
 pub const alloc_config: vm.obj.AllocatorConfig = .{
     .allocator = .safe_oma,
     .capacity = 128,
-    .wrapper = .listNode(Node)
 };
 
 stats: Stats = .{},
 /// Arch-specific context used for context switching.
 context: arch.Context,
+node: Node = .{},
 
 /// Kernel stack is not appear as
 /// map unit and hidden from userspace,
@@ -163,6 +163,6 @@ spec: union {
     user: UserSpecific,
 },
 
-pub inline fn asNode(self: *Self) *Node {
-    return @fieldParentPtr("data", self);
+pub inline fn fromNode(node: *Node) *Self {
+    return @fieldParentPtr("node", node);
 }

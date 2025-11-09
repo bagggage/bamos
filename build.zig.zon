@@ -4,7 +4,7 @@
 
     .fingerprint = 0xcd2c4ccb5b1efab1, // Changing this has security and trust implications.
 
-    .minimum_zig_version = "0.14.1",
+    .minimum_zig_version = "0.15.2",
 
     .dependencies = .{
         .bootboot_bin = .{

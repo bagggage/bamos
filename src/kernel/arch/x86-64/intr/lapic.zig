@@ -47,11 +47,7 @@ pub const LvtTimer = packed struct {
     rsrvd_1: u3 = 0,
     mask: u1 = 0,
 
-    timer_mode: enum(u2) {
-        once = 0b00,
-        periodic = 0b01,
-        tsc_deadline = 0b10
-    },
+    timer_mode: enum(u2) { once = 0b00, periodic = 0b01, tsc_deadline = 0b10 },
 
     rsrvd_2: u13 = 0,
 };

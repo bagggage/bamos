@@ -1,6 +1,6 @@
 //! # Block device high-level interface
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -16,53 +16,188 @@ const vfs = @import("../../vfs.zig");
 
 const Self = @This();
 
-const IoQueue = utils.SList(IoRequest);
-const IoOma = vm.SafeOma(IoQueue.Node);
-
-const io_oma_capacity = 198;
-
 pub const Error = devfs.Error || dev.Name.Error || error {
     IoFailed,
     NoMemory,
 };
 
-pub const IoRequest = struct {
+pub const io = opaque {
     pub const Operation = enum(u8) {
         read,
         write
     };
+
     pub const Status = enum(u8) {
         failed,
         success
     };
 
-    pub const CallbackFn = *const fn (*const IoRequest, Status) void;
+    pub const Request = struct {
+        const Queue = utils.SList;
+        const Node = Queue.Node;
+        const Oma = vm.SafeOma(Request);
 
-    id: u16,
-    operation: Operation,
+        pub const CallbackFn = *const fn (*const Request, Status) void;
 
-    lba_offset: usize,
-    lba_num: u32,
+        id: u16,
+        operation: Operation,
 
-    lma_buf: [*]u8,
+        lba_offset: usize,
+        lba_num: u32,
 
-    callback: CallbackFn,
-    wait_queue: sched.WaitQueue = .{},
+        lma_buf: [*]u8,
 
-    comptime {
-        std.debug.assert(@sizeOf(IoRequest) == 40);
-    }
+        callback: CallbackFn,
+        wait_queue: sched.WaitQueue = .{},
+
+        node: Queue.Node = .{},
+
+        comptime {
+            std.debug.assert(@sizeOf(Request) == 48);
+        }
+
+        inline fn fromNode(node: *Node) *Request {
+            return @fieldParentPtr("node", node);
+        }
+    };
+
+    const Control = struct {
+        const AnyQueue = union {
+            const Single = struct {
+                queue: Request.Queue = .{},
+                lock: utils.Spinlock = .{}
+            };
+
+            multi: [*]Request.Queue,
+            single: Single,
+        };
+
+        const Handle = struct {
+            request: *Request,
+            arena: *vm.ObjectAllocator.Arena,
+        };
+
+        const oma_capacity = 192;
+
+        queue: AnyQueue,
+        oma: Request.Oma = .init(oma_capacity),
+
+        fn init(multi_io: bool) !Control {
+            const queue: AnyQueue = if (multi_io) blk: {
+                const cpus_num = smp.getNum();
+                const mem = vm.malloc(cpus_num * @sizeOf(io.Request.Queue)) orelse return error.NoMemory;
+
+                break :blk .{ .multi = @alignCast(@ptrCast(mem)) };
+            } else .{ .single = .{} };
+
+            return .{ .queue = queue };
+        }
+
+        inline fn deinit(self: *Control, multi_io: bool) void {
+            if (multi_io) vm.free(self.queue.multi);
+            self.oma.deinit();
+        }
+
+        fn enqueue(self: *Control, multi_io: bool, request: *Request) void {
+            if (multi_io) {
+                const cpu_idx = smp.getIdx();
+                self.queue.multi[cpu_idx].prepend(&request.node);
+            } else {
+                const single = &self.queue.single;
+
+                single.lock.lock();
+                defer single.lock.unlock();
+
+                single.queue.prepend(&request.node);
+            }
+        }
+
+        fn dequeue(self: *Control, multi_io: bool) ?*Request {
+            if (multi_io) {
+                const cpu_idx = smp.getIdx();
+
+                const node = self.queue.multi[cpu_idx].popFirst() orelse return null;
+                return Request.fromNode(node);
+            }
+
+            const single_io = &self.queue.single;
+
+            single_io.lock.lock();
+            defer single_io.lock.unlock();
+
+            const node = single_io.queue.popFirst() orelse return null;
+            return Request.fromNode(node);
+        }
+
+        fn allocRequest(self: *Control) ?*Request {
+            const unsafe_oma = &self.oma.oma;
+
+            // FIXME: Use another lock!
+            // Spinlocks shouldn't cover such heavy code.
+            self.oma.lock.lock();
+            defer self.oma.lock.unlock();
+
+            var idx: u32 = 0;
+            var arena: *vm.ObjectAllocator.Arena = blk: {
+                var node = unsafe_oma.arenas.first;
+                while (node) |n| : ({node = n.next; idx += 1;}) {
+                    const arena = vm.ObjectAllocator.Arena.fromNode(n);
+                    if (arena.alloc_num < unsafe_oma.arena_capacity) break :blk arena;
+                }
+
+                break :blk unsafe_oma.newArena() orelse return null;
+            };
+
+            const addr = arena.alloc(@sizeOf(Request));
+            const request: *Request = @ptrFromInt(addr);
+
+            const inner_idx = (addr - arena.getBase()) / @sizeOf(Request);
+            request.id = @truncate((idx * unsafe_oma.arena_capacity) + inner_idx);
+
+            return request;
+        }
+
+        fn freeRequest(self: *Control, handle: Handle) void {
+            // Free request node
+            self.oma.lock.lock();
+            defer self.oma.lock.unlock();
+
+            self.oma.oma.freeRaw(handle.arena, @intFromPtr(handle.request));
+        }
+
+        fn getRequest(self: *Control, id: u16) Handle {
+            // Hope that this function will complete much faster
+            // then new arena would be allocated (in case if many I/O requests would be emited).
+            //
+            // Due to unlikelihood, we assume that this will never happen and we may not use lock.
+
+            const unsafe_oma = &self.oma.oma;
+            const arena_idx = id / unsafe_oma.arena_capacity;
+            const arena = blk: {
+                var node = unsafe_oma.arenas.first orelse unreachable;
+                for (0..arena_idx) |_| {
+                    node = node.next orelse unreachable;
+                }
+                break :blk vm.ObjectAllocator.Arena.fromNode(node);
+            };
+
+            const request: *Request = @ptrFromInt(arena.getBase() + (@sizeOf(io.Request) * id));
+            std.debug.assert(request.id == id);
+
+            return .{ .request = request, .arena = arena };
+        }
+    };
 };
 
 pub const VTable = struct {
-    pub const HandleIoFn = *const fn(obj: *Self, io_request: *const IoRequest) bool;
+    pub const HandleIoFn = *const fn(drive: *Self, io_request: *const io.Request) bool;
 
     handleIo: HandleIoFn,
 };
 
 pub const Flags = packed struct {
-    is_multi_io: bool = false,
-    is_partitionable: bool = false
+    multi_io: bool = false,
+    partitionable: bool = false
 };
 
 pub const file_operations: vfs.File.Operations = .{
@@ -72,17 +207,7 @@ pub const file_operations: vfs.File.Operations = .{
     .write = undefined
 };
 
-const Io = union {
-    const SingleIo = struct {
-        queue: IoQueue = .{},
-        lock: utils.Spinlock = .{}
-    };
-
-    multi: [*]IoQueue,
-    single: SingleIo,
-};
-
-base_part: vfs.parts.Node,
+base_part: vfs.parts.Partition,
 
 lba_size: u16,
 lba_shift: u4 = undefined,
@@ -92,9 +217,7 @@ capacity: usize,
 
 flags: Flags = .{},
 
-io: Io = undefined,
-io_oma: IoOma = undefined,
-
+io_ctrl: io.Control = undefined,
 cache_ctrl: *cache.ControlBlock = undefined,
 parts: vfs.parts.List = .{},
 
@@ -108,29 +231,18 @@ fn checkIo(self: *const Self, lba_offset: usize, buffer: []const u8) void {
 }
 
 pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: bool, partitions: bool) Error!void {
-    self.cache_ctrl = try cache.newCtrl();
+    self.cache_ctrl = try cache.makeCtrl();
     errdefer cache.deleteCtrl(self.cache_ctrl);
 
-    self.flags.is_multi_io = multi_io;
+    self.io_ctrl = try .init(multi_io);
+    errdefer self.io_ctrl.deinit(multi_io);
 
-    if (multi_io) {
-        const cpus_num = smp.getNum();
-        const mem = vm.malloc(cpus_num * @sizeOf(IoQueue)) orelse return error.NoMemory;
-
-        self.io = .{ .multi = @alignCast(@ptrCast(mem)) };
-    } else {
-        self.io = .{ .single = .{} };
-    }
-
-    errdefer if (multi_io) vm.free(self.io.multi);
-
+    self.flags.multi_io = multi_io;
     self.dev_region = dev_region;
     self.lba_shift = std.math.log2_int(u16, self.lba_size);
-    self.io_oma = IoOma.init(io_oma_capacity);
 
     {
-        const base_part = &self.base_part.data;
-        base_part.* = .{
+        self.base_part = .{
             .lba_start = 0,
             .lba_end = self.offsetToLba(self.capacity)
         };
@@ -138,7 +250,7 @@ pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: b
         const dev_num = self.dev_region.alloc() orelse return Error.DevMinorLimit;
         errdefer self.dev_region.free(dev_num);
 
-        try base_part.registerDevice(
+        try self.base_part.registerDevice(
             name,
             dev_num,
             &file_operations,
@@ -146,75 +258,40 @@ pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: b
         );
 
         self.parts = .{};
-        self.parts.append(base_part.asNode());
-        self.flags.is_partitionable = partitions;
+        self.parts.append(&self.base_part.node);
+        self.flags.partitionable = partitions;
     }
 }
 
 pub fn deinit(self: *Self) void {
-    if (self.flags.is_multi_io) vm.free(self.io.multi);
-    self.io_oma.deinit();
-
+    self.io_ctrl.deinit(self.flags.multi_io);
     cache.deleteCtrl(self.cache_ctrl);
 }
 
 pub fn onObjectAdd(self: *Self) void {
-    log.info("registered: {}; lba size: {}; capacity: {} MiB", .{
+    log.info("registered: {f}; lba size: {}; capacity: {} MiB", .{
         self.getName(), self.lba_size, self.capacity / utils.mb_size
     });
 
-    if (self.flags.is_partitionable) vfs.parts.probe(self) catch |err| {
-        log.err("Failed to probe partitions: {s}", .{@errorName(err)});
-        self.flags.is_partitionable = false;
+    if (self.flags.partitionable) vfs.parts.probe(self) catch |err| {
+        log.err("Failed to probe partitions: {s}", .{ @errorName(err) });
+        self.flags.partitionable = false;
     };
 }
 
 pub inline fn getName(self: *Self) *const dev.Name {
-    return &self.base_part.data.dev_file.name;
+    return &self.base_part.dev_file.name;
 }
 
-pub fn nextRequest(self: *Self) ?*const IoRequest {
-    if (self.flags.is_multi_io) {
-        const cpu_idx = smp.getIdx();
-
-        const node = self.io.multi[cpu_idx].popFirst() orelse return null;
-        return &node.data;
-    }
-
-    const single_io = &self.io.single;
-
-    single_io.lock.lock();
-    defer single_io.lock.unlock();
-
-    const node = single_io.queue.popFirst() orelse return null;
-    return &node.data;
+pub inline fn nextRequest(self: *Self) ?*const io.Request {
+    return self.io_ctrl.dequeue(self.flags.multi_io);
 }
 
-pub fn completeIo(self: *Self, id: u16, status: IoRequest.Status) void {
-    // Hope that this function will complete much faster
-    // then new arena would be allocated (in case if many I/O requests would be emited).
-    //
-    // Due to unlikelihood, we assume that this will never happen and we may not use lock.
+pub fn completeIo(self: *Self, id: u16, status: io.Status) void {
+    const handle = self.io_ctrl.getRequest(id);
+    handle.request.callback(handle.request, status);
 
-    const arena_idx = id / self.io_oma.oma.arena_capacity;
-    var node = self.io_oma.oma.arenas.first orelse unreachable;
-
-    for (0..arena_idx) |_| {
-        node = node.next orelse unreachable;
-    }
-
-    const request: *IoQueue.Node = @ptrFromInt(node.data.getBase() + (@sizeOf(IoQueue.Node) * id));
-    const callback = request.data.callback;
-
-    std.debug.assert(request.data.id == id);
-    callback(&request.data, status);
-
-    { // Free request node
-        self.io_oma.lock.lock();
-        defer self.io_oma.lock.unlock();
-
-        self.io_oma.oma.freeRaw(node, @intFromPtr(request));
-    }
+    self.io_ctrl.freeRequest(handle);
 }
 
 pub inline fn putCache(self: *Self, cursor: *cache.Cursor) void {
@@ -251,24 +328,24 @@ pub inline fn readCached(self: *Self, offset: usize) Error!cache.Cursor {
 
 pub fn readAsync(
     self: *Self, lba_offset: usize, buffer: []u8,
-    callback: IoRequest.CallbackFn
+    callback: io.Request.CallbackFn
 ) Error!void {
-    const node = try self.makeRequest(
+    const request = try self.makeRequest(
         .read, lba_offset,
         buffer, callback
     );
-    _ = self.submitRequest(node);
+    _ = self.submitRequest(request);
 }
 
 pub fn writeAsync(
     self: *Self, lba_offset: usize,
-    buffer: []const u8, callback: IoRequest.CallbackFn
+    buffer: []const u8, callback: io.Request.CallbackFn
 ) Error!void {
-    const node = try self.makeRequest(
+    const request = try self.makeRequest(
         .write, lba_offset,
         buffer, callback
     );
-    _ = self.submitRequest(node);
+    _ = self.submitRequest(request);
 }
 
 pub inline fn lbaToOffset(self: *const Self, lba_offset: usize) usize {
@@ -290,28 +367,27 @@ pub fn getPartition(self: *const Self, part: u32) ?*vfs.Partition {
     if (part >= self.parts.len) return null;
 
     var node = self.parts.first;
-
     for (0..part) |_| {
         node = node.?.next;
     }
 
-    return &node.?.data;
+    return vfs.Partition.fromNode(node);
 }
 
-fn syncCallback(request: *const IoRequest, status: IoRequest.Status) void {
-    const rq: *IoRequest = @constCast(request);
+fn syncCallback(request: *const io.Request, status: io.Status) void {
+    const rq: *io.Request = @constCast(request);
     rq.lba_num = @intFromEnum(status);
 
     sched.awakeAll(&rq.wait_queue);
 }
 
-fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
+fn readBlock(self: *Self, idx: usize) Error!*cache.Block {
     if (self.cache_ctrl.get(idx)) |block| return block;
 
-    const block = self.cache_ctrl.new(idx) orelse return error.NoMemory;
+    const block = self.cache_ctrl.add(idx) orelse return error.NoMemory;
     const lba_idx = idx * self.offsetToLba(cache.block_size);
 
-    const rq_node = try self.makeRequest(
+    const request = try self.makeRequest(
         .read, lba_idx,
         block.asSlice(), syncCallback
     );
@@ -320,16 +396,16 @@ fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
         // submit request to device and wait.
         const scheduler = sched.getCurrent();
         var wait = scheduler.initWait();
-        rq_node.data.wait_queue.push(&wait);
+        request.wait_queue.push(&wait);
 
-        if (self.submitRequest(rq_node) == false) {
+        if (self.submitRequest(request) == false) {
             log.warn("request: {} is cached", .{idx});
         }
 
         scheduler.doWait();
     }
 
-    const status: IoRequest.Status = @enumFromInt(rq_node.data.lba_num);
+    const status: io.Status = @enumFromInt(request.lba_num);
     if (status == .failed) return error.IoFailed;
 
     return block;
@@ -337,74 +413,33 @@ fn readBlock(self: *Self, idx: u32) Error!*cache.Block {
 
 inline fn makeRequest(
     self: *Self,
-    comptime operation: IoRequest.Operation,
+    comptime operation: io.Operation,
     lba_offset: usize, buffer: []u8,
-    callback: IoRequest.CallbackFn
-) Error!*IoQueue.Node {
+    callback: io.Request.CallbackFn
+) Error!*io.Request {
     self.checkIo(lba_offset, buffer);
 
-    const node = self.allocRequest() orelse return error.NoMemory;
-    { // Init
-        node.data = .{
-            .id = node.data.id, // id is set during allocation
-            .operation = operation,
-            .lma_buf = buffer.ptr,
-            .lba_offset = lba_offset,
-            .lba_num = @truncate(self.offsetToLba(buffer.len)),
-            .callback = callback
-        };
-    }
+    const rq = self.io_ctrl.allocRequest() orelse return error.NoMemory;
+    rq.* = .{
+        .id = rq.id, // id is set during allocation
+        .operation = operation,
+        .lma_buf = buffer.ptr,
+        .lba_offset = lba_offset,
+        .lba_num = @truncate(self.offsetToLba(buffer.len)),
+        .callback = callback
+    };
 
-    return node;
+    return rq;
 }
 
 // TODO: implement deamon that would trigger enqueued requests submiting.
-fn submitRequest(self: *Self, request: *IoQueue.Node) bool {
-    if (self.vtable.handleIo(self, &request.data) == false) {
-        if (self.flags.is_multi_io) {
-            const cpu_idx = smp.getIdx();
-            self.io.multi[cpu_idx].prepend(request);
-        } else {
-            self.io.single.lock.lock();
-            defer self.io.single.lock.unlock();
-
-            self.io.single.queue.prepend(request);
-        }
-
+fn submitRequest(self: *Self, request: *io.Request) bool {
+    if (self.vtable.handleIo(self, request) == false) {
+        self.io_ctrl.enqueue(self.flags.multi_io, request);
         return false;
     }
 
     return true;
-}
-
-fn allocRequest(self: *Self) ?*IoQueue.Node {
-    const oma = &self.io_oma.oma;
-
-    // FIXME: Use another lock!
-    // Spinlocks shouldn't cover such heavy code.
-    self.io_oma.lock.lock();
-    defer self.io_oma.lock.unlock();
-
-    var idx: u32 = 0;
-    var node = oma.arenas.first;
-
-    while (node) |arena| : ({node = arena.next; idx += 1;}) {
-        if (arena.data.alloc_num < oma.arena_capacity) break;
-    }
-
-    if (node == null) node = oma.newArena();
-
-    if (node) |arena| {
-        const addr = arena.data.alloc(@sizeOf(IoQueue.Node));
-        const request: *IoQueue.Node = @ptrFromInt(addr);
-
-        const inner_idx = (addr - arena.data.getBase()) / @sizeOf(IoQueue.Node);
-        request.data.id = @truncate((idx * oma.arena_capacity) + inner_idx);
-
-        return request;
-    }
-
-    return null;
 }
 
 fn calcPartitionRegion(self: *const Self, part: *const vfs.Partition, offset: usize, len: usize) [2]usize {

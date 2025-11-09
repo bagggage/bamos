@@ -380,7 +380,7 @@ pub fn pageFaultHandler(addr: usize, cause: FaultCause, userspace: bool) bool {
     }
 
     log.warn(
-        \\{raw-log}Page Fault (CPU {}) - {}: 
+        \\Page Fault (CPU {}) - {f}: 
         \\ address: 0x{x:.>16}; cause: {s}
         \\ userspace: {}
         ++ "\n"

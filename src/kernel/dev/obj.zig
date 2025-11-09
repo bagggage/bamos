@@ -1,25 +1,38 @@
 //! # Device objects subsystem
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
 const vm = @import("../vm.zig");
 const utils = @import("../utils.zig");
 
-const List = utils.List(u8);
+const List = utils.List;
+const Node = List.Node;
 const HashMap = std.AutoHashMapUnmanaged(u32, ObjectsList);
 
-const expected_data_offset = @sizeOf(usize) * 2;
-
-comptime {
-    std.debug.assert(@offsetOf(List.Node, "data") == expected_data_offset);
-}
-
+// TODO: Use RCU list instead
 const ObjectsList = struct {
     list: List = .{},
     lock: utils.Spinlock = .{},
 };
+
+fn Object(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        node: Node = .{},
+        payload: T,
+
+        comptime {
+            std.debug.assert(@offsetOf(@This(), "payload") == @sizeOf(Node));
+        }
+
+        inline fn fromPayload(payload: *T) *Self {
+            return @fieldParentPtr("payload", payload);
+        }
+    };
+}
 
 pub const Error = error {
     NoMemory
@@ -48,29 +61,21 @@ fn checkType(comptime T: type) void {
 /// @export
 pub fn new(comptime T: type) Error!*T {
     checkType(T);
-
-    const Node = utils.List(T).Node;
-    comptime std.debug.assert(@offsetOf(Node, "data") == @offsetOf(List.Node, "data"));
-
-    return &(vm.alloc(Node) orelse return error.NoMemory).data;
+    return &(vm.alloc(Object(T)) orelse return error.NoMemory).payload;
 }
 
 /// @export
 pub fn free(comptime T: type, object: *T) void {
-    const Node = utils.List(T).Node;
-    const node: *Node = @fieldParentPtr("data", object);
-
-    vm.free(node);
+    const obj = Object(T).fromPayload(object);
+    vm.free(obj);
 }
 
 pub inline fn add(comptime T: type, object: *T) Error!void {
     comptime checkType(T);
 
-    const Node = getNodeType(T);
     const id = comptime utils.typeId(T);
-
-    const node: *Node = @fieldParentPtr("data", object);
-    if (!addByTypeId(id, @ptrCast(node))) return error.NoMemory;
+    const obj = Object(T).fromPayload(object);
+    if (!addByTypeId(id, &obj.node)) return error.NoMemory;
 
     // Class callback
     if (comptime @hasDecl(T, "onObjectAdd")) T.onObjectAdd(object);
@@ -83,34 +88,30 @@ pub inline fn remove(object: anytype) void {
         else => @compileError("Expected pointer to an object; Found: '"++@typeName(Ptr)++"'")
     };
 
-    const Node = getNodeType(T);
-    const id = comptime utils.typeId(T);
-
     // Class callback
     if (comptime @hasDecl(T, "onObjectRemove")) {
         T.onObjectRemove(object);
     }
-    const node: *Node = @fieldParentPtr("data", object);
 
-    const result = removeByTypeId(id, node);
+    const id = comptime utils.typeId(T);
+    const obj = Object(T).fromPayload(object);
+    const result = removeByTypeId(id, &obj.node);
     std.debug.assert(result == true);
 }
 
-pub inline fn getObjects(comptime T: type) ?*utils.List(T) {
+pub inline fn getObjects(comptime T: type) ?*List {
     comptime checkType(T);
     const id = comptime utils.typeId(T);
 
-    return @alignCast(@ptrCast(getObjectsByTypeId(id) orelse return null));
+    return getObjectsByTypeId(id) orelse return null;
 }
 
-pub export fn putObjects(list: *anyopaque) void {
-    const list_raw: *List = @alignCast(@ptrCast(list));
-    const objects: *ObjectsList = @fieldParentPtr("list", list_raw);
-
+pub export fn putObjects(list: *List) void {
+    const objects: *ObjectsList = @fieldParentPtr("list", list);
     objects.lock.unlock();
 }
 
-export fn removeByTypeId(id: u32, node: *anyopaque) bool {
+export fn removeByTypeId(id: u32, node: *Node) bool {
     const obj_list = blk: {
         map_lock.lock();
         defer map_lock.unlock();
@@ -121,21 +122,21 @@ export fn removeByTypeId(id: u32, node: *anyopaque) bool {
     obj_list.lock.lock();
     defer obj_list.lock.unlock();
 
-    if (obj_list.list.len == 1) {
+    if (obj_list.list.first == obj_list.list.last) {
         map_lock.lock();
         defer map_lock.unlock();
             
         return hash_map.remove(id);
     }
     else {
-        obj_list.list.remove(@alignCast(@ptrCast(node)));
+        obj_list.list.remove(node);
     }
 
     vm.free(node);
     return true;
 }
 
-export fn addByTypeId(id: u32, node: *anyopaque) bool {
+export fn addByTypeId(id: u32, node: *Node) bool {
     const entry = blk: {
         map_lock.lock();
         defer map_lock.unlock();
@@ -148,11 +149,11 @@ export fn addByTypeId(id: u32, node: *anyopaque) bool {
     entry.value_ptr.lock.lock();
     defer entry.value_ptr.lock.unlock();
 
-    entry.value_ptr.list.append(@alignCast(@ptrCast(node)));
+    entry.value_ptr.list.append(node);
     return true;
 }
 
-export fn getObjectsByTypeId(id: u32) ?*anyopaque {
+export fn getObjectsByTypeId(id: u32) ?*List {
     const objects = blk: {
         map_lock.lock();
         defer map_lock.unlock();
@@ -164,13 +165,3 @@ export fn getObjectsByTypeId(id: u32) ?*anyopaque {
     return &objects.list;
 }
 
-fn getNodeType(T: type) type {
-    const List_t = utils.List(T);
-    const Node = List_t.Node;
-
-    comptime {
-        std.debug.assert(@offsetOf(Node, "data") == expected_data_offset);
-    }
-
-    return Node;
-}

@@ -35,7 +35,7 @@ See information on [contributing](./CONTRIBUTING.md).
 
 ## Building from Source
 
-Before you begin, ensure that the Zig compiler version [**0.14.1**](https://ziglang.org/download/) is installed on your workstation.
+Before you begin, ensure that the Zig compiler version [**0.15.2**](https://ziglang.org/download/) is installed on your workstation.
 
 The build process is quite straightforward:
 

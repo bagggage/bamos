@@ -31,12 +31,7 @@ pub const DateTime = extern struct {
     year: u16 = 0,
 
     /// Format date time: DD.MM.YYYY-hh:mm:ss.
-    pub fn format(
-        self: DateTime,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: DateTime, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("{:0>2}.{:0>2}.{:0>4}-{:0>2}:{:0>2}:{:0>2}", .{
             self.day, self.month, self.year, self.hours, self.minutes, self.seconds
         });
@@ -152,37 +147,31 @@ pub const Time = extern struct {
         };
     }
 
-    /// Format time as `{date_time}.{us}` by default.
-    /// If `fmt` is set to:
-    /// - `dt`: format as `{date_time}`.
-    /// - `us`: write `{sec}.{us}`.
-    /// - `ns`: write `{sec}.{ns}`.
-    /// - `s`: write only `{sec}`.
-    pub fn format(
-        self: Time,
-        comptime fmt: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
-        // Print in microseconds.
-        if (comptime std.mem.eql(u8, fmt, "us")) {
-            try writer.print("{:>5}.{:0>6}", .{ self.sec, self.ns / std.time.ns_per_us });
-            return;
-        } else if (comptime std.mem.eql(u8, fmt, "ns")) {
-            try writer.print("{}.{}", .{ self.sec, self.ns });
-            return;
-        }  else if (comptime std.mem.eql(u8, fmt, "s")) {
-            try writer.print("{:>5}", .{ self.sec });
-            return;
-        }
-
+    /// Format time as `{date_time}`.
+    pub fn formatDt(self: Time, writer: *std.Io.Writer) std.io.Writer.Error!void {
         const date_time = DateTime.fromTime(self);
+        try writer.print("{f}", .{ date_time });
+    }
 
-        if (comptime std.mem.eql(u8, fmt, "dt")) {
-            try writer.print("{}", .{ date_time });
-        } else {
-            try writer.print("{}.{:0>6}", .{ date_time, self.ns / std.time.ns_per_us });
-        }
+    /// Format time as `{sec}.{us}`.
+    pub fn formatUs(self: Time, writer: *std.Io.Writer) std.io.Writer.Error!void {
+        try writer.print("{:>5}.{:0>6}", .{ self.sec, self.ns / std.time.ns_per_us });
+    }
+
+    /// Format time as `{sec}.{ns}`.
+    pub fn formatNs(self: Time, writer: *std.Io.Writer) std.io.Writer.Error!void {
+        try writer.print("{}.{}", .{ self.sec, self.ns });
+    }
+
+    /// Format time as `{sec}`.
+    pub fn formatSec(self: Time, writer: *std.Io.Writer) std.io.Writer.Error!void {
+        try writer.print("{:>5}", .{ self.sec });
+    }
+
+    /// Format time as `{date_time}.{us}` by default.
+    pub fn format(self: Time, writer: *std.Io.Writer) std.io.Writer.Error!void {
+        const date_time = DateTime.fromTime(self);
+        try writer.print("{f}.{:0>6}", .{ date_time, self.ns / std.time.ns_per_us });
     }
 };
 
@@ -256,9 +245,12 @@ pub fn init() !void {
     keeper = .init();
     log.debug("count: {}, ns per tick: {}", .{keeper.last_count,keeper.ns_per_ticks});
 
-    log.info("clock: {}, timer: {}", .{ sys_clock.device.name, sys_timer.device.name });
-    log.info("sched timer: {}", .{sched_timer.device.name});
-    log.info("{dt}, epoch: {s}", .{keeper.time,keeper.time});
+    log.info("clock: {f}, timer: {f}", .{ sys_clock.device.name, sys_timer.device.name });
+    log.info("sched timer: {f}", .{sched_timer.device.name});
+    log.info("{f}, epoch: {f}", .{
+        std.fmt.alt(keeper.time, .formatDt),
+        std.fmt.alt(keeper.time, .formatSec)
+    });
 }
 
 pub fn initPerCpu() void {

@@ -10,20 +10,25 @@ const log = std.log.scoped(.@"dev.io");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
-pub usingnamespace arch.io;
+pub const inb = arch.io.inb;
+pub const inw = arch.io.inw;
+pub const inl = arch.io.inl;
+pub const outb = arch.io.outb;
+pub const outw = arch.io.outw;
+pub const outl = arch.io.outl;
 
 pub fn Mechanism(
-    comptime AddrType: type, comptime DataType: type,
+    comptime AddressT: type, comptime DataT: type,
     comptime readFn: anytype, comptime writeFn: anytype,
-    comptime initFn: ?fn(AddrType, AddrType) anyerror!AddrType
+    comptime initFn: ?fn(AddressT, AddressT) anyerror!AddressT
 ) type {
     comptime {
-        const data_info = @typeInfo(DataType);
+        const data_info = @typeInfo(DataT);
 
         if (data_info != .int or data_info.int.signedness == .signed or data_info.int.bits % 8 != 0)
             @compileError("Data type must be an unsigned integer e.g. `u<x>`, where x - number of bits: 8, 16, 32, 64");
 
-        const addr_info = @typeInfo(AddrType);
+        const addr_info = @typeInfo(AddressT);
 
         if (addr_info != .int or addr_info.int.signedness != .unsigned)
             @compileError("Address type must be an unsigned integer e.g `u<x>`, where x - number of bits");
@@ -34,18 +39,18 @@ pub fn Mechanism(
         if (
             read_info != .@"fn" or write_info != .@"fn" or
             write_info.@"fn".return_type != void or
-            read_info.@"fn".return_type != DataType or
+            read_info.@"fn".return_type != DataT or
             read_info.@"fn".params.len != 1 or write_info.@"fn".params.len != 2 or
-            write_info.@"fn".params[0].type != AddrType or write_info.@"fn".params[1].type != DataType or
-            read_info.@"fn".params[0].type != AddrType
+            write_info.@"fn".params[0].type != AddressT or write_info.@"fn".params[1].type != DataT or
+            read_info.@"fn".params[0].type != AddressT
         ) {
             @compileError("Read/Write must be a functions: `fn read(AddrType) DataType` and `fn write(AddrType, DataType) void`");
         }
     }
 
     return struct {
-        pub const Address = AddrType;
-        pub const Data = DataType;
+        pub const Address = AddressT;
+        pub const Data = DataT;
 
         pub const init = initFn;
 
@@ -57,7 +62,7 @@ pub fn Mechanism(
             return writeFn(address, data);
         }
  
-        pub inline fn readNonUniform(comptime IntType: type, base: AddrType, comptime bit_offset: u16) IntType {
+        pub inline fn readNonUniform(comptime IntType: type, base: Address, comptime bit_offset: u16) IntType {
             @setRuntimeSafety(false);
 
             const NonUniformDataType = IntType;
@@ -69,8 +74,8 @@ pub fn Mechanism(
             }
 
             const bit_size = comptime @bitSizeOf(NonUniformDataType);
-            const data_size = comptime @sizeOf(DataType);
-            const data_bit_size = comptime @bitSizeOf(DataType);
+            const data_size = comptime @sizeOf(Data);
+            const data_bit_size = comptime @bitSizeOf(Data);
             
             const begin = comptime (bit_offset / data_bit_size);
             const end = comptime ((bit_offset + bit_size - 1) / data_bit_size);
@@ -101,7 +106,7 @@ pub fn Mechanism(
             return readed;
         }
 
-        pub inline fn writeNonUniform(base: AddrType, comptime bit_offset: u16, data: anytype) void {
+        pub inline fn writeNonUniform(base: Address, comptime bit_offset: u16, data: anytype) void {
             @setRuntimeSafety(false);
 
             const NonUniformDataType = @TypeOf(data);
@@ -113,8 +118,8 @@ pub fn Mechanism(
             }
 
             const bit_size = comptime @bitSizeOf(NonUniformDataType);
-            const data_size = comptime @sizeOf(DataType);
-            const data_bit_size = comptime @bitSizeOf(DataType);
+            const data_size = comptime @sizeOf(Data);
+            const data_bit_size = comptime @bitSizeOf(Data);
             
             const begin = comptime (bit_offset / data_bit_size);
             const end = comptime ((bit_offset + bit_size - 1) / data_bit_size);
@@ -129,7 +134,7 @@ pub fn Mechanism(
                     const idx: comptime_int = i;
                     const bit_shift = comptime (idx * data_bit_size);
 
-                    write(begin_base + (comptime idx * data_size), cast(DataType, data >> bit_shift));
+                    write(begin_base + (comptime idx * data_size), cast(Data, data >> bit_shift));
                 }
             }
             else {
@@ -140,27 +145,27 @@ pub fn Mechanism(
                     const byte_offset = comptime idx * data_size;
 
                     if (comptime i == 0) {
-                        const bitmask = comptime (@as(DataType, 1) << offset) -% 1;
+                        const bitmask = comptime (@as(Data, 1) << offset) -% 1;
 
                         const readed = if (comptime len == 1) blk: {
 
-                            const end_bitmask = comptime cast(DataType, (@as(usize, 0) -% 1) << (offset + bit_size));
+                            const end_bitmask = comptime cast(Data, (@as(usize, 0) -% 1) << (offset + bit_size));
                             break :blk read(begin_base) & (comptime bitmask | end_bitmask);
                         } else read(begin_base) & bitmask;
 
-                        write(begin_base, readed | (cast(DataType, to_write) << offset));
+                        write(begin_base, readed | (cast(Data, to_write) << offset));
 
                         to_write >>= @truncate(data_bit_size - offset);
                     }
                     else if (comptime i == len - 1) {
                         const tail_bits = comptime (bit_size + offset) % data_size;
-                        const end_bitmask = comptime cast(DataType, (@as(usize, 0) -% 1) << tail_bits);
+                        const end_bitmask = comptime cast(Data, (@as(usize, 0) -% 1) << tail_bits);
 
                         const readed = read(begin_base) & end_bitmask;
-                        write(begin_base + byte_offset, readed | cast(DataType, data));
+                        write(begin_base + byte_offset, readed | cast(Data, data));
                     }
                     else {
-                        write(begin_base + byte_offset, cast(DataType, data));
+                        write(begin_base + byte_offset, cast(Data, data));
                     }
                 }
             }
@@ -241,44 +246,54 @@ pub const Type = enum(u1) {
     io_ports
 };
 
-const Region = packed struct {
+const Region = struct {
+    const List = utils.SList;
+    const Node = List.Node;
+
+    pub const alloc_config: vm.obj.AllocatorConfig = .{
+        .allocator = .oma,
+    };
+
     name: [*:0]const u8,
     base: usize,
     end: usize,
 
+    node: Node = .{},
+
     pub fn format(self: *const Region, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         try writer.print("{s}: 0x{x}-0x{x}", .{self.name, self.base, self.end - 1});
     }
+
+    pub inline fn fromNode(node: *Node) *Region {
+        return @fieldParentPtr("node", node);
+    }
 };
-const RegionList = utils.SList(Region);
-const RegionNode = RegionList.Node;
 
 var lock = utils.Spinlock.init(.unlocked);
-var region_oma = vm.ObjectAllocator.init(RegionNode);
 
-var ports_list = RegionList{};
-var mmio_list = RegionList{};
+var ports_list = Region.List{};
+var mmio_list = Region.List{};
 
-inline fn getIoList(comptime io_type: Type) *RegionList {
+inline fn getIoList(comptime io_type: Type) *Region.List {
     return switch (io_type) {
         .io_ports => &ports_list,
         .mmio => &mmio_list
     };
 }
 
-fn writeMmioFn(comptime AddrType: type, comptime DataType: type)
-    fn (address: AddrType, data: DataType) callconv(.Inline) void
+fn writeMmioFn(comptime Address: type, comptime Data: type)
+    fn (address: Address, data: Data) callconv(.@"inline") void
 {
     return struct {
-        pub inline fn write(address: AddrType, data: DataType) void {
+        pub inline fn write(address: Address, data: Data) void {
             @setRuntimeSafety(false);
-            const ptr = switch (@typeInfo(AddrType)) {
-                .comptime_int, .int => @as(*volatile DataType, @ptrFromInt(address)),
-                .pointer => @as(*volatile DataType, @ptrCast(address)),
+            const ptr = switch (@typeInfo(Address)) {
+                .comptime_int, .int => @as(*volatile Data, @ptrFromInt(address)),
+                .pointer => @as(*volatile Data, @ptrCast(address)),
                 else => @compileError("Invalid address type")
             };
             if (comptime builtin.cpu.arch.endian() != .little) {
-                ptr.* = std.mem.nativeToLittle(DataType, data);
+                ptr.* = std.mem.nativeToLittle(Data, data);
             } else {
                 ptr.* = data;
             }
@@ -286,18 +301,18 @@ fn writeMmioFn(comptime AddrType: type, comptime DataType: type)
     }.write;
 }
 
-fn readMmioFn(comptime AddrType: type, comptime DataType: type)
-    fn (address: AddrType) callconv(.Inline) DataType
+fn readMmioFn(comptime Address: type, comptime Data: type)
+    fn (address: Address) callconv(.@"inline") Data
 {
     return struct {
-        pub inline fn read(address: AddrType) DataType {
+        pub inline fn read(address: Address) Data {
             @setRuntimeSafety(false);
-            const ptr = switch (@typeInfo(AddrType)) {
-                .comptime_int, .int => @as(*const volatile DataType, @ptrFromInt(address)),
-                .pointer => @as(*const volatile DataType, @ptrCast(address)),
+            const ptr = switch (@typeInfo(Address)) {
+                .comptime_int, .int => @as(*const volatile Data, @ptrFromInt(address)),
+                .pointer => @as(*const volatile Data, @ptrCast(address)),
                 else => @compileError("Invalid address type")
             };
-            return std.mem.littleToNative(DataType, ptr.*);
+            return std.mem.littleToNative(Data, ptr.*);
         }
     }.read;
 }
@@ -322,7 +337,6 @@ pub const readq = readMmioFn(usize, u64);
 
 pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime io_type: Type) ?usize {
     const end = base + size;
-
     const list = getIoList(io_type);
 
     {
@@ -330,25 +344,20 @@ pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime i
         defer lock.unlock();
 
         var temp = list.first;
-
-        while (temp) |node| : (temp = node.next) {
-            const region = &node.data;
-
+        while (temp) |n| : (temp = n.next) {
+            const region = Region.fromNode(n);
             if (region.end <= base or region.base >= end) continue;
 
             return null;
         }
 
-        const new_region = region_oma.alloc(RegionNode) orelse return null;
-        new_region.* = RegionNode{
-            .data = .{ .base = base, .end = end, .name = name }
-        };
+        const new_region = vm.obj.new(Region) orelse return null;
+        new_region.* = .{ .base = base, .end = end, .name = name };
 
-        list.prepend(new_region);
+        list.prepend(&new_region.node);
     }
 
     log.debug("{s: <8}: {s: <12} 0x{x}-0x{x}", .{@tagName(io_type), name, base, base + size - 1});
-
     return base;
 }
 
@@ -359,13 +368,11 @@ pub fn release(base: usize, comptime io_type: Type) void {
     defer lock.unlock();
 
     var temp = list.first;
-
-    while (temp) |node| : (temp = node.next) {
-        const region = &node.data;
-
+    while (temp) |n| : (temp = n.next) {
+        const region = Region.fromNode(n);
         if (region.base == base) {
-            list.remove(node);
-            region_oma.free(node);
+            list.remove(n);
+            vm.obj.free(Region, region);
             
             return;
         }
@@ -381,12 +388,10 @@ pub fn isAvail(base: usize, size: usize, comptime io_type: Type) bool {
     defer lock.unlock();
 
     var temp = getIoList(io_type).first;
-
-    while (temp) |node| : (temp = node.next) {
-        const region = &node.data;
+    while (temp) |n| : (temp = n.next) {
+        const region = Region.fromNode(n);
 
         if (region.end <= base or region.base >= end) continue;
-
         return false;
     }
 

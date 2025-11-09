@@ -186,7 +186,7 @@ pub fn write(str: []const u8) void {
             i += handleEscapeSequence(str[i..]) - 1;
         } else if (std.ascii.isControl(char)) {
             handleControlChar(char);
-        } else if (std.ascii.isASCII(char)) {
+        } else if (std.ascii.isAscii(char)) {
             cacheChar(char);
 
             text_output.drawChar(char, curr_col, cursor.row, cursor.col);

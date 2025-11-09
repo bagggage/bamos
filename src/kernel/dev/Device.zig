@@ -9,8 +9,17 @@ const dev = @import("../dev.zig");
 const Driver = @import("Driver.zig");
 const log = std.log.scoped(.Device);
 const utils = @import("../utils.zig");
+const vm = @import("../vm.zig");
 
 const Self = @This();
+
+pub const List = utils.List;
+pub const Node = List.Node;
+
+pub const alloc_config: vm.obj.AllocatorConfig = .{
+    .allocator = .safe_oma,
+    .capacity = 64
+};
 
 name: dev.Name = .{},
 bus: *Bus,
@@ -18,6 +27,29 @@ bus: *Bus,
 driver: ?*const Driver,
 driver_data: utils.AnyData,
 
+node: Node = .{},
+
+pub fn new(name: dev.Name, bus: *Bus, driver: ?*const Driver, data: ?*anyopaque) ?*Self {
+    const self = vm.obj.new(Self) orelse return null;
+    self.* = .{
+        .name = name,
+        .bus = bus,
+        .driver = driver,
+        .driver_data = utils.AnyData.from(data),
+    };
+
+    return self;
+}
+
+pub fn delete(self: *Self) void {
+    self.deinit();
+    vm.obj.free(Self, self);
+}
+
 pub inline fn deinit(self: *Self) void {
     self.name.deinit();
+}
+
+pub inline fn fromNode(node: *Node) *Self {
+    return @fieldParentPtr("node", node);
 }

@@ -8,22 +8,32 @@ const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
-const List = utils.SList(Range);
 const Range = struct {
+    pub const alloc_config: vm.obj.AllocatorConfig = .{
+        .allocator = .oma
+    };
+
+    const List = utils.SList;
+    const Node = List.Node;
+
     base: usize = undefined,
     pages: u32 = undefined,
 
-    pub inline fn top(self: *const Range) usize {
+    node: Node = .{},
+
+    inline fn top(self: *const Range) usize {
         return self.base + (self.pages * vm.page_size);
+    }
+
+    inline fn fromNode(node: *Node) *Range {
+        return @fieldParentPtr("node", node);
     }
 };
 
 base: usize = undefined,
 top: usize = undefined,
 
-free_list: List = .{},
-
-var nodes_oma = vm.ObjectAllocator.initSized(@sizeOf(List.Node), 1);
+free_list: Range.List = .{},
 
 pub inline fn init(base: usize) Self {
     return Self{ .base = base, .top = base };
@@ -33,24 +43,24 @@ pub fn reserve(self: *Self, pages: u32) usize {
     std.debug.assert(pages > 0);
 
     var result: usize = undefined;
-    var suitable_range: ?*List.Node = null;
+    var suitable_range: ?*Range = null;
 
-    if (self.free_list.first != null) {
-        var curr_range = self.free_list.first;
+    if (self.free_list.first != null)  {
+        var curr_node = self.free_list.first;
 
-        while (curr_range) |range| : (curr_range = range.next) {
-            if (range.data.pages >= pages and
+        while (curr_node) |n| : (curr_node = n.next) {
+            const range = Range.fromNode(n);
+            if (range.pages >= pages and
                 (suitable_range == null or
-                (suitable_range != null and suitable_range.?.data.pages < range.data.pages)))
+                (suitable_range != null and suitable_range.?.pages < range.pages)))
             {
                 suitable_range = range;
-
-                if (range.data.pages == pages) break;
+                if (range.pages == pages) break;
             }
         }
 
         if (suitable_range) |range| {
-            result = range.data.base;
+            result = range.base;
             self.removeRange(range, pages);
         }
     }
@@ -67,66 +77,65 @@ pub fn release(self: *Self, base: usize, pages: u32) void {
     std.debug.assert(base > 0 and pages > 0);
 
     const range_top = base + (pages * vm.page_size);
-
     if (range_top == self.top) {
         self.top = base;
         return;
     }
 
-    var curr_range = self.free_list.first;
-
-    while (curr_range) |range| : (curr_range = range.next) {
-        if (range.data.base == range_top) {
-            range.data.base = base;
-            range.data.pages += pages;
+    var curr_node = self.free_list.first;
+    while (curr_node) |n| : (curr_node = n.next) {
+        const range = Range.fromNode(n);
+        if (range.base == range_top) {
+            range.base = base;
+            range.pages += pages;
             break;
-        } else if (range.data.top() == base) {
-            range.data.pages += pages;
+        } else if (range.top() == base) {
+            range.pages += pages;
             break;
         }
     }
 
-    if (curr_range == null) {
-        const range = nodes_oma.alloc(List.Node) orelse unreachable;
-        range.data.base = base;
-        range.data.pages = pages;
+    if (curr_node == null) {
+        const range = vm.obj.new(Range) orelse unreachable;
+        range.base = base;
+        range.pages = pages;
 
-        self.free_list.prepend(range);
+        self.free_list.prepend(&range.node);
     } else {
-        var target_node = curr_range.?;
-        curr_range = self.free_list.first;
+        const target_range = Range.fromNode(curr_node.?);
+        curr_node = self.free_list.first;
 
-        const target_top = target_node.data.top();
+        const target_top = target_range.top();
+        while (curr_node) |n| : (curr_node = n.next) {
+            if (curr_node == &target_range.node) continue;
 
-        while (curr_range) |range| : (curr_range = range.next) {
-            if (curr_range == target_node) continue;
+            const range = Range.fromNode(n);
+            const curr_range_top = range.top();
 
-            const curr_range_top = range.data.top();
+            if (range.base == target_top) {
+                range.base = target_range.base;
+                range.pages += target_range.pages;
 
-            if (range.data.base == target_top) {
-                range.data.base = target_node.data.base;
-                range.data.pages += target_node.data.pages;
-
-                self.free_list.remove(target_node);
-                nodes_oma.free(target_node);
+                self.free_list.remove(&target_range.node);
+                vm.obj.free(Range, target_range);
                 break;
-            } else if (curr_range_top == target_node.data.base) {
-                range.data.pages += target_node.data.pages;
+            } else if (curr_range_top == target_range.base) {
+                range.pages += target_range.pages;
 
-                self.free_list.remove(target_node);
-                nodes_oma.free(target_node);
+                self.free_list.remove(&target_range.node);
+                vm.obj.free(Range, target_range);
                 break;
             }
         }
     }
 }
 
-inline fn removeRange(self: *Self, node: *List.Node, pages: u32) void {
-    if (node.data.pages > pages) {
-        node.data.base += pages * vm.page_size;
-        node.data.pages -= pages;
+inline fn removeRange(self: *Self, range: *Range, pages: u32) void {
+    if (range.pages > pages) {
+        range.base += pages * vm.page_size;
+        range.pages -= pages;
     } else {
-        self.free_list.remove(node);
-        nodes_oma.free(node);
+        self.free_list.remove(&range.node);
+        vm.obj.free(Range, range);
     }
 }

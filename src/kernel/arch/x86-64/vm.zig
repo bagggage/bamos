@@ -95,9 +95,13 @@ pub fn init() vm.Error!void {
     pt_oma = try vm.ObjectAllocator.initRaw(@sizeOf(PageTable), oma_pool, pt_pool_pages);
 }
 
-pub inline fn lmaEnd() usize { return lma_end; }
+pub inline fn lmaEnd() usize {
+    return lma_end;
+}
 
-pub inline fn heapStart() usize { return heap_start; }
+pub inline fn heapStart() usize {
+    return heap_start;
+}
 
 pub inline fn isUserVirtAddr(virt: usize) bool {
     return (virt & 0xFFFF_0000_0000_0000) == 0;
@@ -416,11 +420,11 @@ pub fn unmap(virt: usize, pages: u32, page_table: *PageTable) void {
             if (pte[0].size == 1) {
                 // Determine if this is a 1GB or 2MB page
                 const is_1gb = (pt_idx == 1);
-                pages_step = if (is_1gb) 
-                    (utils.gb_size / page_size) 
-                else 
+                pages_step = if (is_1gb)
+                    (utils.gb_size / page_size)
+                else
                     pages_per_2mb;
-                
+
                 entries_to_unmap = 1; // Large page covers all remaining entries
             }
 
@@ -461,7 +465,7 @@ fn correctMmapFlags(flags: vm.MapFlags, virt: usize, phys: usize, pages: u32) vm
     if (flags.large) {
         if (pages < pages_per_2mb or
             (virt % (2 * utils.mb_size) != 0 or
-            phys % (2 * utils.mb_size) != 0)) result.large = false;
+                phys % (2 * utils.mb_size) != 0)) result.large = false;
     }
 
     return result;

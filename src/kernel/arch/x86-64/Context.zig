@@ -20,10 +20,7 @@ const StackPointer = struct {
     }
 };
 
-const CtxRegs = extern struct {
-    callee: regs.CalleeRegs,
-    ret_ptr: usize
-};
+const CtxRegs = extern struct { callee: regs.CalleeRegs, ret_ptr: usize };
 
 stack_ptr: StackPointer,
 
@@ -63,35 +60,36 @@ pub fn jumpTo(self: *Self) noreturn {
     regs.setStack(self.getStackPtr());
     regs.restoreCallerRegs();
 
-    asm volatile("retq");
+    asm volatile ("retq");
 
     unreachable;
 }
 
 pub inline fn switchTo(from: *Self, to: *Self) void {
-    asm volatile(
-        "call switchToEx"::
-        [arg1] "{rdi}" (from),
-        [arg2] "{rsi}" (to)
+    asm volatile ("call switchToEx"
         :
-        "{rax}","{rdi}","{rsi}","{rdx}",
-        "{rcx}","{r8}","{r9}","{r10}",
-        "{r11}", "memory"
+        : [arg1] "{rdi}" (from),
+          [arg2] "{rsi}" (to),
+        : .{
+            .rax = true, .rdi = true, .rsi = true, .rdx = true,
+            .rcx = true, .r8 = true, .r9 = true, .r10 = true,
+            .r11 = true, .memory = true
+        }
     );
 }
 
 export fn switchToEx(_: *Self, _: *Self) callconv(.naked) void {
-    defer asm volatile("retq");
+    defer asm volatile ("retq");
 
     regs.saveCallerRegs();
     defer regs.restoreCallerRegs();
 
     // Swap stack.
     comptime std.debug.assert(@offsetOf(Self, "stack_ptr") == 0);
-    asm volatile(
+    asm volatile (
         \\ mov %rsp, (%rdi)
         \\ mov (%rsi), %rsp
         \\ call switchEndEx
-        ::: "memory"
+        ::: .{ .memory = true }
     );
 }

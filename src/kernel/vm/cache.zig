@@ -7,6 +7,9 @@ const std = @import("std");
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
+const LruList = utils.List;
+const LruNode = LruList.Node;
+
 pub const block_size = 16 * utils.kb_size;
 pub const block_pages = block_size / vm.page_size;
 pub const block_rank = std.math.log2_int(u32, block_pages);
@@ -15,11 +18,17 @@ pub const Error = error {
     NoMemory
 };
 
-pub const Block = packed struct {
-    phys_base: u28 = 0,
-    ref_count: u4 = 0,
+pub const Block = struct {
+    const List = utils.List;
+    const Node = List.Node;
 
-    lba_key: u32 = 0,
+    lba_key: usize = 0,
+    phys_base: u32 = 0,
+
+    ref_count: utils.RefCount(u32) = .{},
+
+    node: Node = .{},
+    lru_node: LruNode = .{},
 
     pub inline fn getPhysBase(self: Block) usize {
         return @as(usize, self.phys_base) * block_size;
@@ -59,15 +68,23 @@ pub const Block = packed struct {
     }
 
     pub inline fn isLocked(self: Block) bool {
-        return self.ref_count != 0;
+        return self.ref_count.count() != 0;
     }
 
     pub inline fn lock(self: *Block) void {
-        self.ref_count += 1;
+        self.ref_count.inc();
     }
 
     pub inline fn release(self: *Block) void {
-        self.ref_count -= 1;
+        self.ref_count.dec();
+    }
+
+    inline fn fromNode(node: *Node) *Block {
+        return @fieldParentPtr("node", node);
+    }
+
+    inline fn fromLruNode(lru_node: *LruNode) *Block {
+        return @fieldParentPtr("lru_node", lru_node);
     }
 };
 
@@ -108,65 +125,45 @@ pub const Cursor = struct {
 
 /// Specific page-cache hash table
 const HashTable = struct {
-    pub const Node = extern struct {
-        data: Block,
-        next: ?*Node = null,
-        prev: ?*Node = null,
-    };
-
-    const PageList = utils.SList(Page);
-    const PageNode = PageList.Node;
-
     const Page = struct {
+        pub const alloc_config: vm.obj.AllocatorConfig = .{
+            .allocator = .safe_oma,
+            .capacity = 128
+        };
+
+        const List = utils.SList;
+        const Node = List.Node;
+
         base: u32,
         rank: u8 = 0,
+
+        node: Page.Node = .{},
 
         pub inline fn getPhysBase(self: Page) usize {
             return @as(usize, self.base) * vm.page_size;
         }
+
+        pub inline fn fromNode(node: *Page.Node) *Page {
+            return @fieldParentPtr("node", node);
+        }
     };
 
     const Bucket = struct {
-        head: ?*Node = null,
-        tail: ?*Node = null,
+        list: Block.List = .{},
 
-        pub fn push(self: *Bucket, node: *Node) void {
-            if (self.tail) |tail| {
-                tail.next = node;
-                self.tail = node;
-            } else {
-                self.head = node;
-                self.tail = node;
-                node.prev = null;
-            }
-
-            node.next = null;
+        pub inline fn push(self: *Bucket, block: *Block) void {
+            self.list.append(&block.node);
         }
 
-        pub fn remove(self: *Bucket, node: *Node) void {
-            if (self.head == node) {
-                if (self.tail == node) {
-                    self.head = null;
-                    self.tail = null;
-                    return;
-                }
-
-                self.head = node.next;
-                node.next.?.prev = null;
-            } else if (self.tail == node) {
-                self.tail = node.prev;
-                node.prev.?.next = null;
-            } else {
-                node.next.?.prev = node.prev;
-                node.prev.?.next = node.next;
-            }
+        pub inline fn remove(self: *Bucket, block: *Block) void {
+            self.list.remove(&block.node);
         }
 
-        pub fn get(self: *const Bucket, key: u32) ?*Node {
-            var node = self.head;
-
+        pub fn get(self: *const Bucket, key: usize) ?*Block {
+            var node = self.list.first;
             while (node) |n| : (node = n.next) {
-                if (n.data.lba_key == key) return n;
+                const block = Block.fromNode(n);
+                if (block.lba_key == key) return block;
             }
 
             return null;
@@ -178,9 +175,7 @@ const HashTable = struct {
     const initial_rank = std.math.log2_int_ceil(u8, initial_pages);
     const virt_pages = (64 * utils.mb_size) / vm.page_size;
 
-    var page_oma = vm.SafeOma(PageNode).init(128);
-
-    pages: PageList = .{},
+    pages: Page.List = .{},
     buckets: []Bucket = &.{},
 
     pub fn init() Error!HashTable {
@@ -209,47 +204,51 @@ const HashTable = struct {
         while (self.pages.first != null) self.freePages();
     }
 
-    pub fn add(self: *HashTable, entry: *Node) void {
-        const idx = entry.data.lba_key % self.buckets.len;
+    pub fn add(self: *HashTable, entry: *Block) void {
+        const idx = entry.lba_key % self.buckets.len;
         self.buckets[idx].push(entry);
     }
 
-    pub fn remove(self: *HashTable, entry: *Node) void {
-        const idx = entry.data.lba_key % self.buckets.len;
+    pub fn remove(self: *HashTable, entry: *Block) void {
+        const idx = entry.lba_key % self.buckets.len;
         self.buckets[idx].remove(entry);
     }
 
-    pub fn get(self: *const HashTable, key: u32) ?*Node {
+    pub fn get(self: *const HashTable, key: usize) ?*Block {
         const idx = key % self.buckets.len;
         return self.buckets[idx].get(key);
     }
 
     fn allocPages(self: *HashTable, rank: u8) Error!usize {
-        const page_node = page_oma.alloc() orelse return error.NoMemory;
-        errdefer page_oma.free(page_node);
+        const page = vm.obj.new(Page) orelse return error.NoMemory;
+        errdefer vm.obj.free(Page, page);
 
         const phys = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
     
-        page_node.data.base = @truncate(phys / vm.page_size);
-        page_node.data.rank = rank;
+        page.base = @truncate(phys / vm.page_size);
+        page.rank = rank;
 
-        self.pages.prepend(page_node);
-
+        self.pages.prepend(&page.node);
         return phys;
     }
 
     fn freePages(self: *HashTable) void {
-        const page_node = self.pages.popFirst() orelse unreachable;
+        const node = self.pages.popFirst() orelse unreachable;
+        const page = Page.fromNode(node);
 
-        vm.PageAllocator.free(page_node.data.getPhysBase(), page_node.data.rank);
-        page_oma.free(page_node);
+        vm.PageAllocator.free(page.getPhysBase(), page.rank);
+        vm.obj.free(Page, page);
     }
 };
 
 pub const ControlBlock = struct {
-    const LruList = utils.List(HashTable.Node);
-    const LruNode = LruList.Node;
-    const NodeOma = vm.SafeOma(LruNode);
+    const BlockOma = vm.SafeOma(Block);
+    const List = utils.List;
+
+    pub const alloc_config: vm.obj.AllocatorConfig = .{
+        .allocator = .safe_oma,
+        .capacity = 32
+    };
 
     hash_table: HashTable = .{},
     hash_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
@@ -257,7 +256,9 @@ pub const ControlBlock = struct {
     lru_list: LruList = .{},
     lru_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
 
-    node_oma: NodeOma = NodeOma.init(256),
+    block_oma: BlockOma = .init(256),
+
+    node: List.Node = .{},
 
     pub inline fn init() Error!ControlBlock {
         return .{ .hash_table = try .init() };
@@ -265,21 +266,21 @@ pub const ControlBlock = struct {
 
     pub fn deinit(self: *ControlBlock) void {
         self.hash_table.deinit();
-        self.node_oma.deinit();
+        self.block_oma.deinit();
     }
 
-    pub fn get(self: *ControlBlock, key: u32) ?*Block {
+    pub fn get(self: *ControlBlock, key: usize) ?*Block {
         self.lru_lock.lock();
         self.hash_lock.lock();
         defer self.lru_lock.unlock();
         defer self.hash_lock.unlock();
 
-        const node = self.hash_table.get(key) orelse return null;
+        const block = self.hash_table.get(key) orelse return null;
 
-        if (!node.data.isLocked()) self.untrack(&node.data);
-        node.data.lock();
+        if (!block.isLocked()) self.untrack(block);
+        block.lock();
 
-        return &node.data;
+        return block;
     }
 
     pub fn put(self: *ControlBlock, block: *Block) void {
@@ -290,19 +291,18 @@ pub const ControlBlock = struct {
         if (!block.isLocked()) self.track(block);
     }
 
-    pub fn new(self: *ControlBlock, key: u32) ?*Block {
-        const block = self.allocBlock() orelse return null;
-        block.data.data.lba_key = key;
+    pub fn add(self: *ControlBlock, key: usize) ?*Block {
+        const block = self.makeBlock(key) orelse return null;
 
         {
             self.hash_lock.lock();
             defer self.hash_lock.unlock();
 
-            self.hash_table.add(&block.data);
+            self.hash_table.add(block);
         }
 
-        block.data.data.lock();
-        return &block.data.data;
+        block.lock();
+        return block;
     }
 
     fn swap(self: *ControlBlock, target_num: u32) u32 {
@@ -311,92 +311,77 @@ pub const ControlBlock = struct {
 
         const num = target_num;
         var node = self.lru_list.first;
-
-        while (node) |lru| : (node = lru.node) {
-
+        while (node) |n| : (node = n.next) {
             if (num >= target_num) break;
         }
 
         return num;
     }
 
-    fn allocBlock(self: *ControlBlock) ?*LruNode {
-        const node = self.node_oma.alloc() orelse return null;
-        const entry = &node.data;
-
+    fn makeBlock(self: *ControlBlock, key: usize) ?*Block {
+        const block = self.block_oma.alloc() orelse return null;
         const phys = vm.PageAllocator.alloc(block_rank) orelse {
-            self.node_oma.free(node);
+            self.block_oma.free(block);
             return null;
         };
 
-        entry.data.phys_base = @truncate(phys / block_size);
-        entry.data.ref_count = 0;
-
-        return node;
+        block.* = .{
+            .phys_base = @truncate(phys / block_size),
+            .lba_key = key
+        };
+        return block;
     }
 
     //fn freeBlocks(self: *ControlBlock, first: *LruNode) void {
     //    self.node_oma.lock.lock();
     //    defer self.node_oma.lock.unlock();
-//
+    //
     //    vm.PageAllocator.free(node.data.data.getPhysBase(), block_rank);
     //}
 
     inline fn track(self: *ControlBlock, block: *Block) void {
-        const node = getLruNode(block);
-        self.lru_list.prepend(node);
+        self.lru_list.prepend(&block.lru_node);
         total_blocks += 1;
     }
 
     inline fn untrack(self: *ControlBlock, block: *Block) void {
-        const node = getLruNode(block);
-        self.lru_list.remove(node);
+        self.lru_list.remove(&block.lru_node);
         total_blocks -= 1;
     }
 
-    inline fn getLruNode(block: *Block) *LruNode {
-        const hash_node: *HashTable.Node = @alignCast(@fieldParentPtr("data", block));
-        const lru_node: *LruNode = @fieldParentPtr("data", hash_node);
-
-        return lru_node;
+    inline fn fromNode(node: *List.Node) *ControlBlock {
+        return @fieldParentPtr("node", node);
     }
 };
-
-const CtrlList = utils.List(ControlBlock);
-const CtrlNode = CtrlList.Node;
-const CtrlOma = vm.SafeOma(CtrlNode);
 
 var total_blocks: u32 = 0;
 
 var ctrl_lock = utils.Spinlock.init(.unlocked);
-var ctrl_list: CtrlList = .{};
-var ctrl_oma = CtrlOma.init(32);
+var ctrl_list: ControlBlock.List = .{};
 
-pub fn newCtrl() Error!*ControlBlock {
-    const node = ctrl_oma.alloc() orelse return error.NoMemory;
-    errdefer ctrl_oma.free(node);
+pub fn makeCtrl() Error!*ControlBlock {
+    const ctrl = vm.obj.new(ControlBlock) orelse return error.NoMemory;
+    errdefer vm.obj.free(ControlBlock, ctrl);
 
-    node.data = try .init();
+    ctrl.* = try .init();
 
     ctrl_lock.lock();
     defer ctrl_lock.unlock();
 
-    ctrl_list.append(node);
-    return &node.data;
+    ctrl_list.append(&ctrl.node);
+    return ctrl;
 }
 
 pub fn deleteCtrl(ctrl: *ControlBlock) void {
-    const node: *CtrlNode = @fieldParentPtr("data", ctrl);
-
     {
         ctrl_lock.lock();
         defer ctrl_lock.unlock();
 
-        ctrl_list.remove(node);
+        ctrl_list.remove(&ctrl.node);
     }
 
-    node.data.deinit();
-    ctrl_oma.free(node);
+    ctrl.deinit();
+    vm.obj.free(ControlBlock, ctrl);
 }
 
 pub fn swap(target_num: u32) u32 {
@@ -407,9 +392,9 @@ pub fn swap(target_num: u32) u32 {
         defer ctrl_lock.unlock();
 
         const node = ctrl_list.first;
-
-        while (node) |ctrl| : (node = ctrl.next) {
-            num += ctrl.data.swap(target_num);
+        while (node) |n| : (node = n.next) {
+            const ctrl = ControlBlock.fromNode(n);
+            num += ctrl.swap(target_num);
 
             if (num >= target_num) break;
         }
@@ -418,16 +403,16 @@ pub fn swap(target_num: u32) u32 {
     return num;
 }
 
-pub inline fn offsetToBlock(offset: usize) u32 {
-    return @truncate(offset / block_size);
+pub inline fn offsetToBlock(offset: usize) usize {
+    return offset / block_size;
 }
 
-pub inline fn offsetModBlock(offset: usize) u32 {
-    return @truncate(offset % block_size);
+pub inline fn offsetModBlock(offset: usize) usize {
+    return offset % block_size;
 }
 
-pub inline fn blockToOffset(block: u32) usize {
-    return @as(usize, block) * block_size;
+pub inline fn blockToOffset(block: usize) usize {
+    return block * block_size;
 }
 
 /// Returns the total number of cache pages.

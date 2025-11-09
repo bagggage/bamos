@@ -4,15 +4,8 @@ const dev = @import("../../../dev.zig");
 const io = dev.io;
 const intr = dev.intr;
 
-pub const Regs = enum(u1) {
-    command = 0x0,
-    data = 0x1
-};
-
-pub const Chip = enum(u8) {
-    master = 0x20,
-    slave = 0xa0
-};
+pub const Regs = enum(u1) { command = 0x0, data = 0x1 };
+pub const Chip = enum(u8) { master = 0x20, slave = 0xa0 };
 
 pub fn init() !void {
     _ = io.request("PIC Master", @intFromEnum(Chip.master), 0x2, .io_ports) orelse return error.IoBusy;
@@ -20,10 +13,7 @@ pub fn init() !void {
 }
 
 pub fn chip() intr.Chip {
-    return .{
-        .name = "8259 PIC",
-        .ops = undefined
-    };
+    return .{ .name = "8259 PIC", .ops = undefined };
 }
 
 pub inline fn disable() void {

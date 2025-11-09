@@ -77,23 +77,36 @@ pub const TriggerMode = enum(u2) {
 };
 
 pub const Handler = struct {
+    const List = utils.List;
+    const Node = List.Node;
+
     pub const Fn = *const fn(*dev.Device) bool;
+
+    pub const alloc_config: vm.obj.AllocatorConfig = .{
+        .allocator = .safe_oma
+    };
 
     device: *dev.Device,
     func: Fn,
+
+    node: Node = .{},
+
+    inline fn fromNode(node: *Node) *Handler {
+        return @fieldParentPtr("node", node);
+    }
 };
 
 pub const SoftHandler = struct {
+    const List = utils.SList;
+
     pub const Node = List.Node;
     pub const Fn = *const fn(?*anyopaque) void;
-
-    const List = utils.SList(void);
 
     ctx: ?*anyopaque,
     func: Fn,
 
     pending: bool = false,
-    node: Node = .{ .data = {} },
+    node: Node = .{},
 
     pub fn init(func: Fn, ctx: ?*anyopaque) SoftHandler {
         return .{
@@ -108,9 +121,6 @@ pub const SoftHandler = struct {
 };
 
 pub const Irq = struct {
-    const HandlerList = utils.List(Handler);
-    const HandlerNode = HandlerList.Node;
-
     in_use: bool = false,
 
     vector: Vector,
@@ -119,9 +129,9 @@ pub const Irq = struct {
     trigger_mode: TriggerMode,
     shared: bool,
 
-    pending: std.atomic.Value(bool) = .{.raw = false},
+    pending: std.atomic.Value(bool) = .init(false),
 
-    handlers: HandlerList = .{},
+    handlers: Handler.List = .{},
     handlers_lock: utils.Spinlock = .{},
 
     pub fn init(pin: u8, vector: Vector, trigger_mode: TriggerMode, shared: bool) Irq {
@@ -138,13 +148,12 @@ pub const Irq = struct {
         self.waitWhilePending();
 
         var node = self.handlers.first;
-
-        while (node) |handler| {
-            node = handler.next;
-            vm.free(handler);
+        while (node) |n| {
+            node = n.next;
+            vm.obj.free(Handler, Handler.fromNode(n));
         }
 
-        self.handlers = HandlerList{};
+        self.handlers = .{};
     }
 
     pub inline fn eql(self: *const Irq, pin: u8) bool {
@@ -152,13 +161,12 @@ pub const Irq = struct {
     }
 
     pub fn addHandler(self: *Irq, func: Handler.Fn, device: *dev.Device) Error!void {
-        if (!self.shared and self.handlers.len > 0) return error.IntrBusy;
+        if (!self.shared and self.handlers.first != null) return error.IntrBusy;
 
         self.waitWhilePending();
 
-        const node: *HandlerNode = @alignCast(@ptrCast(vm.malloc(@sizeOf(HandlerNode)) orelse return error.NoMemory));
-
-        node.data = .{
+        const handler: *Handler = vm.obj.new(Handler) orelse return error.NoMemory;
+        handler.* = .{
             .device = device,
             .func = func
         };
@@ -166,9 +174,8 @@ pub const Irq = struct {
         self.handlers_lock.lock();
         defer self.handlers_lock.unlock();
 
-        self.handlers.append(node);
-
-        if (self.handlers.len == 1) chip.unmaskIrq(self);
+        self.handlers.append(&handler.node);
+        if (self.handlers.first == &handler.node) chip.unmaskIrq(self);
     }
 
     pub fn removeHandler(self: *Irq, device: *const dev.Device) void {
@@ -176,12 +183,11 @@ pub const Irq = struct {
         defer self.handlers_lock.unlock();
 
         const handler = self.findHandlerByDevice(device);
-
-        if (self.handlers.len == 1) chip.maskIrq(self);
+        if (self.handlers.first == &handler.node) chip.maskIrq(self);
 
         self.waitWhilePending();
 
-        self.handlers.remove(handler);
+        self.handlers.remove(&handler.node);
         vm.free(handler);
     }
 
@@ -191,8 +197,9 @@ pub const Irq = struct {
 
         var node = self.handlers.first;
 
-        while (node) |handler| : (node = handler.next) {
-            if (handler.data.func(handler.data.device)) return true;
+        while (node) |n| : (node = n.next) {
+            const handler = Handler.fromNode(n);
+            if (handler.func(handler.device)) return true;
         }
 
         return false;
@@ -202,11 +209,11 @@ pub const Irq = struct {
         while (self.pending.load(.acquire)) {}
     }
 
-    fn findHandlerByDevice(self: *const Irq, device: *const dev.Device) *HandlerNode {
+    fn findHandlerByDevice(self: *const Irq, device: *const dev.Device) *Handler {
         var node = self.handlers.first;
-
-        while (node) |handler| : (node = handler.next) {
-            if (handler.data.device == device) return handler;
+        while (node) |n| : (node = n.next) {
+            const handler = Handler.fromNode(n);
+            if (handler.device == device) return handler;
         }
 
         unreachable;
@@ -321,26 +328,22 @@ const SoftIntrTask = struct {
 pub const max_intr = 128;
 pub const max_msi = max_intr;
 
-/// @noexport
-const max_cpus = 128;
+const max_cpus = smp.max_cpus;
 
-/// @noexport
-const OrderArray = std.BoundedArray(*Cpu, max_cpus);
-/// @noexport
-const CpuArray = std.BoundedArray(Cpu, max_cpus);
-/// @noexport
-const IrqArray = std.BoundedArray(Irq, max_intr);
-/// @noexport
-const MsiArray = std.BoundedArray(Msi, max_msi);
+const OrderArray = std.ArrayList(*Cpu);
+const CpuArray = std.ArrayList(Cpu);
 
-var cpus_order = OrderArray.init(0) catch unreachable;
-var cpus = CpuArray.init(0) catch unreachable;
+var order_buffer: [max_cpus]*Cpu = undefined;
+var cpu_buffer: [max_cpus]Cpu = undefined;
+
+var cpus_order: OrderArray = .initBuffer(&order_buffer);
+var cpus: CpuArray = .initBuffer(&cpu_buffer);
+var irqs: [max_intr]Irq = undefined;
+var msis: [max_msi]Msi = undefined;
+var msis_used: u8 = 0;
+
 var cpus_lock = utils.Spinlock.init(.unlocked);
 var msis_lock = utils.Spinlock.init(.unlocked);
-
-var irqs = IrqArray.init(max_intr) catch unreachable;
-var msis = MsiArray.init(max_intr) catch unreachable;
-var msis_used: u8 = 0;
 
 var soft_tasks: []SoftIntrTask = undefined;
 
@@ -382,13 +385,6 @@ pub inline fn restoreForCpu(intr_enable: bool) void {
 
 pub fn init() !void {
     const cpus_num = smp.getNum();
-
-    cpus = try CpuArray.init(cpus_num);
-    errdefer cpus.resize(0) catch unreachable;
-
-    cpus_order = try OrderArray.init(cpus_num);
-    errdefer cpus_order.resize(0) catch unreachable;
-
     const bytes_per_bm = std.math.divCeil(
         comptime_int,
         arch.intr.avail_vectors,
@@ -397,19 +393,21 @@ pub fn init() !void {
     const bitmap_pool: [*]u8 = @ptrCast(vm.malloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
     errdefer vm.free(bitmap_pool);
 
-    for (cpus.slice(), 0..) |*cpu, i| {
+    for (0..cpus_num) |i| {
         const bm_offset = i * bytes_per_bm;
 
-        cpu.* = Cpu.init(bitmap_pool[bm_offset..bm_offset + bytes_per_bm]);
-        cpus_order.set(i, cpu);
+        const cpu = cpus.addOneAssumeCapacity();
+        cpu.* = .init(bitmap_pool[bm_offset..bm_offset + bytes_per_bm]);
+
+        cpus_order.addOneAssumeCapacity().* = cpu;
     }
 
     try initSoftIntr(cpus_num);
 
     chip = try arch.intr.init();
 
-    @memset(std.mem.asBytes(&msis.buffer), 0);
-    @memset(std.mem.asBytes(&irqs.buffer), 0);
+    @memset(std.mem.sliceAsBytes(&irqs), 0);
+    @memset(std.mem.sliceAsBytes(&msis), 0);
 
     log.info("controller: {s}", .{chip.name});
 }
@@ -421,7 +419,6 @@ fn initSoftIntr(cpus_num: u16) !void {
     errdefer vm.free(soft_tasks.ptr);
 
     soft_tasks.len = cpus_num;
-
     for (soft_tasks, 0..) |*soft_task, i| {
         const task = sched.newKernelTask("soft_intr", SoftIntrTask.handler) orelse {
             for (0..i) |j| sched.freeTask(soft_tasks[j].task);
@@ -433,16 +430,16 @@ fn initSoftIntr(cpus_num: u16) !void {
 }
 
 pub fn deinit() void {
-    const pool = cpus.slice()[0].bitmap.bits.ptr;
+    const pool = cpus.items[0].bitmap.bits.ptr;
 
-    cpus.resize(0) catch unreachable;
-    cpus_order.resize(0) catch unreachable;
+    cpus.shrinkRetainingCapacity(0);
+    cpus_order.shrinkRetainingCapacity(0);
 
     vm.free(pool);
 
-    for (irqs.constSlice()) |*irq_ent| {
-        if (irq_ent.*) |irq| {
-            chip.unbindIrq(&irq);
+    for (irqs) |*irq| {
+        if (irq.in_use) {
+            chip.unbindIrq(irq);
             irq.deinit();
         }
     }
@@ -457,12 +454,10 @@ pub inline fn requestIrq(pin: u8, device: *dev.Device, handler: Handler.Fn, tigg
 }
 
 pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
-    const irq = &irqs.buffer[pin];
-
+    const irq = &irqs[pin];
     irq.removeHandler(device);
 
-    if (irq.handlers.len > 0) return;
-
+    if (irq.handlers.first != null) return;
     irq.in_use = false;
 
     chip.unbindIrq(irq);
@@ -476,7 +471,7 @@ pub export fn handleIrq(pin: u8) void {
     handlerEnter(local);
     defer handlerExit(local);
 
-    _ = irqs.buffer[pin].handle();
+    _ = irqs[pin].handle();
 }
 
 pub export fn handleMsi(idx: u8) void {
@@ -486,7 +481,7 @@ pub export fn handleMsi(idx: u8) void {
     handlerEnter(local);
     defer handlerExit(local);
 
-    const handler = &msis.buffer[idx].handler;
+    const handler = &msis[idx].handler;
     _ = handler.func(handler.device);
 }
 
@@ -505,10 +500,9 @@ pub export fn releaseMsi(idx: u8) void {
     msis_lock.lock();
     defer msis_lock.unlock();
 
-    const msi = &msis.buffer[idx];
+    const msi = &msis[idx];
 
     std.debug.assert(msi.in_use);
-
     freeVector(msi.vector);
 
     msi.in_use = false;
@@ -519,8 +513,7 @@ pub export fn getMsiMessage(idx: u8) Msi.Message {
     msis_lock.lock();
     defer msis_lock.unlock();
 
-    const msi = &msis.buffer[idx];
-
+    const msi = &msis[idx];
     std.debug.assert(msi.in_use);
 
     return msi.message;
@@ -530,7 +523,7 @@ pub fn allocVector(cpu_idx: ?u16) ?Vector {
     cpus_lock.lock();
     defer cpus_lock.unlock();
 
-    const cpu = if (cpu_idx) |idx| &cpus.buffer[idx] else cpus_order.get(0);
+    const cpu = if (cpu_idx) |idx| &cpus.items[idx] else cpus_order.items[0];
 
     const idx = cpu_idx orelse calcCpuIdx(cpu);
     const vec = cpu.allocVector() orelse return null;
@@ -538,7 +531,6 @@ pub fn allocVector(cpu_idx: ?u16) ?Vector {
     reorderCpus(idx, .forward);
 
     log.debug("allocated: cpu: {}, vec: {}", .{idx, vec});
-
     return .{
         .cpu = idx,
         .vec = vec
@@ -546,45 +538,46 @@ pub fn allocVector(cpu_idx: ?u16) ?Vector {
 }
 
 pub fn freeVector(vec: Vector) void {
-    std.debug.assert(vec.cpu < cpus.len and vec.vec < arch.intr.max_vectors);
+    std.debug.assert(vec.cpu < cpus.items.len and vec.vec < arch.intr.max_vectors);
 
     cpus_lock.lock();
     defer cpus_lock.unlock();
 
-    cpus.buffer[vec.cpu].freeVector(vec.vec);
+    cpus.items[vec.cpu].freeVector(vec.vec);
 
     reorderCpus(vec.cpu, .backward);
 }
 
-pub fn allocSoftHandler(device: *dev.Device, cpu_idx: ?u16) bool {
-    const handler = vm.obj.new(SoftHandler) orelse return false;
-
-    const task_idx = if (cpu_idx) |idx| idx else smp.getIdx();
-    const soft_task = &soft_tasks[task_idx];
-
-    log.debug("soft irq: {}, cpu: {}", .{device.name, task_idx});
-
-    const node = vm.obj.asSingleNode(SoftHandler, handler);
-    node.next = null;
-
-    soft_task.unsched_list.prepend(node);
-    device.soft_intr_num.fetchAdd(1, .release);
-
-    return true;
-}
-
-pub fn freeSoftHandler(device: *dev.Device, cpu_idx: ?u16) void {
-    std.debug.assert(device.soft_intr_num.raw > 0);
-
-    device.soft_intr_num.fetchSub(1, .acquire);
-
-    const task_idx = if (cpu_idx) |idx| idx else smp.getIdx();
-    const soft_task = &soft_tasks[task_idx];
-
-    const node = soft_task.unsched_list.popFirst() orelse unreachable;
-
-    vm.obj.free(SoftHandler, node.data);
-}
+// TODO: Fix it, the implementation uses `unsched_list` field, that doesn't exists!
+//pub fn allocSoftHandler(device: *dev.Device, cpu_idx: ?u16) bool {
+//    const handler = vm.obj.new(SoftHandler) orelse return false;
+//
+//    const task_idx = if (cpu_idx) |idx| idx else smp.getIdx();
+//    const soft_task = &soft_tasks[task_idx];
+//
+//    log.debug("soft irq: {}, cpu: {}", .{device.name, task_idx});
+//
+//    const node = &handler.node;
+//    node.next = null;
+//
+//    soft_task.unsched_list.prepend(node);
+//    device.soft_intr_num.fetchAdd(1, .release);
+//
+//    return true;
+//}
+//
+//pub fn freeSoftHandler(device: *dev.Device, cpu_idx: ?u16) void {
+//    std.debug.assert(device.soft_intr_num.raw > 0);
+//
+//    device.soft_intr_num.fetchSub(1, .acquire);
+//
+//    const task_idx = if (cpu_idx) |idx| idx else smp.getIdx();
+//    const soft_task = &soft_tasks[task_idx];
+//
+//    const node = soft_task.unsched_list.popFirst() orelse unreachable;
+//
+//    vm.obj.free(SoftHandler, node.data);
+//}
 
 pub fn scheduleSoft(intr: *SoftHandler) void {
     const soft_task = &soft_tasks[smp.getIdx()];
@@ -593,7 +586,7 @@ pub fn scheduleSoft(intr: *SoftHandler) void {
 
 export fn requestIrqEx(pin: u8, device: *dev.Device, handler: *const anyopaque, tigger_int: u8, shared: bool) i16 {
     const tigger_mode: TriggerMode = @enumFromInt(tigger_int);
-    const irq = &irqs.buffer[pin];
+    const irq = &irqs[pin];
 
     if (irq.in_use) {
         if (!shared or irq.trigger_mode != tigger_mode) return utils.errToInt(Error.IntrBusy);
@@ -620,11 +613,11 @@ export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_i
     if (msis_used == max_intr) return utils.errToInt(Error.NoMemory);
 
     var idx = @intFromPtr(handler) % msis.len;
-    while (msis.buffer[idx].in_use) {
+    while (msis[idx].in_use) {
         idx = (idx +% 1) % msis.len;
     }
 
-    const msi = &msis.buffer[idx];
+    const msi = &msis[idx];
     const vec = allocVector(
         if (cpu_idx == cpu_any) null else cpu_idx
     ) orelse return utils.errToInt(Error.NoVector);
@@ -643,7 +636,7 @@ export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_i
 }
 
 inline fn calcCpuIdx(cpu: *const Cpu) u16 {
-    return @truncate((@intFromPtr(cpu) - @intFromPtr(&cpus.buffer)) / @sizeOf(Cpu));
+    return @truncate((@intFromPtr(cpu) - @intFromPtr(&cpu_buffer)) / @sizeOf(Cpu));
 }
 
 fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
@@ -671,32 +664,32 @@ fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
 
 /// @noexport
 fn reorderCpus(cpu_idx: u16, comptime direction: enum{forward, backward}) void {
-    const cpu = &cpus.buffer[cpu_idx];
+    const cpu = &cpus.items[cpu_idx];
     var order_idx = std.mem.indexOf(
         *Cpu,
-        cpus_order.slice(),
+        cpus_order.items,
         &.{ cpu }
     ) orelse unreachable;
 
     switch (direction) {
         .forward => {
             while (
-                order_idx < cpus.len - 1 and
-                cpu.allocated > cpus_order.get(order_idx + 1).allocated
+                order_idx < cpus.items.len - 1 and
+                cpu.allocated > cpus_order.items[order_idx + 1].allocated
             ) : (order_idx += 1) {
-                const temp = cpus_order.get(order_idx + 1);
-                cpus_order.set(order_idx, temp);
-                cpus_order.set(order_idx + 1, cpu);
+                const temp = cpus_order.items[order_idx + 1];
+                cpus_order.items[order_idx] = temp;
+                cpus_order.items[order_idx + 1] = cpu;
             }
         },
         .backward => {
             while (
                 order_idx > 0 and
-                cpu.allocated < cpus_order.get(order_idx - 1).allocated
+                cpu.allocated < cpus_order.items[order_idx - 1].allocated
             ) : (order_idx -= 1) {
-                const temp = cpus_order.get(order_idx - 1);
-                cpus_order.set(order_idx, temp);
-                cpus_order.set(order_idx - 1, cpu);
+                const temp = cpus_order.items[order_idx - 1];
+                cpus_order.items[order_idx] = temp;
+                cpus_order.items[order_idx - 1] = cpu;
             }
         }
     }

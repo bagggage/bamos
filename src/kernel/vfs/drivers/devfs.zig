@@ -52,21 +52,16 @@ pub const Region = struct {
 };
 
 pub const DevFile = struct {
-    const List = utils.SList(void);
+    const List = utils.SList;
     const Node = List.Node;
 
     name: dev.Name,
-
     num: DevNum,
 
     fops: *const vfs.File.Operations,
     data: utils.AnyData = .{},
 
-    node: Node = .{ .data = undefined },
-
-    pub inline fn asNode(self: *DevFile) *Node {
-        return &self.node;
-    }
+    node: Node = .{},
 
     pub inline fn fromNode(node: *Node) *DevFile {
         return @fieldParentPtr("node", node);
@@ -108,7 +103,7 @@ pub const BlockDev = struct {
 };
 
 const DevList = struct {
-    list: DevFile.List,
+    list: DevFile.List = .{},
     max_no: u16,
 
     lock: utils.Spinlock = .{},

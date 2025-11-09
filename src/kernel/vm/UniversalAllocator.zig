@@ -71,12 +71,12 @@ const HugeNode = HugeTree.Node;
 
 /// A fixed-size array of object allocators (`vm.ObjectAllocator`),
 /// used for managing small memory blocks.
-var oma_pool: [oma_pool_len]vm.ObjectAllocator = init_oma_pool();
+var oma_pool: [oma_pool_len]vm.ObjectAllocator = initOmaPool();
 
 /// An object allocator dedicated to managing nodes within the `HugeTree`.
-var huge_oma = vm.ObjectAllocator.init(HugeNode);
+var huge_oma: vm.ObjectAllocator = .init(HugeNode);
 /// The binary tree that manages all large memory block allocations.
-var huge_alloc_tree = HugeTree{};
+var huge_alloc_tree: HugeTree = .{};
 
 /// Allocates a block of memory of the specified `size`.
 /// 
@@ -86,7 +86,6 @@ var huge_alloc_tree = HugeTree{};
 /// or `null` if the allocation fails.
 pub inline fn alloc(size: usize) ?*anyopaque {
     std.debug.assert(size > 0 and size < (vm.PageAllocator.max_alloc_pages * vm.page_size));
-
     return if (size <= max_small_size) allocSmall(@truncate(size)) else allocHuge(@truncate(size));
 }
 
@@ -171,7 +170,7 @@ fn allocHuge(size: u32) ?*anyopaque {
 /// This function is called only once in compile time.
 /// 
 /// - Returns: A fixed-size array of initialized `vm.ObjectAllocator` instances.
-fn init_oma_pool() [oma_pool_len]vm.ObjectAllocator {
+fn initOmaPool() [oma_pool_len]vm.ObjectAllocator {
     var result: [oma_pool_len]vm.ObjectAllocator = undefined;
 
     const min_rank = std.math.log2(min_size);
@@ -184,7 +183,7 @@ fn init_oma_pool() [oma_pool_len]vm.ObjectAllocator {
         const pages_num = std.math.divCeil(u32, size * oma_min_capacity, vm.page_size) catch unreachable;
         const pages = @as(u32, 1) << @truncate(std.math.log2_int_ceil(u32, pages_num));
 
-        result[i] = vm.ObjectAllocator.initSized(size, pages);
+        result[i] = .initSized(size, pages);
     }
 
     return result;

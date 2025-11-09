@@ -170,15 +170,15 @@ pub const FileSystem = struct {
 pub const Path = struct {
     dentry: *const Dentry,
 
-    pub fn format(self: Path, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: Path, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         const parent = self.dentry.parent;
         if (!std.mem.eql(u8, parent.name.str(), "/")) {
             try format(
-                .{ .dentry = self.dentry.parent },&.{}, .{}, writer
+                .{ .dentry = self.dentry.parent }, writer
             );
         }
 
-        try writer.print("/{s}", .{self.dentry.name.str()});
+        try writer.print("/{s}", .{ self.dentry.name.str() });
     }
 };
 
@@ -189,14 +189,11 @@ pub const MountPoint = struct {
     ctx: Context,
     node: rcu.List.Node = .{},
 
-    pub fn init(
-        self: *MountPoint, fs: *FileSystem,
-        dentry: *Dentry, ctx: Context
-    ) void {
+    pub fn init(fs: *FileSystem, dentry: *Dentry, ctx: Context) MountPoint {
         dentry.ref();
         ctx.getFsRoot().ref();
 
-        self.* = .{
+        return .{
             .fs = fs,
             .dentry = dentry,
             .ctx = ctx
@@ -208,6 +205,7 @@ pub const MountPoint = struct {
         self.dentry.deref();
     }
 
+    // TODO: Replace with `vm.obj` framework
     pub inline fn new() ?*MountPoint {
         return vm.alloc(MountPoint);
     }
@@ -505,11 +503,11 @@ fn mountFs(dentry: *Dentry, fs: *FileSystem, blk_dev: ?*devfs.BlockDev) Error!*D
     }
 
     if (blk_dev) |blk| {
-        log.info("{s} on {} is mounted to \"{s}\"", .{
+        log.info("{s} on {f} is mounted to \"{f}\"", .{
             fs.name, blk.getName(), dentry.path()
         });
     } else {
-        log.info("{s} is mounted to \"{s}\"", .{fs.name, dentry.path()});
+        log.info("{s} is mounted to \"{f}\"", .{fs.name, dentry.path()});
     }
 
     mount_list.append(&mnt_point.node);
@@ -530,7 +528,7 @@ fn mountDriveFs(
         return error.BadSuperblock;
     }
 
-    mnt_point.init(fs, dentry, .{ .super = super });
+    mnt_point.* = .init(fs, dentry, .{ .super = super });
     super.root.ctx = .{ .super = super };
     super.mount_point = mnt_point;
 
@@ -548,7 +546,7 @@ fn mountVirtualFs(fs: *FileSystem, dentry: *Dentry, mnt_point: *MountPoint) !*De
         return error.BadSuperblock;
     }
 
-    mnt_point.init(fs, dentry, .{ .virt = virt });
+    mnt_point.* = .init(fs, dentry, .{ .virt = virt });
     virt.root.ctx = .{ .virt = &mnt_point.ctx.virt };
 
     return virt.root;
@@ -612,7 +610,7 @@ fn initRoot() !void {
         const virt = try tmp_fs.mountVirtual();
         defer root_dentry = virt.root;
 
-        mnt_point.init(tmp_fs, virt.root, .{ .virt = virt });
+        mnt_point.* = .init(tmp_fs, virt.root, .{ .virt = virt });
         mount_list.prepend(&mnt_point.node);
     }
 

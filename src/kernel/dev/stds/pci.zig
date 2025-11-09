@@ -93,13 +93,13 @@ pub const Device = struct {
     }
 
     pub inline fn from(device: *const dev.Device) *Device {
-        std.debug.assert(device.bus == &bus.data);
+        std.debug.assert(device.bus == &bus);
         return device.driver_data.as(Device) orelse unreachable;
     }
 };
 
 pub const Driver = struct {
-    base: dev.DriverNode,
+    base: dev.Driver,
     match_id: Id,
 
     pub fn init(
@@ -114,9 +114,7 @@ pub const Driver = struct {
     }
 
     pub inline fn from(driver: *const dev.Driver) *const Driver {
-        const driver_node: *const dev.DriverNode = @fieldParentPtr("data", driver);
-        const pci_driver: *const Driver = @fieldParentPtr("base", driver_node);
-        return pci_driver;
+        return @fieldParentPtr("base", driver);
     }
 };
 
@@ -199,8 +197,8 @@ fn enumDevice(seg_idx: u16, bus_idx: u8, dev_idx: u8, func_idx: u8) !bool {
 
     errdefer dev_oma.free(pci_dev);
 
-    const device = bus.data.addDevice(
-        try dev.nameFmt(
+    const device = bus.addDevice(
+        try dev.Name.print(
             "{x:0>4}:{x:0>2}:{x:0>2}.{}",
             .{seg_idx,bus_idx,dev_idx,func_idx}
         ), null, pci_dev
@@ -208,7 +206,7 @@ fn enumDevice(seg_idx: u16, bus_idx: u8, dev_idx: u8, func_idx: u8) !bool {
 
     pci_dev.device = device;
 
-    log.debug("device: {}: VEN_ID 0x{x:0>4} : DEV_ID 0x{x:0>4}", .{
+    log.debug("device: {f}: VEN_ID 0x{x:0>4} : DEV_ID 0x{x:0>4}", .{
         device.name, vendor_id, pci_dev.id.device_id
     });
 

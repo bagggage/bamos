@@ -19,16 +19,6 @@ pub const io = @import("dev/io.zig");
 pub const intr = @import("dev/intr.zig");
 pub const pci = @import("dev/stds/pci.zig");
 
-// For internal use
-pub const BusList = utils.List(Bus);
-pub const BusNode = BusList.Node;
-
-pub const DeviceList = utils.List(Device);
-pub const DeviceNode = DeviceList.Node;
-
-pub const DriverList = utils.List(Driver);
-pub const DriverNode = DriverList.Node;
-
 pub const Name = extern struct {
     pub const Error = error {
         NoMemory,
@@ -45,7 +35,7 @@ pub const Name = extern struct {
     };
 
     pub const max_len = std.math.maxInt(Meta.Length);
-    const local_size = @sizeOf(Name) - 1;
+    const local_size = @sizeOf(Name) - @sizeOf(Meta);
 
     ptr: [*]const u8 = undefined,
     pad_0: if (@sizeOf([*]u8) == 4) u32 else void = undefined,
@@ -57,43 +47,38 @@ pub const Name = extern struct {
 
     meta: u8 = 0,           // + 1 = 16 bytes
 
-    comptime { std.debug.assert(@sizeOf(Name) == @sizeOf(usize) * 2); }
+    comptime { std.debug.assert(@sizeOf(Name) == 16); }
 
     pub fn str(self: *const Name) []const u8 {
         const len = self.length();
-        if (self.isAllocated() or len > max_len) return self.ptr[0..len];
-        return self.localBuffer()[0..len];
+        return if (self.length() > local_size or self.isAllocated())
+                self.ptr[0..len]
+            else
+                self.localBuffer()[0..len];
     }
 
     pub fn print(comptime fmt: []const u8, args: anytype) Error!Name {
         var result: Name = undefined;
 
-        const len: u16 = @truncate(std.fmt.count(fmt, args));
-        const alloc: bool = len > local_size;
-
+        const len = std.fmt.count(fmt, args);
         if (len == 0 or len > max_len) return error.BadName;
 
-        const buf: []u8 = blk: {
-            if (alloc) {
-                result.ptr = @ptrCast(vm.malloc(len) orelse return error.NoMemory);
-                break :blk result.localBuffer()[0..len];
-            } else {
-                break :blk result.localBuffer()[0..len];
-            }
-        };
+        const buf: []u8 = if (len > local_size) blk: {
+            result.ptr = @ptrCast(vm.malloc(len) orelse return error.NoMemory);
+            break :blk @constCast(result.ptr[0..len]);
+        } else result.localBuffer()[0..len];
 
         _ = std.fmt.bufPrint(buf, fmt, args) catch return error.NoMemory;
 
         result.meta = @bitCast(Meta{
             .len = @truncate(len),
-            .is_alloc = alloc
+            .is_alloc = (len > local_size)
         });
         return result;
     }
 
     pub fn init(val: []const u8) Name {
-        std.debug.assert(val.len > 0 and val.len < max_len);
-
+        std.debug.assert(val.len > 0 and val.len <= max_len);
         var result: Name = .{
             .ptr = val.ptr,
         };
@@ -110,7 +95,7 @@ pub const Name = extern struct {
     }
 
     export fn devNameInit(value: [*]const u8, len: usize) Name {
-        return Name.init(value[0..len]);
+        return .init(value[0..len]);
     }
 
     pub inline fn deinit(self: *Name) void {
@@ -118,8 +103,8 @@ pub const Name = extern struct {
         self.meta = 0;
     }
 
-    pub fn format(self: *const Name, _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{s}", .{ self.str() });
+    pub fn format(self: *const Name, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.writeAll(self.str());
     }
 
     pub inline fn length(self: *const Name) u7 {
@@ -138,11 +123,9 @@ pub const Name = extern struct {
 };
 
 pub const nameHash = std.hash.Fnv1a_32.hash;
-pub const nameFmt = Name.print;
-pub const nameOf = Name.init;
 
-var buses = BusList{};
-var buses_lock = utils.Spinlock.init(.unlocked);
+var buses: Bus.List = .{};
+var buses_lock: utils.Spinlock = .init(.unlocked);
 
 /// @noexport
 const AutoInit = struct {
@@ -173,7 +156,7 @@ pub fn preinit() !void {
     try intr.init();
 
     registerBus(&platform_bus);
-    platform_bus.data.addDriver(&kernel_driver);
+    platform_bus.addDriver(&kernel_driver);
 
     try acpi.postInit();
     try utils.arch.devInit();
@@ -191,20 +174,18 @@ pub fn init() !void {
     }
 }
 
-pub export fn registerBus(bus: *BusNode) void {
+pub export fn registerBus(bus: *Bus) void {
     buses_lock.lock();
     defer buses_lock.unlock();
 
-    buses.prepend(bus);
+    buses.prepend(&bus.node);
 
-    log.info("{s} bus was registered", .{bus.data.name});
+    log.info("{s} bus was registered", .{bus.name});
 }
 
 pub inline fn registerDevice(
     comptime bus_name: []const u8,
-    name: Name,
-    driver: ?*const Driver,
-    data: ?*anyopaque
+    name: Name, driver: ?*const Driver, data: ?*anyopaque
 ) !*Device {
     const bus = try getBus(bus_name);
     return bus.addDevice(name, driver, data) orelse return error.NoMemory;
@@ -214,13 +195,13 @@ pub inline fn removeDevice(dev: *Device) void {
     dev.bus.removeDevice(dev);
 }
 
-pub inline fn registerDriver(comptime bus_name: []const u8, driver: *DriverNode) !void {
+pub inline fn registerDriver(comptime bus_name: []const u8, driver: *Driver) !void {
     const bus = try getBus(bus_name);
     bus.addDriver(driver);
 }
 
-pub inline fn removeDriver(driver: *DriverNode) void {
-    driver.data.bus.removeDriver(driver);
+pub inline fn removeDriver(driver: *Driver) void {
+    driver.bus.removeDriver(driver);
 }
 
 pub inline fn getBus(comptime name: []const u8) !*Bus {
@@ -233,7 +214,7 @@ pub inline fn getBus(comptime name: []const u8) !*Bus {
 }
 
 pub inline fn getKernelDriver() *Driver {
-    return &kernel_driver.data;
+    return &kernel_driver;
 }
 
 export fn getBusByHash(hash: u32) ?*Bus {
@@ -241,9 +222,9 @@ export fn getBusByHash(hash: u32) ?*Bus {
     defer buses_lock.unlock();
 
     var node = buses.first;
-
-    while(node) |bus| : (node = bus.next) {
-        if (bus.data.type == hash) return &bus.data;
+    while(node) |n| : (node = n.next) {
+        const bus = Bus.fromNode(n);
+        if (bus.type == hash) return bus;
     }
 
     return null;

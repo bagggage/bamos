@@ -9,6 +9,9 @@ const utils = @import("../utils.zig");
 
 const Self = @This();
 
+pub const List = utils.List;
+pub const Node = List.Node;
+
 pub const Operations = struct {
     pub const ProbeResult = enum {
         missmatch,
@@ -31,17 +34,16 @@ pub const Operations = struct {
 
 name: []const u8,
 bus: *Bus = undefined,
+node: Node = .{},
 ops: Operations,
 
 pub fn init(
     comptime name: []const u8,
     comptime ops: Operations
-) dev.DriverNode {
+) Self {
     return .{
-        .data = .{
-            .name = name,
-            .ops = ops,
-        }
+        .name = name,
+        .ops = ops,
     };
 }
 
@@ -62,4 +64,8 @@ pub inline fn removeDevice(self: *const Self, device: *Device) void {
 
 pub inline fn addDevice(self: *const Self, name: dev.Name, data: ?*anyopaque) !*Device {
     return self.bus.addDevice(name, self, data) orelse return error.NoMemory;
+}
+
+pub inline fn fromNode(node: *Node) *Self {
+    return @fieldParentPtr("node", node);
 }
