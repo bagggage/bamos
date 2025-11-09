@@ -35,7 +35,7 @@ inline fn isAvailable() bool {
 }
 
 fn initDevice(self: *const dev.Driver) !void {
-    const device = try self.addDevice(dev.nameOf(device_name), null);
+    const device = try self.addDevice(dev.Name.init(device_name), null);
     errdefer dev.removeDevice(device);
 
     try initTimer();

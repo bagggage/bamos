@@ -12,9 +12,7 @@ const pic = @import("pic.zig");
 const regs = @import("../regs.zig");
 const smp = @import("../../../smp.zig");
 
-const c = @cImport(
-    @cInclude("cpuid.h")
-);
+const c = @cImport(@cInclude("cpuid.h"));
 
 pub const ioapic = @import("ioapic.zig");
 pub const lapic = @import("lapic.zig");
@@ -32,7 +30,7 @@ pub const Madt = extern struct {
         };
 
         type: Type,
-        length: u8
+        length: u8,
     };
 
     pub const ProcLapic = extern struct {
@@ -55,7 +53,7 @@ pub const Madt = extern struct {
         bus: u8,
         irq: u8,
         gsi: u32 align(1),
-        flags: u16 align(1), 
+        flags: u16 align(1),
     };
 
     header: acpi.SdtHeader,
@@ -75,8 +73,7 @@ pub const Madt = extern struct {
 
         const end_addr = @intFromPtr(&self._entries) + self.header.length;
 
-        while (@intFromPtr(entry) < end_addr)
-        : (entry = @ptrFromInt(@intFromPtr(entry) + entry.length)) {
+        while (@intFromPtr(entry) < end_addr) : (entry = @ptrFromInt(@intFromPtr(entry) + entry.length)) {
             // Don`t trust hardware, avoid infinity loop
             if (entry.length == 0) break;
 
@@ -88,32 +85,11 @@ pub const Madt = extern struct {
 };
 
 pub const Interrupt = struct {
-    pub const DeliveryMode = enum(u3) {
-        fixed = 0,
-        lowest_priority = 1,
-        smi = 2,
-
-        nmi = 4,
-        init = 5,
-
-        ext_init = 7
-    };
-    pub const DestinationMode = enum(u1) {
-        physical = 0,
-        logical = 1
-    };
-    pub const DeliveryStatus = enum(u1) {
-        relaxed = 0,
-        waiting = 1
-    };
-    pub const Polarity = enum(u1) {
-        active_high = 0,
-        active_low = 1
-    };
-    pub const TriggerMode = enum(u1) {
-        edge = 0,
-        level = 1
-    };
+    pub const DeliveryMode = enum(u3) { fixed = 0, lowest_priority = 1, smi = 2, nmi = 4, init = 5, ext_init = 7 };
+    pub const DestinationMode = enum(u1) { physical = 0, logical = 1 };
+    pub const DeliveryStatus = enum(u1) { relaxed = 0, waiting = 1 };
+    pub const Polarity = enum(u1) { active_high = 0, active_low = 1 };
+    pub const TriggerMode = enum(u1) { edge = 0, level = 1 };
 };
 
 const Msi = struct {
@@ -206,11 +182,11 @@ fn bindIrq(irq: *const intr.Irq) void {
         .dest = cpuIdxToApicId(irq.vector.cpu),
         .pin_polarity = switch (irq.trigger_mode) {
             .level_low => .active_low,
-            else => .active_high
+            else => .active_high,
         },
-        .trig_mode = switch(irq.trigger_mode) {
+        .trig_mode = switch (irq.trigger_mode) {
             .edge => .edge,
-            else => .level
+            else => .level,
         },
         .mask = 1,
     });
@@ -246,11 +222,11 @@ fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) void {
         .delv_mode = .fixed,
         .pin_polarity = switch (trigger_mode) {
             .level_low => .active_low,
-            else => .active_high
+            else => .active_high,
         },
         .trig_mode = switch (trigger_mode) {
             .edge => .edge,
-            else => .level
+            else => .level,
         }
     };
 
@@ -261,8 +237,5 @@ fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) void {
         arch.intr.intr_gate_flags,
     );
 
-    msi.message = .{
-        .address = @as(u32, @bitCast(address)),
-        .data = @bitCast(data)
-    };
+    msi.message = .{ .address = @as(u32, @bitCast(address)), .data = @bitCast(data) };
 }

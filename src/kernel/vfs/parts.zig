@@ -12,14 +12,13 @@ const vm = @import("../vm.zig");
 
 pub const Error = Drive.Error;
 
+pub const List = utils.List;
 pub const Node = List.Node;
-pub const List = utils.List(Partition);
 
 pub const Partition = struct {
     pub const alloc_config: vm.obj.AllocatorConfig = .{
         .allocator = .safe_oma,
-        .capacity = 128,
-        .wrapper = .listNode(Node)
+        .capacity = 128
     };
 
     lba_start: usize,
@@ -27,8 +26,10 @@ pub const Partition = struct {
 
     dev_file: devfs.DevFile = undefined,
 
-    pub inline fn asNode(self: *Partition) *Node {
-        return @fieldParentPtr("data", self);
+    node: Node = .{},
+
+    pub inline fn fromNode(node: *Node) *Partition {
+        return @fieldParentPtr("node", node);
     }
 
     pub inline fn fromDevFile(dev_file: *devfs.DevFile) *Partition {
@@ -57,7 +58,7 @@ pub const GuidPartitionTable = extern struct {
     pub const Guid = extern struct {
         val: [16]u8,
 
-        pub fn format(value: *const Guid, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        pub fn format(value: *const Guid, writer: *std.Io.Writer) std.Io.Writer.Error!void {
             try writer.print(
                 "{X:0>2}{X:0>2}{X:0>2}{X:0>2}-{X:0>2}{X:0>2}-{X:0>2}{X:0>2}-{X:0>2}{X:0>2}-{X:0>2}{X:0>2}{X:0>2}{X:0>2}{X:0>2}{X:0>2}", .{
                 value.val[3],value.val[2],value.val[1],value.val[0],value.val[5],
@@ -118,15 +119,17 @@ pub const GuidPartitionTable = extern struct {
 pub const Gpt = GuidPartitionTable;
 
 pub fn probe(drive: *Drive) Error!void {
-    std.debug.assert(drive.parts.len == 1);
+    std.debug.assert(drive.parts.first == drive.parts.last);
 
     const lba_size = drive.lba_size;
-    var cache_iter = try drive.readCached(lba_size);
-    const gpt = cache_iter.asObject(Gpt.Header);
+    var cache_cursor = try drive.readCached(lba_size);
+    defer drive.putCache(&cache_cursor);
+
+    const gpt = cache_cursor.asObject(Gpt.Header);
 
     if (gpt.checkSign() == false) return;
 
-    log.info("GPT found: {}; patritions: {}; entry size: {}", .{
+    log.info("GPT found: {f}; patritions: {}; entry size: {}", .{
         drive.getName(), gpt.parts_num, gpt.ent_size
     });
 
@@ -144,9 +147,9 @@ pub fn probe(drive: *Drive) Error!void {
 
     for (0..parts_num) |i| {
         const ent_offset = base_offset + (i * ent_size);
-        try drive.readCachedNext(&cache_iter, ent_offset);
+        try drive.readCachedNext(&cache_cursor, ent_offset);
 
-        const entry = cache_iter.asObject(Gpt.Entry);
+        const entry = cache_cursor.asObject(Gpt.Entry);
 
         if (std.mem.eql(u8, &entry.guid.val, &Gpt.Entry.unused_guid.val)) break;
 
@@ -162,31 +165,23 @@ pub fn probe(drive: *Drive) Error!void {
         errdefer dev_name.deinit();
 
         _ = std.unicode.utf16LeToUtf8(&name, &entry.name) catch {};
-        log.info("{s}: type: {}, guid: {}: \"{s}\"", .{
+        log.info("{s}: type: {f}, guid: {f}: \"{s}\"", .{
             dev_name.str(), entry.type_guid,
             entry.guid, name[0..std.mem.len(@as([*:0]u8, @ptrCast(&name)))]
         });
 
-        const part = try new();
-        errdefer delete(part);
+        const part = vm.obj.new(Partition) orelse return error.NoMemory;
+        errdefer vm.obj.free(Partition, part);
 
         part.* = .{
             .lba_start = entry.start_lba,
             .lba_end = entry.end_lba
         };
 
-        drive.parts.append(part.asNode());
-        errdefer drive.parts.remove(part.asNode());
+        drive.parts.append(&part.node);
+        errdefer drive.parts.remove(&part.node);
 
         try part.registerDevice(dev_name, dev_num, &Drive.file_operations, drive);
     }
 }
 
-pub inline fn new() Error!*Partition {
-    const part = vm.obj.new(Partition) orelse return error.NoMemory;
-    return part;
-}
-
-pub inline fn delete(part: *Partition) void {
-    vm.obj.free(Partition, part);
-}

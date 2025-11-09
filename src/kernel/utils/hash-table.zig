@@ -34,38 +34,43 @@ pub const StringContext = opaque {
     pub const eql = std.hash_map.eqlString;
 };
 
+pub const Bucket = struct {
+    pub const Entry = struct {
+        pub const List = utils.SList;
+        pub const Node = List.Node;
+
+        hash: u64 = undefined,
+        node: Node = .{},
+
+        inline fn fromNode(node: *Node) *Entry {
+            return @fieldParentPtr("node", node);
+        }
+    };
+
+    list: Entry.List = .{},
+
+    fn get(self: Bucket, hash: u64) ?*Entry {
+        var node = self.list.first;
+        while (node) |n| : (node = n.next) {
+            const entry = Entry.fromNode(n);
+            if (entry.hash == hash) return entry;
+        }
+
+        return null;
+    }
+};
+
 /// Hash table structure.
 /// 
 /// - `K`: type of key.
-/// - `V`: type of value.
 /// - `Context`: type that contatins declarations of `hash` and `eql` functions
 ///   for the specified `K` type. This type is similar to `Context` parameter
 ///   used within `std.hash_map` standard implementation.
-pub fn HashTable(K: type, V: type, Context: type) type {
+pub fn HashTable(K: type, Context: type) type {
     return struct {
         const Self = @This();
 
-        pub const Entry = struct {
-            value: V,
-            hash: u64 = undefined
-        };
-
-        pub const EntryList = utils.SList(Entry);
-        pub const EntryNode = EntryList.Node;
-
-        pub const Bucket = struct {
-            list: EntryList = .{},
-
-            fn get(self: Bucket, hash: u64) ?*EntryNode {
-                var node = self.list.first;
-
-                while (node) |n| : (node = n.next) {
-                    if (n.data.hash == hash) return n;
-                }
-
-                return null;
-            }
-        };
+        pub const Entry = Bucket.Entry;
 
         buckets: []Bucket = &.{},
         len: usize = 0,
@@ -103,45 +108,43 @@ pub fn HashTable(K: type, V: type, Context: type) type {
             vm.PageAllocator.free(phys, rank);
         }
 
-        pub fn get(self: *const Self, key: K) ?*V {
+        pub fn get(self: *const Self, key: K) ?*Entry {
             const hash = Context.hash(key);
             const idx = hash % self.buckets.len;
 
-            const node = self.buckets[idx].get(hash) orelse return null;
-
-            return &node.data.value;
+            return self.buckets[idx].get(hash);
         }
 
-        pub fn insert(self: *Self, key: K, entry: *EntryNode) void {
+        pub fn insert(self: *Self, key: K, entry: *Entry) void {
             const hash = Context.hash(key);
             const idx = hash % self.buckets.len;
 
             const bucket = &self.buckets[idx];
 
-            entry.data.hash = hash;
-            bucket.list.prepend(entry);
+            entry.hash = hash;
+            bucket.list.prepend(&entry.node);
 
             self.len += 1;
         }
 
-        pub fn remove(self: *Self, key: K) ?*EntryNode {
+        pub fn remove(self: *Self, key: K) ?*Entry {
             const hash = Context.hash(key);
             const idx = hash % self.buckets.len;
 
             const bucket = &self.buckets[idx];
-            const node = bucket.get(hash) orelse return null;
+            const entry = bucket.get(hash) orelse return null;
 
-            bucket.list.remove(node);
+            bucket.list.remove(&entry.node);
             self.len -= 1;
 
-            return node;
+            return entry;
         }
     };
 }
 
-pub fn AutoHashTable(K: type, V: type) type {
+pub fn AutoHashTable(K: type) type {
     return HashTable(
-        K, V,
+        K,
         if (K != []const u8)
             std.hash_map.AutoContext(K)
         else

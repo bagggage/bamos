@@ -36,15 +36,15 @@ const TaskQueue = struct {
         const priority = task.stats.getPriority();
         if (priority < self.last_min) self.last_min = priority;
 
-        self.lists[priority].append(task.asNode());
+        self.lists[priority].append(&task.node);
         self.size +%= 1;
     }
 
     pub fn pop(self: *TaskQueue) ?*Task {
         for (self.lists[self.last_min..len]) |*list| {
-            if (list.popFirst()) |node| {
+            if (list.popFirst()) |n| {
                 self.size -%= 1;
-                return &node.data;
+                return Task.fromNode(n);
             }
 
             self.last_min += 1;
@@ -55,7 +55,7 @@ const TaskQueue = struct {
 
     pub fn remove(self: *TaskQueue, task: *Task) void {
         const priority = task.stats.getPriority();
-        self.lists[priority].remove(task.asNode());
+        self.lists[priority].remove(&task.node);
     }
 };
 
@@ -279,11 +279,11 @@ pub fn tick(self: *Self) void {
     }
 }
 
-pub fn initWait(self: *Self) WaitQueue.QNode {
+pub fn initWait(self: *Self) WaitQueue.Entry {
     const task = self.current_task;
     task.stats.state = .waiting;
 
-    return WaitQueue.initEntry(
+    return WaitQueue.Entry.init(
         task,
         sys.time.getFastTimestamp()
     );

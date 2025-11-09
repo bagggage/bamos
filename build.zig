@@ -49,7 +49,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         .ofmt = .elf
     });
 
-    const dbg_module = b.addModule("dbg-info", .{
+    const dbg_module = b.createModule(.{
         .root_source_file = b.path("build-tools/dbg-make/dbg.zig"),
         .target = target,
         .optimize = optimize,
@@ -58,13 +58,15 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     });
     const kernel_obj = b.addObject(.{
         .name = "bamos",
-        .root_source_file = b.path(src_dir++"/kernel/main.zig"),
-        .omit_frame_pointer = if (optimize == .Debug or optimize == .ReleaseSafe) false else null,
-        .optimize = optimize,
-        .target = target,
-        .code_model = .kernel,
-        .pic = true,
-        .error_tracing = false
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(src_dir++"/kernel/main.zig"),
+            .omit_frame_pointer = if (optimize == .Debug or optimize == .ReleaseSafe) false else null,
+            .optimize = optimize,
+            .target = target,
+            .code_model = .kernel,
+            .error_tracing = false,
+            .pic = true
+        })
     });
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
     kernel_obj.addIncludePath(b.path("third-party/boot"));
@@ -77,23 +79,27 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
 
     const dbg_obj = b.addObject(.{
         .name = "dbg-script",
-        .root_source_file = maker_script,
-        .code_model = .kernel,
-        .optimize = optimize,
-        .target = target,
-        .pic = true,
+        .root_module = b.createModule(.{
+            .root_source_file = maker_script,
+            .code_model = .kernel,
+            .optimize = optimize,
+            .target = target,
+            .pic = true
+        })
     });
     dbg_obj.root_module.addImport("dbg-info", dbg_module);
 
     const kernel_exe = b.addExecutable(.{
         .name = name orelse "bamos.elf",
-        .root_source_file = b.path(src_dir++"/kernel/start.zig"),
-        .omit_frame_pointer = if (optimize == .Debug) false else null,
-        .optimize = optimize,
-        .target = target,
-        .code_model = .kernel,
-        .strip = false,
-        .pic = true,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(src_dir++"/kernel/start.zig"),
+            .omit_frame_pointer = if (optimize == .Debug) false else null,
+            .optimize = optimize,
+            .target = target,
+            .code_model = .kernel,
+            .strip = false,
+            .pic = true
+        })
     });
     kernel_exe.addObject(kernel_obj);
     kernel_exe.addObject(dbg_obj);
@@ -237,24 +243,30 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
 fn makeTools(b: *std.Build) void {
     dbg_make_exe = b.addExecutable(.{
         .name = "dbg-make",
-        .root_source_file = b.path("build-tools/dbg-make/main.zig"),
-        .target = b.graph.host,
-        .optimize = .ReleaseFast,
-        .strip = true
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("build-tools/dbg-make/main.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+            .strip = true
+        })
     });
     tar_exe = b.addExecutable(.{
         .name = "tar",
-        .root_source_file = b.path("build-tools/tar/main.zig"),
-        .target = b.graph.host,
-        .optimize = .ReleaseFast,
-        .strip = true
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("build-tools/tar/main.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+            .strip = true
+        })
     });
     zip_exe = b.addExecutable(.{
         .name = "zip",
-        .root_source_file = b.path("build-tools/zip/main.zig"),
-        .target = b.graph.host,
-        .optimize = .ReleaseFast,
-        .strip = true
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("build-tools/zip/main.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+            .strip = true
+        })
     });
 }
 

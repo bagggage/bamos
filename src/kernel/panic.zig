@@ -28,7 +28,7 @@ const CodeDump = struct {
         return .{ .code = @as([*]const u8, @ptrFromInt(addr))[0..10] };
     }
 
-    pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         if (self.code == null) {
             try writer.print("invalid instruction pointer...", .{});
             return;
@@ -45,7 +45,7 @@ const StackDump = struct {
         return .{ .stack = @as([*]const usize, @ptrFromInt(addr))[0..10] };
     }
 
-    pub fn format(self: @This(), _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) !void {
         try writer.print(
             "<{s}>" ++ logger.new_line,
             .{if (@intFromPtr(self.stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned"}
@@ -71,25 +71,27 @@ extern fn getDebugSyms() *const dbg.Header;
 /// This function is marked as `noreturn` and will halt the system.
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     @branchHint(.cold);
+    defer utils.halt();
+
     logger.capture();
     defer logger.release();
+    defer logger.flush() catch {};
 
     {
-        tty_config.setColor(logger.writer, .bright_red) catch {};
+        tty_config.setColor(&logger.log_writer, .bright_red) catch {};
 
-        _ = logger.writer.writeAll("[KERNEL PANIC]: ") catch {};
-        _ = logger.writer.writeAll(msg) catch {};
-        _ = logger.writer.writeAll("\n\r") catch {};
+        _ = logger.log_writer.writeAll("[KERNEL PANIC]: ") catch {};
+        _ = logger.log_writer.writeAll(msg) catch {};
+        _ = logger.log_writer.writeAll("\n\r") catch {};
 
         var it = std.debug.StackIterator.init(
             @returnAddress(),
             @frameAddress()
         );
 
-        trace(&it, &logger.writer);
+        // `trace` also flushing writer
+        trace(&it, &logger.log_writer);
     }
-
-    utils.halt();
 }
 
 /// Handles exception by printing message.
@@ -109,29 +111,30 @@ pub fn exception(
 ) void {
     logger.capture();
     defer logger.release();
+    defer logger.flush() catch {};
 
-    tty_config.setColor(logger.writer, .bright_red) catch return;
-    logger.writer.print("<<EXCEPTION>> CPU: {}" ++ logger.new_line, .{smp.getIdx()}) catch return;
+    tty_config.setColor(&logger.log_writer, .bright_red) catch return;
+    logger.log_writer.print("<<EXCEPTION>> CPU: {}" ++ logger.new_line, .{smp.getIdx()}) catch return;
 
-    tty_config.setColor(logger.writer, .bright_yellow) catch return;
-    logger.writer.print(fmt ++ logger.new_line, args) catch return;
-    logger.writer.print(
+    tty_config.setColor(&logger.log_writer, .bright_yellow) catch return;
+    logger.log_writer.print(fmt ++ logger.new_line, args) catch return;
+    logger.log_writer.print(
         logger.new_line ++
-        \\code: {}
-        \\stack: {}
+        \\code: {f}
+        \\stack: {f}
         ++ logger.new_line
         , .{ CodeDump.init(ip), StackDump.init(sp) }
     ) catch return;
 
     var stack_it = std.debug.StackIterator.init(null, fp);
-    trace(&stack_it, &logger.writer);
+    trace(&stack_it, &logger.log_writer);
 
-    tty_config.setColor(logger.writer, .reset) catch return;
+    tty_config.setColor(&logger.log_writer, .reset) catch return;
 }
 
 /// Traces the stack frames and prints the corresponding function names with offsets.
 /// This function is used to provide a detailed trace of the function calls leading up to a panic.
-pub fn trace(it: *std.debug.StackIterator, writer: *std.io.AnyWriter) void {
+pub fn trace(it: *std.debug.StackIterator, writer: *std.io.Writer) void {
     tty_config.setColor(writer, .bright_yellow) catch return;
 
     writer.print("[TRACE]: <0x{x:0<16}>" ++ logger.new_line, .{if (it.first_address) |ip| ip else 0}) catch return;

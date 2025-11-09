@@ -13,14 +13,14 @@ const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 const log = std.log.scoped(.PageAllocator);
 
+const List = utils.SList;
+const Node = List.Node;
 const Spinlock = utils.Spinlock;
 
 /// Represents a free memory area in the buddy allocator. 
 /// It maintains a list of free nodes and a bitmap for tracking free pages.
 const FreeArea = struct {
-    pub const List_t = utils.SList(void);
-
-    list: List_t = List_t{},
+    list: List = .{},
     /// Bitmap for tracking if neighbour pages (buddies) are
     /// at the same state `0` or not `1`.
     /// 
@@ -29,18 +29,17 @@ const FreeArea = struct {
     /// Each bit represents the difference of states between two neighbour pages.
     bitmap: utils.Bitmap = undefined,
 
-    pub fn format(value: @This(), comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(value: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("Free list: ", .{});
 
         var curr_node = value.list.first;
-
         if (curr_node == null) {
             try writer.print("empty", .{});
             return;
         }
 
         try writer.print("{{ ", .{});
-
+    
         while (curr_node) |node| : (curr_node = node.next) {
             try writer.print("0x{x}", .{entGetPhys(node)});
 
@@ -51,8 +50,6 @@ const FreeArea = struct {
     }
 };
 
-const FreeNode = FreeArea.List_t.Node;
-
 const max_areas = 14;
 
 pub const max_rank = max_areas;
@@ -61,7 +58,7 @@ pub const max_alloc_pages = 1 << (max_rank - 1);
 export var allocated_pages: u32 = 0;
 export var total_pages: usize = 0;
 
-var free_areas: [max_areas]FreeArea = .{FreeArea{}} ** max_areas;
+var free_areas: [max_areas]FreeArea = .{ FreeArea{} } ** max_areas;
 var lock = Spinlock.init(.unlocked);
 
 var is_initialized = false;
@@ -110,7 +107,6 @@ pub fn alloc(rank: u32) ?usize {
     defer lock.unlock();
 
     var free_entry = free_areas[rank].list.popFirst();
-
     if (free_entry == null) {
         var temp_rank = rank + 1;
 
@@ -284,35 +280,34 @@ fn pushFreeEntry(entry: *const boot.MemMap.Entry) void {
     }
 }
 
-/// Returns `FreeNode` related to the physical pages block located
+/// Returns `Node` related to the physical pages block located
 /// by physical base.
 /// 
 /// - `phys_base`: Index of the first physical page in a linear block.
-inline fn getNode(phys_base: u32) *FreeNode {
+inline fn getNode(phys_base: u32) *Node {
     return makeNode(phys_base);
 }
 
-/// Returns `FreeNode` related to the physical pages block located
+/// Returns `Node` related to the physical pages block located
 /// by physical base.
 /// 
 /// - `phys_base`: Index of the first physical page in a linear block.
-inline fn makeNode(phys_base: u32) *FreeNode {
+inline fn makeNode(phys_base: u32) *Node {
     const phys_addr = @as(usize, phys_base) * vm.page_size;
     const node_addr = vm.getVirtLma(phys_addr);
-    const node: *FreeNode = @ptrFromInt(node_addr);
 
-    return node;
+    return @ptrFromInt(node_addr);
 }
 
 /// Gets the base address of a free node.
-inline fn entGetBase(node: *FreeNode) u32 {
+inline fn entGetBase(node: *Node) u32 {
     return @truncate(entGetPhys(node) / vm.page_size);
 }
 
 /// Gets the physical address of a free node.
 ///
 /// @export
-inline fn entGetPhys(node: *FreeNode) usize {
+inline fn entGetPhys(node: *Node) usize {
     return vm.getPhysLma(@intFromPtr(node));
 }
 

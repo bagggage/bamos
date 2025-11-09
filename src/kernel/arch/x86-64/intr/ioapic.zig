@@ -107,10 +107,8 @@ const RedirEntry = struct {
     offset: u8,
 
     pub inline fn get(self: *const RedirEntry) Struct {
-        return @bitCast(
-            @as(u64, self.io.read(self.offset)) |
-            @as(u64, self.io.read(self.offset + 1)) >> 32
-        );
+        return @bitCast(@as(u64, self.io.read(self.offset)) |
+            @as(u64, self.io.read(self.offset + 1)) >> 32);
     }
 
     pub inline fn set(self: *const RedirEntry, value: Struct) void {
@@ -129,16 +127,20 @@ const RedirEntry = struct {
 };
 
 const Madt = apic.Madt;
-const IoapicArray = std.BoundedArray(Ioapic, max_ioapics);
+const IoapicArray = std.ArrayList(Ioapic);
 
 const max_ioapics = 4;
 const max_overrides = 16;
 
-var ioapics = IoapicArray.init(0) catch unreachable;
+var ioapic_buffer: [max_ioapics]Ioapic = undefined;
+var ioapics = IoapicArray.initBuffer(&ioapic_buffer);
+
 var max_irqs: u16 = 0;
 var irq_overrides: [max_overrides]u8 = blk: {
     var temp: [max_overrides]u8 = undefined;
-    for (0..max_overrides) |i| { temp[i] = @truncate(i); }
+    for (0..max_overrides) |i| {
+        temp[i] = @truncate(i);
+    }
     break :blk temp;
 };
 
@@ -148,20 +150,18 @@ pub fn init() !void {
     var entry: ?*Madt.Entry = null;
 
     while (madt.findByType(entry, .ioapic)) |ent| : (entry = ent) {
-        const ioapic_ent: *align(2) Madt.Ioapic = @alignCast(@ptrCast(ent));
+        const ioapic_ent: *align(2) Madt.Ioapic = @ptrCast(@alignCast(ent));
         const ioapic = Ioapic.init(ioapic_ent) catch |err| {
-            log.err("Failed to initialize IOAPIC-{}: {}", .{ioapic_ent.id,err});
+            log.err("Failed to initialize IOAPIC-{}: {}", .{ ioapic_ent.id, err });
             continue;
         };
 
-        ioapics.append(ioapic) catch unreachable;
+        ioapics.appendAssumeCapacity(ioapic);
         max_irqs += ioapic.max_redirs;
 
-        log.debug("IOAPIC-{}: max redirections: {}, gsi base: {}", .{
-            ioapic.madt_ent.id, ioapic.max_redirs, ioapic_ent.gsi_base
-        });
+        log.debug("IOAPIC-{}: max redirections: {}, gsi base: {}", .{ ioapic.madt_ent.id, ioapic.max_redirs, ioapic_ent.gsi_base });
 
-        if (ioapics.len == max_ioapics) {
+        if (ioapics.items.len == max_ioapics) {
             log.warn("Reached IOAPIC limit: {}; Others ignored", .{max_ioapics});
             break;
         }
@@ -174,7 +174,7 @@ pub fn init() !void {
 
         irq_overrides[override.irq] = @truncate(override.gsi);
 
-        log.debug("IRQ override: {}->{}", .{override.irq, override.gsi});
+        log.debug("IRQ override: {}->{}", .{ override.irq, override.gsi });
     }
 }
 
@@ -187,16 +187,12 @@ pub fn getRedirEntry(irq: u8) RedirEntry {
 
     const gsi = if (irq < max_overrides) irqToGsi(irq) else irq;
 
-    for (ioapics.slice()) |*ioapic| {
+    for (ioapics.items) |*ioapic| {
         const begin = ioapic.madt_ent.gsi_base;
         const end = begin + ioapic.max_redirs;
 
         if (gsi < begin or gsi >= end) continue;
-
-        return .{
-            .io = ioapic,
-            .offset = @truncate((gsi - begin) * 2 + Ioapic.Regs.redir_tbl_base)
-        };
+        return .{ .io = ioapic, .offset = @truncate((gsi - begin) * 2 + Ioapic.Regs.redir_tbl_base) };
     }
 
     unreachable;

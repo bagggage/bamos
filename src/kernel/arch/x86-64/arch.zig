@@ -44,10 +44,7 @@ pub const io = @import("io.zig");
 pub const time = @import("time.zig");
 pub const vm = @import("vm.zig");
 
-pub const CpuLocalData = struct {
-    self_ptr: usize,
-    apic_id: u8
-};
+pub const CpuLocalData = struct { self_ptr: usize, apic_id: u8 };
 
 pub const cpuid_features = 1;
 
@@ -118,19 +115,18 @@ pub inline fn getCpuInfo() *Cpu {
 
 pub inline fn setCpuLocalData(local_data: *smp.LocalData) void {
     local_data.arch_specific.self_ptr = @intFromPtr(local_data);
-    local_data.arch_specific.apic_id = @truncate(
-        cpuid(cpuid_features, undefined, undefined, undefined).b >> 24
-    );
+    local_data.arch_specific.apic_id = @truncate(cpuid(cpuid_features, undefined, undefined, undefined).b >> 24);
 
     regs.setGs(0);
     regs.setMsr(regs.MSR_GS_BASE, @intFromPtr(local_data));
 }
 
 pub inline fn getCpuLocalData() *smp.LocalData {
-    return asm(std.fmt.comptimePrint(
-        "mov %gs:{},%[ret]",
-        .{@offsetOf(smp.LocalData, "arch_specific") + @offsetOf(CpuLocalData, "self_ptr")})
-        : [ret] "=r" (-> *smp.LocalData)
+    return asm (
+        std.fmt.comptimePrint("mov %gs:{},%[ret]", .{
+            @offsetOf(smp.LocalData, "arch_specific") + @offsetOf(CpuLocalData, "self_ptr")
+        })
+        : [ret] "=r" (-> *smp.LocalData),
     );
 }
 
@@ -148,15 +144,17 @@ pub fn setupCpu(cpu_idx: u16) void {
 }
 
 /// Set new stack pointer and jump to the return address.
-pub inline fn setupStack(stack: usize, ret: *const fn() noreturn) noreturn {
+pub inline fn setupStack(stack: usize, ret: *const fn () noreturn) noreturn {
     @setRuntimeSafety(false);
     defer unreachable;
 
-    asm volatile(
+    asm volatile (
         \\ mov %rdi, %rsp
         \\ mov %rdi, %rbp
         \\ jmp *%rsi
-        :: [stack] "{rdi}" (stack), [ret] "{rsi}" (ret)
+        :
+        : [stack] "{rdi}" (stack),
+          [ret] "{rsi}" (ret),
     );
 }
 
@@ -184,8 +182,7 @@ inline fn enableAvx() void {
         \\xgetbv
         \\or $7,%%rax
         \\xsetbv
-        ::: "rcx", "rax", "rdx"
-    );
+        ::: .{ .rcx = true, .rax = true, .rdx = true });
 }
 
 fn collectCpuInfo() void {
@@ -208,7 +205,7 @@ fn getCpuVendor() Cpu.Vendor {
     return switch (cpuid0_ecx) {
         amd_ecx => .AMD,
         intel_ecx => .Intel,
-        else =>.unknown,
+        else => .unknown,
     };
 }
 

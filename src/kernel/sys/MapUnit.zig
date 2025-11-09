@@ -11,7 +11,7 @@ const vm = @import("../vm.zig");
 
 const Self = @This();
 
-pub const List = utils.SList(Self);
+pub const List = utils.SList;
 pub const Node = List.Node;
 
 pub const Flags = packed struct {
@@ -49,8 +49,7 @@ pub const PageHandle = struct {
 
 pub const alloc_config: vm.obj.AllocatorConfig = .{
     .allocator = .safe_oma,
-    .capacity = 256,
-    .wrapper = .listNode(Node)
+    .capacity = 256
 };
 
 pub const max_pages = Page.max_index + vm.PageAllocator.max_alloc_pages;
@@ -70,6 +69,7 @@ page_capacity: u32,
 ops: *const Operations = &default_ops,
 flags: Flags,
 
+node: Node = .{},
 rb_node: rb.Node = .{},
 
 pub fn init(
@@ -91,8 +91,8 @@ pub inline fn deinit(self: *Self) void {
     self.region.deinit(self.isAnonymous());
 }
 
-pub inline fn asNode(self: *Self) *Node {
-    return @fieldParentPtr("data", self);
+pub inline fn fromNode(node: *Node) *Self {
+    return @fieldParentPtr("node", node);
 }
 
 pub inline fn fromRbNode(node: *rb.Node) *Self {
@@ -128,18 +128,20 @@ pub fn unmapRegion(self: *Self, page_offset: u32, pages: u32, pt: *vm.PageTable)
 
     if (self.isAnonymous()) {
         while (node) |n| {
-            n.data.unmap(self.base(), pt);
-            vm.PageAllocator.free(n.data.getPhysBase(), n.data.rank);
+            const page = Page.fromNode(n);
+            page.unmap(self.base(), pt);
+            vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
 
             node = n.next;
-            vm.obj.free(Page, &n.data);
+            vm.obj.free(Page, page);
         }
     } else {
         while (node) |n| {
-            n.data.unmap(self.base(), pt);
+            const page = Page.fromNode(n);
+            page.unmap(self.base(), pt);
 
             node = n.next;
-            vm.obj.free(Page, &n.data);
+            vm.obj.free(Page, page);
         }
     }
 }
@@ -210,7 +212,7 @@ fn detachPagesTo(self: *Self, page_base: u32, page_len: u32, list: *Page.List) !
     while (self.findPage(page_base, page_len)) |h| {
         const col_base = h.page.base;
         const col_len = h.page.pagesNum();
-        const col_top = h.page.idx + col_len;
+        const col_top = h.page.dim.idx + col_len;
 
         // Shrink or divide this physical region if needed.
         if (page_base > col_base) {
@@ -232,7 +234,7 @@ fn detachPagesTo(self: *Self, page_base: u32, page_len: u32, list: *Page.List) !
 }
 
 fn detachPage(self: *Self, list: *Page.List, handle: *const PageHandle) void {
-    const node = handle.page.asNode();
+    const node = &handle.page.node;
 
     // Remove page from the list.
     if (handle.prev) |p| {
@@ -250,20 +252,15 @@ fn findPage(self: *Self, page_base: u32, page_len: u32) ?PageHandle {
     var prev: ?*Page.Node = null;
     var node: ?*Page.Node = self.region.page_list.first;
 
-    while (node) |n| {
-        const n_base: u32 = n.data.idx;
-        const n_len: u32 = n.data.pagesNum();
+    while (node) |n| : ({prev = node; node = n.next;}) {
+        const page = Page.fromNode(n);
+        const n_base: u32 = page.dim.idx;
+        const n_len: u32 = page.pagesNum();
         const n_top: u32 = n_base + n_len;
 
         if (page_base < n_top and n_base < page_top) {
-            return .{
-                .prev = prev,
-                .page = &n.data,
-            };
+            return .{ .prev = prev, .page = page };
         }
-
-        prev = node;
-        node = n.next;
     }
 
     return null;
@@ -271,16 +268,16 @@ fn findPage(self: *Self, page_base: u32, page_len: u32) ?PageHandle {
 
 fn shrinkPageTop(list: *Page.List, page: *Page, new_top_idx: u32) !void {
     const page_len = page.pagesNum();
-    const page_top_idx = page_len + page.idx;
+    const page_top_idx = page_len + page.dim.idx;
     const detach_len = page_top_idx - new_top_idx;
     const page_new_len = page_len - detach_len;
     const detach_base = page.base + page_new_len;
 
-    const node_dump = page.asNode().*;
+    const page_dump = page.*;
     const list_end = list.first;
 
     // Free new pages on error.
-    var dummy_list: Page.List = .{ .first = page.asNode() };
+    var dummy_list: Page.List = .{ .first = &page.node };
 
     try buildPage( // Detached pages
         list, detach_base,
@@ -288,31 +285,30 @@ fn shrinkPageTop(list: *Page.List, page: *Page, new_top_idx: u32) !void {
     );
 
     errdefer freePageList(list, list_end);
-    errdefer page.asNode().* = node_dump;
+    errdefer page.* = page_dump;
 
     try buildPage( // Rebuilded pages
         &dummy_list, page.base,
-        page.idx, page_len, true
+        page.dim.idx, page_len, true
     );
 }
 
 fn shrinkPageBottom(list: *Page.List, page: *Page, new_idx: u32) !void {
-    const detach_len = new_idx - page.idx;
+    const detach_len = new_idx - page.dim.idx;
     const page_new_base = page.base + detach_len;
     const page_new_len = page.pagesNum() - detach_len;
 
-    const node_dump = page.asNode().*;
+    const page_dump = page.*;
     const list_end = list.first;
 
-    var dummy_list: Page.List = .{ .first = page.asNode() };
-
+    var dummy_list: Page.List = .{ .first = &page.node };
     try buildPage( // Detached pages.
         list, page.base,
-        page.idx, detach_len, false
+        page.dim.idx, detach_len, false
     );
 
     errdefer freePageList(list, list_end);
-    errdefer page.asNode().* = node_dump;
+    errdefer page.* = page_dump;
 
     try buildPage( // Rebuilded pages.
         &dummy_list, page_new_base,
@@ -321,24 +317,24 @@ fn shrinkPageBottom(list: *Page.List, page: *Page, new_idx: u32) !void {
 }
 
 fn dividePages(list: *Page.List, page: *Page, div_idx: u32, div_top_idx: u32) !void {
-    const page_new_len = div_idx - page.idx;
+    const page_new_len = div_idx - page.dim.idx;
     const div_len = div_top_idx - div_idx;
     const div_base = page.base + page_new_len;
     const page_next_len = page.pagesNum() - page_new_len - div_len;
     const page_next_base = page.base + page_new_len + div_len;
 
-    const node_dump = page.asNode().*;
-    const dummy_end = page.asNode().next;
-    var dummy_list: Page.List = .{ .first = page.asNode() };
+    const page_dump = page.*;
+    const dummy_end = page.node.next;
+    var dummy_list: Page.List = .{ .first = &page.node };
 
-    errdefer page.asNode().* = node_dump;
+    errdefer page.* = page_dump;
 
     try buildPage( // Build left part of the page.
         &dummy_list, page.base,
-        page.idx, page_new_len, true
+        page.dim.idx, page_new_len, true
     );
     errdefer {
-        var clean_list: Page.List = .{ .first = page.asNode().next };
+        var clean_list: Page.List = .{ .first = page.node.next };
         freePageList(&clean_list, dummy_end);
     }
 
@@ -376,7 +372,7 @@ fn buildPage(
     while (temp_len > 0) {
         const new_page =
             if (reuse_first and temp_base == phys_base)
-                &list.first.?.data
+                Page.fromNode(list.first.?)
             else
                 (vm.obj.new(Page) orelse return error.NoMemory);
 
@@ -390,13 +386,15 @@ fn buildPage(
 
         new_page.* = .{
             .base = temp_base,
-            .idx = @truncate(temp_idx),
-            .rank = temp_rank
+            .dim = .{
+                .idx = @truncate(temp_idx),
+                .rank = temp_rank
+            },
         };
 
         // Insert new page node after current page.
         if ((comptime !reuse_first) or temp_base != phys_base) {
-            const new_node = new_page.asNode();
+            const new_node = &new_page.node;
 
             if (insert_after)
                 list.first.?.insertAfter(new_node)
@@ -415,6 +413,6 @@ fn freePageList(list: *Page.List, end: ?*Page.Node) void {
         if (n == end) break;
 
         list.first = n.next;
-        vm.obj.free(Page, &n.data);
+        vm.obj.free(Page, Page.fromNode(n));
     }
 }

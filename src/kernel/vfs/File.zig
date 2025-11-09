@@ -29,7 +29,6 @@ pub const Operations = struct {
 
 pub const alloc_config: vm.obj.AllocatorConfig = .{
     .allocator = .safe_oma,
-    .wrapper = .none,
     .capacity = 128,
 };
 

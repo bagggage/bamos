@@ -94,16 +94,13 @@ fn unzip(config: Config) !void {
             try std.fs.cwd().openFile(config.input.?, .{});
     defer zip_file.close();
 
-    const stream = zip_file.seekableStream();
-    const Stream = @TypeOf(stream);
-
-    var iter = try zip.Iterator(Stream).init(stream);
+    var buffer: [512]u8 = undefined;
+    var reader = zip_file.reader(&buffer);
+    var iter = try zip.Iterator.init(&reader);
 
     var filename_buf: [std.fs.max_path_bytes]u8 = undefined;
     while (try iter.next()) |entry| {
-        const crc32 = try entry.extract(stream, .{}, &filename_buf, out_dir);
-        if (crc32 != entry.crc32)
-            return error.ZipCrcMismatch;
+        try entry.extract(&reader, .{}, &filename_buf, out_dir);
 
         const file = try out_dir.openFile(filename_buf[0..entry.filename_len], .{});
         defer file.close();

@@ -17,33 +17,32 @@ const utils = @import("../../utils.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
-const oma_capacity = 128;
-
 const EntryKind = enum {
     directory,
     file
 };
 
 const File = struct {
-    const PageList = utils.SList(u32);
+    const Page = struct {
+        const List = utils.SList;
+        const Node = List.Node;
 
-    var oma = vm.SafeOma(File).init(oma_capacity);
+        base: u32,
+        node: Node = .{},
+    };
 
-    page_list: PageList = .{},
+    pub const alloc_config: vm.obj.AllocatorConfig = .{
+        .allocator = .safe_oma,
+        .capacity = 128
+    };
 
-    pub inline fn new() ?*File {
-        return oma.alloc();
-    }
-
-    pub inline fn free(self: *File) void {
-        oma.free(self);
-    }
+    page_list: Page.List = .{},
 
     pub fn deinit(_: *File) void {}
 
     pub fn delete(self: *File) void {
         self.deinit();
-        self.free();
+        vm.obj.free(File, self);
     }
 };
 
@@ -84,7 +83,8 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     var node = parent.child.first;
 
     while (node) |n| : (node = n.next) {
-        if (std.mem.eql(u8, n.data.name.str(), name)) return &n.data;
+        const dentry = vfs.Dentry.fromNode(n);
+        if (std.mem.eql(u8, dentry.name.str(), name)) return dentry;
     }
 
     return null;

@@ -42,11 +42,7 @@ pub const Descriptor = packed struct {
     rsrvd_1: u32 = 0,
 
     pub fn init(isr_ptr: u64, stack: u3, attr: u8) @This() {
-        var result: @This() = .{
-            .ist = stack,
-            .type_attr = attr,
-            .selector = regs.getCs()
-        };
+        var result: @This() = .{ .ist = stack, .type_attr = attr, .selector = regs.getCs() };
 
         result.offset_1 = @truncate(isr_ptr);
         result.offset_2 = @truncate(isr_ptr >> 16);
@@ -74,11 +70,7 @@ pub const TaskStateSegment = extern struct {
     }
 };
 
-pub const Stack = enum(u3) {
-    kernel = 0x0,
-    nmi = 0x1,
-    double_fault = 0x2
-};
+pub const Stack = enum(u3) { kernel = 0x0, nmi = 0x1, double_fault = 0x2 };
 
 pub var except_handlers: [reserved_vectors]isr.ExceptionFn = undefined;
 
@@ -90,15 +82,9 @@ var irq_stacks: []IrqStack = &.{};
 
 pub fn preinit() void {
     const cpus_num = smp.getNum();
-    const idts_pages = std.math.divCeil(
-        u32, @as(u32, cpus_num) * @sizeOf(DescTable),
-        vm.page_size
-    ) catch unreachable;
+    const idts_pages = std.math.divCeil(u32, @as(u32, cpus_num) * @sizeOf(DescTable), vm.page_size) catch unreachable;
 
-    const tss_pages = std.math.divCeil(
-        u32, cpus_num * @sizeOf(TaskStateSegment),
-        vm.page_size
-    ) catch unreachable;
+    const tss_pages = std.math.divCeil(u32, cpus_num * @sizeOf(TaskStateSegment), vm.page_size) catch unreachable;
 
     const base = boot.alloc(idts_pages + tss_pages) orelse @panic("No memory to allocate IDTs per each cpu");
     const tss_base = base + (vm.page_size * idts_pages);
@@ -130,7 +116,7 @@ pub fn init() !intr.Chip {
             break :blk pic.chip();
         };
 
-        break :blk apic.chip();  
+        break :blk apic.chip();
     };
 }
 
@@ -143,11 +129,7 @@ pub inline fn setupCpu(cpu_idx: u16) void {
 }
 
 pub fn setupIsr(vec: intr.Vector, isr_ptr: isr.Fn, stack: Stack, type_attr: u8) void {
-    idts[vec.cpu][vec.vec] = Descriptor.init(
-        @intFromPtr(isr_ptr),
-        @intFromEnum(stack),
-        type_attr
-    );
+    idts[vec.cpu][vec.vec] = Descriptor.init(@intFromPtr(isr_ptr), @intFromEnum(stack), type_attr);
 }
 
 pub inline fn useIdt(idt: *DescTable) void {
@@ -158,12 +140,12 @@ pub inline fn useIdt(idt: *DescTable) void {
 
 pub inline fn enableForCpu() void {
     @setRuntimeSafety(false);
-    asm volatile("sti");
+    asm volatile ("sti");
 }
 
 pub inline fn disableForCpu() void {
     @setRuntimeSafety(false);
-    asm volatile("cli");
+    asm volatile ("cli");
 }
 
 pub inline fn isEnabledForCpu() bool {
@@ -173,7 +155,7 @@ pub inline fn isEnabledForCpu() bool {
 }
 
 pub inline fn iret() void {
-    asm volatile("iretq");
+    asm volatile ("iretq");
 }
 
 fn initIdts() !void {
@@ -188,11 +170,7 @@ fn initIdts() !void {
 
 fn initTss() !void {
     const cpus_num = smp.getNum();
-    const stacks_pages = std.math.divCeil(
-        u32,
-        @as(u32, cpus_num) * irq_stack_size,
-        vm.page_size
-    ) catch unreachable;
+    const stacks_pages = std.math.divCeil(u32, @as(u32, cpus_num) * irq_stack_size, vm.page_size) catch unreachable;
     const rank = std.math.log2_int_ceil(u32, stacks_pages);
 
     const base = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
@@ -217,14 +195,10 @@ fn initExceptHandlers() void {
     inline for (0..reserved_vectors) |vec| {
         const Handler = isr.ExcpHandler(vec);
 
-        idts[0][vec] = Descriptor.init(
-            @intFromPtr(&Handler.isr),
-            0, trap_gate_flags
-        );
+        idts[0][vec] = Descriptor.init(@intFromPtr(&Handler.isr), 0, trap_gate_flags);
         except_handlers[vec] = switch (vec) {
             isr.page_fault_vec => &isr.pageFaultHandler,
-            else => &isr.commonExcpHandler
+            else => &isr.commonExcpHandler,
         };
     }
 }
-

@@ -34,51 +34,55 @@ pub const PrivilegeLevel = enum(u8) {
 };
 
 pub const WaitQueue = struct {
-    const Entry = struct {
+    pub const QList = utils.SList;
+    pub const QNode = QList.Node;
+
+    pub const Entry = struct {
         task: *Task,
         /// Timestamp of start of wait in nanoseconds.
         timestamp: u64 = 0,
-    };
+        node: QNode = .{},
 
-    const QList = utils.SList(Entry);
-    pub const QNode = QList.Node;
+        pub inline fn init(task: *Task, timestamp: u64) Entry {
+            return .{
+                .task = task,
+                .timestamp = timestamp
+            };
+        }
+
+        inline fn fromNode(node: *QNode) *Entry {
+            return @fieldParentPtr("node", node);
+        }
+    };
 
     list: QList = .{},
 
-    pub inline fn push(self: *WaitQueue, node: *QNode) void {
-        self.list.prepend(node);
+    pub inline fn push(self: *WaitQueue, entry: *Entry) void {
+        self.list.prepend(&entry.node);
     }
 
     pub inline fn pop(self: *WaitQueue) ?*Entry {
         const node = self.list.popFirst() orelse return null;
-        return &node.data;
+        return Entry.fromNode(node);
     }
 
     pub fn remove(self: *WaitQueue, task: *Task) ?*Entry {
         var prev: ?*QNode = null;
         var node = self.list.first;
         while (node) |n| : ({ prev = n; node = n.next; }) {
-            if (n.data.task == task) {
+            const entry = Entry.fromNode(n);
+            if (entry.task == task) {
                 if (prev) |p| {
                     _ = p.removeNext();
                 } else {
                     self.list.first = n.next;
                 }
 
-                return &n.data;
+                return entry;
             }
         }
 
         return null;
-    }
-
-    pub inline fn initEntry(task: *Task, timestamp: u64) QNode {
-        return .{
-            .data = .{
-                .task = task,
-                .timestamp = timestamp
-            }  
-        };
     }
 };
 

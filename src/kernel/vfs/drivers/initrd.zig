@@ -10,7 +10,7 @@ const log = std.log.scoped(.initrd);
 const utils = @import("../../utils.zig");
 const vfs = @import("../../vfs.zig");
 
-const TarIterator = tar.Iterator(std.io.StreamSource.Reader);
+const TarIterator = tar.Iterator;
 const TarFile = TarIterator.File;
 
 /// A struct that is exactly 512 bytes and matches tar file format. This is
@@ -112,13 +112,8 @@ pub fn deinit() void {
     vfs.unregisterFs(&fs);
 }
 
-inline fn getStream() std.io.StreamSource {
-    return .{
-        .const_buffer = std.io.FixedBufferStream([]const u8) {
-            .buffer = initrd,
-            .pos = 0
-        }
-    };
+inline fn getStream() std.Io.Reader {
+    return .fixed(initrd);
 }
 
 fn mount() vfs.Error!vfs.Context.Virt {
@@ -143,10 +138,10 @@ fn mount() vfs.Error!vfs.Context.Virt {
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     const offset = parent.inode.index;
 
-    var stream = getStream();
-    stream.seekTo(offset) catch unreachable;
+    var reader = getStream();
+    reader.seek = offset;
 
-    var tar_iter = tar.iterator(stream.reader(), .{
+    var tar_iter = tar.Iterator.init(&reader, .{
         .file_name_buffer = &file_name,
         .link_name_buffer = &link_name
     });
@@ -187,7 +182,7 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
             const inode = vfs.Inode.new() orelse return error.NoMemory;
             errdefer inode.free();
 
-            setupInode(inode, &file, tar_iter.reader.context.getPos() catch unreachable);
+            setupInode(inode, &file, tar_iter.reader.seek);
             try dentry.setup(entry_name, parent.ctx, inode, &fs.dentry_ops);
 
             return dentry;

@@ -18,9 +18,7 @@ const vm = @import("../vm.zig");
 
 const Dentry = @This();
 
-const oma_capacity = 512;
-
-pub const List = utils.SList(Dentry);
+pub const List = utils.SList;
 pub const Node = List.Node;
 
 pub const Operations = struct {
@@ -108,14 +106,20 @@ inode: *Inode,
 ops: *const Operations = &Operations.default.ops,
 
 child: List = .{},
+node: Node = .{},
+
+cache_ent: lookup_cache.Entry = .{},
 
 ref_count: utils.RefCount(u32) = .{},
 lock: utils.Spinlock = .{},
 
-pub var oma = vm.SafeOma(lookup_cache.Entry).init(oma_capacity);
+pub const alloc_config: vm.obj.AllocatorConfig = .{
+    .allocator = .safe_oma,
+    .capacity = 512
+};
 
 pub inline fn new() ?*Dentry {
-    const dentry = &(oma.alloc() orelse return null).data.value.data;
+    const dentry = vm.obj.new(Dentry) orelse return null;
     dentry.* = .{
         .name = undefined,
         .parent = undefined,
@@ -127,16 +131,15 @@ pub inline fn new() ?*Dentry {
 }
 
 pub inline fn free(self: *Dentry) void {
-    oma.free(self.getCacheEntry());
+    vm.obj.free(Dentry, self);
 }
 
-pub inline fn getNode(self: *Dentry) *Node {
-    return @fieldParentPtr("data", self);
+pub inline fn fromNode(node: *Node) *Dentry {
+    return @fieldParentPtr("node", node);
 }
 
-pub inline fn getCacheEntry(self: *Dentry) *lookup_cache.Entry {
-    const entry: *lookup_cache.Entry.Data = @fieldParentPtr("value", self.getNode());
-    return @fieldParentPtr("data", entry);
+pub inline fn fromCache(entry: *lookup_cache.Entry) *Dentry {
+    return @fieldParentPtr("cache_ent", entry);
 }
 
 pub inline fn getSuper(self: *Dentry) *Superblock {
@@ -252,7 +255,7 @@ pub fn addChild(self: *Dentry, child: *Dentry) void {
     self.ref();
 
     child.parent = self;
-    self.child.prepend(child.getNode());
+    self.child.prepend(&child.node);
 }
 
 pub fn removeChild(self: *Dentry, child: *Dentry) void {
@@ -261,12 +264,12 @@ pub fn removeChild(self: *Dentry, child: *Dentry) void {
     if (self.ref_count.put()) {
         self.delete();
     } else {
-        self.child.remove(child.getNode());
+        self.child.remove(&child.node);
     }
 }
 
 pub inline fn path(self: *const Dentry) Path {
-    return Path{ .dentry = self };
+    return .{ .dentry = self };
 }
 
 pub inline fn assignInode(self: *Dentry, inode: *Inode) void {

@@ -21,7 +21,6 @@ pub const MapUnit = @import("MapUnit.zig");
 pub const alloc_config: vm.obj.AllocatorConfig = .{
     .allocator = .safe_oma,
     .capacity = 128,
-    .wrapper = .none
 };
 
 page_table: *vm.PageTable,
@@ -57,8 +56,10 @@ pub fn create(stack_pages: u16) !*Self {
 
 pub fn deinit(self: *Self) void {
     while (self.map_units.popFirst()) |n| {
-        n.data.deinit();
-        vm.obj.free(MapUnit, &n.data);
+        const map_unit = MapUnit.fromNode(n);
+
+        map_unit.deinit();
+        vm.obj.free(MapUnit, map_unit);
     }
 
     vm.freePt(self.page_table);
@@ -135,7 +136,7 @@ pub fn map(self: *Self, map_unit: *MapUnit) !void {
         }
     }
 
-    self.map_units.prepend(map_unit.asNode());
+    self.map_units.prepend(&map_unit.node);
 }
 
 pub fn pageFault(self: *Self, addr: usize, cause: vm.FaultCause) !void {
@@ -242,14 +243,14 @@ fn divideMapping(self: *Self, map_unit: *MapUnit, div_unit: *MapUnit) !void {
     const pg_off = map_unit.page_capacity - new_pg_size;
     try map_unit.reinsertRegion(new_unit, pg_off, new_pg_size);
 
-    self.map_units.prepend(new_unit.asNode());
+    self.map_units.prepend(&new_unit.node);
     _ = self.rb_tree.insert(&new_unit.rb_node);
 }
 
 fn replaceMapping(self: *Self, old: *MapUnit, new: *MapUnit) void {
     self.rb_tree.replace(&old.rb_node, &new.rb_node);
 
-    self.map_units.remove(old.asNode());
+    self.map_units.remove(&old.node);
     old.unmap(self.page_table);
 
     vm.obj.delete(MapUnit, old);
@@ -257,7 +258,7 @@ fn replaceMapping(self: *Self, old: *MapUnit, new: *MapUnit) void {
 
 fn deleteMapping(self: *Self, map_unit: *MapUnit) void {
     self.rb_tree.remove(&map_unit.rb_node);
-    self.map_units.remove(map_unit.asNode());
+    self.map_units.remove(&map_unit.node);
     map_unit.unmap(self.page_table);
 
     vm.obj.delete(MapUnit, map_unit);

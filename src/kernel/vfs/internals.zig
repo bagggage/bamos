@@ -45,17 +45,17 @@ pub const dentry_ops = opaque {
 
     pub const debug = opaque {
         pub fn lookup(dentry: *const Dentry, _: []const u8) ?*Dentry {
-            std.log.warn("{}: 'lookup' is not implemented", .{dentry.path()});
+            std.log.warn("{f}: 'lookup' is not implemented", .{dentry.path()});
             return null;
         }
 
         pub fn makeDirectory(dentry: *const Dentry, _: *Dentry) Error!void {
-            std.log.warn("{}: 'makeDirectory' is not implemented", .{dentry.path()});
+            std.log.warn("{f}: 'makeDirectory' is not implemented", .{dentry.path()});
             return error.BadOperation;
         }
 
         pub fn createFile(dentry: *const Dentry, _: *Dentry) Error!void {
-            std.log.warn("{}: 'createFile' is not implemented", .{dentry.path()});
+            std.log.warn("{f}: 'createFile' is not implemented", .{dentry.path()});
             return error.BadOperation;
         }
 
@@ -64,12 +64,12 @@ pub const dentry_ops = opaque {
         }
 
         pub fn open(dentry: *const Dentry, _: *File) Error!void {
-            std.log.warn("{}: 'open' is not implemented", .{dentry.path()});
+            std.log.warn("{f}: 'open' is not implemented", .{dentry.path()});
             return error.BadOperation;
         }
 
         pub fn close(dentry: *const Dentry, _: *File) void {
-            std.log.warn("{}: 'close' is not implemented", .{dentry.path()});
+            std.log.warn("{f}: 'close' is not implemented", .{dentry.path()});
         }
 
         pub const ops: Dentry.Operations = .{

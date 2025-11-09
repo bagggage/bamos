@@ -78,7 +78,7 @@ pub inline fn getObject() *Clock {
 fn initDevice(self: *const dev.Driver) !void {
     regs = try RtcRegs.init();
 
-    device = try self.addDevice(dev.nameOf(device_name), null);
+    device = try self.addDevice(dev.Name.init(device_name), null);
     errdefer dev.removeDevice(device);
 
     clock = try dev.obj.new(Clock);

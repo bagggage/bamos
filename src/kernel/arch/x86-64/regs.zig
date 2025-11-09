@@ -1,6 +1,6 @@
 //! # x86-64 Registers
-//! 
-//! Provides access to various x86-64 CPU registers, Global/Interrupt Descriptor Tables (GDT/IDT). 
+//!
+//! Provides access to various x86-64 CPU registers, Global/Interrupt Descriptor Tables (GDT/IDT).
 //! It includes functions for reading/writing MSRs and saving/restoring CPU state.
 
 // Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
@@ -26,7 +26,7 @@ pub const IDTR = packed struct {
     base: u64 = undefined,
 
     pub fn format(self: *const IDTR, _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("base = 0x{x}, limit = {}", .{self.base,self.limit});
+        try writer.print("base = 0x{x}, limit = {}", .{ self.base, self.limit });
     }
 };
 
@@ -48,32 +48,7 @@ pub const EFER = packed struct {
     reserved_3: u48,
 };
 
-pub const Flags = packed struct {
-    carry: bool = false,
-    reserved_1: u1 = 1,
-    parity: bool = false,
-    reserved_2: u1 = 1,
-    aux_carry: bool = false,
-    reserved_3: u1 = 1,
-    zero: bool = false,
-    sign: bool = false,
-    trap: bool = false,
-    intr_enable: bool = false,
-    direction: bool = false,
-    overflow: bool = false,
-    io_privilege: u2 = undefined,
-    nested_task: u1 = undefined,
-    reserved_4: u1 = 0,
-    @"resume": bool = false,
-    virt_mode: bool = false,
-    align_check: bool = false,
-    virt_intr: bool = false,
-    virt_intr_pending: bool = false,
-    cpuid: bool = true,
-    reserved_5: u8 = 0,
-    aes: bool = false,
-    alt_instr_set: bool = false
-};
+pub const Flags = packed struct { carry: bool = false, reserved_1: u1 = 1, parity: bool = false, reserved_2: u1 = 1, aux_carry: bool = false, reserved_3: u1 = 1, zero: bool = false, sign: bool = false, trap: bool = false, intr_enable: bool = false, direction: bool = false, overflow: bool = false, io_privilege: u2 = undefined, nested_task: u1 = undefined, reserved_4: u1 = 0, @"resume": bool = false, virt_mode: bool = false, align_check: bool = false, virt_intr: bool = false, virt_intr_pending: bool = false, cpuid: bool = true, reserved_5: u8 = 0, aes: bool = false, alt_instr_set: bool = false };
 
 pub const ScratchRegs = extern struct {
     rax: u64 = 0,
@@ -87,14 +62,7 @@ pub const ScratchRegs = extern struct {
     r11: u64 = 0,
 };
 
-pub const CalleeRegs = extern struct {
-    rbx: u64 = 0,
-    rbp: u64 = 0,
-    r12: u64 = 0,
-    r13: u64 = 0,
-    r14: u64 = 0,
-    r15: u64 = 0
-};
+pub const CalleeRegs = extern struct { rbx: u64 = 0, rbp: u64 = 0, r12: u64 = 0, r13: u64 = 0, r14: u64 = 0, r15: u64 = 0 };
 
 pub const State = extern struct {
     callee: CalleeRegs,
@@ -103,15 +71,9 @@ pub const State = extern struct {
 
 /// Stack frame that is automatically pushed
 /// when a hardware interrupt occurs.
-pub const InterruptFrame = extern struct {
-    rip: u64 = 0,
-    cs: u64 = 0,
-    rflags: u64 = 0,
-    rsp: u64 = 0,
-    ss: u64 = 0
-};
+pub const InterruptFrame = extern struct { rip: u64 = 0, cs: u64 = 0, rflags: u64 = 0, rsp: u64 = 0, ss: u64 = 0 };
 
-/// Represents the full state of the CPU during an interrupt, including the 
+/// Represents the full state of the CPU during an interrupt, including the
 /// callee-saved registers, scratch registers, and the interrupt frame.
 pub const IntrState = extern struct {
     callee: CalleeRegs = .{},
@@ -132,7 +94,7 @@ pub const LowLevelIntrState = extern struct {
 };
 
 /// Read Model-Specific Register.
-/// 
+///
 /// - `msr_addr`: The address of the MSR to read.
 /// - Returns: The value of the MSR.
 pub inline fn getMsr(msr_addr: u32) u64 {
@@ -149,7 +111,7 @@ pub inline fn getMsr(msr_addr: u32) u64 {
 }
 
 /// Write Model-Specific Register.
-/// 
+///
 /// - `msr_addr`: The address of the MSR to write.
 /// - `value`: The value to write to the MSR.
 pub inline fn setMsr(msr_addr: u32, value: u64) void {
@@ -226,7 +188,8 @@ pub inline fn getCs() u16 {
 
 pub inline fn setGs(selector: u16) void {
     asm volatile ("mov %[res],%%gs"
-        :: [res] "r" (selector),
+        :
+        : [res] "r" (selector),
     );
 }
 
@@ -238,42 +201,36 @@ pub inline fn getSs() u16 {
 
 pub inline fn setSs(selector: u16) void {
     asm volatile ("mov %[res],%%ss"
-        :: [res] "r" (selector),
+        :
+        : [res] "r" (selector),
     );
 }
 
 pub inline fn getFlags() Flags {
-    return asm volatile(
+    return asm volatile (
         \\pushfq
         \\pop %rax
-        : [out] "={rax}" (-> Flags)
+        : [out] "={rax}" (-> Flags),
         :
-        : "memory"
+        : .{ .memory = true }
     );
 }
 
 pub inline fn swapgs() void {
-    asm volatile("swapgs");
+    asm volatile ("swapgs");
 }
 
 pub inline fn swapStackToKernel() void {
-    asm volatile(std.fmt.comptimePrint(
-        \\ movq %rsp, %gs:{}
-        \\ movq %gs:{}, %rsp
-        , .{
-            @offsetOf(smp.LocalData, "current_sp"),
-            @offsetOf(smp.LocalData, "kernel_sp")
-        }
-    ));
+    asm volatile (std.fmt.comptimePrint(
+            \\ movq %rsp, %gs:{}
+            \\ movq %gs:{}, %rsp
+        , .{ @offsetOf(smp.LocalData, "current_sp"), @offsetOf(smp.LocalData, "kernel_sp") }));
 }
 
 pub inline fn swapStackToUser() void {
-    asm volatile(std.fmt.comptimePrint(
-        \\ movq %gs:{}, %rsp
-        , .{
-            @offsetOf(smp.LocalData, "current_sp")
-        }
-    ));
+    asm volatile (std.fmt.comptimePrint(
+            \\ movq %gs:{}, %rsp
+        , .{@offsetOf(smp.LocalData, "current_sp")}));
 }
 
 pub inline fn saveCallerRegs() void {
@@ -347,31 +304,31 @@ pub inline fn getStack() usize {
 
 pub inline fn setStack(stack: usize) void {
     asm volatile ("mov %[res],%%rsp"
-        :: [res] "r" (stack),
+        :
+        : [res] "r" (stack),
     );
 }
 
 pub inline fn getIdtr() IDTR {
     var idtr: IDTR = undefined;
-    asm volatile (
-        "sidt %[reg]"
-        :[reg] "=memory" (idtr)
+    asm volatile ("sidt %[reg]"
+        : [reg] "=memory" (idtr),
     );
 
     return idtr;
 }
 
 pub inline fn setIdtr(idtr: IDTR) void {
-    asm volatile (
-        "lidt %[reg]"
-        ::[reg] "memory" (idtr),
+    asm volatile ("lidt %[reg]"
+        :
+        : [reg] "memory" (idtr),
     );
 }
 
 pub inline fn setTss(tss: u16) void {
-    asm volatile (
-        "ltr %[seg]"
-        ::[seg] "r" (tss)
+    asm volatile ("ltr %[seg]"
+        :
+        : [seg] "r" (tss),
     );
 }
 
@@ -379,21 +336,24 @@ pub inline fn getTsc() u64 {
     var hi: u32 = undefined;
     var lo: u32 = undefined;
 
-    asm volatile ("rdtsc" : [hi]"={edx}"(hi),[lo]"={eax}"(lo));
+    asm volatile ("rdtsc"
+        : [hi] "={edx}" (hi),
+          [lo] "={eax}" (lo),
+    );
 
     return (@as(u64, hi) << 32) | lo;
 }
 
 pub inline fn stackAlloc(comptime items_num: comptime_int) void {
-    asm volatile (
-        "sub %[size],%rsp"
-        ::[size] "i" (items_num * @sizeOf(usize))
+    asm volatile ("sub %[size],%rsp"
+        :
+        : [size] "i" (items_num * @sizeOf(usize)),
     );
 }
 
 pub inline fn stackFree(comptime items_num: comptime_int) void {
-    asm volatile (
-        "add %[size],%rsp"
-        ::[size] "i" (items_num * @sizeOf(usize))
+    asm volatile ("add %[size],%rsp"
+        :
+        : [size] "i" (items_num * @sizeOf(usize)),
     );
 }

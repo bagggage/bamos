@@ -44,7 +44,7 @@ pub fn init() !void {
     try evalTimerFrequency();
 
     const device = try dev.getKernelDriver()
-        .addDevice(dev.nameOf(device_name), null);
+        .addDevice(dev.Name.init(device_name), null);
     errdefer dev.removeDevice(device);
 
     timer.init(

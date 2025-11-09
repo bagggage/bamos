@@ -26,10 +26,21 @@ fn EnumParser(comptime T: type) type {
     };
 }
 
-const Map = utils.AutoHashTable([]const u8, []const u8);
+const Map = utils.AutoHashTable([]const u8);
+const Value = struct {
+    pub const alloc_config: vm.obj.AllocatorConfig = .{
+        .allocator = .oma
+    };
+
+    string: []const u8 = &.{},
+    map_ent: Map.Entry = .{},
+
+    inline fn fromEntry(entry: *Map.Entry) *Value {
+        return @fieldParentPtr("map_ent", entry);
+    }
+};
 
 var map: Map = undefined;
-var oma: vm.ObjectAllocator = .init(Map.EntryNode);
 
 var env: []const u8 = undefined;
 
@@ -42,7 +53,7 @@ pub fn init() !void {
 }
 
 pub inline fn get(key: []const u8) ?[]const u8 {
-    return (map.get(key) orelse return null).*;
+    return Value.fromEntry(map.get(key) orelse return null).string;
 }
 
 pub fn getAs(comptime T: type, key: []const u8) ?T {
@@ -245,10 +256,8 @@ fn parseBool(value: []const u8) !bool {
 }
 
 fn put(key: []const u8, value: []const u8) !void {
-    const ent = oma.alloc(Map.EntryNode) orelse return error.NoMemory;
-    ent.* = .{
-        .data = .{ .value = value }
-    };
+    const val = vm.obj.new(Value) orelse return error.NoMemory;
+    val.* = .{ .string = value };
 
-    map.insert(key, ent);
+    map.insert(key, &val.map_ent);
 }

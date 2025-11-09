@@ -85,7 +85,8 @@ pub const kernel_ss: SegmentSelector = .{
     .rpl = .kernel
 };
 
-var gdt = std.BoundedArray(SegmentDescriptor, max_entries).init(0) catch unreachable;
+var gdt_buffer: [max_entries]SegmentDescriptor = undefined;
+var gdt: std.ArrayList(SegmentDescriptor) = .initBuffer(&gdt_buffer);
 var tss_base_idx: usize = 0;
 
 pub fn init() void {
@@ -99,17 +100,17 @@ pub fn init() void {
 
     // Copy first entries
     for (src_gdt) |segment| {
-        gdt.append(segment) catch unreachable;
+        gdt.appendBounded(segment) catch unreachable;
     }
 
     // Fill with zeros other entries
-    @memset(gdt.buffer[src_gdt.len..], std.mem.zeroes(SegmentDescriptor));
+    @memset(gdt.items[src_gdt.len..], std.mem.zeroes(SegmentDescriptor));
 }
 
 pub fn addTss(tss: *const intr.TaskStateSegment) !void {
-    const descriptor: *align(8) SystemSegmentDescriptor = @ptrCast(try gdt.addOne());
+    const descriptor: *align(8) SystemSegmentDescriptor = @ptrCast(try gdt.addOneBounded());
 
-    _ = try gdt.addOne();
+    _ = try gdt.addOneBounded();
 
     descriptor.* = SystemSegmentDescriptor.init(
         @intFromPtr(tss),
@@ -125,7 +126,7 @@ pub inline fn getTssOffset(idx: u16) u16 {
 
 pub inline fn setupCpu() void {
     regs.setGdtr(.{
-        .base = @intFromPtr(&gdt.buffer),
-        .limit = @as(u16, gdt.buffer.len) * @sizeOf(SegmentDescriptor)
+        .base = @intFromPtr(&gdt_buffer),
+        .limit = @as(u16, @truncate(gdt_buffer.len)) * @sizeOf(SegmentDescriptor)
     });
 }

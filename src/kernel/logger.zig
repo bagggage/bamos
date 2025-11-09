@@ -19,65 +19,82 @@ const video = @import("video.zig");
 const Spinlock = utils.Spinlock;
 
 const EarlyWriter = struct {
-    const buffer_size = arch.vm.page_size;
-    const Stream = std.io.FixedBufferStream([buffer_size]u8);
-
-    var stream: Stream = .{
-        .buffer = .{ 0 } ** buffer_size,
-        .pos = 0
+    const vtable: std.io.Writer.VTable = .{
+        .drain = drain,
     };
-    var buf_writer = stream.writer();
 
-    fn setup() std.io.AnyWriter {
-        return .{
-            .context = undefined,
-            .writeFn = write
-        };
+    var buf_writer: std.io.Writer = .fixed(&log_buffer);
+
+    fn setup() std.io.Writer {
+        return .{ .buffer = &.{}, .vtable = &vtable };
     }
 
     fn getPrinted() []const u8 {
-        return stream.buffer[0..stream.pos];
+        return log_buffer[0..buf_writer.end];
     }
 
-    fn write(_: *const anyopaque, bytes: []const u8) anyerror!usize {
-        serial.write(bytes);
-        return buf_writer.write(bytes);
+    fn drain(writer: *std.io.Writer, data: []const []const u8, _: usize) std.io.Writer.Error!usize {
+        const slice = writer.buffer[0..writer.end];
+
+        serial.write(slice);
+        _ = buf_writer.write(slice) catch { buf_writer.end = 0; };
+        writer.end = 0;
+
+        var bytes: usize = 0;
+        for (data) |d| {
+            serial.write(d);
+            _ = buf_writer.write(d) catch { buf_writer.end = 0; };
+
+            bytes += d.len;
+        }
+
+        return bytes;
     }
 };
 
 const KernelWriter = struct {
-    fn setup() std.io.AnyWriter {
+    var vtable: std.io.Writer.VTable = .{
+        .drain = drainBoth,
+    };
+
+    fn setup(buffer: []u8) std.io.Writer {
         const early_logs = EarlyWriter.getPrinted();
 
         if (terminal.isInitialized()) {
             terminal.write(early_logs);
-            return .{
-                .context = undefined,
-                .writeFn = writeBoth
-            };
+        } else {
+            vtable.drain = drainSerial;
         }
 
-        return .{
-            .context = undefined,
-            .writeFn = writeSerial
-        };
+        return .{ .buffer = buffer, .vtable = &vtable};
     }
 
-    fn writeBoth(_: *const anyopaque, bytes: []const u8) anyerror!usize {
-        serial.write(bytes);
-        terminal.write(bytes);
+    fn drainBoth(writer: *std.io.Writer, data: []const []const u8, _: usize) std.io.Writer.Error!usize {
+        defer writer.end = 0;
 
-        return bytes.len;
+        var bytes: usize = 0;
+        serial.write(writer.buffer[0..writer.end]);
+        for (data) |d| serial.write(d);
+
+        terminal.write(writer.buffer[0..writer.end]);
+        for (data) |d| { terminal.write(d); bytes += d.len; }
+
+        return bytes;
     }
 
-    fn writeSerial(_: *const anyopaque, bytes: []const u8) anyerror!usize {
-        serial.write(bytes);
-        return bytes.len;
+    fn drainSerial(writer: *std.io.Writer, data: []const []const u8, _: usize) std.io.Writer.Error!usize {
+        defer writer.end = 0;
+
+        var bytes: usize = 0;
+        serial.write(writer.buffer[0..writer.end]);
+        for (data) |d| { serial.write(d); bytes += d.len; }
+
+        return bytes;
     }
 };
 
 pub const new_line = "\r\n";
-pub var writer: std.io.AnyWriter = EarlyWriter.setup();
+pub var log_writer: std.io.Writer = EarlyWriter.setup();
 
 const tty_config: std.io.tty.Config = .escape_codes;
 
@@ -86,8 +103,10 @@ var lock = Spinlock.init(.unlocked);
 var lock_owner: u16 = undefined;
 var double_lock = false;
 
+var log_buffer: [arch.vm.page_size]u8 = undefined;
+
 pub fn switchFromEarly() void {
-    writer = KernelWriter.setup();
+    log_writer = KernelWriter.setup(&log_buffer);
 }
 
 pub fn capture() void {
@@ -111,6 +130,10 @@ pub fn release() void {
     lock.unlock();
 }
 
+pub inline fn flush() !void {
+    try log_writer.flush();
+}
+
 // @export
 pub fn defaultLog(
     comptime level: std.log.Level,
@@ -128,10 +151,10 @@ pub fn defaultLog(
         format,
         args
     ) catch |erro| {
-        tty_config.setColor(writer, .bright_red) catch {};
+        tty_config.setColor(&log_writer, .bright_red) catch {};
 
-        writer.print("<LOGGER ERROR>: {s}", .{@errorName(erro)}) catch {
-            writer.writeAll("<LOGGER PANIC>") catch {};
+        log_writer.print("<LOGGER ERROR>: {s}", .{@errorName(erro)}) catch {
+            log_writer.writeAll("<LOGGER PANIC>") catch {};
         };
     };
 }
@@ -142,10 +165,7 @@ inline fn logFmtPrint(
     comptime format: []const u8,
     args: anytype
 ) !void {
-    const raw_prefix = "{raw-log}";
-    const raw_log = comptime std.mem.startsWith(u8, format, raw_prefix);
     const level_str = levelToString(level);
-
     const color: std.io.tty.Color = switch (level) {
         .info => .reset,
         .debug => .bright_black,
@@ -153,16 +173,15 @@ inline fn logFmtPrint(
         .err => .bright_red
     };
 
-    try tty_config.setColor(writer, color);
-
-    if (!raw_log) try writer.print("{us} [{s}] ", .{sys.time.getUpTime(),level_str});
+    try tty_config.setColor(&log_writer, color);
+    try log_writer.print("{f} [{s}] ", .{ std.fmt.alt(sys.time.getUpTime(), .formatUs), level_str });
 
     if (scope != std.log.default_log_scope) {
-        try writer.writeAll(@tagName(scope)++": ");
+        try log_writer.writeAll(@tagName(scope) ++ ": ");
     }
 
-    const fmt = if (comptime raw_log) format[raw_prefix.len..] else format;
-    try writer.print(fmt ++ new_line, args);
+    try log_writer.print(format ++ new_line, args);
+    if (level == .err) try log_writer.flush();
 }
 
 inline fn levelToString(comptime level: std.log.Level) []const u8 {

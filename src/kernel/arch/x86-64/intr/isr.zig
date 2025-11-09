@@ -15,7 +15,7 @@ const smp = @import("../../../smp.zig");
 const utils = @import("../../../utils.zig");
 const vm = @import("../../../vm.zig");
 
-pub const Fn = *const fn() callconv(.naked) noreturn;
+pub const Fn = *const fn () callconv(.naked) noreturn;
 pub const ExceptionFn = @TypeOf(&commonExcpHandler);
 
 pub const page_fault_vec = 14;
@@ -25,76 +25,75 @@ const isrEntryName = "isr.entry";
 const isrErrorEntryName = "isr.entryError";
 const isrExitName = "isr.exit";
 
-fn IsrHelper(comptime has_error_code: bool) type { return opaque {
-    /// Enter into interrupt context.
-    pub fn entry() callconv(.naked) void {
-        // Check if interrupt received from userspace (CS == 0b11).
-        // `cs` offset: 8-bytes.
-        if (comptime has_error_code) {
-            asm volatile("testb $3, 0x18(%rsp)");
-        } else {
-            asm volatile("testb $3, 0x10(%rsp)");
+fn IsrHelper(comptime has_error_code: bool) type {
+    return opaque {
+        /// Enter into interrupt context.
+        pub fn entry() callconv(.naked) void {
+            // Check if interrupt received from userspace (CS == 0b11).
+            // `cs` offset: 8-bytes.
+            if (comptime has_error_code) {
+                asm volatile ("testb $3, 0x18(%rsp)");
+            } else {
+                asm volatile ("testb $3, 0x10(%rsp)");
+            }
+
+            // Jump to `entryFromKernel`
+            asm volatile ("jz 1f");
+
+            // Entry from userspace.
+            {
+                regs.swapgs();
+                regs.swapStackToKernel();
+
+                regs.saveScratchRegs();
+
+                // Put user stack pointer into `rdi`
+                // Do return using `jmp`.
+                asm volatile (std.fmt.comptimePrint(
+                        \\ mov %gs:{}, %rdi
+                        \\ jmp *(%rdi)
+                    , .{@offsetOf(smp.LocalData, "current_sp")}));
+            }
+
+            // Entry from kernel.
+            {
+                asm volatile ("1:");
+
+                regs.saveScratchRegs();
+                const frame_offset = comptime @sizeOf(regs.ScratchRegs);
+
+                // Align stack.
+                regs.stackAlloc(1);
+
+                // Do return using `jmp` to return address.
+                asm volatile (std.fmt.comptimePrint(
+                        \\ jmp *{}(%rsp)
+                    , .{frame_offset + @sizeOf(u64)}));
+            }
         }
 
-        // Jump to `entryFromKernel`
-        asm volatile("jz 1f");
+        pub fn exit() callconv(.naked) void {
+            regs.stackFree(1);
+            regs.restoreScratchRegs();
 
-        // Entry from userspace.
-        {
+            asm volatile (
+                \\ test %rsp, %rsp
+                \\ js 1f
+            );
+
+            // Exit from userspace.
+            regs.swapStackToUser();
             regs.swapgs();
-            regs.swapStackToKernel();
 
-            regs.saveScratchRegs();
+            arch.intr.iret();
 
-            // Put user stack pointer into `rdi` 
-            // Do return using `jmp`.
-            asm volatile(std.fmt.comptimePrint(
-                \\ mov %gs:{}, %rdi
-                \\ jmp *(%rdi)
-                , .{@offsetOf(smp.LocalData, "current_sp")}
-            ));
+            // Exit from kernel.
+            asm volatile ("1:");
+
+            regs.stackFree(1);
+            arch.intr.iret();
         }
-
-        // Entry from kernel.
-        {
-            asm volatile("1:");
-            
-            regs.saveScratchRegs();
-            const frame_offset = comptime @sizeOf(regs.ScratchRegs);
-
-            // Align stack.
-            regs.stackAlloc(1);
-
-            // Do return using `jmp` to return address.
-            asm volatile(std.fmt.comptimePrint(
-                \\ jmp *{}(%rsp)
-                , .{frame_offset + @sizeOf(u64)}
-            ));
-        }
-    }
-
-    pub fn exit() callconv(.naked) void {
-        regs.stackFree(1);
-        regs.restoreScratchRegs();
-
-        asm volatile(
-            \\ test %rsp, %rsp
-            \\ js 1f
-        );
-
-        // Exit from userspace.
-        regs.swapStackToUser();
-        regs.swapgs();
-
-        arch.intr.iret();
-
-        // Exit from kernel.
-        asm volatile("1:");
-
-        regs.stackFree(1);
-        arch.intr.iret();
-    }
-};
+    };
 }
 
 const excp_state_size = @sizeOf(regs.State);
@@ -106,10 +105,10 @@ export fn excpHandlerCaller() callconv(.naked) noreturn {
     @setRuntimeSafety(false);
     // Check if interrupt received from userspace (CS == 0b11).
     // `cs` offset: 8-bytes.
-    asm volatile("testb $3, 0x8(%rsp)");
+    asm volatile ("testb $3, 0x8(%rsp)");
 
     // Jump to `entryFromKernel`
-    asm volatile("jz 0f");
+    asm volatile ("jz 0f");
 
     // Entry from userspace.
     {
@@ -125,23 +124,19 @@ export fn excpHandlerCaller() callconv(.naked) noreturn {
 
         // Put user stack pointer into `rdi` and
         // move arguments from old stack.
-        asm volatile(std.fmt.comptimePrint(
-            \\ mov %gs:{}, %rdi
-            \\ mov %rsp, %rsi
-            \\ mov -{}(%rdi), %rdx
-            \\ mov -{}(%rdi), %rcx
-            , .{
-                @offsetOf(smp.LocalData, "current_sp"),
-                excp_vec_offset, excp_err_offset
-            }
-        ));
+        asm volatile (std.fmt.comptimePrint(
+                \\ mov %gs:{}, %rdi
+                \\ mov %rsp, %rsi
+                \\ mov -{}(%rdi), %rdx
+                \\ mov -{}(%rdi), %rcx
+            , .{ @offsetOf(smp.LocalData, "current_sp"), excp_vec_offset, excp_err_offset }));
 
         callExcpHandler(@sizeOf(regs.State));
     }
 
     // Entry from kernel.
     {
-        asm volatile("0:");
+        asm volatile ("0:");
         defer arch.intr.iret();
 
         regs.saveState();
@@ -149,13 +144,12 @@ export fn excpHandlerCaller() callconv(.naked) noreturn {
 
         // Move error code(-0x8) into %rcx and
         // exception vector(-0x10) into %rdx.
-        asm volatile(std.fmt.comptimePrint(
-            \\ lea {}(%rsp), %rdi
-            \\ mov %rsp, %rsi
-            \\ mov -0x8(%rsp), %rcx
-            \\ mov -0x10(%rsp), %rdx
-            , .{excp_state_size}
-        ));
+        asm volatile (std.fmt.comptimePrint(
+                \\ lea {}(%rsp), %rdi
+                \\ mov %rsp, %rsi
+                \\ mov -0x8(%rsp), %rcx
+                \\ mov -0x10(%rsp), %rdx
+            , .{excp_state_size}));
 
         callExcpHandler(excp_state_size + @sizeOf(regs.InterruptFrame));
     }
@@ -170,10 +164,11 @@ inline fn callExcpHandler(comptime frame_size: comptime_int) void {
 
     // Load handler table pointer to %rax
     // and do call: table[vec](%rdi, %rsi, %rdx, %rcx).
-    asm volatile(
+    asm volatile (
         \\ mov %[table], %rax
         \\ call *(%rax,%rdx,8)
-         :: [table] "i" (&arch.intr.except_handlers),
+        :
+        : [table] "i" (&arch.intr.except_handlers),
     );
 }
 
@@ -182,16 +177,16 @@ pub fn ExcpHandler(vec: comptime_int) type {
         fn hasErrorCode() bool {
             return switch (vec) {
                 8, 10, 11, 12, 13, 14, 17, 21 => true,
-                else => false 
+                else => false,
             };
         }
 
-        pub fn isr() callconv(.Naked) noreturn {
+        pub fn isr() callconv(.naked) noreturn {
             // Put error code on the stack.
             const instr = if (comptime hasErrorCode()) "pop -{}(%%rsp)" else "movq $0,-{}(%%rsp)";
-            asm volatile(std.fmt.comptimePrint(instr, .{excp_err_offset}));
+            asm volatile (std.fmt.comptimePrint(instr, .{excp_err_offset}));
 
-            asm volatile(std.fmt.comptimePrint(
+            asm volatile (std.fmt.comptimePrint(
                     \\movq %[vec],-{}(%%rsp)
                     \\jmp excpHandlerCaller
                 , .{excp_vec_offset})
@@ -202,14 +197,8 @@ pub fn ExcpHandler(vec: comptime_int) type {
     };
 }
 
-pub fn commonExcpHandler(
-    frame: *regs.InterruptFrame, state: *regs.State,
-    vec: u32, error_code: u32
-) callconv(.c) void {
-    panic.exception(
-        frame.rip,
-        frame.rsp,
-        state.callee.rbp,
+pub fn commonExcpHandler(frame: *regs.InterruptFrame, state: *regs.State, vec: u32, error_code: u32) callconv(.c) void {
+    panic.exception(frame.rip, frame.rsp, state.callee.rbp,
         \\#{} error: 0x{x}
         \\
         \\Regs:
@@ -220,24 +209,25 @@ pub fn commonExcpHandler(
         \\cr2: 0x{x:.>16}, cr3: 0x{x:.>16}, cr4: 0x{x:.>16}
         \\
         \\cs: 0x{x}, ss: 0x{x}, lapic id: {}
-        , .{
-            vec, error_code,
-            state.scratch.rax, state.scratch.rcx, state.scratch.rdx, state.callee.rbx,
-            frame.rip, frame.rsp, state.callee.rbp, frame.rflags,
-            state.scratch.r8, state.scratch.r9, state.scratch.r10, state.scratch.r11,
-            state.callee.r12, state.callee.r13, state.callee.r14, state.callee.r15,
-            regs.getCr2(), regs.getCr3(), regs.getCr4(),
-            frame.cs, frame.ss, if (apic.lapic.isInitialized()) apic.lapic.getId() else 9999,
-        }
-    );
+    , .{
+        vec,               error_code,
+        state.scratch.rax, state.scratch.rcx,
+        state.scratch.rdx, state.callee.rbx,
+        frame.rip,         frame.rsp,
+        state.callee.rbp,  frame.rflags,
+        state.scratch.r8,  state.scratch.r9,
+        state.scratch.r10, state.scratch.r11,
+        state.callee.r12,  state.callee.r13,
+        state.callee.r14,  state.callee.r15,
+        regs.getCr2(),     regs.getCr3(),
+        regs.getCr4(),     frame.cs,
+        frame.ss,          if (apic.lapic.isInitialized()) apic.lapic.getId() else 9999,
+    });
 
     utils.halt();
 }
 
-pub fn pageFaultHandler(
-    frame: *regs.InterruptFrame, state: *regs.State,
-    vec: u32, error_code: u32
-) callconv(.c) void {
+pub fn pageFaultHandler(frame: *regs.InterruptFrame, state: *regs.State, vec: u32, error_code: u32) callconv(.c) void {
     const addr = regs.getCr2();
     const cause: vm.FaultCause =
         if ((error_code & 0b10010) == 0) .read
@@ -246,35 +236,36 @@ pub fn pageFaultHandler(
     const userspace = (error_code & 0b0100) != 0;
 
     const success = vm.pageFaultHandler(addr, cause, userspace);
-    if (success) { @branchHint(.likely); return; }
+    if (success) {
+        @branchHint(.likely);
+        return;
+    }
 
     commonExcpHandler(frame, state, vec, error_code);
 }
 
-pub fn irqHandler(
-    idx: u8,
-    comptime kind: enum{irq, msi},
-    comptime max_num: comptime_int
-) *const fn() callconv(.naked) noreturn {
+pub fn irqHandler(idx: u8, comptime kind: enum { irq, msi }, comptime max_num: comptime_int) *const fn () callconv(.naked) noreturn {
     const Static = opaque {
-        fn getIsr(comptime n: comptime_int) *const fn() callconv(.Naked) noreturn {
+        fn getIsr(comptime n: comptime_int) *const fn () callconv(.naked) noreturn {
             return opaque {
-                fn isr() callconv(.Naked) noreturn {
+                fn isr() callconv(.naked) noreturn {
                     switch (comptime kind) {
-                        .irq => asm volatile(
+                        .irq => asm volatile (
                             \\ call isr.entry
                             \\ mov %[idx], %edi
                             \\ call handleIrq
                             \\ jmp isr.exit
-                            :: [idx] "i" (n)
+                            :
+                            : [idx] "i" (n),
                         ),
-                        .msi => asm volatile(
+                        .msi => asm volatile (
                             \\ call isr.entry
                             \\ mov %[idx], %edi
                             \\ call handleMsi
                             \\ jmp isr.exit
-                            :: [idx] "i" (n)
-                        )
+                            :
+                            : [idx] "i" (n),
+                        ),
                     }
                 }
 
@@ -290,10 +281,10 @@ pub fn irqHandler(
         }
 
         pub const table = blk: {
-            var result: []const *const fn() callconv(.naked) noreturn = &.{};
+            var result: []const *const fn () callconv(.naked) noreturn = &.{};
 
             for (0..max_num) |i| {
-                result = result ++ .{ getIsr(i) };
+                result = result ++ .{getIsr(i)};
             }
 
             break :blk result;
@@ -303,7 +294,7 @@ pub fn irqHandler(
     return Static.table[idx];
 }
 
-comptime{
+comptime {
     @export(&IsrHelper(false).entry, .{ .name = isrEntryName });
     @export(&IsrHelper(true).entry, .{ .name = isrErrorEntryName });
     @export(&IsrHelper(false).exit, .{ .name = isrExitName });

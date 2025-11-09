@@ -216,7 +216,7 @@ const Namespace = struct {
         self.base.deinit();
     }
 
-    pub fn handleIo(self: *Drive, request: *const Drive.IoRequest) bool {
+    pub fn handleIo(self: *Drive, request: *const Drive.io.Request) bool {
         const ns = &@as(*NamespaceDrive, @ptrCast(self)).derived;
         const pages = request.lba_num / (vm.page_size / self.lba_size);
         const prp1 = @intFromPtr(vm.getPhysLma(request.lma_buf));
