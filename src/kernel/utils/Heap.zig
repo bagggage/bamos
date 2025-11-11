@@ -1,6 +1,6 @@
 //! # Heap
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -9,15 +9,15 @@ const vm = @import("../vm.zig");
 
 const Self = @This();
 const Range = struct {
-    pub const alloc_config: vm.obj.AllocatorConfig = .{
+    pub const alloc_config: vm.auto.Config = .{
         .allocator = .oma
     };
 
     const List = utils.SList;
     const Node = List.Node;
 
-    base: usize = undefined,
-    pages: u32 = undefined,
+    base: usize,
+    pages: u32,
 
     node: Node = .{},
 
@@ -96,9 +96,8 @@ pub fn release(self: *Self, base: usize, pages: u32) void {
     }
 
     if (curr_node == null) {
-        const range = vm.obj.new(Range) orelse unreachable;
-        range.base = base;
-        range.pages = pages;
+        const range = vm.auto.alloc(Range) orelse unreachable;
+        range.* = .{ .base = base, .pages = pages };
 
         self.free_list.prepend(&range.node);
     } else {
@@ -117,13 +116,13 @@ pub fn release(self: *Self, base: usize, pages: u32) void {
                 range.pages += target_range.pages;
 
                 self.free_list.remove(&target_range.node);
-                vm.obj.free(Range, target_range);
+                vm.auto.free(Range, target_range);
                 break;
             } else if (curr_range_top == target_range.base) {
                 range.pages += target_range.pages;
 
                 self.free_list.remove(&target_range.node);
-                vm.obj.free(Range, target_range);
+                vm.auto.free(Range, target_range);
                 break;
             }
         }
@@ -136,6 +135,6 @@ inline fn removeRange(self: *Self, range: *Range, pages: u32) void {
         range.pages -= pages;
     } else {
         self.free_list.remove(&range.node);
-        vm.obj.free(Range, range);
+        vm.auto.free(Range, range);
     }
 }

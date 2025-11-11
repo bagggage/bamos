@@ -113,13 +113,13 @@ cache_ent: lookup_cache.Entry = .{},
 ref_count: utils.RefCount(u32) = .{},
 lock: utils.Spinlock = .{},
 
-pub const alloc_config: vm.obj.AllocatorConfig = .{
+pub const alloc_config: vm.auto.Config = .{
     .allocator = .safe_oma,
     .capacity = 512
 };
 
 pub inline fn new() ?*Dentry {
-    const dentry = vm.obj.new(Dentry) orelse return null;
+    const dentry = vm.auto.alloc(Dentry) orelse return null;
     dentry.* = .{
         .name = undefined,
         .parent = undefined,
@@ -131,7 +131,7 @@ pub inline fn new() ?*Dentry {
 }
 
 pub inline fn free(self: *Dentry) void {
-    vm.obj.free(Dentry, self);
+    vm.auto.free(Dentry, self);
 }
 
 pub inline fn fromNode(node: *Node) *Dentry {
@@ -233,7 +233,7 @@ pub fn open(self: *Dentry, perm: vfs.Permissions) Error!*File {
     self.ref();
     errdefer self.deref();
 
-    const file = vm.obj.new(File) orelse return error.NoMemory;
+    const file = vm.auto.alloc(File) orelse return error.NoMemory;
     file.* = .{
         .dentry = self,
         .perm = perm
@@ -248,7 +248,7 @@ pub fn onClose(self: *Dentry, file: *File) void {
 
     self.ops.close(self, file);
     self.deref();
-    vm.obj.free(File, file);
+    vm.auto.free(File, file);
 }
 
 pub fn addChild(self: *Dentry, child: *Dentry) void {

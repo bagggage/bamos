@@ -16,7 +16,7 @@ const Self = @This();
 pub const List = utils.List;
 pub const Node = List.Node;
 
-pub const alloc_config: vm.obj.AllocatorConfig = .{
+pub const alloc_config: vm.auto.Config = .{
     .allocator = .safe_oma,
     .capacity = 64
 };
@@ -30,7 +30,7 @@ driver_data: utils.AnyData,
 node: Node = .{},
 
 pub fn new(name: dev.Name, bus: *Bus, driver: ?*const Driver, data: ?*anyopaque) ?*Self {
-    const self = vm.obj.new(Self) orelse return null;
+    const self = vm.auto.alloc(Self) orelse return null;
     self.* = .{
         .name = name,
         .bus = bus,
@@ -43,7 +43,7 @@ pub fn new(name: dev.Name, bus: *Bus, driver: ?*const Driver, data: ?*anyopaque)
 
 pub fn delete(self: *Self) void {
     self.deinit();
-    vm.obj.free(Self, self);
+    vm.auto.free(Self, self);
 }
 
 pub inline fn deinit(self: *Self) void {

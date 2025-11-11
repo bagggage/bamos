@@ -1,6 +1,6 @@
 //! # Architecture-independent I/O subsytem
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -250,7 +250,7 @@ const Region = struct {
     const List = utils.SList;
     const Node = List.Node;
 
-    pub const alloc_config: vm.obj.AllocatorConfig = .{
+    pub const alloc_config: vm.auto.Config = .{
         .allocator = .oma,
     };
 
@@ -351,7 +351,7 @@ pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime i
             return null;
         }
 
-        const new_region = vm.obj.new(Region) orelse return null;
+        const new_region = vm.auto.alloc(Region) orelse return null;
         new_region.* = .{ .base = base, .end = end, .name = name };
 
         list.prepend(&new_region.node);
@@ -372,7 +372,7 @@ pub fn release(base: usize, comptime io_type: Type) void {
         const region = Region.fromNode(n);
         if (region.base == base) {
             list.remove(n);
-            vm.obj.free(Region, region);
+            vm.auto.free(Region, region);
             
             return;
         }

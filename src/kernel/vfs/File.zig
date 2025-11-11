@@ -27,7 +27,7 @@ pub const Operations = struct {
     ioctl: IoctlFn = &default.ioctl,
 };
 
-pub const alloc_config: vm.obj.AllocatorConfig = .{
+pub const alloc_config: vm.auto.Config = .{
     .allocator = .safe_oma,
     .capacity = 128,
 };

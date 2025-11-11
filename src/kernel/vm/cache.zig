@@ -1,6 +1,6 @@
 //! # Cache subsystem **DRAFT**
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -126,7 +126,7 @@ pub const Cursor = struct {
 /// Specific page-cache hash table
 const HashTable = struct {
     const Page = struct {
-        pub const alloc_config: vm.obj.AllocatorConfig = .{
+        pub const alloc_config: vm.auto.Config = .{
             .allocator = .safe_oma,
             .capacity = 128
         };
@@ -220,8 +220,8 @@ const HashTable = struct {
     }
 
     fn allocPages(self: *HashTable, rank: u8) Error!usize {
-        const page = vm.obj.new(Page) orelse return error.NoMemory;
-        errdefer vm.obj.free(Page, page);
+        const page = vm.auto.alloc(Page) orelse return error.NoMemory;
+        errdefer vm.auto.free(Page, page);
 
         const phys = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
     
@@ -237,7 +237,7 @@ const HashTable = struct {
         const page = Page.fromNode(node);
 
         vm.PageAllocator.free(page.getPhysBase(), page.rank);
-        vm.obj.free(Page, page);
+        vm.auto.free(Page, page);
     }
 };
 
@@ -245,7 +245,7 @@ pub const ControlBlock = struct {
     const BlockOma = vm.SafeOma(Block);
     const List = utils.List;
 
-    pub const alloc_config: vm.obj.AllocatorConfig = .{
+    pub const alloc_config: vm.auto.Config = .{
         .allocator = .safe_oma,
         .capacity = 32
     };
@@ -360,8 +360,8 @@ var ctrl_lock = utils.Spinlock.init(.unlocked);
 var ctrl_list: ControlBlock.List = .{};
 
 pub fn makeCtrl() Error!*ControlBlock {
-    const ctrl = vm.obj.new(ControlBlock) orelse return error.NoMemory;
-    errdefer vm.obj.free(ControlBlock, ctrl);
+    const ctrl = vm.auto.alloc(ControlBlock) orelse return error.NoMemory;
+    errdefer vm.auto.free(ControlBlock, ctrl);
 
     ctrl.* = try .init();
 
@@ -381,7 +381,7 @@ pub fn deleteCtrl(ctrl: *ControlBlock) void {
     }
 
     ctrl.deinit();
-    vm.obj.free(ControlBlock, ctrl);
+    vm.auto.free(ControlBlock, ctrl);
 }
 
 pub fn swap(target_num: u32) u32 {

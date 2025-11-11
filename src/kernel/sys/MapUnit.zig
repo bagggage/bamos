@@ -47,7 +47,7 @@ pub const PageHandle = struct {
     page: *Page,
 };
 
-pub const alloc_config: vm.obj.AllocatorConfig = .{
+pub const alloc_config: vm.auto.Config = .{
     .allocator = .safe_oma,
     .capacity = 256
 };
@@ -73,16 +73,16 @@ node: Node = .{},
 rb_node: rb.Node = .{},
 
 pub fn init(
-    self: *Self, file: ?*vfs.File, virt: usize,
-    page_offset: u32, pages: u32, map_flags: vm.MapFlags
-) void {
+    file: ?*vfs.File, virt: usize,
+    page_offset: u32, pages: u32, flags: Flags
+) Self {
     if (file) |f| f.ref();
-    self.* = .{
+    return .{
         .file = file,
         .page_offset = page_offset,
         .page_capacity = pages,
         .region = .{ .base = virt },
-        .flags = .{ .map = map_flags },
+        .flags = flags,
     };
 }
 
@@ -133,7 +133,7 @@ pub fn unmapRegion(self: *Self, page_offset: u32, pages: u32, pt: *vm.PageTable)
             vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
 
             node = n.next;
-            vm.obj.free(Page, page);
+            vm.auto.free(Page, page);
         }
     } else {
         while (node) |n| {
@@ -141,7 +141,7 @@ pub fn unmapRegion(self: *Self, page_offset: u32, pages: u32, pt: *vm.PageTable)
             page.unmap(self.base(), pt);
 
             node = n.next;
-            vm.obj.free(Page, page);
+            vm.auto.free(Page, page);
         }
     }
 }
@@ -374,7 +374,7 @@ fn buildPage(
             if (reuse_first and temp_base == phys_base)
                 Page.fromNode(list.first.?)
             else
-                (vm.obj.new(Page) orelse return error.NoMemory);
+                (vm.auto.alloc(Page) orelse return error.NoMemory);
 
         var temp_rank: u8 = std.math.log2_int(u32, temp_len);
         var rank_pages_num: u32 = @as(u32, 1) << @truncate(temp_rank);
@@ -413,6 +413,6 @@ fn freePageList(list: *Page.List, end: ?*Page.Node) void {
         if (n == end) break;
 
         list.first = n.next;
-        vm.obj.free(Page, Page.fromNode(n));
+        vm.auto.free(Page, Page.fromNode(n));
     }
 }

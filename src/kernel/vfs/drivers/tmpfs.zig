@@ -8,7 +8,7 @@
 //! It can also be mounted during regular operation; however,
 //! any data written to it is not preserved and remains in RAM only until it is unmounted.
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -31,7 +31,7 @@ const File = struct {
         node: Node = .{},
     };
 
-    pub const alloc_config: vm.obj.AllocatorConfig = .{
+    pub const alloc_config: vm.auto.Config = .{
         .allocator = .safe_oma,
         .capacity = 128
     };
@@ -42,7 +42,7 @@ const File = struct {
 
     pub fn delete(self: *File) void {
         self.deinit();
-        vm.obj.free(File, self);
+        vm.auto.free(File, self);
     }
 };
 

@@ -32,10 +32,10 @@ pub const max_phys_pages = std.math.maxInt(u32);
 pub const PageTable = arch.vm.PageTable;
 pub const VirtualRegion = @import("vm/VirtualRegion.zig");
 
+pub const auto = @import("vm/auto.zig");
 pub const BucketAllocator = @import("vm/BucketAllocator.zig");
 pub const cache = @import("vm/cache.zig");
 pub const Heap = utils.Heap;
-pub const obj = @import("vm/object.zig");
 pub const ObjectAllocator = @import("vm/ObjectAllocator.zig");
 pub const PageAllocator = @import("vm/PageAllocator.zig");
 pub const UniversalAllocator = @import("vm/UniversalAllocator.zig");
