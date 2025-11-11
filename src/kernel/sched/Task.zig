@@ -138,10 +138,15 @@ pub const UserSpecific = struct {
     user_stack: *sys.AddressSpace.MapUnit,
 
     /// Used by `sys.Process` to put task in list.
-    node: UNode,
+    node: UNode = .{},
 };
 
-pub const alloc_config: vm.obj.AllocatorConfig = .{
+pub const Specific = union {
+    kernel: KernelSpecific,
+    user: UserSpecific,
+};
+
+pub const alloc_config: vm.auto.Config = .{
     .allocator = .safe_oma,
     .capacity = 128,
 };
@@ -158,10 +163,16 @@ kernel_stack: vm.VirtualRegion,
 
 /// Specific data which is different for
 /// kernel and user tasks.
-spec: union {
-    kernel: KernelSpecific,
-    user: UserSpecific,
-},
+spec: Specific,
+
+pub fn init(spec: Specific, ip: usize, stack_size: usize) !Self {
+    const stack = thread.makeStack(stack_size) orelse return error.NoMemory;
+    return .{
+        .spec = spec,
+        .kernel_stack = stack,
+        .context = .init(stack.getTopAligned(thread.stack_alignment), ip),
+    };
+}
 
 pub inline fn fromNode(node: *Node) *Self {
     return @fieldParentPtr("node", node);
