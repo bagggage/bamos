@@ -8,7 +8,7 @@ const arch = utils.arch;
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
-const stack_alignment = @sizeOf(usize);
+pub const stack_alignment = @sizeOf(usize);
 
 const kernel_stack_map_flags = vm.MapFlags{
     .global = true,
@@ -20,20 +20,19 @@ const user_stack_map_flags = vm.MapFlags{
     .write = true,
 };
 
-pub fn initStack(stack: *vm.VirtualRegion, stack_size: usize) ?usize {
+pub fn makeStack(stack_size: usize) ?vm.VirtualRegion {
     const pages = std.math.divCeil(usize, stack_size, vm.page_size) catch unreachable;
     const rank = std.math.log2_int_ceil(usize, pages) - 1;
     const virt = vm.heapReserve(@truncate(pages));
     const top = virt + (pages * vm.page_size);
 
-    stack.* = .init(top);
-
+    var stack: vm.VirtualRegion = .init(top);
     stack.growDown(rank, kernel_stack_map_flags) catch {
         vm.heapRelease(virt, @truncate(pages));
         return null;
     };
 
-    return stack.getTopAligned(stack_alignment);
+    return stack;
 }
 
 pub fn deinitStack(stack: *vm.VirtualRegion, stack_size: usize) void {

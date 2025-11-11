@@ -122,20 +122,16 @@ pub inline fn waitStartup() noreturn {
 }
 
 pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*Task {
-    const task = vm.obj.new(Task) orelse return null;
-    const stack_top = thread.initStack(&task.kernel_stack, kernel_stack_size) orelse {
-        vm.obj.free(Task, task);
+    const task = vm.auto.alloc(Task) orelse return null;
+    task.* = Task.init(
+        .{ .kernel = .{ .name = name }},
+        @intFromPtr(handler), kernel_stack_size
+    ) catch {
+        vm.auto.free(Task, task);
         return null;
     };
 
-    task.stats = .{};
-    task.spec = .{ .kernel = .{ .name = name } };
-    task.context.init(
-        stack_top,
-        @intFromPtr(handler),
-    );
-
-    return @ptrCast(task);
+    return task;
 }
 
 pub fn freeTask(task: *Task) void {
@@ -145,7 +141,7 @@ pub fn freeTask(task: *Task) void {
         &task.kernel_stack,
         kernel_stack_size
     );
-    vm.obj.free(Task, task);
+    vm.auto.free(Task, task);
 }
 
 pub inline fn enqueue(task: *Task) void {

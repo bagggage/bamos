@@ -24,16 +24,14 @@ const CtxRegs = extern struct { callee: regs.CalleeRegs, ret_ptr: usize };
 
 stack_ptr: StackPointer,
 
-pub fn init(
-    self: *Self,
-    stack_ptr: usize,
-    ip: usize,
-) void {
-    self.setStackPtr(stack_ptr - @sizeOf(CtxRegs));
-    const ctx_regs = self.stack_ptr.asCtxRegs();
+pub fn init(stack_ptr: usize, ip: usize) Self {
+    const ptr = stack_ptr - @sizeOf(CtxRegs);
+    const ctx_regs: *CtxRegs = @ptrFromInt(ptr);
 
     ctx_regs.ret_ptr = ip;
-    ctx_regs.callee.rbp = self.getStackPtr();
+    ctx_regs.callee.rbp = ptr;
+
+    return .{ .stack_ptr = .{ .ptr = @ptrFromInt(ptr) } };
 }
 
 pub inline fn setInstrPtr(self: *Self, value: usize) void {

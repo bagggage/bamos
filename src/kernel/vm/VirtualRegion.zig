@@ -5,13 +5,15 @@
 //! 
 //! The size and base address is aligned to `vm.page_size`
 
+// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 pub const Page = struct {
-    pub const alloc_config: vm.obj.AllocatorConfig = .{
+    pub const alloc_config: vm.auto.Config = .{
         .allocator = .safe_oma,
         .capacity = 256
     };
@@ -244,9 +246,9 @@ fn map(
 }
 
 fn allocPages(rank: u8) ?*Page {
-    const page = vm.obj.new(Page) orelse return null;
+    const page = vm.auto.alloc(Page) orelse return null;
     const phys = vm.PageAllocator.alloc(rank) orelse {
-        vm.obj.free(Page, page);
+        vm.auto.free(Page, page);
         return null;
     };
 
@@ -262,5 +264,5 @@ inline fn freePages(page: *Page, free_phys: bool) void {
         vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
     }
 
-    vm.obj.free(Page, page);
+    vm.auto.free(Page, page);
 }

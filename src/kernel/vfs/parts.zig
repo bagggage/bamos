@@ -1,5 +1,7 @@
 //! # Partitions handling for block devices.
 
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const dev = @import("../dev.zig");
@@ -16,7 +18,7 @@ pub const List = utils.List;
 pub const Node = List.Node;
 
 pub const Partition = struct {
-    pub const alloc_config: vm.obj.AllocatorConfig = .{
+    pub const alloc_config: vm.auto.Config = .{
         .allocator = .safe_oma,
         .capacity = 128
     };
@@ -170,8 +172,8 @@ pub fn probe(drive: *Drive) Error!void {
             entry.guid, name[0..std.mem.len(@as([*:0]u8, @ptrCast(&name)))]
         });
 
-        const part = vm.obj.new(Partition) orelse return error.NoMemory;
-        errdefer vm.obj.free(Partition, part);
+        const part = vm.auto.alloc(Partition) orelse return error.NoMemory;
+        errdefer vm.auto.free(Partition, part);
 
         part.* = .{
             .lba_start = entry.start_lba,

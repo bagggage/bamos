@@ -28,7 +28,7 @@ fn EnumParser(comptime T: type) type {
 
 const Map = utils.AutoHashTable([]const u8);
 const Value = struct {
-    pub const alloc_config: vm.obj.AllocatorConfig = .{
+    pub const alloc_config: vm.auto.Config = .{
         .allocator = .oma
     };
 
@@ -256,7 +256,7 @@ fn parseBool(value: []const u8) !bool {
 }
 
 fn put(key: []const u8, value: []const u8) !void {
-    const val = vm.obj.new(Value) orelse return error.NoMemory;
+    const val = vm.auto.alloc(Value) orelse return error.NoMemory;
     val.* = .{ .string = value };
 
     map.insert(key, &val.map_ent);

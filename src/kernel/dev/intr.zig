@@ -82,7 +82,7 @@ pub const Handler = struct {
 
     pub const Fn = *const fn(*dev.Device) bool;
 
-    pub const alloc_config: vm.obj.AllocatorConfig = .{
+    pub const alloc_config: vm.auto.Config = .{
         .allocator = .safe_oma
     };
 
@@ -150,7 +150,7 @@ pub const Irq = struct {
         var node = self.handlers.first;
         while (node) |n| {
             node = n.next;
-            vm.obj.free(Handler, Handler.fromNode(n));
+            vm.auto.free(Handler, Handler.fromNode(n));
         }
 
         self.handlers = .{};
@@ -165,11 +165,8 @@ pub const Irq = struct {
 
         self.waitWhilePending();
 
-        const handler: *Handler = vm.obj.new(Handler) orelse return error.NoMemory;
-        handler.* = .{
-            .device = device,
-            .func = func
-        };
+        const handler: *Handler = vm.auto.alloc(Handler) orelse return error.NoMemory;
+        handler.* = .{ .device = device, .func = func };
 
         self.handlers_lock.lock();
         defer self.handlers_lock.unlock();

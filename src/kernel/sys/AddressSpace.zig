@@ -18,7 +18,7 @@ const Self = @This();
 
 pub const MapUnit = @import("MapUnit.zig");
 
-pub const alloc_config: vm.obj.AllocatorConfig = .{
+pub const alloc_config: vm.auto.Config = .{
     .allocator = .safe_oma,
     .capacity = 128,
 };
@@ -45,8 +45,8 @@ pub fn init(pt: *vm.PageTable, stack_pages: u16) Self {
 }
 
 pub fn create(stack_pages: u16) !*Self {
-    const self = vm.obj.new(Self) orelse return error.NoMemory;
-    errdefer vm.obj.free(Self, self);
+    const self = vm.auto.alloc(Self) orelse return error.NoMemory;
+    errdefer vm.auto.free(Self, self);
 
     const pt = vm.newPt() orelse return error.NoMemory;
     self.* = .init(pt, stack_pages);
@@ -59,7 +59,7 @@ pub fn deinit(self: *Self) void {
         const map_unit = MapUnit.fromNode(n);
 
         map_unit.deinit();
-        vm.obj.free(MapUnit, map_unit);
+        vm.auto.free(MapUnit, map_unit);
     }
 
     vm.freePt(self.page_table);
@@ -67,7 +67,7 @@ pub fn deinit(self: *Self) void {
 
 pub inline fn delete(self: *Self) void {
     self.deinit();
-    vm.obj.free(Self, self);
+    vm.auto.free(Self, self);
 }
 
 pub inline fn ref(self: *Self) void {
@@ -225,8 +225,8 @@ fn divideMapping(self: *Self, map_unit: *MapUnit, div_unit: *MapUnit) !void {
     const new_pg_size: u32 = @truncate((map_unit.top() - new_base) / vm.page_size);
     const new_pg_off: u32 = new_gap + map_unit.page_offset;
 
-    const new_unit = vm.obj.new(MapUnit) orelse return error.NoMemory;
-    errdefer vm.obj.free(MapUnit, new_unit);
+    const new_unit = vm.auto.alloc(MapUnit) orelse return error.NoMemory;
+    errdefer vm.auto.free(MapUnit, new_unit);
 
     const map_pg_size = (div_unit.base() - map_unit.base()) / vm.page_size;
     try map_unit.unmapRegion(
@@ -234,11 +234,10 @@ fn divideMapping(self: *Self, map_unit: *MapUnit, div_unit: *MapUnit) !void {
         div_unit.page_capacity, self.page_table
     );
 
-    new_unit.init(
+    new_unit.* = .init(
         map_unit.file, new_base, new_pg_off,
-        new_pg_size, undefined
+        new_pg_size, map_unit.flags
     );
-    new_unit.flags = map_unit.flags;
 
     const pg_off = map_unit.page_capacity - new_pg_size;
     try map_unit.reinsertRegion(new_unit, pg_off, new_pg_size);
@@ -253,7 +252,7 @@ fn replaceMapping(self: *Self, old: *MapUnit, new: *MapUnit) void {
     self.map_units.remove(&old.node);
     old.unmap(self.page_table);
 
-    vm.obj.delete(MapUnit, old);
+    vm.auto.delete(MapUnit, old);
 }
 
 fn deleteMapping(self: *Self, map_unit: *MapUnit) void {
@@ -261,5 +260,5 @@ fn deleteMapping(self: *Self, map_unit: *MapUnit) void {
     self.map_units.remove(&map_unit.node);
     map_unit.unmap(self.page_table);
 
-    vm.obj.delete(MapUnit, map_unit);
+    vm.auto.delete(MapUnit, map_unit);
 }
