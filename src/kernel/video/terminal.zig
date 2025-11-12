@@ -83,11 +83,11 @@ var curr_col: u32 = undefined;
 
 /// Buffer storing the ascii characters.
 var char_buffer: []u8 = undefined;
-var char_buf_rank: u32 = undefined;
+var char_buf_rank: u8 = undefined;
 
 /// Buffer storing the color of each character.
 var color_buffer: []u32 = undefined;
-var color_buf_rank: u32 = undefined;
+var color_buf_rank: u8 = undefined;
 
 var is_initialized = false;
 

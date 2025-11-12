@@ -23,7 +23,7 @@ var fb: *Framebuffer = undefined;
 
 /// Texture buffer for rendering the font glyphs.
 var font_tex: []u32 = undefined;
-var font_tex_rank: u32 = undefined;
+var font_tex_rank: u8 = undefined;
 
 /// Initializes the text output system,
 /// setting up the framebuffer, ascii buffers, and rendering the font.
