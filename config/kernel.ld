@@ -30,6 +30,8 @@ SECTIONS
         *(COMMON)
     } :boot
 
+    .got : {} :boot
+
     kernel_elf_end = .;
 
     /DISCARD/ : { *(.eh_frame) *(.comment) }
