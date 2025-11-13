@@ -134,23 +134,27 @@ pub const io = opaque {
 
             // FIXME: Use another lock!
             // Spinlocks shouldn't cover such heavy code.
-            self.oma.lock.lock();
-            defer self.oma.lock.unlock();
+            //self.oma.lock.lock();
+            //defer self.oma.lock.unlock();
 
             var idx: u32 = 0;
+            var addr: usize = 0;
             var arena: *vm.ObjectAllocator.Arena = blk: {
-                var node = unsafe_oma.arenas.first;
+                var node = unsafe_oma.arenas.first.load(.acquire);
                 while (node) |n| : ({node = n.next; idx += 1;}) {
                     const arena = vm.ObjectAllocator.Arena.fromNode(n);
-                    if (arena.alloc_num < unsafe_oma.arena_capacity) break :blk arena;
+                    addr = arena.alloc(@sizeOf(Request), unsafe_oma.arena_capacity) orelse continue;
+
+                    break :blk arena;
                 }
 
-                break :blk unsafe_oma.newArena() orelse return null;
+                const new = unsafe_oma.newArena() orelse return null;
+                addr = new.allocFirst(@sizeOf(Request));
+
+                break :blk new;
             };
 
-            const addr = arena.alloc(@sizeOf(Request));
             const request: *Request = @ptrFromInt(addr);
-
             const inner_idx = (addr - arena.getBase()) / @sizeOf(Request);
             request.id = @truncate((idx * unsafe_oma.arena_capacity) + inner_idx);
 
@@ -158,9 +162,8 @@ pub const io = opaque {
         }
 
         fn freeRequest(self: *Control, handle: Handle) void {
-            // Free request node
-            self.oma.lock.lock();
-            defer self.oma.lock.unlock();
+            //self.oma.lock.lock();
+            //defer self.oma.lock.unlock();
 
             self.oma.oma.freeRaw(handle.arena, @intFromPtr(handle.request));
         }
@@ -174,7 +177,7 @@ pub const io = opaque {
             const unsafe_oma = &self.oma.oma;
             const arena_idx = id / unsafe_oma.arena_capacity;
             const arena = blk: {
-                var node = unsafe_oma.arenas.first orelse unreachable;
+                var node = unsafe_oma.arenas.first.load(.acquire) orelse unreachable;
                 for (0..arena_idx) |_| {
                     node = node.next orelse unreachable;
                 }
