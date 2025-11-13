@@ -32,7 +32,7 @@ const File = struct {
     };
 
     pub const alloc_config: vm.auto.Config = .{
-        .allocator = .safe_oma,
+        .allocator = .oma,
         .capacity = 128
     };
 

@@ -14,7 +14,10 @@ const vm = @import("../vm.zig");
 
 const Superblock = @This();
 
-const oma_capacity = 32;
+pub const alloc_config: vm.auto.Config = .{
+    .allocator = .oma,
+    .capacity = 32
+};
 
 drive: *Drive,
 part: *const Partition,
@@ -29,14 +32,12 @@ mount_point: *MountPoint = undefined,
 
 fs_data: utils.AnyData,
 
-pub var oma = vm.SafeOma(Superblock).init(oma_capacity);
-
 pub inline fn new() ?*Superblock {
-    return oma.alloc();
+    return vm.auto.alloc(Superblock);
 }
 
 pub inline fn free(self: *Superblock) void {
-    oma.free(self);
+    vm.auto.free(Superblock, self);
 }
 
 pub fn init(

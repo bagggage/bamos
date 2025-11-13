@@ -147,7 +147,7 @@ pub const Specific = union {
 };
 
 pub const alloc_config: vm.auto.Config = .{
-    .allocator = .safe_oma,
+    .allocator = .oma,
     .capacity = 128,
 };
 

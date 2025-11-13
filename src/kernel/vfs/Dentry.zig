@@ -114,7 +114,7 @@ ref_count: utils.RefCount(u32) = .{},
 lock: utils.Spinlock = .{},
 
 pub const alloc_config: vm.auto.Config = .{
-    .allocator = .safe_oma,
+    .allocator = .oma,
     .capacity = 512
 };
 

@@ -19,7 +19,7 @@ const Self = @This();
 pub const MapUnit = @import("MapUnit.zig");
 
 pub const alloc_config: vm.auto.Config = .{
-    .allocator = .safe_oma,
+    .allocator = .oma,
     .capacity = 128,
 };
 
