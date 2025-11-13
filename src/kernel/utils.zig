@@ -44,6 +44,7 @@ pub fn CmpFnType(comptime T: type) type {
     return fn(*const T, *const T) CmpResult;
 }
 
+pub const atomic = @import("utils/atomic.zig");
 pub const AutoHashTable = hash_table.AutoHashTable;
 pub const config = @import("utils/config.zig");
 pub const hash_table = @import("utils/hash-table.zig");
