@@ -127,7 +127,7 @@ pub const Cursor = struct {
 const HashTable = struct {
     const Page = struct {
         pub const alloc_config: vm.auto.Config = .{
-            .allocator = .safe_oma,
+            .allocator = .oma,
             .capacity = 128
         };
 
@@ -242,11 +242,10 @@ const HashTable = struct {
 };
 
 pub const ControlBlock = struct {
-    const BlockOma = vm.SafeOma(Block);
     const List = utils.List;
 
     pub const alloc_config: vm.auto.Config = .{
-        .allocator = .safe_oma,
+        .allocator = .oma,
         .capacity = 32
     };
 
@@ -256,7 +255,7 @@ pub const ControlBlock = struct {
     lru_list: LruList = .{},
     lru_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
 
-    block_oma: BlockOma = .init(256),
+    block_oma: vm.ObjectAllocator = .initCapacity(@sizeOf(Block), 256),
 
     node: List.Node = .{},
 
@@ -319,7 +318,7 @@ pub const ControlBlock = struct {
     }
 
     fn makeBlock(self: *ControlBlock, key: usize) ?*Block {
-        const block = self.block_oma.alloc() orelse return null;
+        const block = self.block_oma.alloc(Block) orelse return null;
         const phys = vm.PageAllocator.alloc(block_rank) orelse {
             self.block_oma.free(block);
             return null;

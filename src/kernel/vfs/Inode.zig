@@ -8,8 +8,6 @@ const vm = @import("../vm.zig");
 
 const Inode = @This();
 
-const oma_capacity = 512;
-
 pub const Type = enum(u8) {
     unknown = 0,
     regular_file,
@@ -19,6 +17,11 @@ pub const Type = enum(u8) {
     fifo,
     socket,
     symbolic_link
+};
+
+pub const alloc_config: vm.auto.Config = .{
+    .allocator = .oma,
+    .capacity = 512
 };
 
 index: u32,
@@ -39,17 +42,15 @@ ref_count: utils.RefCount(u32) = .init(0),
 
 fs_data: utils.AnyData = .{},
 
-pub var oma = vm.SafeOma(Inode).init(oma_capacity);
-
 pub inline fn new() ?*Inode {
-    const inode = oma.alloc() orelse return null;
+    const inode = vm.auto.alloc(Inode) orelse return null;
     inode.ref_count = .{};
 
     return inode;
 }
 
 pub inline fn free(self: *Inode) void {
-    oma.free(self);
+    vm.auto.free(Inode, self);
 }
 
 pub inline fn ref(self: *Inode) void {

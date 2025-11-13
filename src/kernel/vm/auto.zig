@@ -15,14 +15,11 @@
 const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
-const default_oma_capacity = 128;
-
 pub const config_member_name = "alloc_config";
 
 pub const Config = struct {
     pub const Allocator = enum {
         oma,
-        safe_oma,
         gpa,
     };
 
@@ -36,7 +33,6 @@ pub fn alloc(T: type) ?*T {
     const config: Config = T.alloc_config;
     return switch (comptime config.allocator) {
         .gpa => vm.alloc(T),
-        .safe_oma => getSafeOma(T).alloc(),
         .oma => getOma(T).alloc(T)
     };
 }
@@ -47,7 +43,6 @@ pub fn free(T: type, ptr: *T) void {
     const config: Config = T.alloc_config;
     switch (comptime config.allocator) {
         .gpa => vm.free(ptr),
-        .safe_oma => getSafeOma(T).free(ptr),
         .oma => getOma(T).free(ptr)
     }
 }
@@ -70,21 +65,11 @@ fn assertIsAllocatable(T: type) void {
     );
 }
 
-fn getSafeOma(T: type) *vm.SafeOma(T) {
-    const Static = struct {
-        pub var oma: vm.SafeOma(T) = .init(
-            T.alloc_config.capacity orelse default_oma_capacity
-        );
-    };
-
-    return &Static.oma;
-}
-
 fn getOma(T: type) *vm.ObjectAllocator {
     const Static = struct {
         pub var oma: vm.ObjectAllocator = .initCapacity(
             @sizeOf(T),
-            T.alloc_config.capacity orelse default_oma_capacity
+            T.alloc_config.capacity orelse vm.ObjectAllocator.default_capacity
         );
     };
 

@@ -83,7 +83,7 @@ pub const Handler = struct {
     pub const Fn = *const fn(*dev.Device) bool;
 
     pub const alloc_config: vm.auto.Config = .{
-        .allocator = .safe_oma
+        .allocator = .oma
     };
 
     device: *dev.Device,

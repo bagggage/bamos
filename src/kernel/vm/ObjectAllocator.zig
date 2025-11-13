@@ -121,7 +121,7 @@ arena_capacity: u16,
 obj_size: u16,
 
 /// Target capacity of bucket for arena nodes allocator.
-pub const default_capacity = 256;
+pub const default_capacity = 128;
 /// Allocator for managing arena nodes.
 var arenas_alloc: vm.BucketAllocator = undefined;
 var arenas_lock = utils.Spinlock.init(.unlocked);

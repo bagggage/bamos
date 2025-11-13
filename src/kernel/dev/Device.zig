@@ -17,7 +17,7 @@ pub const List = utils.List;
 pub const Node = List.Node;
 
 pub const alloc_config: vm.auto.Config = .{
-    .allocator = .safe_oma,
+    .allocator = .oma,
     .capacity = 64
 };
 
