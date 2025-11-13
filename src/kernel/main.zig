@@ -67,7 +67,7 @@ fn main2() noreturn {
     }
 
     init(vm);
-    log.warn("Used memory: {} KB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / utils.kb_size});
+    log.warn("Used memory: {} KiB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / utils.kb_size});
 
     init(config);
 
