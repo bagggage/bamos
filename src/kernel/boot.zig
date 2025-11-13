@@ -139,7 +139,7 @@ pub fn getMappings() vm.Error![]MappingEntry {
     const buffer = vm.PageAllocator.alloc(0) orelse return vm.Error.NoMemory;
     const mappings: [*]MMap = @ptrFromInt(vm.getVirtLma(buffer));
 
-    log.info("LMA size: {} GB", .{vm.lmaSize() / utils.gb_size});
+    log.info("LMA size: {} GiB", .{vm.lmaSize() / utils.gb_size});
 
     mappings[@intFromEnum(Order.LMA)] = MMap.init(
         vm.lma_start, 0x0, vm.lmaSize(),
@@ -280,7 +280,6 @@ inline fn calcMemMapSize() usize {
         (@intFromPtr(&bootboot.mmap) -
         @intFromPtr(&bootboot))) / @sizeOf(c.MMapEnt);
 }
-
 
 /// Allocates memory early in the boot process before the full memory map is initialized.
 fn earlyAlloc(pages: u32) ?usize {
