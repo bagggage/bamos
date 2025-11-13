@@ -35,7 +35,6 @@ pub const io = opaque {
     pub const Request = struct {
         const Queue = utils.SList;
         const Node = Queue.Node;
-        const Oma = vm.SafeOma(Request);
 
         pub const CallbackFn = *const fn (*const Request, Status) void;
 
@@ -77,10 +76,8 @@ pub const io = opaque {
             arena: *vm.ObjectAllocator.Arena,
         };
 
-        const oma_capacity = 192;
-
         queue: AnyQueue,
-        oma: Request.Oma = .init(oma_capacity),
+        oma: vm.ObjectAllocator = .initCapacity(@sizeOf(Request), 192),
 
         fn init(multi_io: bool) !Control {
             const queue: AnyQueue = if (multi_io) blk: {
@@ -130,25 +127,18 @@ pub const io = opaque {
         }
 
         fn allocRequest(self: *Control) ?*Request {
-            const unsafe_oma = &self.oma.oma;
-
-            // FIXME: Use another lock!
-            // Spinlocks shouldn't cover such heavy code.
-            //self.oma.lock.lock();
-            //defer self.oma.lock.unlock();
-
             var idx: u32 = 0;
             var addr: usize = 0;
             var arena: *vm.ObjectAllocator.Arena = blk: {
-                var node = unsafe_oma.arenas.first.load(.acquire);
+                var node = self.oma.arenas.first.load(.acquire);
                 while (node) |n| : ({node = n.next; idx += 1;}) {
                     const arena = vm.ObjectAllocator.Arena.fromNode(n);
-                    addr = arena.alloc(@sizeOf(Request), unsafe_oma.arena_capacity) orelse continue;
+                    addr = arena.alloc(@sizeOf(Request), self.oma.arena_capacity) orelse continue;
 
                     break :blk arena;
                 }
 
-                const new = unsafe_oma.newArena() orelse return null;
+                const new = self.oma.newArena() orelse return null;
                 addr = new.allocFirst(@sizeOf(Request));
 
                 break :blk new;
@@ -156,16 +146,13 @@ pub const io = opaque {
 
             const request: *Request = @ptrFromInt(addr);
             const inner_idx = (addr - arena.getBase()) / @sizeOf(Request);
-            request.id = @truncate((idx * unsafe_oma.arena_capacity) + inner_idx);
+            request.id = @truncate((idx * self.oma.arena_capacity) + inner_idx);
 
             return request;
         }
 
         fn freeRequest(self: *Control, handle: Handle) void {
-            //self.oma.lock.lock();
-            //defer self.oma.lock.unlock();
-
-            self.oma.oma.freeRaw(handle.arena, @intFromPtr(handle.request));
+            self.oma.freeRaw(handle.arena, @intFromPtr(handle.request));
         }
 
         fn getRequest(self: *Control, id: u16) Handle {
@@ -174,10 +161,9 @@ pub const io = opaque {
             //
             // Due to unlikelihood, we assume that this will never happen and we may not use lock.
 
-            const unsafe_oma = &self.oma.oma;
-            const arena_idx = id / unsafe_oma.arena_capacity;
+            const arena_idx = id / self.oma.arena_capacity;
             const arena = blk: {
-                var node = unsafe_oma.arenas.first.load(.acquire) orelse unreachable;
+                var node = self.oma.arenas.first.load(.acquire) orelse unreachable;
                 for (0..arena_idx) |_| {
                     node = node.next orelse unreachable;
                 }
