@@ -5,16 +5,14 @@
 
 const std = @import("std");
 
+const lib = @import("../lib.zig");
 const sched = @import("../sched.zig");
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
-
-const list = std.SinglyLinkedList(u8);
 
 /// Raw implementation of the RCU based on
 /// generations.
 pub const GenerationBlock = struct {
-    lock: utils.Spinlock = .{},
+    lock: lib.sync.Spinlock = .{},
 
     gen_counters: [2]std.atomic.Value(u16) = .{ std.atomic.Value(u16).init(0) } ** 2,
     generation: std.atomic.Value(u8) = .init(0),
@@ -61,8 +59,8 @@ pub const GenerationBlock = struct {
     }
 };
 
-/// # RCU Single-linked list
-pub const SList = struct {
+/// # RCU Singly-linked list
+pub const SinglyLinkedList = struct {
     pub const Node = struct {
         next: ?*Node = null
     };
@@ -70,20 +68,20 @@ pub const SList = struct {
     ctrl: GenerationBlock = .{},
     head: std.atomic.Value(?*Node) = .init(null),
 
-    pub inline fn prepend(self: *SList, node: *Node) void {
+    pub inline fn prepend(self: *SinglyLinkedList, node: *Node) void {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
         self.prependRaw(node);
     }
 
-    pub fn prependRaw(self: *SList, node: *Node) void {
+    pub fn prependRaw(self: *SinglyLinkedList, node: *Node) void {
         node.next = self.head.raw;
         self.head.store(node, .release);
         self.ctrl.update();
     }
 
-    pub fn insertAfter(self: *SList, prev: *Node, node: *Node) void {
+    pub fn insertAfter(self: *SinglyLinkedList, prev: *Node, node: *Node) void {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
@@ -93,7 +91,7 @@ pub const SList = struct {
         self.ctrl.update();
     }
 
-    pub fn popFirst(self: *SList) ?*Node {
+    pub fn popFirst(self: *SinglyLinkedList) ?*Node {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
@@ -104,7 +102,7 @@ pub const SList = struct {
         return node;
     }
 
-    pub fn removeAfter(self: *SList, prev: *Node) ?*Node {
+    pub fn removeAfter(self: *SinglyLinkedList, prev: *Node) ?*Node {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
@@ -115,7 +113,7 @@ pub const SList = struct {
         return node;
     }
 
-    pub fn clear(self: *SList) ?*Node {
+    pub fn clear(self: *SinglyLinkedList) ?*Node {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
@@ -126,8 +124,8 @@ pub const SList = struct {
     }
 };
 
-/// # RCU Double-linked list
-pub const List = struct {
+/// # RCU Doubly-linked list
+pub const DoublyLinkedList = struct {
     pub const Node = struct {
         next: ?*Node = null,
         prev: ?*Node = null
@@ -137,14 +135,14 @@ pub const List = struct {
     first: std.atomic.Value(?*Node) = .init(null),
     last: std.atomic.Value(?*Node) = .init(null),
 
-    pub fn append(self: *List, node: *Node) void {
+    pub fn append(self: *DoublyLinkedList, node: *Node) void {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
         self.appendRaw(node);
     }
 
-    pub fn appendRaw(self: *List, node: *Node) void {
+    pub fn appendRaw(self: *DoublyLinkedList, node: *Node) void {
         const last = self.last.raw;
         node.prev = last;
         node.next = null;
@@ -161,14 +159,14 @@ pub const List = struct {
         self.ctrl.update();
     }
 
-    pub fn prepend(self: *List, node: *Node) void {
+    pub fn prepend(self: *DoublyLinkedList, node: *Node) void {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
         self.prependRaw(node);
     }
 
-    pub fn prependRaw(self: *List, node: *Node) void {
+    pub fn prependRaw(self: *DoublyLinkedList, node: *Node) void {
         const first = self.first.raw;
         node.next = first;
         node.prev = null;
@@ -185,7 +183,7 @@ pub const List = struct {
         self.ctrl.update();
     }
 
-    pub fn insertAfter(self: *List, prev: *Node, node: *Node) void {
+    pub fn insertAfter(self: *DoublyLinkedList, prev: *Node, node: *Node) void {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
@@ -206,7 +204,7 @@ pub const List = struct {
         self.ctrl.update();
     }
 
-    pub fn insertBefore(self: *List, next: *Node, node: *Node) void {
+    pub fn insertBefore(self: *DoublyLinkedList, next: *Node, node: *Node) void {
                 self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 
@@ -227,7 +225,7 @@ pub const List = struct {
         self.ctrl.update();
     }
 
-    pub fn popFirst(self: *List) ?*Node {
+    pub fn popFirst(self: *DoublyLinkedList) ?*Node {
         @setRuntimeSafety(false);
 
         self.ctrl.writeLock();
@@ -249,7 +247,7 @@ pub const List = struct {
         return node;
     }
 
-    pub fn popLast(self: *List) ?*Node {
+    pub fn popLast(self: *DoublyLinkedList) ?*Node {
         @setRuntimeSafety(false);
 
         self.ctrl.writeLock();
@@ -270,7 +268,7 @@ pub const List = struct {
         return node;
     }
 
-    pub fn remove(self: *List, node: *Node) void {
+    pub fn remove(self: *DoublyLinkedList, node: *Node) void {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
         defer {
@@ -300,7 +298,7 @@ pub const List = struct {
         }
     }
 
-    pub fn clear(self: *List) ?*Node {
+    pub fn clear(self: *DoublyLinkedList) ?*Node {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
 

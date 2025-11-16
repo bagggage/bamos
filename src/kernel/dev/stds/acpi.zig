@@ -3,8 +3,8 @@ const std = @import("std");
 const boot = @import("../../boot.zig");
 const dev = @import("../../dev.zig");
 const io = @import("../io.zig");
+const lib = @import("../../lib.zig");
 const smp = @import("../../smp.zig");
-const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");
 
 pub const timer = @import("../drivers/timer/acpi_timer.zig");
@@ -184,7 +184,7 @@ const GenericAddrStruct = extern struct {
     }
 };
 
-const mmio_size = 512 * utils.kb_size;
+const mmio_size = 512 * lib.kb_size;
 
 var sdt: *Xsdt = undefined;
 var fadt: *Fadt = undefined;

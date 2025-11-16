@@ -4,14 +4,14 @@
 
 const std = @import("std");
 
-const arch = utils.arch;
+const arch = lib.arch;
 const boot = @import("../boot.zig");
 const dev = @import("../dev.zig");
 const io = dev.io;
+const lib = @import("../lib.zig");
 const log = std.log.scoped(.intr);
-const smp = @import("../smp.zig");
 const sched = @import("../sched.zig");
-const utils = @import("../utils.zig");
+const smp = @import("../smp.zig");
 const vm = @import("../vm.zig");
 
 const cpu_any: u16 = 0xFFFF;
@@ -77,7 +77,7 @@ pub const TriggerMode = enum(u2) {
 };
 
 pub const Handler = struct {
-    const List = utils.List;
+    const List = std.DoublyLinkedList;
     const Node = List.Node;
 
     pub const Fn = *const fn(*dev.Device) bool;
@@ -97,7 +97,7 @@ pub const Handler = struct {
 };
 
 pub const SoftHandler = struct {
-    const List = utils.SList;
+    const List = std.SinglyLinkedList;
 
     pub const Node = List.Node;
     pub const Fn = *const fn(?*anyopaque) void;
@@ -132,7 +132,7 @@ pub const Irq = struct {
     pending: std.atomic.Value(bool) = .init(false),
 
     handlers: Handler.List = .{},
-    handlers_lock: utils.Spinlock = .{},
+    handlers_lock: lib.sync.Spinlock = .{},
 
     pub fn init(pin: u8, vector: Vector, trigger_mode: TriggerMode, shared: bool) Irq {
         return .{
@@ -237,11 +237,11 @@ pub const Vector = struct {
 
 /// @noexport
 const Cpu = struct {
-    bitmap: utils.Bitmap = .{},
+    bitmap: lib.Bitmap = .{},
     allocated: u16 = 0,
 
     pub fn init(bits: []u8) Cpu {
-        return .{ .bitmap = utils.Bitmap.init(bits, false) };
+        return .{ .bitmap = .init(bits, false) };
     }
 
     pub fn allocVector(self: *Cpu) ?u16 {
@@ -339,8 +339,8 @@ var irqs: [max_intr]Irq = undefined;
 var msis: [max_msi]Msi = undefined;
 var msis_used: u8 = 0;
 
-var cpus_lock = utils.Spinlock.init(.unlocked);
-var msis_lock = utils.Spinlock.init(.unlocked);
+var cpus_lock: lib.sync.Spinlock = .init(.unlocked);
+var msis_lock: lib.sync.Spinlock = .init(.unlocked);
 
 var soft_tasks: []SoftIntrTask = undefined;
 
@@ -385,7 +385,7 @@ pub fn init() !void {
     const bytes_per_bm = std.math.divCeil(
         comptime_int,
         arch.intr.avail_vectors,
-        utils.byte_size
+        lib.byte_size
     ) catch unreachable;
     const bitmap_pool: [*]u8 = @ptrCast(vm.malloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
     errdefer vm.free(bitmap_pool);
@@ -447,7 +447,7 @@ pub fn deinit() void {
 
 pub inline fn requestIrq(pin: u8, device: *dev.Device, handler: Handler.Fn, tigger_mode: TriggerMode, shared: bool) Error!void {
     const result = requestIrqEx(pin, device, handler, @intFromEnum(tigger_mode), shared);
-    if (result < 0) return utils.intToErr(Error, result);
+    if (result < 0) return lib.meta.intToErr(Error, result);
 }
 
 pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
@@ -490,7 +490,7 @@ pub inline fn requestMsi(
         device, handler,
         @intFromEnum(trigger_mode), cpu_idx orelse cpu_any
     );
-    return if (result < 0) utils.intToErr(Error, result) else @intCast(result);
+    return if (result < 0) lib.meta.intToErr(Error, result) else @intCast(result);
 }
 
 pub export fn releaseMsi(idx: u8) void {
@@ -586,16 +586,16 @@ export fn requestIrqEx(pin: u8, device: *dev.Device, handler: *const anyopaque, 
     const irq = &irqs[pin];
 
     if (irq.in_use) {
-        if (!shared or irq.trigger_mode != tigger_mode) return utils.errToInt(Error.IntrBusy);
+        if (!shared or irq.trigger_mode != tigger_mode) return lib.meta.errToInt(Error.IntrBusy);
     } else {
-        const vector = allocVector(null) orelse return utils.errToInt(Error.NoVector);
+        const vector = allocVector(null) orelse return lib.meta.errToInt(Error.NoVector);
         irq.* = Irq.init(pin, vector, tigger_mode, shared);
 
         chip.bindIrq(irq);
     }
 
     irq.addHandler(@ptrCast(handler), device) catch |err| {
-        return utils.errToInt(err);
+        return lib.meta.errToInt(err);
     };
 
     return 0;
@@ -607,7 +607,7 @@ export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_i
     msis_lock.lock();
     defer msis_lock.unlock();
 
-    if (msis_used == max_intr) return utils.errToInt(Error.NoMemory);
+    if (msis_used == max_intr) return lib.meta.errToInt(Error.NoMemory);
 
     var idx = @intFromPtr(handler) % msis.len;
     while (msis[idx].in_use) {
@@ -617,7 +617,7 @@ export fn requestMsiEx(device: *dev.Device, handler: *const anyopaque, trigger_i
     const msi = &msis[idx];
     const vec = allocVector(
         if (cpu_idx == cpu_any) null else cpu_idx
-    ) orelse return utils.errToInt(Error.NoVector);
+    ) orelse return lib.meta.errToInt(Error.NoVector);
 
     msi.* = .{
         .message = undefined,

@@ -4,12 +4,10 @@
 
 const std = @import("std");
 
-const api = utils.api.scoped(@This());
 const dev = @import("dev.zig");
+const lib = @import("lib.zig");
 const log = std.log.scoped(.vfs);
 const sys = @import("sys.zig");
-const rcu = utils.rcu;
-const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
 const hashFn = std.hash.Fnv1a_32.hash;
@@ -53,7 +51,7 @@ pub const Context = union(enum) {
     /// Represents virtual filesystem context.
     pub const Virt = struct {
         root: *Dentry = bad_root,
-        data: utils.AnyData = .{},
+        data: lib.AnyData = .{},
 
         pub inline fn getMountPoint(self: *Virt) *MountPoint {
             return @fieldParentPtr("virt", self);
@@ -87,6 +85,9 @@ pub const Context = union(enum) {
 };
 
 pub const FileSystem = struct {
+    const List = lib.rcu.DoublyLinkedList;
+    const Node = List.Node;
+
     pub const DriveOperations = struct {
         pub const MountFn = *const fn(*Drive, *Partition) Error!*Superblock;
         pub const UnmountFn = *const fn(*Superblock) void;
@@ -111,12 +112,12 @@ pub const FileSystem = struct {
     name: []const u8,
     hash: u32,
 
-    ref_count: utils.RefCount(u32) = .init(0),
+    ref_count: lib.atomic.RefCount(u32) = .init(0),
 
     ops: Operations = undefined,
     dentry_ops: Dentry.Operations = undefined,
 
-    node: rcu.List.Node = .{},
+    node: Node = .{},
 
     pub fn init(
         comptime name: []const u8,
@@ -154,7 +155,7 @@ pub const FileSystem = struct {
         };
     }
 
-    pub inline fn fromNode(node: *rcu.List.Node) *FileSystem {
+    pub inline fn fromNode(node: *Node) *FileSystem {
         return @fieldParentPtr("node", node);
     }
 
@@ -183,11 +184,14 @@ pub const Path = struct {
 };
 
 pub const MountPoint = struct {
+    const List = lib.rcu.DoublyLinkedList;
+    const Node = List.Node;
+
     fs: *FileSystem,
     dentry: *Dentry,
 
     ctx: Context,
-    node: rcu.List.Node = .{},
+    node: Node = .{},
 
     pub fn init(fs: *FileSystem, dentry: *Dentry, ctx: Context) MountPoint {
         dentry.ref();
@@ -214,7 +218,7 @@ pub const MountPoint = struct {
         vm.free(self);
     }
 
-    pub inline fn fromNode(node: *rcu.List.Node) *MountPoint {
+    pub inline fn fromNode(node: *Node) *MountPoint {
         return @fieldParentPtr("node", node);
     }
 
@@ -265,8 +269,8 @@ pub const Role = enum(u16) {
 
 export var root_dentry: *Dentry = undefined;
 
-var mount_list: rcu.List = .{};
-var fs_list: rcu.List = .{};
+var mount_list: MountPoint.List = .{};
+var fs_list: FileSystem.List = .{};
 
 const AutoInit = opaque {
     pub var file_systems = .{
@@ -296,8 +300,16 @@ pub fn deinit() void {
     tmpfs.deinit();
 }
 
-pub inline fn mount(dentry: *Dentry, fs_name: []const u8, blk_dev: ?*devfs.BlockDev) Error!*Dentry {
-    return api.externFn(mountEx, .mountEx)(dentry, fs_name, blk_dev);
+pub fn mount(dentry: *Dentry, fs_name: []const u8, blk_dev: ?*devfs.BlockDev) Error!*Dentry {
+    if (
+        dentry.inode.type != .directory or
+        (dentry == root_dentry)
+    ) return error.BadDentry;
+
+    const fs = getFs(fs_name) orelse return error.NoFs;
+    defer fs.deref();
+
+    return mountFs(dentry, fs, blk_dev);
 }
 
 pub fn tryMount(dentry: *Dentry, blk_dev: *devfs.BlockDev) Error!*Dentry {
@@ -343,23 +355,76 @@ pub fn registerFs(fs: *FileSystem) bool {
     }
 
     log.info("{s} was registered", .{fs.name});
-
     return true;
 }
 
 pub fn unregisterFs(fs: *FileSystem) void {
-    comptime api.exportFn(unregisterFs);
     fs_list.remove(&fs.node);
 
     log.info("{s} was removed", .{fs.name});
 }
 
-pub inline fn getFs(name: []const u8) ?*FileSystem {
-    return api.externFn(getFsEx, .getFsEx)(name);
+pub fn getFs(name: []const u8) ?*FileSystem {
+    const hash = hashFn(name);
+
+    const gen = fs_list.ctrl.readLock();
+    defer fs_list.ctrl.readUnlock(gen);
+
+    var node = fs_list.first.load(.acquire);
+    while (node) |n| : (node = n.next) {
+        const fs = FileSystem.fromNode(n);
+        if (fs.hash == hash) {
+            fs.ref();
+            return fs;
+        }
+    }
+
+    return null;
 }
 
-pub inline fn lookup(dir: ?*Dentry, path: []const u8) Error!*Dentry {
-    return api.externFn(lookupEx, .lookupEx)(dir, path);
+pub fn lookup(dir: ?*Dentry, path: []const u8) Error!*Dentry {
+    if (path.len == 0) return error.InvalidArgs;
+
+    log.debug("lookup for: \"{s}\"", .{path});
+
+    const start_dent = if (path[0] == '/') root_dentry else dir orelse root_dentry;
+
+    var ent: ?*Dentry = start_dent;
+    var it = std.mem.splitScalar(
+        u8,
+        if (path[0] == '/') path[1..] else path[0..],
+        '/'
+    );
+
+    start_dent.ref();
+    defer if (ent == start_dent) start_dent.deref();
+
+    while (it.next()) |element| {
+        const dentry = ent.?;
+        errdefer dentry.deref();
+
+        if (element.len == 0) continue;
+        if (element[0] == '.') {
+            if (element.len == 1) continue;
+
+            if (element.ptr[1] == '.' and element.len == 2) {
+                dentry.parent.ref();
+                defer dentry.deref();
+
+                ent = dentry.parent;
+                continue;
+            }
+        }
+    
+        if (dentry.inode.type != .directory) return error.BadDentry;
+
+        ent = dentry.lookup(element);
+        dentry.deref();
+
+        if (ent == null) break;
+    }
+
+    return ent orelse error.NoEnt;
 }
 
 /// Same as `vfs.lookup`, but returns `null` if dentry not found.
@@ -385,7 +450,7 @@ pub fn resolveSymLink(sym_dent: *Dentry) Error!*Dentry {
 }
 
 pub fn changeRoot(new: *Dentry) void {
-    // TODO: Implement
+    // TODO: Implement.
     _ = new;
 }
 
@@ -442,36 +507,6 @@ fn getNextFs(fs: *FileSystem) ?*FileSystem {
     next.ref();
 
     return next;
-}
-
-fn getFsEx(name: []const u8) ?*FileSystem {
-    const hash = hashFn(name);
-
-    const gen = fs_list.ctrl.readLock();
-    defer fs_list.ctrl.readUnlock(gen);
-
-    var node = fs_list.first.load(.acquire);
-    while (node) |n| : (node = n.next) {
-        const fs = FileSystem.fromNode(n);
-        if (fs.hash == hash) {
-            fs.ref();
-            return fs;
-        }
-    }
-
-    return null;
-}
-
-fn mountEx(dentry: *Dentry, fs_name: []const u8, blk_dev: ?*devfs.BlockDev) Error!*Dentry {
-    if (
-        dentry.inode.type != .directory or
-        (dentry == root_dentry)
-    ) return error.BadDentry;
-
-    const fs = getFs(fs_name) orelse return error.NoFs;
-    defer fs.deref();
-
-    return mountFs(dentry, fs, blk_dev);
 }
 
 fn mountFs(dentry: *Dentry, fs: *FileSystem, blk_dev: ?*devfs.BlockDev) Error!*Dentry {
@@ -550,51 +585,6 @@ fn mountVirtualFs(fs: *FileSystem, dentry: *Dentry, mnt_point: *MountPoint) !*De
     virt.root.ctx = .{ .virt = &mnt_point.ctx.virt };
 
     return virt.root;
-}
-
-fn lookupEx(dir: ?*Dentry, path: []const u8) Error!*Dentry {
-    if (path.len == 0) return error.InvalidArgs;
-
-    log.debug("lookup for: \"{s}\"", .{path});
-
-    const start_dent = if (path[0] == '/') root_dentry else dir orelse root_dentry;
-
-    var ent: ?*Dentry = start_dent;
-    var it = std.mem.splitScalar(
-        u8,
-        if (path[0] == '/') path[1..] else path[0..],
-        '/'
-    );
-
-    start_dent.ref();
-    defer if (ent == start_dent) start_dent.deref();
-
-    while (it.next()) |element| {
-        const dentry = ent.?;
-        errdefer dentry.deref();
-
-        if (element.len == 0) continue;
-        if (element[0] == '.') {
-            if (element.len == 1) continue;
-
-            if (element.ptr[1] == '.' and element.len == 2) {
-                dentry.parent.ref();
-                defer dentry.deref();
-
-                ent = dentry.parent;
-                continue;
-            }
-        }
-    
-        if (dentry.inode.type != .directory) return error.BadDentry;
-
-        ent = dentry.lookup(element);
-        dentry.deref();
-
-        if (ent == null) break;
-    }
-
-    return ent orelse error.NoEnt;
 }
 
 fn initRoot() !void {

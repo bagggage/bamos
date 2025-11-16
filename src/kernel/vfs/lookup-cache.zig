@@ -5,23 +5,23 @@
 const std = @import("std");
 
 const Dentry = vfs.Dentry;
+const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"vfs.lookup_cache");
-const utils = @import("../utils.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
-const Table = utils.HashTable(u64, opaque{
+const Table = lib.HashTable(u64, opaque{
     pub fn hash(key: u64) u64 { return key; } 
     pub fn eql(a: u64, b: u64) bool { return a == b; }
 });
 
-const max_table_size = utils.mb_size * 16;
-const min_table_size = utils.mb_size;
+const max_table_size = lib.mb_size * 16;
+const min_table_size = lib.mb_size;
 
 pub const Entry = Table.Entry;
 
 var table: Table = .{};
-var lock = utils.Spinlock.init(.unlocked);
+var lock: lib.sync.Spinlock = .init(.unlocked);
 
 pub fn init() !void {
     const total_mem_size = vm.PageAllocator.getTotalPages() * vm.page_size;
@@ -30,10 +30,10 @@ pub fn init() !void {
         min_table_size,
         max_table_size
     );
-    const table_capacity = std.math.divCeil(usize, table_size, @sizeOf(utils.hash_table.Bucket)) catch unreachable;
+    const table_capacity = std.math.divCeil(usize, table_size, @sizeOf(lib.hash_table.Bucket)) catch unreachable;
 
     table = try .init(@truncate(table_capacity));
-    log.info("table: capacity: {}, size: {} KB", .{table_capacity,table_size / utils.kb_size});
+    log.info("table: capacity: {}, size: {} KB", .{table_capacity,table_size / lib.kb_size});
 }
 
 pub fn get(hash: u64) ?*Dentry {

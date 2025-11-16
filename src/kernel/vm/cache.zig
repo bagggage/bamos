@@ -4,13 +4,13 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 const vm = @import("../vm.zig");
 
-const LruList = utils.List;
+const LruList = std.DoublyLinkedList;
 const LruNode = LruList.Node;
 
-pub const block_size = 16 * utils.kb_size;
+pub const block_size = 16 * lib.kb_size;
 pub const block_pages = block_size / vm.page_size;
 pub const block_rank = std.math.log2_int(u32, block_pages);
 
@@ -19,13 +19,13 @@ pub const Error = error {
 };
 
 pub const Block = struct {
-    const List = utils.List;
+    const List = std.DoublyLinkedList;
     const Node = List.Node;
 
     lba_key: usize = 0,
     phys_base: u32 = 0,
 
-    ref_count: utils.RefCount(u32) = .{},
+    ref_count: lib.atomic.RefCount(u32) = .{},
 
     node: Node = .{},
     lru_node: LruNode = .{},
@@ -131,7 +131,7 @@ const HashTable = struct {
             .capacity = 128
         };
 
-        const List = utils.SList;
+        const List = std.SinglyLinkedList;
         const Node = List.Node;
 
         base: u32,
@@ -173,7 +173,7 @@ const HashTable = struct {
     const initial_capacity = 512;
     const initial_pages = std.math.divCeil(comptime_int, initial_capacity * @sizeOf(Bucket), vm.page_size) catch unreachable;
     const initial_rank = std.math.log2_int_ceil(u8, initial_pages);
-    const virt_pages = (64 * utils.mb_size) / vm.page_size;
+    const virt_pages = (64 * lib.mb_size) / vm.page_size;
 
     pages: Page.List = .{},
     buckets: []Bucket = &.{},
@@ -242,7 +242,7 @@ const HashTable = struct {
 };
 
 pub const ControlBlock = struct {
-    const List = utils.List;
+    const List = std.DoublyLinkedList;
 
     pub const alloc_config: vm.auto.Config = .{
         .allocator = .oma,
@@ -250,10 +250,10 @@ pub const ControlBlock = struct {
     };
 
     hash_table: HashTable = .{},
-    hash_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
+    hash_lock: lib.sync.Spinlock = .init(.unlocked),
 
     lru_list: LruList = .{},
-    lru_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
+    lru_lock: lib.sync.Spinlock = .init(.unlocked),
 
     block_oma: vm.ObjectAllocator = .initCapacity(@sizeOf(Block), 256),
 
@@ -355,7 +355,7 @@ pub const ControlBlock = struct {
 
 var total_blocks: u32 = 0;
 
-var ctrl_lock = utils.Spinlock.init(.unlocked);
+var ctrl_lock: lib.sync.Spinlock = .init(.unlocked);
 var ctrl_list: ControlBlock.List = .{};
 
 pub fn makeCtrl() Error!*ControlBlock {

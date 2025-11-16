@@ -2,14 +2,15 @@
 
 // Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
 
+const std = @import("std");
+
 const Bus = @import("Bus.zig");
 const Device = @import("Device.zig");
 const dev = @import("../dev.zig");
-const utils = @import("../utils.zig");
 
 const Self = @This();
 
-pub const List = utils.List;
+pub const List = std.DoublyLinkedList;
 pub const Node = List.Node;
 
 pub const Operations = struct {

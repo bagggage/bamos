@@ -15,13 +15,13 @@
 const std = @import("std");
 
 const boot = @import("../boot.zig");
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 const vm = @import("../vm.zig");
 
-const FreeList = utils.atomic.SList;
+const FreeList = lib.atomic.SinglyLinkedList;
 
 pub const Arena = struct {
-    const List = utils.atomic.SList;
+    const List = lib.atomic.SinglyLinkedList;
     const Node = List.Node;
 
     /// Represents a physical page number of the memory pool from which objects are allocated.
@@ -124,7 +124,7 @@ obj_size: u16,
 pub const default_capacity = 128;
 /// Allocator for managing arena nodes.
 var arenas_alloc: vm.BucketAllocator = undefined;
-var arenas_lock = utils.Spinlock.init(.unlocked);
+var arenas_lock: lib.sync.Spinlock = .init(.unlocked);
 
 /// Initializes the Object Memory Allocator (OMA) system.
 /// - Returns: An error if the memory could not be allocated.

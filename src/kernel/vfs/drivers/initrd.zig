@@ -7,7 +7,6 @@ const tar = std.tar;
 
 const boot = @import("../../boot.zig");
 const log = std.log.scoped(.initrd);
-const utils = @import("../../utils.zig");
 const vfs = @import("../../vfs.zig");
 
 const TarIterator = tar.Iterator;
@@ -209,6 +208,6 @@ fn setupInode(inode: *vfs.Inode, file: *const TarFile, pos: usize) void {
         .size = file.size,
 
         // Data pointer
-        .fs_data = utils.AnyData.from(@constCast(&initrd.ptr[pos]))
+        .fs_data = .from(@constCast(&initrd.ptr[pos]))
     };
 }

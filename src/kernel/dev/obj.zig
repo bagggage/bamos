@@ -4,17 +4,17 @@
 
 const std = @import("std");
 
+const lib = @import("../lib.zig");
 const vm = @import("../vm.zig");
-const utils = @import("../utils.zig");
 
-const List = utils.List;
+const List = std.DoublyLinkedList;
 const Node = List.Node;
 const HashMap = std.AutoHashMapUnmanaged(u32, ObjectsList);
 
 // TODO: Use RCU list instead
 const ObjectsList = struct {
     list: List = .{},
-    lock: utils.Spinlock = .{},
+    lock: lib.sync.Spinlock = .{},
 };
 
 fn Object(comptime T: type) type {
@@ -48,7 +48,7 @@ pub fn Inherit(comptime Base: type, comptime T: type) type {
 }
 
 var hash_map: HashMap = .{};
-var map_lock = utils.Spinlock.init(.unlocked);
+var map_lock: lib.sync.Spinlock = .init(.unlocked);
 
 fn checkType(comptime T: type) void {
     if (@typeInfo(T) != .@"struct") {
@@ -73,7 +73,7 @@ pub fn free(comptime T: type, object: *T) void {
 pub inline fn add(comptime T: type, object: *T) Error!void {
     comptime checkType(T);
 
-    const id = comptime utils.typeId(T);
+    const id = comptime lib.meta.typeId(T);
     const obj = Object(T).fromPayload(object);
     if (!addByTypeId(id, &obj.node)) return error.NoMemory;
 
@@ -93,7 +93,7 @@ pub inline fn remove(object: anytype) void {
         T.onObjectRemove(object);
     }
 
-    const id = comptime utils.typeId(T);
+    const id = comptime lib.meta.typeId(T);
     const obj = Object(T).fromPayload(object);
     const result = removeByTypeId(id, &obj.node);
     std.debug.assert(result == true);
@@ -101,7 +101,7 @@ pub inline fn remove(object: anytype) void {
 
 pub inline fn getObjects(comptime T: type) ?*List {
     comptime checkType(T);
-    const id = comptime utils.typeId(T);
+    const id = comptime lib.meta.typeId(T);
 
     return getObjectsByTypeId(id) orelse return null;
 }

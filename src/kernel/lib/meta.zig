@@ -1,92 +1,16 @@
-//! # Utilities
-
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
-const builtin = @import("builtin");
 
-const log = std.log.scoped(.utils);
-const num_alloc = @import("utils/num-alloc.zig");
+const TypeHasher = std.hash.Fnv1a_32;
 
-pub const api = @import("utils/api.zig");
-pub const algorithm = @import("utils/algorithm.zig");
-pub const arch = switch (builtin.cpu.arch) {
-    .x86_64 => @import("arch/x86-64/arch.zig"),
-    else => @compileError("Unsupported architecture"),
-};
+pub fn typeId(comptime T: type) u32 {
+    const name = comptime @typeName(T);
 
-pub const AnyData = struct {
-    ptr: ?*anyopaque = null,
+    comptime var hasher = TypeHasher.init();
+    hasher.update(name);
 
-    pub inline fn from(ptr: ?*anyopaque) AnyData {
-        return .{ .ptr = ptr };
-    }
-
-    pub inline fn set(self: *AnyData, ptr: ?*anyopaque) void {
-        self.ptr = ptr;
-    }
-
-    pub inline fn as(self: AnyData, comptime T: type) ?*T {
-        return if (self.ptr) |val| @as(*T, @ptrCast(@alignCast(val))) else null;
-    }
-};
-
-pub const Bitmap = @import("utils/Bitmap.zig");
-pub const BinaryTree = @import("utils/binary-tree.zig").BinaryTree;
-
-pub const CmpResult = enum {
-    less,
-    equals,
-    great
-};
-
-pub fn CmpFnType(comptime T: type) type {
-    return fn(*const T, *const T) CmpResult;
-}
-
-pub const atomic = @import("utils/atomic.zig");
-pub const AutoHashTable = hash_table.AutoHashTable;
-pub const config = @import("utils/config.zig");
-pub const hash_table = @import("utils/hash-table.zig");
-pub const HashTable = hash_table.HashTable;
-pub const Heap = @import("utils/Heap.zig");
-pub const List = std.DoublyLinkedList;
-pub const NumberAlloc = num_alloc.NumberAlloc;
-pub const NumberAllocCeil = num_alloc.NumberAllocCeil;
-pub const NumberAllocFloor = num_alloc.NumberAllocFloor;
-pub const NumberAllocRanged = num_alloc.NumberAllocRanged;
-pub const rb = @import("utils/rb-tree.zig");
-pub const rcu = @import("utils/rcu.zig");
-pub const RefCount = @import("utils/ref-count.zig").RefCount;
-pub const SList = std.SinglyLinkedList;
-pub const RwLock = @import("utils/RwLock.zig");
-pub const Spinlock = @import("utils/Spinlock.zig");
-
-pub const is_debug = (builtin.mode == .Debug or builtin.mode == .ReleaseSafe);
-
-/// Fixed-point scale.
-pub const fp_scale = 32;
-
-pub const byte_size = 8;
-pub const kb_size = 1024;
-pub const mb_size = kb_size * 1024;
-pub const gb_size = mb_size * 1024;
-
-pub inline fn alignUp(comptime T: type, value: T, alignment: T) T {
-    return ((value + (alignment - 1)) & ~(alignment - 1));
-}
-
-pub inline fn alignDown(comptime T: type, value: T, alignment: T) T {
-    return value & ~(alignment - 1);
-}
-
-pub inline fn divByPowerOfTwo(comptime T: type, value: T, pow_of_2: std.math.Log2Int(T)) T {
-    return value >> pow_of_2;
-}
-
-pub inline fn modByPowerOfTwo(comptime T: type, value: T, pow_of_2: std.math.Log2Int(T)) T {
-    const mask = ~@as(T, 0) << pow_of_2;
-    return value & (~mask);
+    return hasher.final();
 }
 
 pub inline fn errToInt(err: anyerror) i16 {
@@ -98,60 +22,6 @@ pub inline fn intToErr(comptime Err: type, int: i16) Err {
     const uint: u16 = @intCast(-int);
     return @as(Err, @errorCast(@errorFromInt(uint)));
 }
-
-pub inline fn halt() noreturn {
-    while (true) arch.halt();
-}
-
-/// @export
-pub fn profile(src: ?std.builtin.SourceLocation, func: anytype, args: anytype) void {
-    const begin = profileBegin();
-
-    const is_ret_error = comptime blk: {
-        const fn_type = @typeInfo(@TypeOf(func)).Fn;
-
-        if (fn_type.return_type) |ret_t| {
-            const ret_info = @typeInfo(ret_t);
-
-            break :blk (ret_info == .ErrorSet or ret_info == .ErrorUnion);
-        }
-
-        break :blk false;
-    };
-
-    if (is_ret_error) {
-        _ = @call(.auto, func, args) catch |err| {
-            log.err("Error while profiling: {s}", .{@errorName(err)});
-            return;
-        };
-    } else {
-        _ = @call(.auto, func, args);
-    }
-
-    const cycles = profileEnd(begin);
-    const cpu_mhz = arch.getCpuInfo().base_frequency;
-    const ms = if(cpu_mhz != 0) cycles / (cpu_mhz * 1000) else 0;
-
-    if (src) |s| {
-        log.warn("Profile at {s}.{s}:{}:{} - {}t ~ {}ms", .{
-            s.file, s.fn_name, s.line, s.column, cycles, ms
-        });
-    } else {
-        log.warn("Profile: {s} - {}t ~ {}ms", .{
-            @typeName(@TypeOf(func)), cycles, ms
-        });
-    }
-}
-
-pub inline fn profileBegin() usize {
-    return arch.timestamp();
-}
-
-pub inline fn profileEnd(begin: usize) usize {
-    return arch.timestamp() - begin;
-}
-
-const TypeHasher = std.hash.Fnv1a_32;
 
 fn typeIdShort(comptime T: type) u32 {
     @setEvalBranchQuota(10000);
@@ -342,13 +212,4 @@ fn _typeId(comptime T: type) u32 {
             return comptime hasher.final();
         }
     }.typeIdImpl(T, 0);
-}
-
-pub fn typeId(comptime T: type) u32 {
-    const name = comptime @typeName(T);
-
-    comptime var hasher = TypeHasher.init();
-    hasher.update(name);
-
-    return hasher.final();
 }

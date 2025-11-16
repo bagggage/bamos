@@ -4,8 +4,8 @@
 
 const std = @import("std");
 
+const lib = @import("lib.zig");
 const log = std.log.scoped(.dev);
-const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
 pub const acpi = @import("dev/stds/acpi.zig");
@@ -125,7 +125,7 @@ pub const Name = extern struct {
 pub const nameHash = std.hash.Fnv1a_32.hash;
 
 var buses: Bus.List = .{};
-var buses_lock: utils.Spinlock = .init(.unlocked);
+var buses_lock: lib.sync.Spinlock = .init(.unlocked);
 
 /// @noexport
 const AutoInit = struct {
@@ -159,7 +159,7 @@ pub fn preinit() !void {
     platform_bus.addDriver(&kernel_driver);
 
     try acpi.postInit();
-    try utils.arch.devInit();
+    try lib.arch.devInit();
 }
 
 pub fn init() !void {

@@ -7,16 +7,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const arch = utils.arch;
+const arch = lib.arch;
 const boot = @import("boot.zig");
-const config = utils.config;
+const config = @import("config.zig");
 const dev = @import("dev.zig");
+const lib = @import("lib.zig");
 const logger = @import("logger.zig");
 const log = std.log;
 const sched = @import("sched.zig");
 const smp = @import("smp.zig");
 const sys = @import("sys.zig");
-const utils = @import("utils.zig");
 const vfs = @import("vfs.zig");
 const video = @import("video.zig");
 const vm = @import("vm.zig");
@@ -67,7 +67,7 @@ fn main2() noreturn {
     }
 
     init(vm);
-    log.warn("Used memory: {} KiB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / utils.kb_size});
+    log.warn("Used memory: {} KiB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / lib.kb_size});
 
     init(config);
 
@@ -78,7 +78,7 @@ fn main2() noreturn {
 
     sched.startup(0, kernelStartupTask) catch |err| {
         log.err("startup failed: {s}", .{@errorName(err)});
-        utils.halt();
+        lib.sync.halt();
     };
 }
 
@@ -136,7 +136,7 @@ fn awaitTask() noreturn {
 fn preinit(comptime Module: type) void {
     Module.preinit() catch |err| {
         log.err("Can't pre-initialize `" ++ @typeName(Module) ++ "` module: {s}", .{@errorName(err)});
-        utils.halt();
+        lib.sync.halt();
 
         unreachable;
     };
@@ -145,7 +145,7 @@ fn preinit(comptime Module: type) void {
 fn init(comptime Module: type) void {
     Module.init() catch |err| {
         log.err("Can't initialize `" ++ @typeName(Module) ++ "` module: {s}", .{@errorName(err)});
-        utils.halt();
+        lib.sync.halt();
 
         unreachable;
     };

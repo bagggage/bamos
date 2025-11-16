@@ -7,16 +7,16 @@
 
 const std = @import("std");
 
+const lib = @import("../lib.zig");
 const sys = @import("../sys.zig");
-const utils = @import("../utils.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
 
 files: [*]?*vfs.File = undefined,
-bitmap: utils.Bitmap = .{},
-lock: utils.Spinlock = .{},
+bitmap: lib.Bitmap = .{},
+lock: lib.sync.Spinlock = .{},
 
 // Capacity.
 max_files: u32 = 0,

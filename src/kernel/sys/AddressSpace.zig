@@ -4,15 +4,15 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 const VmList = MapUnit.List;
 const VmNode = MapUnit.Node;
 
-const RbTree = utils.rb.Tree(compareMapUnits);
-const RbNode = utils.rb.Node;
+const RbTree = lib.rb.Tree(compareMapUnits);
+const RbNode = lib.rb.Node;
 
 const Self = @This();
 
@@ -25,10 +25,10 @@ pub const alloc_config: vm.auto.Config = .{
 
 page_table: *vm.PageTable,
 
-users: utils.RefCount(u32) = .init(0),
+users: lib.atomic.RefCount(u32) = .init(0),
 
 map_units: VmList = .{},
-map_lock: utils.RwLock = .{},
+map_lock: lib.sync.RwLock = .{},
 rb_tree: RbTree = .{},
 
 /// The last map unit before heap first free region starts.
@@ -160,7 +160,7 @@ pub fn format(
     _: std.fmt.FormatOptions,
     writer: anytype,
 ) !void {
-    const stack_size = self.stack_pages * (vm.page_size / utils.kb_size);
+    const stack_size = self.stack_pages * (vm.page_size / lib.kb_size);
 
     try writer.print("{*}: refs: {}\n\t{*}, stack size: {} KB\n", .{
         self, self.users.count(), self.page_table, stack_size

@@ -7,8 +7,8 @@
 const std = @import("std");
 
 const cache = @import("../../vm.zig").cache;
+const lib = @import("../../lib.zig");
 const log = std.log.scoped(.ext2);
-const utils = @import("../../utils.zig");
 const vfs = @import("../../vfs.zig");
 
 const super_offset = 1024;
@@ -324,11 +324,10 @@ const Inode = extern struct {
             // Shift to get number of ptrs that we skip buy 
             var shift = self.ptr_per_blk_shift * (self.indir_level - 1);
             for (0..self.indir_level - 1) |i| {
-                self.ptr_stack[i] = utils.divByPowerOfTwo(u32, self.inner_idx, shift);
-                self.inner_idx = utils.modByPowerOfTwo(u32, self.inner_idx, shift);
+                self.ptr_stack[i] = lib.misc.divByPowerOfTwo(u32, self.inner_idx, shift);
+                self.inner_idx = lib.misc.modByPowerOfTwo(u32, self.inner_idx, shift);
 
                 shift -= self.ptr_per_blk_shift;
-
                 try self.readPtrBlock(self.ptrs[self.ptr_stack[i]]);
             }
         }

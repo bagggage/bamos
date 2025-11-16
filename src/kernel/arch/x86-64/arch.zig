@@ -12,9 +12,6 @@ const gdt = @import("gdt.zig");
 const lapic = @import("intr/lapic.zig");
 const regs = @import("regs.zig");
 const smp = @import("../../smp.zig");
-const utils = @import("../../utils.zig");
-
-const Spinlock = utils.Spinlock;
 
 const Cpu = struct {
     const Vendor = enum { unknown, Intel, AMD };

@@ -15,8 +15,8 @@ const c = @cImport({
 
 const std = @import("std");
 const builtin = @import("builtin");
+const lib = @import("lib.zig");
 const log = std.log.scoped(.boot);
-const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
 const Framebuffer = @import("video/Framebuffer.zig");
@@ -139,14 +139,14 @@ pub fn getMappings() vm.Error![]MappingEntry {
     const buffer = vm.PageAllocator.alloc(0) orelse return vm.Error.NoMemory;
     const mappings: [*]MMap = @ptrFromInt(vm.getVirtLma(buffer));
 
-    log.info("LMA size: {} GiB", .{vm.lmaSize() / utils.gb_size});
+    log.info("LMA size: {} GiB", .{vm.lmaSize() / lib.gb_size});
 
     mappings[@intFromEnum(Order.LMA)] = MMap.init(
         vm.lma_start, 0x0, vm.lmaSize(),
         .{ .write = true, .global = true, .large = true }
     );
     mappings[@intFromEnum(Order.Fb)] = MMap.init(
-        @intFromPtr(&fb), bootboot.fb_ptr, 16 * utils.mb_size,
+        @intFromPtr(&fb), bootboot.fb_ptr, 16 * lib.mb_size,
         .{ .write = true, .global = true, .large = true, .cache_disable = true }
     );
     mappings[@intFromEnum(Order.Boot)] = MMap.init(

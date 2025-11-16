@@ -9,7 +9,7 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 const vm = @import("../vm.zig");
 
 pub const Page = struct {
@@ -18,7 +18,7 @@ pub const Page = struct {
         .capacity = 256
     };
 
-    pub const List = utils.SList;
+    pub const List = std.SinglyLinkedList;
     pub const Node = List.Node;
 
     const Dim = packed struct {
@@ -223,7 +223,7 @@ pub fn getTop(self: *const Self) usize {
 }
 
 pub fn getTopAligned(self: *const Self, comptime alignment: u5) usize {
-    return utils.alignDown(usize, self.getTop() - 1, alignment);
+    return lib.misc.alignDown(usize, self.getTop() - 1, alignment);
 }
 
 pub fn format(self: *const Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {

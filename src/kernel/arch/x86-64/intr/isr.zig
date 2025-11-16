@@ -7,12 +7,12 @@ const std = @import("std");
 const arch = @import("../arch.zig");
 const apic = @import("apic.zig");
 const intr = @import("../../../dev/intr.zig");
+const lib = @import("../../../lib.zig");
 const log = std.log.scoped(.isr);
 const logger = @import("../../../logger.zig");
 const panic = @import("../../../panic.zig");
 const regs = @import("../regs.zig");
 const smp = @import("../../../smp.zig");
-const utils = @import("../../../utils.zig");
 const vm = @import("../../../vm.zig");
 
 pub const Fn = *const fn () callconv(.naked) noreturn;
@@ -224,7 +224,7 @@ pub fn commonExcpHandler(frame: *regs.InterruptFrame, state: *regs.State, vec: u
         frame.ss,          if (apic.lapic.isInitialized()) apic.lapic.getId() else 9999,
     });
 
-    utils.halt();
+    lib.sync.halt();
 }
 
 pub fn pageFaultHandler(frame: *regs.InterruptFrame, state: *regs.State, vec: u32, error_code: u32) callconv(.c) void {

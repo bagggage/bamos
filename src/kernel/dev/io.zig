@@ -5,9 +5,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const arch = utils.arch;
+const arch = lib.arch;
+const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"dev.io");
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 pub const inb = arch.io.inb;
@@ -247,7 +247,7 @@ pub const Type = enum(u1) {
 };
 
 const Region = struct {
-    const List = utils.SList;
+    const List = std.SinglyLinkedList;
     const Node = List.Node;
 
     pub const alloc_config: vm.auto.Config = .{
@@ -269,10 +269,10 @@ const Region = struct {
     }
 };
 
-var lock = utils.Spinlock.init(.unlocked);
+var lock: lib.sync.Spinlock = .init(.unlocked);
 
-var ports_list = Region.List{};
-var mmio_list = Region.List{};
+var ports_list: Region.List = .{};
+var mmio_list: Region.List = .{};
 
 inline fn getIoList(comptime io_type: Type) *Region.List {
     return switch (io_type) {

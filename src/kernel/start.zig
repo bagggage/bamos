@@ -8,8 +8,8 @@
 extern fn main() noreturn;
 
 /// The `_start` function delegates to the `startImpl` function, defined in the architecture-specific 
-/// `utils.zig` module. The `startImpl` is responsible for setting up the initial CPU state 
+/// `arch` module. The `startImpl` is responsible for setting up the initial CPU state 
 /// and then jumping to the `main` function.
 pub export fn _start() callconv(.naked) noreturn {
-    @import("utils.zig").arch.startImpl();
+    @import("lib.zig").arch.startImpl();
 }

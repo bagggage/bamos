@@ -5,9 +5,9 @@
 const std = @import("std");
 
 const dev = @import("../../dev.zig");
+const lib = @import("../../lib.zig");
 const log = std.log.scoped(.devfs);
 const tmpfs = vfs.tmpfs;
-const utils = @import("../../utils.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
@@ -26,7 +26,7 @@ pub const DevNum = struct {
 
 pub const Region = struct {
     major: u16,
-    minor_alloc: utils.NumberAlloc(u16) = .{},
+    minor_alloc: lib.NumberAlloc(u16) = .{},
 
     pub fn init() Error!Region {
         return .{
@@ -52,14 +52,14 @@ pub const Region = struct {
 };
 
 pub const DevFile = struct {
-    const List = utils.SList;
+    const List = std.SinglyLinkedList;
     const Node = List.Node;
 
     name: dev.Name,
     num: DevNum,
 
     fops: *const vfs.File.Operations,
-    data: utils.AnyData = .{},
+    data: lib.AnyData = .{},
 
     node: Node = .{},
 
@@ -106,7 +106,7 @@ const DevList = struct {
     list: DevFile.List = .{},
     max_no: u16,
 
-    lock: utils.Spinlock = .{},
+    lock: lib.sync.Spinlock = .{},
 };
 
 const init_inode_idx = 1;
@@ -127,8 +127,8 @@ var fs = vfs.FileSystem.init(
 );
 
 var root: *vfs.Dentry = undefined;
-var major_bitmap: utils.Bitmap = .{};
-var major_lock: utils.Spinlock = .{};
+var major_bitmap: lib.Bitmap = .{};
+var major_lock: lib.sync.Spinlock = .{};
 
 var inode_idx: u32 = init_inode_idx;
 
@@ -175,7 +175,7 @@ pub inline fn registerCharDev(devf: *DevFile) Error!void {
     _ = try registerDevice(devf, .char_device);
 }
 
-pub inline fn getDevData(dentry: *const vfs.Dentry) utils.AnyData {
+pub inline fn getDevData(dentry: *const vfs.Dentry) lib.AnyData {
     return dentry.inode.fs_data.as(DevFile).?.data;
 }
 

@@ -8,11 +8,11 @@
 
 const std = @import("std");
 
-const arch = @import("utils.zig").arch;
+const arch = lib.arch;
 const boot = @import("boot.zig");
+const lib = @import("lib.zig");
 const log = std.log.scoped(.vm);
 const smp = @import("smp.zig");
-const utils = @import("utils.zig");
 
 /// The size of a memory page, specific to the architecture.
 pub const page_size = arch.vm.page_size;
@@ -35,7 +35,6 @@ pub const VirtualRegion = @import("vm/VirtualRegion.zig");
 pub const auto = @import("vm/auto.zig");
 pub const BucketAllocator = @import("vm/BucketAllocator.zig");
 pub const cache = @import("vm/cache.zig");
-pub const Heap = utils.Heap;
 pub const ObjectAllocator = @import("vm/ObjectAllocator.zig");
 pub const PageAllocator = @import("vm/PageAllocator.zig");
 pub const UniversalAllocator = @import("vm/UniversalAllocator.zig");
@@ -157,8 +156,8 @@ pub const Error = error {
 var root_pt: *PageTable = undefined;
 
 /// The kernel heap used for allocation virtual address ranges.
-var heap: Heap = undefined;
-var heap_lock = utils.Spinlock.init(.unlocked);
+var heap: lib.Heap = undefined;
+var heap_lock: lib.sync.Spinlock = .init(.unlocked);
 
 /// Initializes the virtual memory management system. Must be called only once.
 /// 

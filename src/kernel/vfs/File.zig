@@ -8,8 +8,8 @@ const File = @This();
 
 const Dentry = vfs.Dentry;
 const Error = vfs.Error;
+const lib = @import("../lib.zig");
 const sys = @import("../sys.zig");
-const utils = @import("../utils.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
@@ -34,7 +34,7 @@ pub const alloc_config: vm.auto.Config = .{
 
 dentry: *Dentry,
 ops: *const Operations = &Operations.default.ops,
-ref_count: utils.RefCount(u32) = .init(0),
+ref_count: lib.atomic.RefCount(u32) = .init(0),
 perm: vfs.Permissions = .none,
 offset: usize = 0,
 

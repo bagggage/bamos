@@ -10,16 +10,16 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
 const Bucket = struct {
-    const List = utils.SList;
+    const List = std.SinglyLinkedList;
     const Node = List.Node;
 
     pool_addr: usize,
-    bitmap: utils.Bitmap,
+    bitmap: lib.Bitmap,
     alloc_num: usize = 0,
     node: Node = .{},
 
@@ -30,9 +30,9 @@ const Bucket = struct {
     /// - `pool_addr`: The virtual address of the memory pool.
     pub fn init(bitmap_addr: usize, capacity: usize, pool_addr: usize) Bucket {
         const bits: [*]u8 = @ptrFromInt(bitmap_addr);
-        const bitmap_size = std.math.divCeil(usize, capacity, utils.byte_size) catch unreachable;
+        const bitmap_size = std.math.divCeil(usize, capacity, lib.byte_size) catch unreachable;
 
-        defer bits[bitmap_size - 1] = @as(u8, 0xFF) << @truncate(capacity % utils.byte_size);
+        defer bits[bitmap_size - 1] = @as(u8, 0xFF) << @truncate(capacity % lib.byte_size);
         return .{
             .pool_addr = pool_addr,
             .bitmap = .init(bits[0..bitmap_size], false)
@@ -50,16 +50,16 @@ const Bucket = struct {
     /// - Returns: The number of objects that can be stored in the bucket.
     pub fn calcCapacity(pages: u32, obj_size: u32) u32 {
         var capacity: u32 = ((pages * vm.page_size) - @sizeOf(Bucket)) / obj_size;
-        var bitmap_size: u32 = std.math.divCeil(u32, capacity, utils.byte_size) catch unreachable;
+        var bitmap_size: u32 = std.math.divCeil(u32, capacity, lib.byte_size) catch unreachable;
 
         // Adjust the capacity to ensure the bucket fits within the allocated pages.
-        while ((utils.alignUp(
+        while ((lib.misc.alignUp(
             u32, (capacity * obj_size) + bitmap_size,
             @alignOf(Bucket)) + @sizeOf(Bucket)) >
             (pages * vm.page_size))
         {
             capacity -= 1;
-            bitmap_size = std.math.divCeil(u32, capacity, utils.byte_size) catch unreachable;
+            bitmap_size = std.math.divCeil(u32, capacity, lib.byte_size) catch unreachable;
         }
 
         return capacity;
@@ -121,7 +121,7 @@ pub inline fn init(comptime T: type) Self {
 /// - Returns: A pointer to the new bucket, or `null` if allocation fails.
 pub fn newBucket(self: *Self) ?*Bucket {
     const pool_size = (self.obj_size * self.bucket_capacity) + @sizeOf(Bucket) +
-        (std.math.divCeil(u32, self.bucket_capacity, utils.byte_size) catch unreachable);
+        (std.math.divCeil(u32, self.bucket_capacity, lib.byte_size) catch unreachable);
 
     const pool_pages: u32 = @truncate(std.math.divCeil(usize, pool_size, vm.page_size) catch unreachable);
     const pool_addr = vm.PageAllocator.alloc(std.math.log2_int(u32, pool_pages)) orelse return null;
@@ -137,9 +137,9 @@ pub fn newBucket(self: *Self) ?*Bucket {
 /// - `pool_addr`: The virtual address of the memory pool.
 /// - Returns: A pointer to the new bucket.
 fn makeBucket(self: *Self, pool_addr: usize) *Bucket {
-    const bitmap_size = std.math.divCeil(u32, self.bucket_capacity, utils.byte_size) catch unreachable;
+    const bitmap_size = std.math.divCeil(u32, self.bucket_capacity, lib.byte_size) catch unreachable;
     const bitmap_addr = pool_addr + (self.bucket_capacity * self.obj_size);
-    const bucket_addr = utils.alignUp(usize, bitmap_addr + bitmap_size, @alignOf(Bucket));
+    const bucket_addr = lib.misc.alignUp(usize, bitmap_addr + bitmap_size, @alignOf(Bucket));
 
     const bucket: *Bucket = @ptrFromInt(bucket_addr);
     bucket.* = .init(bitmap_addr, self.bucket_capacity, pool_addr);

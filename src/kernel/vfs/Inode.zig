@@ -2,7 +2,7 @@
 
 // Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
 
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
@@ -38,9 +38,9 @@ uid: u16 = 0,
 
 links_num: u16 = 1,
 
-ref_count: utils.RefCount(u32) = .init(0),
+ref_count: lib.atomic.RefCount(u32) = .init(0),
 
-fs_data: utils.AnyData = .{},
+fs_data: lib.AnyData = .{},
 
 pub inline fn new() ?*Inode {
     const inode = vm.auto.alloc(Inode) orelse return null;

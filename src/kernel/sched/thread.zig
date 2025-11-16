@@ -4,8 +4,8 @@
 
 const std = @import("std");
 
-const arch = utils.arch;
-const utils = @import("../utils.zig");
+const arch = lib.arch;
+const lib = @import("../lib.zig");
 const vm = @import("../vm.zig");
 
 pub const stack_alignment = @sizeOf(usize);
