@@ -39,7 +39,7 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 const vm = @import("../vm.zig");
 
 /// The maximum size for small memory allocations, defined as half of the 
@@ -58,15 +58,15 @@ const HugeFrame = struct {
     base: u32 = undefined,
     rank: u8 = undefined,
 
-    pub fn cmp(lhs: *const HugeFrame, rhs: *const HugeFrame) utils.CmpResult {
-        if (lhs.base == rhs.base) { return .equals; }
-        else if (lhs.base < rhs.base) { return .less; }
+    pub fn cmp(lhs: *const HugeFrame, rhs: *const HugeFrame) std.math.Order {
+        if (lhs.base == rhs.base) { return .eq; }
+        else if (lhs.base < rhs.base) { return .lt; }
 
-        return .great;
+        return .gt;
     }
 };
 
-const HugeTree = utils.BinaryTree(HugeFrame, HugeFrame.cmp);
+const HugeTree = lib.BinaryTree(HugeFrame, HugeFrame.cmp);
 const HugeNode = HugeTree.Node;
 
 /// A fixed-size array of object allocators (`vm.ObjectAllocator`),

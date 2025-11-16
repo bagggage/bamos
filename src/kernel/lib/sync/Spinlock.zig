@@ -7,15 +7,15 @@
 
 // Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
-const atomic = std.atomic;
 const std = @import("std");
-const smp = @import("../smp.zig");
-const sched = @import("../sched.zig");
-const intr = @import("../dev.zig").intr;
+
+const smp = @import("../../smp.zig");
+const sched = @import("../../sched.zig");
+const intr = @import("../../dev.zig").intr;
 
 const Self = @This();
 
-exclusion: atomic.Value(State) = .init(.unlocked),
+exclusion: std.atomic.Value(State) = .init(.unlocked),
 
 /// Represents the lock state.
 pub const State = enum(u8) {

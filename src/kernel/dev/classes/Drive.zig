@@ -7,10 +7,10 @@ const std = @import("std");
 const cache = vm.cache;
 const dev = @import("../../dev.zig");
 const devfs = vfs.devfs;
+const lib = @import("../../lib.zig");
 const log = std.log.scoped(.Drive);
 const sched = @import("../../sched.zig");
 const smp = @import("../../smp.zig");
-const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");
 const vfs = @import("../../vfs.zig");
 
@@ -33,7 +33,7 @@ pub const io = opaque {
     };
 
     pub const Request = struct {
-        const Queue = utils.SList;
+        const Queue = std.SinglyLinkedList;
         const Node = Queue.Node;
 
         pub const CallbackFn = *const fn (*const Request, Status) void;
@@ -64,7 +64,7 @@ pub const io = opaque {
         const AnyQueue = union {
             const Single = struct {
                 queue: Request.Queue = .{},
-                lock: utils.Spinlock = .{}
+                lock: lib.sync.Spinlock = .{}
             };
 
             multi: [*]Request.Queue,
@@ -259,7 +259,7 @@ pub fn deinit(self: *Self) void {
 
 pub fn onObjectAdd(self: *Self) void {
     log.info("registered: {f}; lba size: {}; capacity: {} MiB", .{
-        self.getName(), self.lba_size, self.capacity / utils.mb_size
+        self.getName(), self.lba_size, self.capacity / lib.mb_size
     });
 
     if (self.flags.partitionable) vfs.parts.probe(self) catch |err| {

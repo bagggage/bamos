@@ -14,7 +14,6 @@ const rtc_cmos = @import("dev/rtc_cmos.zig");
 const smp = @import("../../smp.zig");
 const sys = @import("../../sys.zig");
 const Timer = dev.classes.Timer;
-const utils = @import("../../utils.zig");
 
 // Nothing to do here.
 pub fn init() !void {}

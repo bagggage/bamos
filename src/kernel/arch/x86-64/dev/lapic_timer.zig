@@ -2,16 +2,16 @@
 
 const std = @import("std");
 
-const dev = @import("../../../dev.zig");
 const Clock = dev.classes.Clock;
+const dev = @import("../../../dev.zig");
 const intr = @import("../intr.zig");
 const lapic = @import("../intr/lapic.zig");
+const lib = @import("../../../lib.zig");
 const log = std.log.scoped(.@"lapic.timer");
+const rtc_cmos = @import("../dev/rtc_cmos.zig");
 const sched = @import("../../../sched.zig");
 const smp = @import("../../../smp.zig");
 const Timer = dev.classes.Timer;
-const rtc_cmos = @import("../dev/rtc_cmos.zig");
-const utils = @import("../../../utils.zig");
 
 const device_name = "lapic_timer";
 const clock_freq_div_rank = 12;
@@ -34,7 +34,7 @@ const vtable: Timer.VTable = .{
     .setFrequency = setFrequencyCallback
 };
 
-var eval_lock = utils.Spinlock.init(.unlocked);
+var eval_lock: lib.sync.Spinlock = .init(.unlocked);
 var timer: *Timer = undefined;
 
 pub fn init() !void {

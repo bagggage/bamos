@@ -2,12 +2,12 @@
 
 const std = @import("std");
 
-const arch = utils.arch;
+const arch = lib.arch;
 const dev = @import("../dev.zig");
 const epoch = std.time.epoch;
+const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"sys.time");
 const smp = @import("../smp.zig");
-const utils = @import("../utils.zig");
 
 pub const Clock = dev.classes.Clock;
 pub const Timer = dev.classes.Timer;
@@ -235,7 +235,7 @@ var keeper: Keeper = undefined;
 /// System timer frequency.
 var sys_timer_hz: u32 = default_hz;
 var sys_up_ticks: std.atomic.Value(usize) = .init(0);
-var up_ticks_lock: utils.Spinlock = .init(.unlocked);
+var up_ticks_lock: lib.sync.Spinlock = .init(.unlocked);
 
 pub fn init() !void {
     sys_clock = try chooseClock();
@@ -256,7 +256,7 @@ pub fn init() !void {
 pub fn initPerCpu() void {
     arch.time.initPerCpu() catch |err| {
         log.err("failed to initialize CPU timer: {s}", .{@errorName(err)});
-        utils.halt();
+        lib.sync.halt();
     };
 }
 

@@ -5,15 +5,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const arch = utils.arch;
+const arch = lib.arch;
 const boot = @import("boot.zig");
+const lib = @import("lib.zig");
 const log = std.log.scoped(.smp);
 const sys = @import("sys.zig");
 const sched = @import("sched.zig");
-const utils = @import("utils.zig");
 const vm = @import("vm.zig");
-
-const Spinlock = utils.Spinlock;
 
 /// Index of the CPU that boots the system.
 pub const boot_cpu = 0;
@@ -63,7 +61,7 @@ pub const LocalData = struct {
     }
 };
 
-var init_lock = Spinlock.init(.unlocked);
+var init_lock: lib.sync.Spinlock = .init(.unlocked);
 var init_cpu_idx: u16 = 0;
 
 var cpus_data: []LocalData = undefined;
@@ -120,7 +118,7 @@ pub fn initCpu(ret: *const fn() noreturn) void {
 
         const pt = vm.newPt() orelse {
             log.err("Not enough memory to allocate page table per each cpu", .{});
-            utils.halt();
+            lib.sync.halt();
         };
 
         vm.setPt(pt);

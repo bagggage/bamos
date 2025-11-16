@@ -8,12 +8,11 @@
 const std = @import("std");
 
 const boot = @import("../boot.zig");
-const math = std.math;
-const utils = @import("../utils.zig");
-const vm = @import("../vm.zig");
+const lib = @import("../lib.zig");
 const log = std.log.scoped(.PageAllocator);
+const vm = @import("../vm.zig");
 
-const List = utils.SList;
+const List = std.SinglyLinkedList;
 const Node = List.Node;
 
 /// Represents a free memory area in the buddy allocator. 
@@ -26,7 +25,7 @@ const FreeArea = struct {
     /// There are two states: allocated and free.
     /// But for optimization purposes state not stored directly within the bitmap.
     /// Each bit represents the difference of states between two neighbour pages.
-    bitmap: utils.Bitmap = .{},
+    bitmap: lib.Bitmap = .{},
 
     pub fn format(value: *FreeArea, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("Free list: ", .{});
@@ -58,7 +57,7 @@ export var allocated_pages: u32 = 0;
 export var total_pages: usize = 0;
 
 var free_areas: [max_areas]FreeArea = .{ FreeArea{} } ** max_areas;
-var lock: utils.Spinlock = .init(.unlocked);
+var lock: lib.sync.Spinlock = .init(.unlocked);
 
 var is_initialized = false;
 
@@ -70,13 +69,13 @@ pub fn init() vm.Error!void {
     const mem_map = boot.getMemMap();
     const max_pages = mem_map.maxPage() + 1;
 
-    const bitmap_size = math.divCeil(u32, max_pages, utils.byte_size) catch unreachable;
-    const bitmap_pages = math.divCeil(u32, bitmap_size, vm.page_size) catch unreachable;
+    const bitmap_size = std.math.divCeil(u32, max_pages, lib.byte_size) catch unreachable;
+    const bitmap_pages = std.math.divCeil(u32, bitmap_size, vm.page_size) catch unreachable;
 
     const mem_pool = boot.alloc(bitmap_pages) orelse return vm.Error.NoMemory;
     const virt_pool = vm.getVirtLma(mem_pool);
 
-    log.warn("mem pool size: {} bytes ~ {} KiB", .{bitmap_size, @as(usize, bitmap_pages) * (vm.page_size / utils.kb_size)});
+    log.warn("mem pool size: {} bytes ~ {} KiB", .{bitmap_size, @as(usize, bitmap_pages) * (vm.page_size / lib.kb_size)});
     initAreas(virt_pool, bitmap_size);
 
     allocated_pages += bitmap_pages;
@@ -84,8 +83,8 @@ pub fn init() vm.Error!void {
     total_pages += allocated_pages;
 
     {
-        const total_kb = total_pages * vm.page_size / utils.kb_size;
-        log.warn("total mem: {} KiB ({} MiB)", .{ total_kb, total_kb / utils.kb_size });
+        const total_kb = total_pages * vm.page_size / lib.kb_size;
+        log.warn("total mem: {} KiB ({} MiB)", .{ total_kb, total_kb / lib.kb_size });
     }
 
     is_initialized = true;
@@ -222,7 +221,7 @@ fn initAreas(bitmap_base: usize, bitmap_size: u32) void {
     const mem_map = boot.getMemMap();
 
     var curr_bitmap_base = bitmap_base;
-    var curr_bitmap_size = math.divCeil(u32, bitmap_size, 2) catch unreachable;
+    var curr_bitmap_size = std.math.divCeil(u32, bitmap_size, 2) catch unreachable;
 
     // Initialize bitmaps
     for (0..max_areas) |i| {
@@ -251,7 +250,7 @@ fn pushFreeEntry(entry: *const boot.MemMap.Entry) void {
     var temp_pages = entry.pages;
 
     while (temp_pages != 0) {
-        var temp_rank: u32 = math.log2_int(u32, temp_pages);
+        var temp_rank: u32 = std.math.log2_int(u32, temp_pages);
         if (temp_rank >= max_rank) temp_rank = max_rank - 1;
 
         var rank_pages_num: u32 = @as(u32, 1) << @truncate(temp_rank);

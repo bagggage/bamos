@@ -7,10 +7,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dbg = @import("dbg-info");
 
+const lib = @import("lib.zig");
 const logger = @import("logger.zig");
 const smp = @import("smp.zig");
 const text_output = video.text_output;
-const utils = @import("utils.zig");
 const video = @import("video.zig");
 const vm = @import("vm.zig");
 
@@ -71,7 +71,7 @@ extern fn getDebugSyms() *const dbg.Header;
 /// This function is marked as `noreturn` and will halt the system.
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     @branchHint(.cold);
-    defer utils.halt();
+    defer lib.sync.halt();
 
     logger.capture();
     defer logger.release();

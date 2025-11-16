@@ -11,9 +11,8 @@ const std = @import("std");
 const cc = std.ascii.control_code;
 
 const boot = @import("../boot.zig");
-const config = utils.config;
+const config = @import("../config.zig");
 const log = std.log.scoped(.@"video.terminal");
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 const Color = Framebuffer.Color;

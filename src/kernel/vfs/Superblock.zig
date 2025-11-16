@@ -6,9 +6,9 @@ const std = @import("std");
 
 const Dentry = vfs.Dentry;
 const Drive = vfs.Drive;
+const lib = @import("../lib.zig");
 const MountPoint = vfs.MountPoint;
 const Partition = vfs.Partition;
-const utils = @import("../utils.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
@@ -30,7 +30,7 @@ block_shift: u4,
 root: *Dentry = vfs.Context.bad_root,
 mount_point: *MountPoint = undefined,
 
-fs_data: utils.AnyData,
+fs_data: lib.AnyData = .{},
 
 pub inline fn new() ?*Superblock {
     return vm.auto.alloc(Superblock);

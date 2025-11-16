@@ -10,11 +10,11 @@ const std = @import("std");
 
 const dev = @import("../../../dev.zig");
 const devfs = @import("../../../vfs.zig").devfs;
+const lib = @import("../../../lib.zig");
 const log = std.log.scoped(.nvme);
 const pci = dev.pci;
 const sched = @import("../../../sched.zig");
 const smp = @import("../../../smp.zig");
-const utils = @import("../../../utils.zig");
 const vm = @import("../../../vm.zig");
 
 const Command = SubmissionEntry.Opcode;
@@ -445,7 +445,7 @@ const Controller = struct {
     doorbells: usize,
     doorbell_stride: u16,
 
-    admin_lock: utils.Spinlock = utils.Spinlock.init(.unlocked),
+    admin_lock: lib.sync.Spinlock = .init(.unlocked),
     admin_cmpl: u16 = 0, // last complete command id
     admin_fail: u16 = 0, // last failed command status
 

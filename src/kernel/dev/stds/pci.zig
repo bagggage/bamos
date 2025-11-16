@@ -5,8 +5,8 @@
 const std = @import("std");
 
 const dev = @import("../../dev.zig");
+const lib = @import("../../lib.zig");
 const log = std.log.scoped(.pci);
-const utils = @import("../../utils.zig");
 const regs = dev.regs;
 const vm = @import("../../vm.zig");
 
@@ -28,7 +28,7 @@ pub const Device = struct {
     id: Id,
     config: config.ConfigSpace,
     intr_ctrl: intr.Control,
-    data: utils.AnyData = .{},
+    data: lib.AnyData = .{},
 
     pub fn init(cfg: config.ConfigSpace) Device {
         return .{

@@ -4,14 +4,13 @@
 
 const std = @import("std");
 
-const rb = utils.rb;
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
 
-pub const List = utils.SList;
+pub const List = std.SinglyLinkedList;
 pub const Node = List.Node;
 
 pub const Flags = packed struct {
@@ -70,7 +69,7 @@ ops: *const Operations = &default_ops,
 flags: Flags,
 
 node: Node = .{},
-rb_node: rb.Node = .{},
+rb_node: lib.rb.Node = .{},
 
 pub fn init(
     file: ?*vfs.File, virt: usize,
@@ -95,7 +94,7 @@ pub inline fn fromNode(node: *Node) *Self {
     return @fieldParentPtr("node", node);
 }
 
-pub inline fn fromRbNode(node: *rb.Node) *Self {
+pub inline fn fromRbNode(node: *lib.rb.Node) *Self {
     return @fieldParentPtr("rb_node", node);
 }
 
@@ -379,7 +378,7 @@ fn buildPage(
         var temp_rank: u8 = std.math.log2_int(u32, temp_len);
         var rank_pages_num: u32 = @as(u32, 1) << @truncate(temp_rank);
 
-        while (utils.modByPowerOfTwo(u32, rank_pages_num, @truncate(temp_rank)) != 0) {
+        while (lib.misc.modByPowerOfTwo(u32, rank_pages_num, @truncate(temp_rank)) != 0) {
             temp_rank -= 1;
             rank_pages_num >>= 1;
         }

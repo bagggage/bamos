@@ -8,15 +8,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const arch = utils.arch;
+const arch = lib.arch;
+const lib = @import("lib.zig");
 const serial = @import("dev/drivers/uart.zig");
 const smp = @import("smp.zig");
 const sys = @import("sys.zig");
 const terminal = video.terminal;
-const utils = @import("utils.zig");
 const video = @import("video.zig");
-
-const Spinlock = utils.Spinlock;
 
 const EarlyWriter = struct {
     const vtable: std.io.Writer.VTable = .{
@@ -99,7 +97,7 @@ pub var log_writer: std.io.Writer = EarlyWriter.setup();
 const tty_config: std.io.tty.Config = .escape_codes;
 
 /// Spinlock to ensure that logging is thread-safe.
-var lock = Spinlock.init(.unlocked);
+var lock: lib.sync.Spinlock = .init(.unlocked);
 var lock_owner: u16 = undefined;
 var double_lock = false;
 

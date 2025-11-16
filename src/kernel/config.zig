@@ -2,10 +2,10 @@
 
 const std = @import("std");
 
-const boot = @import("../boot.zig");
+const boot = @import("boot.zig");
+const lib = @import("lib.zig");
 const log = std.log.scoped(.config);
-const utils = @import("../utils.zig");
-const vm = @import("../vm.zig");
+const vm = @import("vm.zig");
 
 const EnumParseResult = extern struct {
     value: usize = undefined,
@@ -26,7 +26,7 @@ fn EnumParser(comptime T: type) type {
     };
 }
 
-const Map = utils.AutoHashTable([]const u8);
+const Map = lib.AutoHashTable([]const u8);
 const Value = struct {
     pub const alloc_config: vm.auto.Config = .{
         .allocator = .oma
@@ -41,7 +41,6 @@ const Value = struct {
 };
 
 var map: Map = undefined;
-
 var env: []const u8 = undefined;
 
 pub fn init() !void {

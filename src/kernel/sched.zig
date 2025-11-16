@@ -4,13 +4,13 @@
 
 const std = @import("std");
 
+const lib = @import("lib.zig");
 const log = std.log.scoped(.sched);
 const smp = @import("smp.zig");
 const sys = @import("sys.zig");
-const utils = @import("utils.zig");
 const vm = @import("vm.zig");
 
-const kernel_stack_size = 32 * utils.kb_size;
+const kernel_stack_size = 32 * lib.kb_size;
 
 /// Scheduler timer target frequency.
 pub const hz = 1000;
@@ -34,7 +34,7 @@ pub const PrivilegeLevel = enum(u8) {
 };
 
 pub const WaitQueue = struct {
-    pub const QList = utils.SList;
+    pub const QList = std.SinglyLinkedList;
     pub const QNode = QList.Node;
 
     pub const Entry = struct {

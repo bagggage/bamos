@@ -8,12 +8,11 @@ const std = @import("std");
 
 const Self = @This();
 
-const atomic = std.atomic;
-const sched = @import("../sched.zig");
+const sched = @import("../../sched.zig");
 const Spinlock = @import("Spinlock.zig");
 
 lock: Spinlock = .init(.unlocked),
-readers: atomic.Value(u16) = .init(0),
+readers: std.atomic.Value(u16) = .init(0),
 
 pub fn readLock(self: *Self) void {
     self.waitForRead();
@@ -54,7 +53,7 @@ pub fn writeLock(self: *Self) void {
 
     while (self.readers.load(.acquire) > 0) {
         @branchHint(.unlikely);
-        atomic.spinLoopHint();
+        std.atomic.spinLoopHint();
     }
 }
 
@@ -77,6 +76,6 @@ pub inline fn writeUnlock(self: *Self) void {
 inline fn waitForRead(self: *Self) void {
     while (self.lock.isLocked()) {
         @branchHint(.unlikely);
-        atomic.spinLoopHint();
+        std.atomic.spinLoopHint();
     }
 }

@@ -9,7 +9,6 @@ const dev = @import("../../../dev.zig");
 const intr = dev.intr;
 const io = dev.io;
 const log = std.log.scoped(.@"pci.intr");
-const utils = @import("../../../utils.zig");
 const vm = @import("../../../vm.zig");
 
 const Msi = struct {

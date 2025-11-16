@@ -4,7 +4,7 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig"); 
+const lib = @import("../lib.zig"); 
 
 const Self = @This();
 
@@ -19,19 +19,19 @@ pub inline fn init(bits: []u8, comptime is_setted: bool) Self {
 }
 
 pub inline fn get(self: *Self, bit_idx: usize) u8 {
-    return self.bits[bit_idx / utils.byte_size] & bitmask(bit_idx);
+    return self.bits[bit_idx / lib.byte_size] & bitmask(bit_idx);
 }
 
 pub inline fn clear(self: *Self, bit_idx: usize) void {
-    self.bits[bit_idx / utils.byte_size] &= ~bitmask(bit_idx);
+    self.bits[bit_idx / lib.byte_size] &= ~bitmask(bit_idx);
 }
 
 pub inline fn set(self: *Self, bit_idx: usize) void {
-    self.bits[bit_idx / utils.byte_size] |= bitmask(bit_idx);
+    self.bits[bit_idx / lib.byte_size] |= bitmask(bit_idx);
 }
 
 pub inline fn toggle(self: *Self, bit_idx: usize) void {
-    self.bits[bit_idx / utils.byte_size] ^= bitmask(bit_idx);
+    self.bits[bit_idx / lib.byte_size] ^= bitmask(bit_idx);
 }
 
 pub fn find(self: *Self, comptime is_setted: bool) ?usize {
@@ -60,14 +60,14 @@ pub fn rfind(self: *Self, comptime is_setted: bool) ?usize {
         const byte = self.bits[byte_idx];
         if (byte == byte_val) continue;
 
-        return (byte_idx *% utils.byte_size) + if (comptime is_setted) @ctz(byte) else @ctz(~byte);
+        return (byte_idx *% lib.byte_size) + if (comptime is_setted) @ctz(byte) else @ctz(~byte);
     }
 
     return null;
 }
 
 inline fn bitmask(bit_idx: usize) u8 {
-    return @as(u8,1) << @truncate(@mod(bit_idx, utils.byte_size));
+    return @as(u8,1) << @truncate(@mod(bit_idx, lib.byte_size));
 }
 
 inline fn findGranulated(

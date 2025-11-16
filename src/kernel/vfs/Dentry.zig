@@ -8,17 +8,17 @@ const Context = vfs.Context;
 const Error = vfs.Error;
 const File = vfs.File;
 const Inode = vfs.Inode;
+const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"vfs.Dentry");
 const lookup_cache = vfs.lookup_cache;
 const Path = vfs.Path;
 const Superblock = vfs.Superblock;
-const utils = @import("../utils.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 const Dentry = @This();
 
-pub const List = utils.SList;
+pub const List = std.SinglyLinkedList;
 pub const Node = List.Node;
 
 pub const Operations = struct {
@@ -110,8 +110,8 @@ node: Node = .{},
 
 cache_ent: lookup_cache.Entry = .{},
 
-ref_count: utils.RefCount(u32) = .{},
-lock: utils.Spinlock = .{},
+ref_count: lib.atomic.RefCount(u32) = .{},
+lock: lib.sync.Spinlock = .{},
 
 pub const alloc_config: vm.auto.Config = .{
     .allocator = .oma,

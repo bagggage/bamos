@@ -4,9 +4,9 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig");
+const lib = @import("../lib.zig");
 
-pub const default_stack_size = 2 * utils.mb_size;
+pub const default_stack_size = 2 * lib.mb_size;
 pub const default_max_open_files = 1024;
 pub const default_max_threads = 8192;
 pub const default_max_process = 65565;

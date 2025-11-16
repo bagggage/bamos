@@ -4,16 +4,16 @@
 
 const std = @import("std");
 
-const arch = utils.arch;
-const thread = @import("thread.zig");
+const arch = lib.arch;
+const lib = @import("../lib.zig");
 const sched = @import("../sched.zig");
 const sys = @import("../sys.zig");
-const utils = @import("../utils.zig");
+const thread = @import("thread.zig");
 const vm = @import("../vm.zig");
 
 pub const Self = @This();
 
-pub const List = utils.List;
+pub const List = std.DoublyLinkedList;
 pub const Node = List.Node;
 
 pub const State = enum(u8) {
@@ -82,13 +82,13 @@ pub const Stats = struct {
 
     /// Update priority bonus based on task interactivity.
     pub fn updateBonus(self: *Stats) void {
-        const max_inter: comptime_int = utils.fp_scale;
+        const max_inter: comptime_int = lib.fp_scale;
         const base_inter: comptime_int = (max_inter - 1) / 2;
         const max_bonus: comptime_int = (std.math.maxInt(Priority) + 1) / 2;
-        const norm_mul: comptime_int = (max_inter * utils.fp_scale) / max_bonus;
+        const norm_mul: comptime_int = (max_inter * lib.fp_scale) / max_bonus;
 
         const interactivity: i32 = self.getInteractivity();
-        const bonus = @divFloor(-interactivity * norm_mul, utils.fp_scale);
+        const bonus = @divFloor(-interactivity * norm_mul, lib.fp_scale);
         self.bonus_prior = @truncate(bonus + base_inter);
     }
 
@@ -102,18 +102,18 @@ pub const Stats = struct {
         const time = @as(u32, self.cpu_time) + self.sleep_time;
         if (time == 0) return 0;
 
-        const result = (@as(u32, self.sleep_time + 1) * utils.fp_scale) / time;
+        const result = (@as(u32, self.sleep_time + 1) * lib.fp_scale) / time;
         return @truncate(result);
     }
 
     /// Caclulate time slice for the task and return it.
     fn calcTimeSlice(self: *const Stats) Ticks {
         const max_bonus: comptime_int = comptime calcTimeBonus(sched.max_priority);
-        const norm_mult: comptime_int = ((sched.max_slice_ticks + 1) * utils.fp_scale) / max_bonus;
+        const norm_mult: comptime_int = ((sched.max_slice_ticks + 1) * lib.fp_scale) / max_bonus;
 
         const reverse_prior: u32 = @as(u32, sched.max_priority) - self.getPriority();
         const bonus: u32 = calcTimeBonus(reverse_prior);
-        const norm_bonus: Ticks = @truncate((bonus * norm_mult) / utils.fp_scale);
+        const norm_bonus: Ticks = @truncate((bonus * norm_mult) / lib.fp_scale);
 
         return if (norm_bonus < sched.min_slice_ticks)
             sched.min_slice_ticks else norm_bonus;
@@ -131,7 +131,7 @@ pub const KernelSpecific = struct {
 
 /// User task specific data.
 pub const UserSpecific = struct {
-    pub const UList = utils.SList;
+    pub const UList = std.SinglyLinkedList;
     pub const UNode = UList.Node;
 
     process: *sys.Process,

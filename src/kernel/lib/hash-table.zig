@@ -14,7 +14,6 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 pub fn AutoContext(K: type) type {
@@ -36,7 +35,7 @@ pub const StringContext = opaque {
 
 pub const Bucket = struct {
     pub const Entry = struct {
-        pub const List = utils.SList;
+        pub const List = std.SinglyLinkedList;
         pub const Node = List.Node;
 
         hash: u64 = undefined,

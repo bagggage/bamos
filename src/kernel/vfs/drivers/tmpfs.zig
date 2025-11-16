@@ -13,7 +13,6 @@
 const std = @import("std");
 
 const log = std.log.scoped(.tmpfs);
-const utils = @import("../../utils.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
@@ -24,7 +23,7 @@ const EntryKind = enum {
 
 const File = struct {
     const Page = struct {
-        const List = utils.SList;
+        const List = std.SinglyLinkedList;
         const Node = List.Node;
 
         base: u32,

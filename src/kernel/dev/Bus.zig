@@ -5,8 +5,8 @@ const std = @import("std");
 const Device = @import("Device.zig");
 const dev = @import("../dev.zig");
 const Driver = @import("Driver.zig");
+const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"dev.bus");
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
@@ -19,7 +19,7 @@ pub const Operations = struct {
     remove: RemoveFn
 };
 
-pub const List = utils.List;
+pub const List = std.DoublyLinkedList;
 pub const Node = List.Node;
 
 name: []const u8,
@@ -31,8 +31,8 @@ matched_devs: Device.List = .{},
 unmatched_devs: Device.List = .{},
 drivers: Driver.List = .{},
 
-dri_lock: utils.Spinlock = .{},
-dev_lock: utils.Spinlock = .{},
+dri_lock: lib.sync.Spinlock = .{},
+dev_lock: lib.sync.Spinlock = .{},
 
 ops: Operations,
 

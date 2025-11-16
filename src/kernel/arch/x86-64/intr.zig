@@ -12,7 +12,6 @@ const log = std.log.scoped(.@"x86-64.intr");
 const pic = @import("intr/pic.zig");
 const regs = @import("regs.zig");
 const smp = @import("../../smp.zig");
-const utils = @import("../../utils.zig");
 const vm = @import("../../vm.zig");
 
 pub const isr = @import("intr/isr.zig");

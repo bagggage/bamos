@@ -7,13 +7,13 @@ const std = @import("std");
 const Bus = @import("Bus.zig");
 const dev = @import("../dev.zig");
 const Driver = @import("Driver.zig");
+const lib = @import("../lib.zig");
 const log = std.log.scoped(.Device);
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
 
-pub const List = utils.List;
+pub const List = std.DoublyLinkedList;
 pub const Node = List.Node;
 
 pub const alloc_config: vm.auto.Config = .{
@@ -25,7 +25,7 @@ name: dev.Name = .{},
 bus: *Bus,
 
 driver: ?*const Driver,
-driver_data: utils.AnyData,
+driver_data: lib.AnyData,
 
 node: Node = .{},
 
@@ -35,7 +35,7 @@ pub fn new(name: dev.Name, bus: *Bus, driver: ?*const Driver, data: ?*anyopaque)
         .name = name,
         .bus = bus,
         .driver = driver,
-        .driver_data = utils.AnyData.from(data),
+        .driver_data = .from(data),
     };
 
     return self;

@@ -8,13 +8,12 @@ const dev = @import("../dev.zig");
 const devfs = vfs.devfs;
 const Drive = dev.classes.Drive;
 const log = std.log.scoped(.parts);
-const utils = @import("../utils.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 pub const Error = Drive.Error;
 
-pub const List = utils.List;
+pub const List = std.DoublyLinkedList;
 pub const Node = List.Node;
 
 pub const Partition = struct {

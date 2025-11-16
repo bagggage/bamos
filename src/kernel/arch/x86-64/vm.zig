@@ -5,10 +5,10 @@
 const std = @import("std");
 
 const boot = @import("../../boot.zig");
+const lib = @import("../../lib.zig");
 const log = std.log.scoped(.@"x86-64.vm");
 const regs = @import("regs.zig");
 const vm = @import("../../vm.zig");
-const utils = @import("../../utils.zig");
 
 pub const page_size = 4096;
 pub const page_table_size = 512;
@@ -17,10 +17,10 @@ pub const page_table_size = 512;
 pub const lma_start = 0xFFFF800000000000;
 
 pub const max_userspace_addr = 0x0000_8FFF_FFFF_FFFF;
-pub const max_user_heap_addr = max_userspace_addr - utils.gb_size + 1;
+pub const max_user_heap_addr = max_userspace_addr - lib.gb_size + 1;
 
 const pt_pool_pages = 512;
-const pages_per_2mb = (utils.mb_size * 2) / page_size;
+const pages_per_2mb = (lib.mb_size * 2) / page_size;
 
 const PageTableEntry = packed struct {
     present: u1 = 0,
@@ -147,7 +147,7 @@ pub inline fn logPt(pt: *const PageTable) void {
 const LogPt = struct {
     const prefixies = [_][]const u8{ "", "|---", "|---|---", "|---|---|---" };
     const size_strs = [_][]const u8{ "", "GB", "MB", "KB" };
-    const size_steps = [_]usize{ 0, utils.gb_size, utils.mb_size * 2, utils.kb_size * 4 };
+    const size_steps = [_]usize{ 0, lib.gb_size, lib.mb_size * 2, lib.kb_size * 4 };
     const size_units = [_]u8{ 0, 1, 2, 4 };
 };
 
@@ -210,7 +210,7 @@ fn earlyMapLma() void {
     const lma_size = calcLmaSize();
 
     lma_end = lma_start + lma_size;
-    heap_start = lma_end + utils.gb_size;
+    heap_start = lma_end + lib.gb_size;
 
     const pt = vm.getPhysLma(getPt());
     const p4_idx = comptime getPxeIdx(3, lma_start);
@@ -225,8 +225,8 @@ fn earlyMapLma() void {
         0,
         vm.MapFlags{ .write = true, .global = true, .large = true }
     );
-    const len = lma_size / utils.gb_size;
-    const gb_pages = utils.gb_size / vm.page_size;
+    const len = lma_size / lib.gb_size;
+    const gb_pages = lib.gb_size / vm.page_size;
 
     for (pt3[0..len]) |*entry| {
         entry.* = template_pte;
@@ -239,7 +239,7 @@ fn calcLmaSize() usize {
     // all physical memory is accessible via LMA.
 
     // Currently just return 256 GB.
-    return 256 * utils.gb_size;
+    return 256 * lib.gb_size;
 }
 
 inline fn getPxeIdx(pt_idx: u8, virt: usize) u16 {
@@ -277,9 +277,9 @@ pub fn mmap(virt: usize, phys: usize, pages: u32, flags: vm.MapFlags, page_table
 
     var max_pt: u8 = 3;
     if (pte_flags.large) {
-        max_pt = if (pages >= (utils.gb_size / page_size) and
-            (virt % utils.gb_size) == 0 and
-            (phys % utils.gb_size) == 0) 1 else 2;
+        max_pt = if (pages >= (lib.gb_size / page_size) and
+            (virt % lib.gb_size) == 0 and
+            (phys % lib.gb_size) == 0) 1 else 2;
     }
 
     var mapped_pages: u28 = 0;
@@ -323,7 +323,7 @@ pub fn mmap(virt: usize, phys: usize, pages: u32, flags: vm.MapFlags, page_table
             if (pte_flags.large) {
                 switch (max_pt) {
                     1 => {
-                        pages_step = utils.gb_size / page_size;
+                        pages_step = lib.gb_size / page_size;
                         entries_to_map /= pages_step;
                     },
                     2 => {
@@ -421,7 +421,7 @@ pub fn unmap(virt: usize, pages: u32, page_table: *PageTable) void {
                 // Determine if this is a 1GB or 2MB page
                 const is_1gb = (pt_idx == 1);
                 pages_step = if (is_1gb)
-                    (utils.gb_size / page_size)
+                    (lib.gb_size / page_size)
                 else
                     pages_per_2mb;
 
@@ -464,8 +464,8 @@ fn correctMmapFlags(flags: vm.MapFlags, virt: usize, phys: usize, pages: u32) vm
 
     if (flags.large) {
         if (pages < pages_per_2mb or
-            (virt % (2 * utils.mb_size) != 0 or
-                phys % (2 * utils.mb_size) != 0)) result.large = false;
+            (virt % (2 * lib.mb_size) != 0 or
+                phys % (2 * lib.mb_size) != 0)) result.large = false;
     }
 
     return result;

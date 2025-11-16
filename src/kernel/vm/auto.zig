@@ -12,7 +12,6 @@
 
 // Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
 
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 pub const config_member_name = "alloc_config";

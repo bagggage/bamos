@@ -1,8 +1,12 @@
-//! # Atomic Reference Counter
-
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+//! # Atomic data structures
+//! 
+//! Lock-free data structures that are built on atomic instructions and guarantee
+//! atomic execution of declared operations.
+//! The implementation may have a slight overhead compared to non-atomic ones.
 
 const std = @import("std");
+
+const sched = @import("../sched.zig");
 
 pub fn RefCount(comptime UintType: type) type {
     comptime {
@@ -27,10 +31,8 @@ pub fn RefCount(comptime UintType: type) type {
 
         pub inline fn get(self: *Self) bool {
             var old = self.count();
-
             while (true) {
                 if (old == 0) return false;
-
                 if (self.value.cmpxchgWeak(
                     old, old + 1,
                     .acquire, .monotonic)
@@ -72,3 +74,56 @@ pub fn RefCount(comptime UintType: type) type {
         }
     };
 }
+
+pub const SinglyLinkedList = struct {
+    pub const Node = std.SinglyLinkedList.Node;
+
+    first: std.atomic.Value(?*Node) = .init(null),
+
+    pub fn popFirst(self: *SinglyLinkedList) ?*Node {
+        while (self.first.raw) |node| {
+            if (self.first.cmpxchgWeak(node, node.next, .release, .monotonic) == null) {
+                return node;
+            }
+        }
+
+        return null;
+    }
+
+    pub fn prepend(self: *SinglyLinkedList, node: *Node) void {
+        var first = self.first.raw;
+        node.next = first;
+
+        while (self.first.cmpxchgWeak(first, node, .release, .monotonic)) |other| {
+            node.next = other;
+            first = other;
+        }
+    }
+
+    pub fn remove(self: *SinglyLinkedList, node: *Node) void {
+        sched.getCurrent().disablePreemption();
+        defer sched.getCurrent().enablePreemption();
+
+        while (true) {
+            // If node is first in a list
+            if (self.first.cmpxchgStrong(node, node.next, .release, .monotonic) == null) {
+                return;
+            }
+
+            var prev_prev: ?*Node = null;
+            var prev = self.first.load(.acquire);
+            while (prev) |p| : ({ prev_prev = p; prev = @atomicLoad(?*Node, &p.next, .acquire); }) {
+                if (p.next != node) continue;
+
+                if (@cmpxchgWeak(?*Node, &p.next, node, node.next, .release, .monotonic) != null) {
+                    break;
+                }
+                if (prev_prev) |pp| {
+                    if (@atomicLoad(?*Node, &pp.next, .acquire) != p) break;
+                }
+
+                return;
+            }
+        }
+    }
+};

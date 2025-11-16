@@ -4,14 +4,14 @@
 
 const std = @import("std");
 
-const arch = utils.arch;
+const arch = lib.arch;
+const intr = @import("../dev.zig").intr;
+const lib = @import("../lib.zig");
+const log = std.log.scoped(.sched);
 const sched = @import("../sched.zig");
 const smp = @import("../smp.zig");
 const sys = @import("../sys.zig");
 const Task = sched.Task;
-const log = std.log.scoped(.sched);
-const intr = @import("../dev.zig").intr;
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 const WaitQueue = sched.WaitQueue;
@@ -59,7 +59,7 @@ const TaskQueue = struct {
     }
 };
 
-task_lock: utils.Spinlock = .init(.unlocked),
+task_lock: lib.sync.Spinlock = .init(.unlocked),
 task_queues: [2]TaskQueue = .{ TaskQueue{} } ** 2,
 
 pause_queue: sched.WaitQueue = .{},
@@ -82,7 +82,7 @@ pub fn begin(self: *Self) noreturn {
 
     const task = self.next() orelse {
         log.warn("No tasks to begin with. Halting core...", .{});
-        utils.halt();
+        lib.sync.halt();
     };
 
     self.current_task = task;

@@ -4,7 +4,6 @@
 
 const std = @import("std");
 
-const utils = @import("../utils.zig");
 const vm = @import("../vm.zig");
 
 const Self = @This();
@@ -13,7 +12,7 @@ const Range = struct {
         .allocator = .oma
     };
 
-    const List = utils.SList;
+    const List = std.SinglyLinkedList;
     const Node = List.Node;
 
     base: usize,
@@ -36,7 +35,7 @@ top: usize = undefined,
 free_list: Range.List = .{},
 
 pub inline fn init(base: usize) Self {
-    return Self{ .base = base, .top = base };
+    return .{ .base = base, .top = base };
 }
 
 pub fn reserve(self: *Self, pages: u32) usize {
