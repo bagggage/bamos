@@ -52,5 +52,6 @@ pub const NumberAllocRanged = num_alloc.NumberAllocRanged;
 pub const rb = @import("lib/rb-tree.zig");
 pub const rcu = @import("lib/rcu.zig");
 pub const sync = @import("lib/sync.zig");
+pub const VirtualArray = @import("lib/virtual-array.zig").VirtualArray;
 
 const num_alloc = @import("lib/num-alloc.zig");
