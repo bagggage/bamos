@@ -55,7 +55,7 @@ pub const Page = struct {
     }
 
     pub inline fn unmap(self: *Page, base: usize, pt: *vm.PageTable) void {
-        vm.unmap(base + self.getOffset(), self.pagesNum(), pt);
+        pt.unmap(base + self.getOffset(), self.pagesNum());
     }
 };
 
@@ -139,13 +139,7 @@ pub fn insertNewPage(
     const page_base = self.base + (page_offset * vm.page_size);
     const pages = @as(u32, 1) << @truncate(rank);
 
-    try vm.mmap(
-        page_base,
-        page.getPhysBase(),
-        pages,
-        map_flags,
-        vm.getPt(),
-    );
+    try vm.getPageTable().map(page_base, page.getPhysBase(), pages, map_flags);
 
     page.dim.idx = @truncate(page_offset);
     self.page_list.prepend(&page.node);
@@ -230,19 +224,9 @@ pub fn format(self: *const Self, writer: *std.Io.Writer) std.Io.Writer.Error!voi
     try writer.print("0x{x}-0x{x}", .{self.base, self.base + self.size()});
 }
 
-fn map(
-    base: usize, page: *Page,
-    pages: u32, map_flags: vm.MapFlags
-) !void {
+fn map(base: usize, page: *Page, pages: u32, map_flags: vm.MapFlags) !void {
     if (map_flags.none) return;
-
-    try vm.mmap(
-        base,
-        page.getPhysBase(),
-        pages,
-        map_flags,
-        vm.getPt(),
-    );
+    try vm.getPageTable().map(base, page.getPhysBase(), pages, map_flags);
 }
 
 fn allocPages(rank: u8) ?*Page {

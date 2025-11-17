@@ -150,18 +150,18 @@ pub fn getMappings() vm.Error![]MappingEntry {
         .{ .write = true, .global = true, .large = true, .cache_disable = true }
     );
     mappings[@intFromEnum(Order.Boot)] = MMap.init(
-        @intFromPtr(&bootboot), @intFromPtr(vm.getPhys(&bootboot) orelse unreachable),
+        @intFromPtr(&bootboot), (vm.translateVirtToPhys(@intFromPtr(&bootboot)) orelse unreachable),
         vm.page_size, .{ .write = true, .global = true }
     );
 
     const kernel_elf_size = @intFromPtr(&kernel_elf_end) - @intFromPtr(&kernel_elf_start);
 
     mappings[@intFromEnum(Order.Kernel)] = MMap.init(
-        @intFromPtr(&kernel_elf_start), @intFromPtr(vm.getPhys(&kernel_elf_start) orelse unreachable),
+        @intFromPtr(&kernel_elf_start), (vm.translateVirtToPhys(@intFromPtr(&kernel_elf_start)) orelse unreachable),
         kernel_elf_size, .{ .write = true, .global = true, .exec = true }
     );
     mappings[@intFromEnum(Order.Envir)] = MMap.init(
-        @intFromPtr(&environment), @intFromPtr(vm.getPhys(&environment) orelse unreachable),
+        @intFromPtr(&environment), (vm.translateVirtToPhys(@intFromPtr(&environment)) orelse unreachable),
         vm.page_size, .{ .write = true, .global = true }
     );
 
@@ -175,7 +175,7 @@ pub fn getMappings() vm.Error![]MappingEntry {
         const base = stack_base - (page_idx * vm.page_size);
 
         mappings[@intFromEnum(Order.Stack) + page_idx] = MMap.init(
-            base, vm.getPhys(base) orelse unreachable,
+            base, vm.translateVirtToPhys(base) orelse unreachable,
             vm.page_size, .{ .write = true, .global = true }
         );
     }

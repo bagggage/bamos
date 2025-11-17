@@ -17,11 +17,8 @@ const smp = @import("smp.zig");
 /// The size of a memory page, specific to the architecture.
 pub const page_size = arch.vm.page_size;
 /// The start virtual address of the kernel in memory.
-/// @noexport
 pub const kernel_start = &boot.kernel_elf_start;
-/// @noexport
 pub const kernel_end = &boot.kernel_elf_end;
-
 pub const lma_start = arch.vm.lma_start;
 
 pub const max_user_heap_addr = arch.vm.max_user_heap_addr;
@@ -39,31 +36,15 @@ pub const ObjectAllocator = @import("vm/ObjectAllocator.zig");
 pub const PageAllocator = @import("vm/PageAllocator.zig");
 pub const UniversalAllocator = @import("vm/UniversalAllocator.zig");
 
-/// Allocates a new page table and zeroing all entries.
-pub const allocPt = arch.vm.allocPt;
-/// Frees a page table.
-pub const freePt = arch.vm.freePt;
 /// Gets the current page table from the specific cpu register.
-pub const getPt = arch.vm.getPt;
+pub const getPageTable = arch.vm.getPageTable;
 /// Sets the given page table to the specific cpu register.
-pub const setPt = arch.vm.setPt;
-/// Logs the contents of a page table.
-pub const logPt = arch.vm.logPt;
-
-/// Maps a virtual memory range to a physical memory range.
-/// 
-/// - `virt`: base virtual address to which physicall region must be mapped.
-/// - `phys`: region base physical address.
-/// - `pages`: number of pages to map.
-/// - `flags`: flags to specify (see `vm.MapFlags` structure).
-/// - `page_table`: target page table.
-pub const mmap = arch.vm.mmap;
-pub const unmap = arch.vm.unmap;
+pub const setPageTable = arch.vm.setPageTable;
 
 pub inline fn lmaSize() usize { return lmaEnd() - lma_start; }
-
 pub const lmaEnd = arch.vm.lmaEnd;
 pub const heapStart = arch.vm.heapStart;
+
 /// Checks if an address belongs to the userspace virtual memory range.
 pub const isUserVirtAddr = arch.vm.isUserVirtAddr;
 
@@ -86,6 +67,7 @@ pub var std_allocator = std.mem.Allocator{
     .ptr = undefined,
     .vtable = &std_vtable
 };
+
 const std_vtable = opaque {
     pub const vtable = std.mem.Allocator.VTable{
         .alloc = stdAlloc,
@@ -102,7 +84,7 @@ const std_vtable = opaque {
     }
 
     fn stdFree(_: *anyopaque, buf: []u8, _: std.mem.Alignment, _: usize) void {
-        free(buf.ptr);
+        UniversalAllocator.free(buf.ptr);
     }
 
     fn stdResize(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
@@ -173,28 +155,25 @@ pub fn init() Error!void {
 
     try arch.vm.init();
 
-    root_pt = allocPt() orelse return Error.NoMemory;
+    root_pt = PageTable.new() orelse return Error.NoMemory;
 
     const mappings = try boot.getMappings();
     defer boot.freeMappings(mappings);
 
     for (mappings[0..]) |map_entry| {
-        try mmap(
+        try root_pt.map(
             map_entry.virt, map_entry.phys,
-            map_entry.pages, map_entry.flags,
-            root_pt
+            map_entry.pages, map_entry.flags
         );
     }
 
-    setPt(root_pt);
+    setPageTable(root_pt);
 }
 
 const intPtrErrorStr = "Only integer and pointer types are acceptable";
 
 /// Translates a physical address to a virtual (LMA) address.
 /// This is the fastest address transalition.
-/// 
-/// - `address`: the physical address to translate.
 /// - Returns: The translated virtual address.
 pub inline fn getVirtLma(address: anytype) @TypeOf(address) {
     const typeInfo = @typeInfo(@TypeOf(address));
@@ -208,8 +187,6 @@ pub inline fn getVirtLma(address: anytype) @TypeOf(address) {
 
 /// Translates a virtual address of the linear memory access (LMA) region to a physical.
 /// Can be used only with address returned from `getVirtLma`, UB otherwise.
-/// 
-/// - `address`: the virtual address to translate.
 /// - Returns: The translated physical address.
 pub inline fn getPhysLma(address: anytype) @TypeOf(address) {
     const type_info = @typeInfo(@TypeOf(address));
@@ -221,40 +198,11 @@ pub inline fn getPhysLma(address: anytype) @TypeOf(address) {
     };
 }
 
-/// Translate the virtual address into physical address via specific page table.
-/// 
-/// - `address`: The virtual address to translate.
-/// - `pt`: The page table to use for translation.
-/// - Returns: The corresponding physical address or `null` if the address isn't mapped.
-pub inline fn getPhysPt(address: anytype, pt: *const PageTable) ?@TypeOf(address) {
-    const type_info = @typeInfo(@TypeOf(address));
-
-    _ = switch (type_info) {
-        .int, .comptime_int, .pointer => 0,
-        else => @compileError(intPtrErrorStr),
-    };
-
-    const virt = switch (type_info) {
-        .pointer => @intFromPtr(address),
-        else => address,
-    };
-
-    if (virt >= lma_start and virt < lmaEnd()) return getPhysLma(address);
-
-    const phys = arch.vm.getPhys(virt, pt) orelse return null;
-
-    return switch (type_info) {
-        .pointer => @ptrFromInt(phys),
-        else => phys,
-    };
-}
-
 /// Retrieves the physical address associated with a virtual address using the current page table.
-/// 
-/// - `address`: The virtual address to translate.
 /// - Returns: The corresponding physical address or `null` if the address isn't mapped.
-pub inline fn getPhys(address: anytype) ?@TypeOf(address) {
-    return getPhysPt(address, getPt());
+pub inline fn translateVirtToPhys(virt: usize) ?usize {
+    if (virt >= lma_start and virt < lmaEnd()) return getPhysLma(virt);
+    return getPageTable().translateVirtToPhys(virt);
 }
 
 /// Maps a physical memory to a virtual address in the cache disabled MMIO (Memory-Mapped I/O) space.
@@ -273,10 +221,9 @@ pub inline fn mmio(phys: usize, pages: u32) Error!usize {
         break :blk heap.reserve(pages);
     };
 
-    try mmap(
+    try root_pt.map(
         virt, phys, pages,
         .{ .write = true, .global = true, .cache_disable = true },
-        root_pt
     );
 
     return virt;
@@ -300,13 +247,12 @@ pub inline fn unmmio(virt: usize, pages: u32) void {
 
 /// Allocates new page table and maps all neccessary kernel units.
 /// Kernel mapping is optimized by coping a few entries from top level table of `root_pt`. 
-/// 
 /// - Returns: A pointer to the new page table or `null` if allocation fails.
-pub inline fn newPt() ?*PageTable {
-    const pt = allocPt() orelse return null;
-    arch.vm.clonePt(root_pt, pt);
+pub inline fn createPageTable() ?*PageTable {
+    const new_pt = PageTable.new() orelse return null;
+    arch.vm.copyKernelMappings(root_pt, new_pt);
 
-    return pt;
+    return new_pt;
 }
 
 pub inline fn getRootPt() *PageTable {

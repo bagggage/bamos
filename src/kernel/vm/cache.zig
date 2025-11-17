@@ -185,10 +185,9 @@ const HashTable = struct {
         errdefer self.freePages();
 
         const virt = vm.heapReserve(virt_pages);
-        vm.mmap(
+        vm.getRootPt().map(
             virt, phys, initial_pages,
             .{ .global = true, .write = true },
-            vm.getRootPt()
         ) catch return error.NoMemory;
 
         self.buckets.ptr = @ptrFromInt(virt);
