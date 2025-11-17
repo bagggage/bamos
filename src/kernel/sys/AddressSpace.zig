@@ -48,7 +48,7 @@ pub fn create(stack_pages: u16) !*Self {
     const self = vm.auto.alloc(Self) orelse return error.NoMemory;
     errdefer vm.auto.free(Self, self);
 
-    const pt = vm.newPt() orelse return error.NoMemory;
+    const pt = vm.createPageTable() orelse return error.NoMemory;
     self.* = .init(pt, stack_pages);
 
     return self;
@@ -62,7 +62,7 @@ pub fn deinit(self: *Self) void {
         vm.auto.free(MapUnit, map_unit);
     }
 
-    vm.freePt(self.page_table);
+    self.page_table.free();
 }
 
 pub inline fn delete(self: *Self) void {

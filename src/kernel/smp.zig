@@ -113,15 +113,14 @@ pub fn initCpu(ret: *const fn() noreturn) void {
 
     if (!is_boot) {
         arch.initCpu();
+        vm.setPageTable(vm.getRootPt());
 
-        vm.setPt(vm.getRootPt());
-
-        const pt = vm.newPt() orelse {
+        const pt = vm.createPageTable() orelse {
             log.err("Not enough memory to allocate page table per each cpu", .{});
             lib.sync.halt();
         };
 
-        vm.setPt(pt);
+        vm.setPageTable(pt);
     }
 
     const local_data = &cpus_data[cpu_idx];
