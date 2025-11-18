@@ -64,7 +64,7 @@ pub const Name = extern struct {
         if (len == 0 or len > max_len) return error.BadName;
 
         const buf: []u8 = if (len > local_size) blk: {
-            result.ptr = @ptrCast(vm.malloc(len) orelse return error.NoMemory);
+            result.ptr = @ptrCast(vm.gpa.alloc(len) orelse return error.NoMemory);
             break :blk @constCast(result.ptr[0..len]);
         } else result.localBuffer()[0..len];
 
@@ -99,7 +99,7 @@ pub const Name = extern struct {
     }
 
     pub inline fn deinit(self: *Name) void {
-        if (self.isAllocated()) vm.free(@constCast(self.ptr));
+        if (self.isAllocated()) vm.gpa.free(@constCast(self.ptr));
         self.meta = 0;
     }
 

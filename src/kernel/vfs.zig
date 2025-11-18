@@ -211,11 +211,11 @@ pub const MountPoint = struct {
 
     // TODO: Replace with `vm.obj` framework
     pub inline fn new() ?*MountPoint {
-        return vm.alloc(MountPoint);
+        return vm.gpa.create(MountPoint);
     }
 
     pub inline fn free(self: *MountPoint) void {
-        vm.free(self);
+        vm.gpa.free(self);
     }
 
     pub inline fn fromNode(node: *Node) *MountPoint {

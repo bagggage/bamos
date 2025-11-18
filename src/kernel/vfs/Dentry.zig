@@ -61,7 +61,7 @@ pub const Name = struct {
             self.value.short[name.len] = 0;
         }
         else {
-            const buffer: [*]u8 = @ptrCast(vm.malloc(name.len) orelse return error.NoMemory);
+            const buffer: [*]u8 = @ptrCast(vm.gpa.alloc(name.len) orelse return error.NoMemory);
             @memcpy(buffer[0..name.len], name);
 
             self.value = .{ .long = buffer };
@@ -88,7 +88,7 @@ pub const Name = struct {
     }
 
     pub fn deinit(self: *Name) void {
-        if (self.len >= Union.short_len) vm.free(self.value.long);
+        if (self.len >= Union.short_len) vm.gpa.free(self.value.long);
     }
 
     pub inline fn str(self: *const Name) []const u8 {

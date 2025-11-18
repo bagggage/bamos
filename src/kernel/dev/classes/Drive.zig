@@ -82,7 +82,7 @@ pub const io = opaque {
         fn init(multi_io: bool) !Control {
             const queue: AnyQueue = if (multi_io) blk: {
                 const cpus_num = smp.getNum();
-                const mem = vm.malloc(cpus_num * @sizeOf(io.Request.Queue)) orelse return error.NoMemory;
+                const mem = vm.gpa.alloc(cpus_num * @sizeOf(io.Request.Queue)) orelse return error.NoMemory;
 
                 break :blk .{ .multi = @alignCast(@ptrCast(mem)) };
             } else .{ .single = .{} };
@@ -91,7 +91,7 @@ pub const io = opaque {
         }
 
         inline fn deinit(self: *Control, multi_io: bool) void {
-            if (multi_io) vm.free(self.queue.multi);
+            if (multi_io) vm.gpa.free(self.queue.multi);
             self.oma.deinit();
         }
 

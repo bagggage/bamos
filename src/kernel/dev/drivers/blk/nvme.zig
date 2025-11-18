@@ -486,13 +486,13 @@ const Controller = struct {
 
     // TODO: Check if it's complete.
     pub fn deinit(self: *Controller) void {
-        vm.free(self.soft_intrs);
+        vm.gpa.free(self.soft_intrs);
 
         for (self.namespaces) |ns| {
             Namespace.deinit(ns);
         }
 
-        if (self.namespaces.len > 0) vm.free(@ptrCast(self.namespaces.ptr));
+        if (self.namespaces.len > 0) vm.gpa.free(@ptrCast(self.namespaces.ptr));
 
         self.deinitIoQueues();
 
@@ -553,10 +553,10 @@ const Controller = struct {
         const intr_num = try pci_dev.requestInterrupts(1, @truncate(smp.getNum()), .{ .msi_x = true });
         errdefer pci_dev.releaseInterrupts();
 
-        self.soft_intrs = @alignCast(@ptrCast(vm.malloc(
+        self.soft_intrs = @alignCast(@ptrCast(vm.gpa.alloc(
             @as(usize, @sizeOf(dev.intr.SoftHandler)) * intr_num
         ) orelse return error.NoMemory));
-        errdefer vm.free(self.soft_intrs);
+        errdefer vm.gpa.free(self.soft_intrs);
 
         for (0..intr_num) |intr| {
             try pci_dev.setupInterrupt(
@@ -785,11 +785,11 @@ const Controller = struct {
             const slice = ids[0..std.mem.len(@as([*:0]const u32, @volatileCast(ids)))];
             if (slice.len == 0) return;
 
-            const ptr = vm.malloc(@sizeOf(*NamespaceDrive) * slice.len) orelse return error.NoMemory;
+            const ptr = vm.gpa.alloc(@sizeOf(*NamespaceDrive) * slice.len) orelse return error.NoMemory;
 
             self.namespaces.ptr = @alignCast(@ptrCast(ptr));
             self.namespaces.len = slice.len;
-            errdefer vm.free(@ptrCast(self.namespaces.ptr));
+            errdefer vm.gpa.free(@ptrCast(self.namespaces.ptr));
 
             for (slice, 0..) |nsid, i| {
                 const drive = try dev.obj.new(NamespaceDrive);
@@ -918,13 +918,13 @@ fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {
     log.info("controller: {s}", .{device.name.str()});
 
     const pci_dev = pci.Device.from(device);
-    const controller = vm.alloc(Controller) orelse return .no_resources;
+    const controller = vm.gpa.create(Controller) orelse return .no_resources;
     pci_dev.data.set(@ptrCast(controller));
 
     controller.init(pci_dev) catch |err| {
         log.err("initialization failed: {s}", .{@errorName(err)});
 
-        vm.free(controller);
+        vm.gpa.free(controller);
         pci_dev.data.set(null);
 
         return .failed;
@@ -941,5 +941,5 @@ fn remove(device: *dev.Device) void {
     controller.deinit();
     ctrl_idx -= 1;
 
-    vm.free(controller);
+    vm.gpa.free(controller);
 }
