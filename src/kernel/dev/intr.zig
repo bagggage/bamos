@@ -461,7 +461,7 @@ pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
     freeVector(irq.vector);
 }
 
-pub export fn handleIrq(pin: u8) void {
+export fn handleIrq(pin: u8) void {
     @setRuntimeSafety(false);
     const local = smp.getLocalData();
 
@@ -471,7 +471,12 @@ pub export fn handleIrq(pin: u8) void {
     _ = irqs[pin].handle();
 }
 
-pub export fn handleMsi(idx: u8) void {
+export fn handleStubIrq(pin: u8) void {
+    @setRuntimeSafety(false);
+    log.warn("No IRQ handler for vector: {} on CPU {}", .{pin, smp.getIdx()});
+}
+
+export fn handleMsi(idx: u8) void {
     @setRuntimeSafety(false);
     const local = smp.getLocalData();
 

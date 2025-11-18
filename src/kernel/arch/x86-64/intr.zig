@@ -101,6 +101,7 @@ pub fn preinit() void {
     }
 
     initExceptHandlers();
+    initStubHandlers();
 }
 
 pub fn init() !intr.Chip {
@@ -128,7 +129,7 @@ pub inline fn setupCpu(cpu_idx: u16) void {
 }
 
 pub fn setupIsr(vec: intr.Vector, isr_ptr: isr.Fn, stack: Stack, type_attr: u8) void {
-    idts[vec.cpu][vec.vec] = Descriptor.init(@intFromPtr(isr_ptr), @intFromEnum(stack), type_attr);
+    idts[vec.cpu][vec.vec] = .init(@intFromPtr(isr_ptr), @intFromEnum(stack), type_attr);
 }
 
 pub inline fn useIdt(idt: *DescTable) void {
@@ -158,12 +159,8 @@ pub inline fn iret() void {
 }
 
 fn initIdts() !void {
-    for (idts[1..idts.len]) |*idt| {
-        for (0..reserved_vectors) |vec| {
-            idt[vec] = idts[0][vec];
-        }
-
-        @memset(idt[reserved_vectors..max_vectors], std.mem.zeroes(Descriptor));
+    for (idts[1..]) |*idt| {
+        @memcpy(idt, &idts[0]);
     }
 }
 
@@ -194,10 +191,16 @@ fn initExceptHandlers() void {
     inline for (0..reserved_vectors) |vec| {
         const Handler = isr.ExcpHandler(vec);
 
-        idts[0][vec] = Descriptor.init(@intFromPtr(&Handler.isr), 0, trap_gate_flags);
+        idts[0][vec] = .init(@intFromPtr(&Handler.isr), 0, trap_gate_flags);
         except_handlers[vec] = switch (vec) {
             isr.page_fault_vec => &isr.pageFaultHandler,
             else => &isr.commonExcpHandler,
         };
+    }
+}
+
+fn initStubHandlers() void {
+    inline for (reserved_vectors..max_vectors) |vec| {
+        idts[0][vec] = .init(@intFromPtr(isr.stubIrqHandler(vec)), 0, intr_gate_flags);
     }
 }

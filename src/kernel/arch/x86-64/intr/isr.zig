@@ -244,6 +244,27 @@ pub fn pageFaultHandler(frame: *regs.InterruptFrame, state: *regs.State, vec: u3
     commonExcpHandler(frame, state, vec, error_code);
 }
 
+pub fn stubIrqHandler(comptime vec: u8) *const fn () callconv(.naked) noreturn {
+    const Static = opaque {
+        fn isr() callconv(.naked) noreturn {
+            asm volatile (
+                \\ call isr.entry
+                \\ mov %[vec], %edi
+                \\ call handleStubIrq
+                \\ jmp isr.exit
+                :
+                : [vec] "i" (vec),
+            );
+
+            comptime {
+                @export(&isr, .{ .name = std.fmt.comptimePrint("isr{x}_stub", .{vec}) });
+            }
+        }
+    };
+
+    return &Static.isr;
+}
+
 pub fn irqHandler(idx: u8, comptime kind: enum { irq, msi }, comptime max_num: comptime_int) *const fn () callconv(.naked) noreturn {
     const Static = opaque {
         fn getIsr(comptime n: comptime_int) *const fn () callconv(.naked) noreturn {
