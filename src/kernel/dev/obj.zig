@@ -61,13 +61,13 @@ fn checkType(comptime T: type) void {
 /// @export
 pub fn new(comptime T: type) Error!*T {
     checkType(T);
-    return &(vm.alloc(Object(T)) orelse return error.NoMemory).payload;
+    return &(vm.gpa.create(Object(T)) orelse return error.NoMemory).payload;
 }
 
 /// @export
 pub fn free(comptime T: type, object: *T) void {
     const obj = Object(T).fromPayload(object);
-    vm.free(obj);
+    vm.gpa.free(obj);
 }
 
 pub inline fn add(comptime T: type, object: *T) Error!void {
@@ -132,7 +132,7 @@ export fn removeByTypeId(id: u32, node: *Node) bool {
         obj_list.list.remove(node);
     }
 
-    vm.free(node);
+    vm.gpa.free(node);
     return true;
 }
 
@@ -141,7 +141,7 @@ export fn addByTypeId(id: u32, node: *Node) bool {
         map_lock.lock();
         defer map_lock.unlock();
 
-        break :blk hash_map.getOrPutValue(vm.std_allocator, id, ObjectsList{}) catch {
+        break :blk hash_map.getOrPutValue(vm.gpa.std_interface, id, ObjectsList{}) catch {
             return false;
         };
     };

@@ -141,7 +141,7 @@ const MsiX = struct {
             self.maskIdx(@truncate(i), true);
         }
 
-        vm.free(@ptrCast(self.msis.ptr));
+        vm.gpa.free(@ptrCast(self.msis.ptr));
     }
 
     pub inline fn enable(self: *MsiX) void {
@@ -161,7 +161,7 @@ const MsiX = struct {
     pub fn alloc(self: *MsiX, num: u8) Error!void {
         std.debug.assert(num > 0 and num <= self.getMax());
 
-        const msis= @as([*]u8, @ptrCast(vm.malloc(@sizeOf(u8) * num) orelse return error.NoMemory))[0..num];
+        const msis= @as([*]u8, @ptrCast(vm.gpa.alloc(@sizeOf(u8) * num) orelse return error.NoMemory))[0..num];
 
         for (0..num) |i| { msis[i] = 0xFF; }
 

@@ -1,6 +1,6 @@
-//! # Universal memory allocator
+//! # General Purpose Allocator
 //! 
-//! The `UniversalAllocator` is a versatile and efficient memory allocator
+//! The `gpa` is a versatile memory allocator
 //! that supports random size allocations.
 //! 
 //! It is designed to work within the constraints of a virtual memory system
@@ -19,7 +19,7 @@
 //! 
 //! ## Implementation details:
 //! 
-//! Universal allocator is build on top of the pool of `vm.ObjectAllocator`s and `vm.PageAllocator`.
+//! Gpa is build on top of the pool of `vm.ObjectAllocator`s and `vm.PageAllocator`.
 //! 
 //! There are two strategy:
 //! - For small objects/memory blocks (with the size less or equal `max_small_size`).
@@ -69,6 +69,50 @@ const HugeFrame = struct {
 const HugeTree = lib.BinaryTree(HugeFrame, HugeFrame.cmp);
 const HugeNode = HugeTree.Node;
 
+/// High-level general purpose allocator interface.
+/// Implements `std.mem.Allocator` interface for use with Zig Standard Library `std`.
+pub const std_interface = std.mem.Allocator{
+    .ptr = undefined,
+    .vtable = &std_vtable
+};
+
+const std_vtable = opaque {
+    const vtable = std.mem.Allocator.VTable{
+        .alloc = stdAlloc,
+        .resize = stdResize,
+        .remap = stdRemap,
+        .free = stdFree,
+    };
+
+    fn stdAlloc(_: *anyopaque, len: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
+        const result = alloc(len) orelse return null;
+        // Check if pointer is aligned
+        // std.debug.assert((@intFromPtr(result) % (@as(u32, 1) << @truncate(ptr_align))) == 0);
+        return @ptrCast(result);
+    }
+
+    fn stdFree(_: *anyopaque, buf: []u8, _: std.mem.Alignment, _: usize) void {
+        free(buf.ptr);
+    }
+
+    fn stdResize(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
+        return buf.len >= new_len;
+    }
+
+    fn stdRemap(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) ?[*]u8 {
+        const new_buf: [*]u8 = @ptrCast(alloc(new_len) orelse return null);
+
+        if (buf.len < new_len) {
+            @memcpy(new_buf[0..buf.len], buf);
+        } else {
+            @memcpy(new_buf[0..new_len], buf[0..new_len]);
+        }
+
+        free(buf.ptr);
+        return new_buf;
+    }
+}.vtable;
+
 /// A fixed-size array of object allocators (`vm.ObjectAllocator`),
 /// used for managing small memory blocks.
 var oma_pool: [oma_pool_len]vm.ObjectAllocator = initOmaPool();
@@ -78,13 +122,17 @@ var huge_oma: vm.ObjectAllocator = .init(HugeNode);
 /// The binary tree that manages all large memory block allocations.
 var huge_alloc_tree: HugeTree = .{};
 
+pub inline fn create(comptime T: type) ?*T {
+    return @ptrCast(@alignCast(alloc(@sizeOf(T))));
+}
+
 /// Allocates a block of memory of the specified `size`.
 /// 
 /// - `size`: The size of memory to allocate. Must be great than zero.
 /// Maximum size of the memory block is limited by `vm.PageAllocator.max_alloc_pages`.
 /// - Returns: A pointer to the allocated memory block,
 /// or `null` if the allocation fails.
-pub inline fn alloc(size: usize) ?*anyopaque {
+pub fn alloc(size: usize) callconv(.c) ?*anyopaque {
     std.debug.assert(size > 0 and size < (vm.PageAllocator.max_alloc_pages * vm.page_size));
     return if (size <= max_small_size) allocSmall(@truncate(size)) else allocHuge(@truncate(size));
 }
@@ -92,7 +140,7 @@ pub inline fn alloc(size: usize) ?*anyopaque {
 /// Frees a previously allocated block of memory pointed to by `mem`.
 /// 
 /// - `mem`: A pointer to the memory block to free, or `null` (which is ignored).
-pub fn free(mem: ?*anyopaque) void {
+pub fn free(mem: ?*anyopaque) callconv(.c) void {
     if (mem == null) return;
 
     const addr: usize = @intFromPtr(mem.?);

@@ -32,9 +32,9 @@ pub const VirtualRegion = @import("vm/VirtualRegion.zig");
 pub const auto = @import("vm/auto.zig");
 pub const BucketAllocator = @import("vm/BucketAllocator.zig");
 pub const cache = @import("vm/cache.zig");
+pub const gpa = @import("vm/gpa.zig");
 pub const ObjectAllocator = @import("vm/ObjectAllocator.zig");
 pub const PageAllocator = @import("vm/PageAllocator.zig");
-pub const UniversalAllocator = @import("vm/UniversalAllocator.zig");
 
 /// Gets the current page table from the specific cpu register.
 pub const getPageTable = arch.vm.getPageTable;
@@ -47,63 +47,6 @@ pub const heapStart = arch.vm.heapStart;
 
 /// Checks if an address belongs to the userspace virtual memory range.
 pub const isUserVirtAddr = arch.vm.isUserVirtAddr;
-
-/// General-purpose kernel memory allocation function.
-pub const malloc = UniversalAllocator.alloc;
-/// General-purpose kernel memory deallocation function.
-pub const free = UniversalAllocator.free;
-
-/// General-purpose kernel allocation function to allocate
-/// object of the specific type.
-pub inline fn alloc(comptime T: type) ?*T {
-    return @alignCast(@ptrCast(malloc(@sizeOf(T))));
-}
-
-/// Kernel high-level general purpose allocator interface.
-/// 
-/// Implements `std.mem.Allocator` interface for use
-/// with Zig Standard Library `std`.
-pub var std_allocator = std.mem.Allocator{
-    .ptr = undefined,
-    .vtable = &std_vtable
-};
-
-const std_vtable = opaque {
-    pub const vtable = std.mem.Allocator.VTable{
-        .alloc = stdAlloc,
-        .resize = stdResize,
-        .remap = stdRemap,
-        .free = stdFree,
-    };
-
-    fn stdAlloc(_: *anyopaque, len: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
-        const result = malloc(len) orelse return null;
-        // Check if pointer is aligned
-        // std.debug.assert((@intFromPtr(result) % (@as(u32, 1) << @truncate(ptr_align))) == 0);
-        return @ptrCast(result);
-    }
-
-    fn stdFree(_: *anyopaque, buf: []u8, _: std.mem.Alignment, _: usize) void {
-        UniversalAllocator.free(buf.ptr);
-    }
-
-    fn stdResize(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
-        return buf.len >= new_len;
-    }
-
-    fn stdRemap(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) ?[*]u8 {
-        const new_buf: [*]u8 = @ptrCast(malloc(new_len) orelse return null);
-
-        if (buf.len < new_len) {
-            @memcpy(new_buf[0..buf.len], buf);
-        } else {
-            @memcpy(new_buf[0..new_len], buf[0..new_len]);
-        }
-
-        free(buf.ptr);
-        return new_buf;
-    }
-}.vtable;
 
 /// Mapping flags used to enable/disable specific features for memory pages.
 pub const MapFlags = packed struct {

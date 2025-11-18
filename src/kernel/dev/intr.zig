@@ -185,7 +185,7 @@ pub const Irq = struct {
         self.waitWhilePending();
 
         self.handlers.remove(&handler.node);
-        vm.free(handler);
+        vm.gpa.free(handler);
     }
 
     pub fn handle(self: *Irq) bool {
@@ -387,8 +387,8 @@ pub fn init() !void {
         arch.intr.avail_vectors,
         lib.byte_size
     ) catch unreachable;
-    const bitmap_pool: [*]u8 = @ptrCast(vm.malloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
-    errdefer vm.free(bitmap_pool);
+    const bitmap_pool: [*]u8 = @ptrCast(vm.gpa.alloc(bytes_per_bm * cpus_num) orelse return error.NoMemory);
+    errdefer vm.gpa.free(bitmap_pool);
 
     for (0..cpus_num) |i| {
         const bm_offset = i * bytes_per_bm;
@@ -411,9 +411,9 @@ pub fn init() !void {
 
 fn initSoftIntr(cpus_num: u16) !void {
     soft_tasks.ptr = @alignCast(@ptrCast(
-        vm.malloc(@sizeOf(SoftIntrTask) * cpus_num) orelse return error.NoMemory
+        vm.gpa.alloc(@sizeOf(SoftIntrTask) * cpus_num) orelse return error.NoMemory
     ));
-    errdefer vm.free(soft_tasks.ptr);
+    errdefer vm.gpa.free(soft_tasks.ptr);
 
     soft_tasks.len = cpus_num;
     for (soft_tasks, 0..) |*soft_task, i| {
