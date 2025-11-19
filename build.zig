@@ -66,7 +66,8 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
             .code_model = .kernel,
             .error_tracing = false,
             .pic = true
-        })
+        }),
+        .use_llvm = true
     });
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
     kernel_obj.addIncludePath(b.path("third-party/boot"));
@@ -85,7 +86,8 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
             .optimize = optimize,
             .target = target,
             .pic = true
-        })
+        }),
+        .use_llvm = true
     });
     dbg_obj.root_module.addImport("dbg-info", dbg_module);
 
@@ -99,7 +101,8 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
             .code_model = .kernel,
             .strip = false,
             .pic = true
-        })
+        }),
+        .use_llvm = true
     });
     kernel_exe.addObject(kernel_obj);
     kernel_exe.addObject(dbg_obj);
