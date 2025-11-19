@@ -274,7 +274,7 @@ pub const ClassCode = enum(u8) {
     proc_accelerator = 0x12,
     non_essential_instrum = 0x13,
     co_processor = 0x40,
-    vendor_specific = 0xFF
+    _
 };
 
 pub const SubclassCode = extern union {
@@ -389,7 +389,8 @@ pub const Capability = struct {
         sata_data_idx_conf = 18,
         advanced_feat = 19,
         enhanced_alloc = 20,
-        flattening_portal_bridge = 21
+        flattening_portal_bridge = 21,
+        _
     };
 
     /// MSI layouts namespace
