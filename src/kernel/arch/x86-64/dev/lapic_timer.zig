@@ -47,12 +47,7 @@ pub fn init() !void {
         .addDevice(dev.Name.init(device_name), null);
     errdefer dev.removeDevice(device);
 
-    timer.init(
-        device, &vtable,
-        timer.base_frequency,
-        .system_high, .both, .once
-    );
-
+    timer.* = .init(device, &vtable, timer.base_frequency, .system_high, .both, .once);
     log.info("frequency: {} MHz, ns per tick: {}", .{timer.base_frequency / 1000_000, accur_config.ns_per_tick});
 }
 

@@ -67,12 +67,12 @@ supported_modes: SupportedModes,
 mode: Mode,
 
 pub fn init(
-    self: *Self, device: *const dev.Device,
+    device: *const dev.Device,
     vt: *const VTable, base_frequency: u32,
     kind: Kind, supported_modes: SupportedModes,
     mode: Mode
-) void {
-    self.* = .{
+) Self {
+    return .{
         .vtable = vt,
         .device = device,
         .base_frequency = base_frequency,

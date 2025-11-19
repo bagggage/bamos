@@ -44,11 +44,7 @@ fn initDevice(self: *const dev.Driver) !void {
     const obj = try dev.obj.new(Timer);
     errdefer dev.obj.free(Timer, obj);
 
-    obj.init(
-        device, &vtable,
-        frequency_hz, .system_high,
-        .periodic, .periodic
-    );
+    obj.* = .init(device, &vtable, frequency_hz, .system_high, .periodic, .periodic);
     obj.mask = calcCounterMask();
 
     try dev.obj.add(Timer, obj);
@@ -95,7 +91,7 @@ fn deinitTimer() void {
 }
 
 inline fn calcCounterMask() u64 {
-    return if ((acpi.getFadt().flags & 256) != 0) std.math.maxInt(u32) else std.math.maxInt(u24);
+    return if ((acpi.getFadt().flags & 0x100) != 0) std.math.maxInt(u32) else std.math.maxInt(u24);
 }
 
 fn getCounterPio(_: *const Timer) usize {
