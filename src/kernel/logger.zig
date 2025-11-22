@@ -179,7 +179,7 @@ inline fn logFmtPrint(
     }
 
     try log_writer.print(format ++ new_line, args);
-    if (level == .err) try log_writer.flush();
+    try log_writer.flush();
 }
 
 inline fn levelToString(comptime level: std.log.Level) []const u8 {
