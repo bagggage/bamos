@@ -34,7 +34,7 @@ pub const PrivilegeLevel = enum(u8) {
 };
 
 pub const WaitQueue = struct {
-    pub const QList = std.SinglyLinkedList;
+    pub const QList = lib.atomic.SinglyLinkedList;
     pub const QNode = QList.Node;
 
     pub const Entry = struct {
@@ -67,22 +67,17 @@ pub const WaitQueue = struct {
     }
 
     pub fn remove(self: *WaitQueue, task: *Task) ?*Entry {
-        var prev: ?*QNode = null;
-        var node = self.list.first;
-        while (node) |n| : ({ prev = n; node = n.next; }) {
-            const entry = Entry.fromNode(n);
-            if (entry.task == task) {
-                if (prev) |p| {
-                    _ = p.removeNext();
-                } else {
-                    self.list.first = n.next;
-                }
-
-                return entry;
+        var node = self.list.first.load(.acquire);
+        const entry = blk: {
+            while (node) |n| : (node = n.next) {
+                const temp = Entry.fromNode(n);
+                if (temp.task == task) break :blk temp;
             }
-        }
+            return null;
+        };
 
-        return null;
+        self.list.remove(&entry.node);
+        return entry;
     }
 };
 
@@ -169,6 +164,15 @@ pub inline fn pause() void {
 pub inline fn wait(queue: *WaitQueue) void {
     const scheduler = getCurrent();
     waitEx(scheduler, queue);
+}
+
+pub fn waitUnlock(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
+    const scheduler = getCurrent();
+    var entry = scheduler.initWait();
+    queue.push(&entry);
+    lock.unlock();
+
+    scheduler.doWait();
 }
 
 pub fn resumeTask(task: *Task) void {
