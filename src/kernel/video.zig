@@ -10,3 +10,10 @@ pub const terminal = @import("video/terminal.zig");
 pub const Framebuffer = @import("video/Framebuffer.zig");
 pub const Color = Framebuffer.Color;
 pub const RawFont = @import("video/RawFont.zig");
+
+const boot = @import("boot.zig");
+
+pub fn debugBlt(color: Color, offset: usize, len: usize) void {
+    const fb_ptr: [*]u32 = @ptrCast(&boot.fb);
+    @memset(fb_ptr[offset..offset + len], color.pack(.ARGB));
+}
