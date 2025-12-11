@@ -139,9 +139,9 @@ pub fn map(self: *Self, map_unit: *MapUnit) !void {
     self.map_units.prepend(&map_unit.node);
 }
 
-pub fn pageFault(self: *Self, addr: usize, cause: vm.FaultCause) !void {
+pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) vfs.Error!void {
     // Page aligned base address.
-    const base = addr - (addr % vm.page_size);
+    const base = address - (address % vm.page_size);
     const top = base + vm.page_size;
 
     const map_unit = blk: {
@@ -151,15 +151,10 @@ pub fn pageFault(self: *Self, addr: usize, cause: vm.FaultCause) !void {
         break :blk self.lookupMapUnit(base, top) orelse return error.NoEnt;
     };
 
-    try map_unit.ops.pageFault(map_unit, addr, cause);
+    try map_unit.pageFault(self.page_table, address, cause);
 }
 
-pub fn format(
-    self: *const Self,
-    comptime _: []const u8,
-    _: std.fmt.FormatOptions,
-    writer: anytype,
-) !void {
+pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
     const stack_size = self.stack_pages * (vm.page_size / lib.kb_size);
 
     try writer.print("{*}: refs: {}\n\t{*}, stack size: {} KB\n", .{
@@ -171,14 +166,13 @@ pub fn format(
         const map_unit = MapUnit.fromRbNode(n);
 
         try writer.writeByte('\t');
-        try map_unit.format(&.{}, .{}, writer);
+        try map_unit.format(writer);
         try writer.writeByte('\n');
     }
 }
 
 fn lookupMapUnit(self: *Self, base: usize, top: usize) ?*MapUnit {
     var rb_node = self.rb_tree.root;
-
     while (rb_node) |n| {
         const map_unit = MapUnit.fromRbNode(n);
         const order = compareMapRegions(
