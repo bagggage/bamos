@@ -40,6 +40,7 @@ pub fn VirtualArray(comptime T: type) type {
             const virt = self.region.base;
             self.region.base = 0;
 
+            std.debug.assert(virt != 0);
             vm.heapRelease(virt, virt_pages);
         }
 
@@ -85,7 +86,7 @@ pub fn VirtualArray(comptime T: type) type {
             try self.ensureTotalCapacity(new_len);
 
             self.len = new_len;
-            return self.manyPtr()[self.len -% 1];
+            return &self.manyPtr()[self.len -% 1];
         }
 
         pub fn addManyAsSlice(self: *Self, n: u32) vm.Error![]T {
@@ -104,11 +105,6 @@ pub fn VirtualArray(comptime T: type) type {
         pub fn appendSlice(self: *Self, items: []const T) vm.Error!void {
             const new_items = try self.addManyAsSlice(items.len);
             @memcpy(new_items, items);
-        }
-
-        comptime {
-            const array: std.ArrayList(T) = .{};
-            array.orderedRemove(0);
         }
 
         pub fn swapRemove(self: *Self, i: u32) T {
@@ -165,7 +161,8 @@ pub fn VirtualArray(comptime T: type) type {
         }
 
         pub fn clearAndFree(self: *Self) void {
-            self.region.unmap(vm.getPt(), true);
+            self.region.unmap();
+            self.region.deinit();
 
             self.len = 0;
             self.capacity = 0;
