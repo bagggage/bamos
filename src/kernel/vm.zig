@@ -16,6 +16,7 @@ const smp = @import("smp.zig");
 
 /// The size of a memory page, specific to the architecture.
 pub const page_size = arch.vm.page_size;
+pub const page_shift = std.math.log2_int(u16, page_size);
 /// The start virtual address of the kernel in memory.
 pub const kernel_start = &boot.kernel_elf_start;
 pub const kernel_end = &boot.kernel_elf_end;
@@ -64,6 +65,12 @@ pub const MapFlags = packed struct {
     }
 };
 
+pub const PageAttributes = packed struct {
+    mapped: bool = false,
+    accessed: bool = false,
+    dirty: bool = false,
+};
+
 pub const FaultCause = enum {
     read,
     write,
@@ -90,7 +97,7 @@ var heap_lock: lib.sync.Spinlock = .init(.unlocked);
 /// virtual memory system. It also maps initial memory regions based on the kernel's memory mappings.
 /// 
 /// - Returns: An error if the initialization fails.
-pub fn init() Error!void {
+pub fn init() !void {
     heap = .init(heapStart());
 
     try ObjectAllocator.initOmaSystem();
@@ -224,11 +231,32 @@ pub inline fn heapRelease(base: usize, pages: u32) void {
     heap.release(base, pages);
 }
 
-pub fn pageFaultHandler(addr: usize, cause: FaultCause, userspace: bool) bool {
+comptime {
+    std.debug.assert(PageAllocator.max_rank <= std.math.maxInt(u8));
+    std.debug.assert(PageAllocator.max_alloc_pages <= std.math.maxInt(u32));
+}
+
+pub inline fn rankToPages(rank: u8) u32 {
+    return @as(u32, 1) << @intCast(rank);
+}
+
+pub inline fn rankToBytes(rank: u8) usize {
+    return (@as(usize, 1) << @intCast(rank)) << page_shift;
+}
+
+pub inline fn pagesToRank(pages: u32) u8 {
+    return std.math.log2_int_ceil(u32, pages);
+}
+
+pub inline fn pagesToRankExact(pages: u32) u8 {
+    return std.math.log2_int(u32, pages);
+}
+
+pub fn pageFaultHandler(address: usize, cause: FaultCause, userspace: bool) bool {
     const sys = @import("sys.zig");
 
-    if (userspace) {
-        sys.Process.getCurrent().pageFault(addr, cause);
+    if (arch.vm.isUserVirtAddr(address)) {
+        sys.Process.getCurrent().pageFault(address, cause);
         return true;
     }
 
@@ -238,7 +266,7 @@ pub fn pageFaultHandler(addr: usize, cause: FaultCause, userspace: bool) bool {
         \\ userspace: {}
         ++ "\n"
         , .{
-            smp.getIdx(), sys.time.getTime(), addr,
+            smp.getIdx(), sys.time.getTime(), address,
             @tagName(cause), userspace
         }
     );

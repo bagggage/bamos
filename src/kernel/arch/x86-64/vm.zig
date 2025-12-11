@@ -22,6 +22,11 @@ const pages_per_2mb = (lib.mb_size * 2) / page_size;
 
 pub const PageTable = struct {
     const Entry = packed struct {
+        const Handle = struct {
+            pte: *const Entry,
+            pt_idx: u2
+        };
+
         present: u1 = 0,
         writeable: u1 = 0,
         user_access: u1 = 0,
@@ -142,17 +147,14 @@ pub const PageTable = struct {
     }
 
     pub fn translateVirtToPhys(self: *const PageTable, virt: usize) ?usize {
-        var pte = &self.entries[getPxeIdx(3, virt)];
-        for (0..4) |pt_idx| {
-            if (pte.present == 0) break;
-            if (pte.size == 1 or pt_idx == 3) {
-                return pte.getBase() | getInpageOffset(@truncate(3 - pt_idx), virt);
-            }
+        const handle = self.translateVirtToPte(virt) orelse return null;
+        return handle.pte.getBase() | getInpageOffset(3 - handle.pt_idx, virt);
+    }
 
-            pte = &pte.nextPageTable().entries[getPxeIdx(@truncate(2 - pt_idx), virt)];
-        }
-
-        return null;
+    pub fn accessPageAttributes(self: *const PageTable, virt: usize) vm.PageAttributes {
+        const pte = @constCast((self.translateVirtToPte(virt) orelse return .{}).pte);
+        defer { pte.accessed = 0; pte.dirty = 0; }
+        return .{ .mapped = true, .accessed = pte.accessed != 0, .dirty = pte.dirty != 0 };
     }
 
     /// Maps a virtual memory range to a physical memory range.
@@ -398,6 +400,18 @@ pub const PageTable = struct {
         }
 
         return result;
+    }
+
+    fn translateVirtToPte(self: *const PageTable, virt: usize) ?Entry.Handle {
+        var pte = &self.entries[getPxeIdx(3, virt)];
+        for (0..4) |pt_idx| {
+            if (pte.present == 0) break;
+            if (pte.size == 1 or pt_idx == 3) return .{ .pte = pte, .pt_idx = @truncate(pt_idx) };
+
+            pte = &pte.nextPageTable().entries[getPxeIdx(@truncate(2 - pt_idx), virt)];
+        }
+
+        return null;
     }
 
     inline fn getPxeIdx(pt_idx: u8, virt: usize) u16 {
