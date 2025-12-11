@@ -324,6 +324,8 @@ export fn sleepTask(self: *Self) void {
     local.tryExitInterrupt(1);
 
     self.flags.sleep = true;
+    defer self.flags.sleep = false;
+
     intr.enableForCpu();
 
     // Waiting for awake.
