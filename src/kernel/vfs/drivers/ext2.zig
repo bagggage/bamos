@@ -6,10 +6,11 @@
 
 const std = @import("std");
 
-const cache = @import("../../vm.zig").cache;
+const cache = vfs.Drive.cache;
 const lib = @import("../../lib.zig");
 const log = std.log.scoped(.ext2);
 const vfs = @import("../../vfs.zig");
+const vm = @import("../../vm.zig");
 
 const super_offset = 1024;
 const super_magic = 0xEF53;
@@ -213,26 +214,25 @@ const Inode = extern struct {
         inner_idx: u32,
         indir_level: u2,
 
-        cursor: cache.Cursor = .blank(),
+        cursor: cache.Cursor,
 
-        ptrs: [*]u32 = undefined,
+        ptrs: [*]const u32 = undefined,
         ptr_stack: [2]u32 = .{ 0, 0 },
 
         ptr_per_blk_shift: u5,
 
-        super: *vfs.Superblock,
+        super: *const vfs.Superblock,
         inode: *const Inode,
 
-        pub inline fn init(begin_idx: u32, super: *vfs.Superblock, inode: *const Inode) !BlockIter {
+        pub inline fn init(begin_idx: u32, super: *const vfs.Superblock, inode: *const Inode) !BlockIter {
             const ptr_per_blk_shift = super.block_shift - std.math.log2(@sizeOf(u32));
-            const location = calcPtrStartLocation(
-                begin_idx, ptr_per_blk_shift
-            );
+            const location = calcPtrStartLocation(begin_idx, ptr_per_blk_shift);
 
             var self: BlockIter = .{
                 .inner_idx = location.inner_idx,
                 .indir_level = location.indir_level,
                 .ptr_per_blk_shift = ptr_per_blk_shift,
+                .cursor = .blank(super.drive),
                 .super = super,
                 .inode = inode
             };
@@ -242,7 +242,7 @@ const Inode = extern struct {
         }
 
         pub inline fn deinit(self: *BlockIter) void {
-            self.super.drive.putCache(&self.cursor);
+            self.cursor.close(.read);
         }
 
         pub inline fn next(self: *BlockIter) !u32 {
@@ -277,7 +277,7 @@ const Inode = extern struct {
                 try self.nextIndirBlock();
             }
 
-            const ptr = self.ptrs[self.inner_idx];
+            const ptr = try self.getIndirectPtr(self.inner_idx);
             self.inner_idx +%= 1;
 
             return ptr;
@@ -312,7 +312,7 @@ const Inode = extern struct {
 
             for (0..self.indir_level - 1) |i| {
                 const idx = self.ptr_stack[i];
-                try self.readPtrBlock(self.ptrs[idx]);
+                try self.readPtrBlock(try self.getIndirectPtr(idx));
             }
         }
 
@@ -328,17 +328,23 @@ const Inode = extern struct {
                 self.inner_idx = lib.misc.modByPowerOfTwo(u32, self.inner_idx, shift);
 
                 shift -= self.ptr_per_blk_shift;
-                try self.readPtrBlock(self.ptrs[self.ptr_stack[i]]);
+                try self.readPtrBlock(try self.getIndirectPtr(self.ptr_stack[i]));
             }
         }
 
         fn readPtrBlock(self: *BlockIter, block: u32) !void {
-            const blk_data = try readBlock(
-                self.super,
-                block,
-                &self.cursor
-            );
-            self.ptrs = @ptrCast(@alignCast(blk_data.ptr));
+            const offset = calcBlockOffset(self.super, block);
+            try self.cursor.ensureCache(.read, offset);
+            self.ptrs = @ptrCast(self.cursor.asObject(u32));
+        }
+
+        fn getIndirectPtr(self: *BlockIter, i: usize) !u32 {
+            const offset = self.cursor.innerOffset() + (i * @sizeOf(u32));
+            if (offset >= cache.block_size) {
+                @branchHint(.unlikely);
+                try self.cursor.seekAndEnsure(.read, cache.block_size);
+            }
+            return self.ptrs[i];
         }
 
         fn calcPtrStartLocation(begin_idx: u32, ptr_per_blk_shift: u5) Location {
@@ -416,6 +422,8 @@ const Inode = extern struct {
             .perm = @as(u16, @bitCast(self.type_perm)) & 0x0FFF,
             .size = @as(usize, self.size_hi) << 32 | self.size_lo,
 
+            .cache_ctrl = .{ .write_back = vfs.internals.cache.noWriteBackFail },
+
             .create_time = self.create_time,
             .access_time = self.access_time,
             .modify_time = self.modify_time,
@@ -432,8 +440,8 @@ const Inode = extern struct {
 
 const Dentry = extern struct {
     const Iterator = struct {
-        cursor: cache.Cursor = cache.Cursor.blank(),
-        dent: *Dentry = undefined,
+        cursor: cache.Cursor,
+        dent: *const Dentry = undefined,
         inode: *const Inode,
 
         block_i: u16 = 0,
@@ -441,8 +449,8 @@ const Dentry = extern struct {
 
         inner_offset: u16 = undefined,
 
-        pub fn next(self: *Iterator, super: *vfs.Superblock) !?*Dentry {
-            if (!self.cursor.isValid()) return try self.readNext(super);
+        pub fn next(self: *Iterator, super: *const vfs.Superblock) !?*const Dentry {
+            if (self.cursor.isBlank()) return try self.readNext(super);
 
             self.inner_offset += self.dent.size;
             if (self.inner_offset >= super.block_size) {
@@ -450,25 +458,23 @@ const Dentry = extern struct {
                 return try self.readNext(super);
             }
 
-            self.dent = @ptrFromInt(@intFromPtr(self.dent) + self.dent.size);
+            try self.cursor.seekAndEnsure(.read, self.dent.size);
+            self.dent = self.cursor.asObject(Dentry);
             return self.dent;
         }
 
-        pub fn deinit(self: *Iterator, super: *vfs.Superblock) void {
-            super.drive.putCache(&self.cursor);
+        pub fn deinit(self: *Iterator) void {
+            self.cursor.close(.read);
         }
 
-        fn readNext(self: *Iterator, super: *vfs.Superblock) !?*Dentry {
+        fn readNext(self: *Iterator, super: *const vfs.Superblock) !?*const Dentry {
             self.inner_offset = 0;
-
             if (self.block_i < self.blocks_num) {
                 const block_idx = self.inode.direct_ptrs[self.block_i];
+                const offset = super.part_offset + super.blockToOffset(block_idx);
 
-                log.debug("read block: {}, i:{}", .{block_idx,self.block_i});
-
-                const buffer = try readBlock(super, block_idx, &self.cursor);
-                self.dent = @alignCast(@ptrCast(buffer.ptr));
-
+                try self.cursor.ensureCache(.read, offset);
+                self.dent = self.cursor.asObject(Dentry);
                 return self.dent;
             }
 
@@ -483,13 +489,13 @@ const Dentry = extern struct {
 
     _name: u8,
 
-    pub inline fn name(self: *Dentry) []u8 {
-        return @as([*]u8, @ptrCast(&self._name))[0..self.name_len];
+    pub inline fn name(self: *const Dentry) []const u8 {
+        return @as([*]const u8, @ptrCast(&self._name))[0..self.name_len];
     }
 };
 
-const file_ops: vfs.File.Operations = .{
-    .read = fileRead,
+const file_cached_ops: vfs.internals.file.Cached = .{
+    .readCacheBlock = fileReadCacheBlock
 };
 
 var fs = vfs.FileSystem.init(
@@ -519,30 +525,31 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
     const part_super_offset = part_offset + super_offset;
 
     // Read superblock
-    var super_cache = try drive.readCached(part_super_offset);
-    errdefer drive.putCache(&super_cache);
+    var super_cache = try drive.openCursor(.read, part_super_offset);
+    errdefer super_cache.close(.read);
 
     const ext_super = super_cache.asObject(Superblock);
+    const block_size = @as(u16, 1) << @truncate(ext_super.block_shift + 10);
     if (!ext_super.check()) return error.BadSuperblock;
 
     log.debug("ver: {}.{}", .{ext_super.major_ver, ext_super.minor_ver});
-    log.debug("optional: 0x{x}, required: 0x{x}, read-only: 0x{x}", .{
-        ext_super.optional_feat, ext_super.required_feat, ext_super.readonly_feat
+    log.debug("block size: {}, optional: 0x{x}, required: 0x{x}, read-only: 0x{x}", .{
+        block_size, ext_super.optional_feat, ext_super.required_feat, ext_super.readonly_feat
     });
 
+    // Currently not supported
+    if (block_size < drive.lba_size) return error.BadSuperblock;
+
+    // Init super
     const super = vfs.Superblock.new() orelse return error.NoMemory;
     errdefer super.free();
 
-    // Init super
-    {
-        const block_size = @as(u16, 1) << @truncate(ext_super.block_shift + 10);
-        super.init(drive, part, block_size, ext_super);
-    }
+    super.init(drive, part, block_size, ext_super);
 
     // Init root dentry
     {
-        var cache_cursor = cache.Cursor.blank();
-        defer drive.putCache(&cache_cursor);
+        var cache_cursor = drive.blankCursor();
+        defer cache_cursor.close(.read);
 
         const inode = try readInode(super, root_inode, &cache_cursor);
         if (inode.type_perm.type != .directory) return error.BadInode;
@@ -557,22 +564,19 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
     return super;
 }
 
-fn readBgd(super: *vfs.Superblock, group: u32, cursor: *cache.Cursor) !*BlockGroupDescriptor {
+fn readBgd(super: *const vfs.Superblock, group: u32, cursor: *cache.Cursor) !*BlockGroupDescriptor {
     const ext_super = super.fs_data.as(Superblock).?;
     const offset = super.part_offset + ((ext_super.sb_block + 1) * super.block_size) + (group * @sizeOf(BlockGroupDescriptor));
-    try super.drive.readCachedNext(cursor, offset);
 
+    try cursor.ensureCache(.read, offset);
     return cursor.asObject(BlockGroupDescriptor);
 }
 
-fn readBlock(super: *vfs.Superblock, block: u32, cursor: *cache.Cursor) ![]u8 {
-    const offset = super.part_offset + super.blockToOffset(block);
-
-    try super.drive.readCachedNext(cursor, offset);
-    return cursor.asSlice().ptr[0..super.block_size];
+inline fn calcBlockOffset(super: *const vfs.Superblock, block: u32) usize {
+    return super.part_offset + super.blockToOffset(block);
 }
 
-fn readInode(super: *vfs.Superblock, inode: u32, cursor: *cache.Cursor) !*Inode {
+fn readInode(super: *const vfs.Superblock, inode: u32, cursor: *cache.Cursor) !*const Inode {
     const ext_super = super.fs_data.as(Superblock).?;
 
     const idx = inode - 1;
@@ -582,16 +586,17 @@ fn readInode(super: *vfs.Superblock, inode: u32, cursor: *cache.Cursor) !*Inode 
     const bgd = try readBgd(super, group, cursor);
     const offset = super.part_offset + super.blockToOffset(bgd.inode_table) + (inner_idx * ext_super.inode_size);
 
-    try super.drive.readCachedNext(cursor, offset);
+    try cursor.ensureCache(.read, offset);
     return cursor.asObject(Inode);
 }
 
-fn readDirectory(super: *vfs.Superblock, inode: *vfs.Inode, cursor: *cache.Cursor) !Dentry.Iterator {
+fn readDirectory(super: *const vfs.Superblock, inode: *vfs.Inode, cursor: *cache.Cursor) !Dentry.Iterator {
     const blocks_num = inode.size >> super.block_shift;
     const ext_inode = try readInode(super, inode.index, cursor);
 
     return Dentry.Iterator{
         .inode = ext_inode,
+        .cursor = .blank(super.drive),
         .blocks_num = @truncate(blocks_num),
     };
 }
@@ -599,11 +604,11 @@ fn readDirectory(super: *vfs.Superblock, inode: *vfs.Inode, cursor: *cache.Curso
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     const super = parent.ctx.super;
 
-    var cache_cursor = cache.Cursor.blank();
-    defer super.drive.putCache(&cache_cursor);
+    var cache_cursor = super.drive.blankCursor();
+    defer cache_cursor.close(.read);
 
     var dent_it = readDirectory(super, parent.inode, &cache_cursor) catch return null;
-    defer dent_it.deinit(super);
+    defer dent_it.deinit();
 
     const ext_dent = blk: {
         while (dent_it.next(super) catch return null) |dent| {
@@ -632,53 +637,53 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
 }
 
 fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
-    file.ops = &file_ops;
+    file.ops = &file_cached_ops.ops;
 }
 
 fn dentryClose(_: *const vfs.Dentry, _: *vfs.File) void {}
 
-fn fileRead(dentry: *const vfs.Dentry, offset: usize, buffer: []u8) vfs.Error!usize {
+fn fileReadCacheBlock(dentry: *const vfs.Dentry, block: *vm.cache.Block) vfs.Error!void {
     const inode = dentry.inode;
     const super = dentry.ctx.super;
 
-    if (offset >= inode.size) return 0;
+    const offset = block.getOffset();
+    const len = @min(inode.size - offset, block.size.toBytes());
 
-    const end = std.mem.min(usize, &.{ offset + buffer.len, inode.size });
+    const start_blk_i = super.offsetToBlock(offset);
+    const len_blk = super.offsetToBlock(len + super.block_size - 1);
 
-    const begin_blk = super.offsetToBlock(offset);
-    const end_blk = super.offsetToBlock(end - 1) + 1;
-
-    var inode_cache = cache.Cursor.blank();
-    defer super.drive.putCache(&inode_cache);
+    var inode_cache = super.drive.blankCursor();
+    defer inode_cache.close(.read);
 
     const ext_inode = try readInode(super, inode.index, &inode_cache);
-
-    var ptr_iter: Inode.BlockIter = try .init(@truncate(begin_blk), super, ext_inode);
+    var ptr_iter: Inode.BlockIter = try .init(@truncate(start_blk_i), super, ext_inode);
     defer ptr_iter.deinit();
 
-    var blk_cache = cache.Cursor.blank();
-    defer super.drive.putCache(&blk_cache);
+    var buffer = block.asSlice()[0..len];
+    var base_blk: u32 = 0;
+    var top_blk: u32 = 0;
+    var n: usize = 0;
 
-    log.debug("blocks: {} - {}", .{begin_blk, end_blk});
+    while (buffer.len > 0) {
+        var i_blk: u32 = undefined;
+        defer { base_blk = i_blk; top_blk = i_blk + 1; }
 
-    var buf_offset: usize = 0;
-    for (begin_blk..end_blk) |i| {
-        const blk_ptr = try ptr_iter.next();
-        var data = try readBlock(super, blk_ptr, &blk_cache);
+        while (n < len_blk) : (n += 1) {
+            i_blk = try ptr_iter.next();
+            if (top_blk == 0) {
+                base_blk = i_blk;
+                top_blk = i_blk + 1;
+            } else if (i_blk == top_blk) {
+                top_blk += 1;
+            } else { n += 1; break; }
+        }
 
-        log.debug("read block: {}", .{blk_ptr});
+        const blk_offset = super.part_offset + super.blockToOffset(base_blk);
+        const lba_offset = super.drive.offsetToLba(blk_offset);
+        const region_size = super.blockToOffset(top_blk -% base_blk);
+        try super.drive.ioSync(.read, lba_offset, buffer.ptr[0..region_size]);
 
-        const buf_start = if (i == begin_blk) super.offsetModBlock(offset) else 0;
-        const buf_end = if (i == end_blk - 1) super.offsetModBlock(end - 1) + 1 else super.block_size;
-        const buf_size = buf_end - buf_start;
-
-        @memcpy(
-            buffer[buf_offset..buf_offset + buf_size],
-            data[buf_start..buf_end]
-        );
-
-        buf_offset += buf_size;
+        if (region_size >= buffer.len) break;
+        buffer = buffer[region_size..];
     }
-
-    return buf_offset;
 }
