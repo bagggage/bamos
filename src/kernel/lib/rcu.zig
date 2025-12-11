@@ -102,6 +102,28 @@ pub const SinglyLinkedList = struct {
         return node;
     }
 
+    pub fn remove(self: *SinglyLinkedList, node: *Node) ?*Node {
+        self.ctrl.writeLock();
+        defer self.ctrl.writeUnlock();
+
+        var prev: ?*Node = null;
+        var temp = self.head.load(.acquire);
+        while (temp) |n| : ({ prev = temp; temp = n.next; }) {
+            if (n != node) continue;
+
+            if (prev) |p| {
+                @atomicStore(?*Node, &p.next, n.next, .release);
+            } else {
+                self.head.store(null, .release);
+            }
+
+            self.ctrl.updateSync();
+            return n;
+        }
+
+        return null;
+    }
+
     pub fn removeAfter(self: *SinglyLinkedList, prev: *Node) ?*Node {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
@@ -128,7 +150,16 @@ pub const SinglyLinkedList = struct {
 pub const DoublyLinkedList = struct {
     pub const Node = struct {
         next: ?*Node = null,
-        prev: ?*Node = null
+        prev: ?*Node = null,
+
+        pub inline fn asLinkedListNode(self: *Node) *std.DoublyLinkedList.Node {
+            comptime {
+                const StdNode = std.DoublyLinkedList.Node;
+                std.debug.assert(@offsetOf(Node, "next") == @offsetOf(StdNode, "next"));
+                std.debug.assert(@offsetOf(Node, "prev") == @offsetOf(StdNode, "prev"));
+            }
+            return @ptrCast(self);
+        }
     };
 
     ctrl: GenerationBlock = .{},
@@ -271,6 +302,11 @@ pub const DoublyLinkedList = struct {
     pub fn remove(self: *DoublyLinkedList, node: *Node) void {
         self.ctrl.writeLock();
         defer self.ctrl.writeUnlock();
+
+        self.removeRaw(node);
+    }
+
+    pub fn removeRaw(self: *DoublyLinkedList, node: *Node) void {
         defer {
             self.ctrl.updateSync();
             node.* = .{};
