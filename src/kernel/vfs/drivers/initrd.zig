@@ -119,18 +119,12 @@ fn mount() vfs.Error!vfs.Context.Virt {
     // Already mounted
     if (initrd.len != 0) return error.Busy;
 
-    const inode = vfs.Inode.new() orelse return error.NoMemory;
-    errdefer inode.free();
+    const dentry = try vfs.tmpfs.createDirectory("/", undefined);
+    dentry.ops = &fs.dentry_ops;
 
-    const dentry = vfs.Dentry.new() orelse return error.NoMemory;
-    inode.* = .{
-        .index = 0,
-        .type = .directory,
-    };
-
-    dentry.setup("/", undefined, inode, &fs.dentry_ops) catch unreachable;
     initrd = boot.getInitrd();
 
+    log.debug("initrd size: 0x{x}", .{initrd.len});
     return .{ .root = dentry };
 }
 
@@ -146,7 +140,7 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     });
 
     return tarLookup(&tar_iter, parent, name) catch |err| {
-        handleErr(err);
+        log.err("while parsing tar: {s}", .{@errorName(err)});
         return null;
     };
 }
@@ -191,10 +185,6 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
     return null;
 }
 
-fn handleErr(err: anyerror) void {
-    log.err("while parsing tar: {s}", .{@errorName(err)});
-}
-
 fn setupInode(inode: *vfs.Inode, file: *const TarFile, pos: usize) void {
     inode.* = .{
         // Offset in tar
@@ -206,6 +196,7 @@ fn setupInode(inode: *vfs.Inode, file: *const TarFile, pos: usize) void {
             .sym_link => .symbolic_link
         },
         .size = file.size,
+        .cache_ctrl = .{ .write_back = &vfs.internals.cache.noWriteBack },
 
         // Data pointer
         .fs_data = .from(@constCast(&initrd.ptr[pos]))
