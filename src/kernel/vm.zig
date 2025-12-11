@@ -118,6 +118,8 @@ pub fn init() !void {
     }
 
     setPageTable(root_pt);
+
+    try cache.init();
 }
 
 const intPtrErrorStr = "Only integer and pointer types are acceptable";
