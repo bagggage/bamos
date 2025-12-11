@@ -35,6 +35,7 @@ pub const BucketAllocator = @import("vm/BucketAllocator.zig");
 pub const cache = @import("vm/cache.zig");
 pub const gpa = @import("vm/gpa.zig");
 pub const ObjectAllocator = @import("vm/ObjectAllocator.zig");
+pub const Page = @import("vm/Page.zig");
 pub const PageAllocator = @import("vm/PageAllocator.zig");
 
 /// Gets the current page table from the specific cpu register.
@@ -63,12 +64,6 @@ pub const MapFlags = packed struct {
     comptime {
         std.debug.assert(@sizeOf(MapFlags) == @sizeOf(u8));
     }
-};
-
-pub const PageAttributes = packed struct {
-    mapped: bool = false,
-    accessed: bool = false,
-    dirty: bool = false,
 };
 
 pub const FaultCause = enum {
@@ -244,6 +239,14 @@ pub inline fn rankToPages(rank: u8) u32 {
 
 pub inline fn rankToBytes(rank: u8) usize {
     return (@as(usize, 1) << @intCast(rank)) << page_shift;
+}
+
+pub inline fn bytesToRank(bytes: usize) u8 {
+    return pagesToRank(bytesToPages(bytes));
+}
+
+pub inline fn bytesToPages(bytes: usize) u32 {
+    return @intCast((bytes + page_size - 1) >> page_shift);
 }
 
 pub inline fn pagesToRank(pages: u32) u8 {
