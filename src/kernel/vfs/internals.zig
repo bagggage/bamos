@@ -2,6 +2,7 @@
 
 const std = @import("std");
 
+const lib = @import("../lib.zig");
 const sys = @import("../sys.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
@@ -98,6 +99,8 @@ pub const dentry_ops = opaque {
 
 pub const file = opaque {
     pub const Cached = struct {
+        const log = std.log.scoped(.@"file.Cached");
+
         pub const mmap = opaque {
             pub const ops: sys.AddressSpace.MapUnit.Operations = .{
                 .pageFault = pageFault,
@@ -106,33 +109,72 @@ pub const file = opaque {
 
             const MapUnit = sys.AddressSpace.MapUnit;
 
-            pub fn pageFault(map_unit: *MapUnit, pt: *vm.PageTable, offset: usize, _: vm.FaultCause) Error!void {
+            pub fn pageFault(map_unit: *MapUnit, pt: *vm.PageTable, offset: usize, cause: vm.FaultCause) Error!void {
                 const file_offset = (map_unit.page_offset * vm.page_size) + offset;
                 const block = try getCacheBlockOrRead(map_unit.file.?, file_offset);
                 errdefer block.deref();
 
-                const page_offset = offset / vm.page_size;
-                const page_base = block.phys_base + (block.innerOffset(file_offset) / vm.page_size);
-                try map_unit.attachAndMapPage(pt, @truncate(page_offset), @truncate(page_base), 0);
+                const inner_offset = block.innerOffset(file_offset);
+                var page: vm.Page = .{
+                    .base = undefined,
+                    .dim = .{ .idx = @truncate(offset / vm.page_size) }
+                };
+
+                const copy_on_write = (cause == .write and !map_unit.flags.shared and map_unit.flags.map.write);
+                if (copy_on_write) {
+                    log.debug("copy on write happened: {f}", .{map_unit.file.?.dentry.path()});
+                    const phys = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
+                    const virt = vm.getVirtLma(phys);
+                    errdefer vm.PageAllocator.free(phys, 0);
+
+                    {
+                        const src: [*]u8 = @ptrFromInt(block.getAddress() + lib.misc.alignDown(usize, inner_offset, vm.page_size));
+                        const dst: [*]u8 = @ptrFromInt(virt);
+
+                        block.readDown();
+                        defer { block.readUp(); block.deref(); }
+
+                        @memcpy(dst[0..vm.page_size], src[0..vm.page_size]);
+                    }
+
+                    page.base = @truncate(phys / vm.page_size);
+
+                    if (map_unit.region.getPage(page.dim.idx)) |_| {
+                        try map_unit.remapPage(pt, page, map_unit.flags.map);
+                        block.deref();
+                    } else {
+                        try map_unit.attachAndMapPage(pt, page, map_unit.flags.map);
+                    }
+                } else {
+                    var map_flags = map_unit.flags.map;
+                    map_flags.write &= map_unit.flags.shared;
+
+                    page.base = @truncate(block.phys_base + (inner_offset / vm.page_size));
+                    try map_unit.attachAndMapPage(pt, page, map_flags);
+                }
             }
 
-            pub fn unmapPage(map_unit: *const MapUnit, pt: *const vm.PageTable, page: MapUnit.Page) void {
+            pub fn unmapPage(map_unit: *const MapUnit, pt: *const vm.PageTable, page: vm.Page) void {
                 const inode = map_unit.file.?.dentry.inode;
-
                 const mapped_page_offset = page.getOffset();
-                const file_offset = map_unit.page_offset * vm.page_size + mapped_page_offset;
-                const block = vm.cache.getNoRef(&inode.cache_ctrl, vm.cache.offsetToIdx(file_offset))
-                    catch @panic("Trying to unmap cache page of non-existing cache block!");
+                const virt = map_unit.base() + mapped_page_offset;
+                const page_attr = pt.accessPageAttributes(virt);
 
-                if (map_unit.flags.map.write) {
-                    const virt = map_unit.base() + mapped_page_offset;
-                    if (pt.accessPageAttributes(virt).dirty) {
+                // Check if page is backed by cache block
+                if (map_unit.flags.shared or !page_attr.writeable) {
+                    const file_offset = map_unit.page_offset * vm.page_size + mapped_page_offset;
+                    const block = vm.cache.getNoRef(&inode.cache_ctrl, vm.cache.offsetToIdx(file_offset))
+                        catch @panic("Trying to unmap cache page of non-existing cache block!");
+                    defer block.deref();
+
+                    if (page_attr.dirty) {
                         const quant = block.offsetToQuant(file_offset);
                         block.dirty_map.set(quant);
                     }
+                } else {
+                    // Copy-on-write - allocated page
+                    vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
                 }
-
-                block.deref();
             }
         };
 
