@@ -115,7 +115,7 @@ lock: lib.sync.Spinlock = .{},
 
 pub const alloc_config: vm.auto.Config = .{
     .allocator = .oma,
-    .capacity = 512
+    .capacity = 1024
 };
 
 pub inline fn new() ?*Dentry {
