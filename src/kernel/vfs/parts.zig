@@ -123,11 +123,10 @@ pub fn probe(drive: *Drive) Error!void {
     std.debug.assert(drive.parts.first == drive.parts.last);
 
     const lba_size = drive.lba_size;
-    var cache_cursor = try drive.readCached(lba_size);
-    defer drive.putCache(&cache_cursor);
+    var cache_cursor = try drive.openCursor(.read, lba_size);
+    defer cache_cursor.close(.read);
 
     const gpt = cache_cursor.asObject(Gpt.Header);
-
     if (gpt.checkSign() == false) return;
 
     log.info("GPT found: {f}; patritions: {}; entry size: {}", .{
@@ -148,19 +147,16 @@ pub fn probe(drive: *Drive) Error!void {
 
     for (0..parts_num) |i| {
         const ent_offset = base_offset + (i * ent_size);
-        try drive.readCachedNext(&cache_cursor, ent_offset);
+        try cache_cursor.ensureCache(.read, ent_offset);
 
         const entry = cache_cursor.asObject(Gpt.Entry);
-
         if (std.mem.eql(u8, &entry.guid.val, &Gpt.Entry.unused_guid.val)) break;
 
         const dev_num = drive.dev_region.alloc() orelse return Error.DevMinorLimit;
         errdefer drive.dev_region.free(dev_num);
 
         var dev_name = try blk: {
-            if (dev_name_letter)
-                break :blk dev.Name.print("{s}{}", .{drive_name, i + 1});
-
+            if (dev_name_letter) break :blk dev.Name.print("{s}{}", .{drive_name, i + 1});
             break :blk dev.Name.print("{s}p{}", .{drive_name, i + 1});
         };
         errdefer dev_name.deinit();

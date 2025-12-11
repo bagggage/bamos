@@ -4,7 +4,6 @@
 
 const std = @import("std");
 
-const cache = vm.cache;
 const dev = @import("../../dev.zig");
 const devfs = vfs.devfs;
 const lib = @import("../../lib.zig");
@@ -16,9 +15,11 @@ const vfs = @import("../../vfs.zig");
 
 const Self = @This();
 
+pub const cache = @import("Drive/cache.zig");
+
 pub const Error = devfs.Error || dev.Name.Error || error {
+    BadLbaSize,
     IoFailed,
-    NoMemory,
 };
 
 pub const io = opaque {
@@ -29,14 +30,24 @@ pub const io = opaque {
 
     pub const Status = enum(u8) {
         failed,
-        success
+        success,
+        none
     };
 
     pub const Request = struct {
         const Queue = std.SinglyLinkedList;
         const Node = Queue.Node;
 
-        pub const CallbackFn = *const fn (*const Request, Status) void;
+        pub const Callback = struct {
+            pub const Fn = *const fn (*const Request, Status, lib.AnyData) void;
+
+            func: Fn,
+            data: lib.AnyData = .{},
+
+            inline fn call(self: *const Callback, request: *const Request, status: Status) void {
+                self.func(request, status, self.data);
+            }
+        };
 
         id: u16,
         operation: Operation,
@@ -46,13 +57,13 @@ pub const io = opaque {
 
         lma_buf: [*]u8,
 
-        callback: CallbackFn,
+        callback: Callback,
         wait_queue: sched.WaitQueue = .{},
 
         node: Queue.Node = .{},
 
         comptime {
-            std.debug.assert(@sizeOf(Request) == 48);
+            std.debug.assert(@sizeOf(Request) == 56);
         }
 
         inline fn fromNode(node: *Node) *Request {
@@ -77,7 +88,7 @@ pub const io = opaque {
         };
 
         queue: AnyQueue,
-        oma: vm.ObjectAllocator = .initCapacity(@sizeOf(Request), 192),
+        oma: vm.ObjectAllocator = .initCapacity(@sizeOf(Request), 512),
 
         fn init(multi_io: bool) !Control {
             const queue: AnyQueue = if (multi_io) blk: {
@@ -191,7 +202,7 @@ pub const Flags = packed struct {
 
 pub const file_operations: vfs.File.Operations = .{
     .ioctl = undefined,
-    .mmap = undefined,
+    .mmapPrepare = undefined,
     .read = filePartitionRead,
     .write = undefined
 };
@@ -207,7 +218,7 @@ capacity: usize,
 flags: Flags = .{},
 
 io_ctrl: io.Control = undefined,
-cache_ctrl: *cache.ControlBlock = undefined,
+cache_ctrl: vm.cache.Control = undefined,
 parts: vfs.parts.List = .{},
 
 dev_region: *devfs.Region,
@@ -220,8 +231,9 @@ fn checkIo(self: *const Self, lba_offset: usize, buffer: []const u8) void {
 }
 
 pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: bool, partitions: bool) Error!void {
-    self.cache_ctrl = try cache.makeCtrl();
-    errdefer cache.deleteCtrl(self.cache_ctrl);
+    if (!std.math.isPowerOfTwo(self.lba_size) or self.lba_size > vm.page_size) return error.BadLbaSize;
+
+    self.cache_ctrl = .{ .write_back = &cacheWriteBack };
 
     self.io_ctrl = try .init(multi_io);
     errdefer self.io_ctrl.deinit(multi_io);
@@ -254,7 +266,7 @@ pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: b
 
 pub fn deinit(self: *Self) void {
     self.io_ctrl.deinit(self.flags.multi_io);
-    cache.deleteCtrl(self.cache_ctrl);
+    // TODO: remove all the cache blocks
 }
 
 pub fn onObjectAdd(self: *Self) void {
@@ -278,63 +290,39 @@ pub inline fn nextRequest(self: *Self) ?*const io.Request {
 
 pub fn completeIo(self: *Self, id: u16, status: io.Status) void {
     const handle = self.io_ctrl.getRequest(id);
-    handle.request.callback(handle.request, status);
+    const request = handle.request;
+
+    request.callback.call(request, status);
+    sched.awakeAll(&request.wait_queue);
 
     self.io_ctrl.freeRequest(handle);
 }
 
-pub inline fn putCache(self: *Self, cursor: *cache.Cursor) void {
-    if (cursor.blk) |blk| {
-        self.cache_ctrl.put(blk);
-        cursor.blk = null;
-    }
+pub inline fn openCursor(self: *Self, comptime op: io.Operation, offset: usize) Error!cache.Cursor {
+    return .open(self, op, offset);
 }
 
-pub inline fn getCache(self: *const Self, offset: usize) ?cache.Cursor {
-    const blk = self.cache_ctrl.get(cache.offsetToBlock(offset)) orelse return null;
-    return cache.Cursor.from(blk, offset);
+pub inline fn blankCursor(self: *Self) cache.Cursor {
+    return .blank(self);
 }
 
-pub fn readCachedNext(self: *Self, cursor: *cache.Cursor, offset: usize) Error!void {
-    @setRuntimeSafety(false);
-
-    cursor.offset = offset;
-    const blk_idx = cache.offsetToBlock(offset);
-
-    if (cursor.isValid()) {
-        if (cursor.blk.?.lba_key == blk_idx) return;
-
-        self.cache_ctrl.put(cursor.blk.?);
-    }
-
-    cursor.blk = try self.readBlock(blk_idx);
-}
-
-pub inline fn readCached(self: *Self, offset: usize) Error!cache.Cursor {
-    const blk_idx = cache.offsetToBlock(offset);
-    return cache.Cursor.from(try self.readBlock(blk_idx), offset);
-}
-
-pub fn readAsync(
-    self: *Self, lba_offset: usize, buffer: []u8,
-    callback: io.Request.CallbackFn
-) Error!void {
+pub fn ioAsync(self: *Self, op: io.Operation, lba_offset: usize, buffer: []u8, callback: io.Request.Callback) Error!void {
     const request = try self.makeRequest(
-        .read, lba_offset,
+        op, lba_offset,
         buffer, callback
     );
     _ = self.submitRequest(request);
 }
 
-pub fn writeAsync(
-    self: *Self, lba_offset: usize,
-    buffer: []const u8, callback: io.Request.CallbackFn
-) Error!void {
+pub fn ioSync(self: *Self, op: io.Operation, lba_offset: usize, buffer: []u8) Error!void {
+    var status: io.Status = undefined;
     const request = try self.makeRequest(
-        .write, lba_offset,
-        buffer, callback
+        op, lba_offset, buffer,
+        .{ .func = syncCallback, .data = .from(&status) }
     );
-    _ = self.submitRequest(request);
+
+    self.submitRequestAndWait(request);
+    if (status == .failed) return error.IoFailed;
 }
 
 pub inline fn lbaToOffset(self: *const Self, lba_offset: usize) usize {
@@ -363,48 +351,14 @@ pub fn getPartition(self: *const Self, part: u32) ?*vfs.Partition {
     return vfs.Partition.fromNode(node);
 }
 
-fn syncCallback(request: *const io.Request, status: io.Status) void {
-    const rq: *io.Request = @constCast(request);
-    rq.lba_num = @intFromEnum(status);
-
-    sched.awakeAll(&rq.wait_queue);
-}
-
-fn readBlock(self: *Self, idx: usize) Error!*cache.Block {
-    if (self.cache_ctrl.get(idx)) |block| return block;
-
-    const block = self.cache_ctrl.add(idx) orelse return error.NoMemory;
-    const lba_idx = idx * self.offsetToLba(cache.block_size);
-
-    const request = try self.makeRequest(
-        .read, lba_idx,
-        block.asSlice(), syncCallback
-    );
-
-    {   // Safe wait: put task into queue first, only then
-        // submit request to device and wait.
-        const scheduler = sched.getCurrent();
-        var wait = scheduler.initWait();
-        request.wait_queue.push(&wait);
-
-        if (self.submitRequest(request) == false) {
-            log.warn("request: {} is cached", .{idx});
-        }
-
-        scheduler.doWait();
-    }
-
-    const status: io.Status = @enumFromInt(request.lba_num);
-    if (status == .failed) return error.IoFailed;
-
-    return block;
+fn syncCallback(_: *const io.Request, status: io.Status, data: lib.AnyData) void {
+    const status_ptr = data.as(io.Status).?;
+    status_ptr.* = status;
 }
 
 inline fn makeRequest(
-    self: *Self,
-    comptime operation: io.Operation,
-    lba_offset: usize, buffer: []u8,
-    callback: io.Request.CallbackFn
+    self: *Self, operation: io.Operation,
+    lba_offset: usize, buffer: []u8, callback: io.Request.Callback
 ) Error!*io.Request {
     self.checkIo(lba_offset, buffer);
 
@@ -431,6 +385,17 @@ fn submitRequest(self: *Self, request: *io.Request) bool {
     return true;
 }
 
+fn submitRequestAndWait(self: *Self, request: *io.Request) void {
+    const scheduler = sched.getCurrent();
+    var wait = scheduler.initWait();
+    request.wait_queue.push(&wait);
+
+    if (self.submitRequest(request) == false) {
+        log.warn("request: {} is cached", .{request.id});
+    }
+    scheduler.doWait();
+}
+
 fn calcPartitionRegion(self: *const Self, part: *const vfs.Partition, offset: usize, len: usize) [2]usize {
     const part_start = self.lbaToOffset(part.lba_start);
     const part_end = self.lbaToOffset(part.lba_end);
@@ -438,10 +403,39 @@ fn calcPartitionRegion(self: *const Self, part: *const vfs.Partition, offset: us
     const start = part_start + offset;
     const end = start + len;
 
-    return .{
-        std.mem.min(usize, &.{start, part_end}),
-        std.mem.min(usize, &.{end, part_end})
+    return .{ @min(start, part_end), @min(end, part_end) };
+}
+
+fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, quant_shift: u5) bool {
+    const self: *Self = @fieldParentPtr("cache_ctrl", block.ctrl);
+    const offset = block.getOffset();
+    const buffer = block.asSlice();
+
+    var statuses: [vm.cache.Block.max_quants]io.Status = .{ io.Status.none } ** vm.cache.Block.max_quants;
+    const num = blk: {
+        for (quants, 0..) |q, i| {
+            const lba_offset = self.offsetToLba(offset + q.base);
+            self.ioAsync(
+                .read, lba_offset, buffer[q.base..q.top],
+                .{ .func = &syncCallback, .data = .from(&statuses[i]) }
+            ) catch break :blk i;
+        }
+        break :blk quants.len;
     };
+
+    var successed = true;
+    for (&statuses, 0..num) |*s, i| {
+        const status: *volatile io.Status = s;
+        while (status.* == .none) sched.yield();
+        if (status.* == .failed) { successed = false; continue; }
+
+        const q_base_idx = quants[i].base >> quant_shift;
+        const q_top_idx = quants[i].top >> quant_shift;
+
+        for (q_base_idx..q_top_idx) |q_idx| block.dirty_map.unset(q_idx);
+    }
+
+    return num == quants.len and successed;
 }
 
 fn filePartitionRead(dentry: *const vfs.Dentry, offset: usize, buffer: []u8) vfs.Error!usize {
@@ -452,24 +446,18 @@ fn filePartitionRead(dentry: *const vfs.Dentry, offset: usize, buffer: []u8) vfs
     const region = self.calcPartitionRegion(part, offset, buffer.len);
     if (region[0] == region[1]) return 0;
 
-    const blk_start = cache.offsetToBlock(region[0]);
-    const blk_end = cache.offsetToBlock(region[1] - 1) + 1;
+    var to_read = region[1] - region[0];
+    var cursor = try self.openCursor(.read, region[0]);
+    defer cursor.close(.read);
 
-    var buf_offset: usize = 0;
-    for (blk_start..blk_end) |idx| {
-        const blk = try self.readBlock(@truncate(idx));
-        defer blk.release();
+    while (to_read > 0) : (try cursor.next(.read)) {
+        const data = cursor.asSlice();
+        const size = @min(to_read, data.len);
 
-        const buf_start = if (idx == blk_start) cache.offsetModBlock(region[0]) else 0;
-        const buf_end = if (idx == blk_end - 1) cache.offsetModBlock(region[1] - 1) + 1 else cache.block_size;
-        const buf_size = buf_end - buf_start;
+        const pos = buffer.len -% to_read;
+        @memcpy(buffer[pos..pos + size], data[0..size]);
 
-        @memcpy(
-            buffer[buf_offset..buf_offset + buf_size],
-            blk.asSlice()[buf_start..buf_end]
-        );
-
-        buf_offset += buf_size;
+        to_read -%= size;
     }
 
     return region[1] - region[0];
