@@ -746,17 +746,17 @@ const Controller = struct {
     }
 
     fn identify(self: *Controller) !void {
-        const buffer = vm.PageAllocator.alloc(1) orelse return error.NoMemory;
-        defer vm.PageAllocator.free(buffer, 1);
+        const phys_buffer = vm.PageAllocator.alloc(1) orelse return error.NoMemory;
+        defer vm.PageAllocator.free(phys_buffer, 1);
 
-        const virt = vm.getVirtLma(buffer);
+        const buffer = vm.getVirtLma(phys_buffer);
 
         // Identify controller
         {
-            const info: *volatile Info = @ptrFromInt(virt);
+            const info: *volatile Info = @ptrFromInt(buffer);
             const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(buffer), &.{
+            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(phys_buffer), &.{
                 0x01 // (CNS) Controller identify
             }, true);
             self.adminInitialWait(cmd_id);
@@ -772,10 +772,10 @@ const Controller = struct {
 
         // Identify namespaces
         {
-            const ids: [*:0]volatile u32 = @ptrFromInt(virt);
+            const ids: [*:0]volatile u32 = @ptrFromInt(buffer);
             const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(buffer), &.{
+            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(phys_buffer), &.{
                 0x02 // (CNS) Namespace ID list
             }, true);
 
@@ -797,7 +797,7 @@ const Controller = struct {
 
                 self.namespaces[i] = drive;
 
-                try Namespace.setup(drive, self, nsid, @ptrFromInt(virt + vm.page_size));
+                try Namespace.setup(drive, self, nsid, @ptrFromInt(buffer + vm.page_size));
                 errdefer Namespace.deinit(drive);
 
                 try dev.obj.add(Drive, &drive.base);
