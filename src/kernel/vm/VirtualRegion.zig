@@ -38,6 +38,25 @@ pub const Page = struct {
         std.debug.assert(vm.max_phys_pages <= std.math.maxInt(u32));
     }
 
+    pub fn new(page_offset: u32, rank: u8) ?*Page {
+        const page = vm.auto.alloc(Page) orelse return null;
+        const phys = vm.PageAllocator.alloc(rank) orelse {
+            vm.auto.free(Page, page);
+            return null;
+        };
+
+        page.* = .{
+            .dim = .{ .idx = @truncate(page_offset), .rank = rank },
+            .base = @truncate(phys / vm.page_size)
+        };
+        return page;
+    }
+
+    pub inline fn delete(self: *Page) void {
+        vm.PageAllocator.free(self.getPhysBase(), self.dim.rank);
+        vm.auto.free(Page, self);
+    }
+
     pub inline fn getOffset(self: Page) usize {
         return @as(usize, self.dim.idx) * vm.page_size;
     }
@@ -74,28 +93,15 @@ pub fn init(virt: usize) Self {
     return .{ .base = virt };
 }
 
-pub fn deinit(self: *Self, free_phys: bool) void {
+pub fn deinit(self: *Self) void {
     var node = self.page_list.first;
+    defer self.page_list.first = null;
 
     while (node) |n| {
         node = n.next;
         const page = Page.fromNode(n);
-        freePages(page, free_phys);
+        page.delete();
     }
-}
-
-pub fn unmap(self: *Self, page_table: *vm.PageTable, free_phys: bool) void {
-    var node = self.page_list.first;
-
-    while (node) |n| {
-        const page = Page.fromNode(n);
-        page.unmap(self.base, page_table);
-
-        node = n.next;
-        freePages(page, free_phys);
-    }
-
-    self.page_list.first = null;
 }
 
 pub fn growUp(self: *Self, rank: u8, map_flags: vm.MapFlags) !void {
@@ -103,13 +109,12 @@ pub fn growUp(self: *Self, rank: u8, map_flags: vm.MapFlags) !void {
     const pages_num = self.pagesNum();
     if (pages_num > Page.Dim.max_index) return error.MaxSize;
 
-    const page = allocPages(rank) orelse return error.NoMemory;
-    errdefer freePages(page, true);
+    const page = Page.new(pages_num, rank) orelse return error.NoMemory;
+    errdefer page.delete();
 
     const base = self.base + (pages_num * vm.page_size);
     try map(base, page, pages, map_flags);
 
-    page.dim.idx = @truncate(pages_num);
     self.page_list.prepend(&page.node);
 }
 
@@ -118,77 +123,55 @@ pub fn growDown(self: *Self, rank: u8, map_flags: vm.MapFlags) !void {
     const pages_num = self.pagesNum();
     if (pages_num > Page.Dim.max_index) return error.MaxSize;
 
-    const page = allocPages(rank) orelse return error.NoMemory;
-    errdefer freePages(page, true);
+    const page = Page.new(pages_num, rank) orelse return error.NoMemory;
+    errdefer page.delete();
 
     const new_base = self.base - (pages * vm.page_size);
     try map(new_base, page, pages, map_flags);
 
-    page.dim.idx = @truncate(pages_num);
     self.page_list.prepend(&page.node);
     self.base = new_base;
 }
 
-pub fn insertNewPage(
-    self: *Self, page_offset: u32,
-    rank: u8, map_flags: vm.MapFlags
-) !void {
-    const page = allocPages(rank) orelse return error.NoMemory;
-    errdefer freePages(page, true);
-
-    const page_base = self.base + (page_offset * vm.page_size);
-    const pages = @as(u32, 1) << @truncate(rank);
-
-    try vm.getPageTable().map(page_base, page.getPhysBase(), pages, map_flags);
-
-    page.dim.idx = @truncate(page_offset);
-    self.page_list.prepend(&page.node);
-}
-
 pub fn shrinkTop(self: *Self) ?u8 {
-    const node = self.page_list.popFirst() orelse return null;
-    const page = Page.fromNode(node);
+    const page = self.detachLastPage() orelse return null;
     const rank = page.dim.rank;
 
-    freePages(page, true);
+    page.delete();
     return rank;
 }
 
 pub fn shrinkBottom(self: *Self) ?u8 {
-    const node = self.page_list.popFirst() orelse return null;
-    const page = Page.fromNode(node);
+    const page = self.detachLastPage() orelse return null;
     const rank = page.dim.rank;
 
     const new_base = self.base + (page.pagesNum() * vm.page_size);
-    freePages(page, true);
-
     self.base = new_base;
+
+    page.delete();
     return rank;
 }
 
-pub inline fn size(self: *const Self) usize {
-    return self.pagesNum() * vm.page_size;
+pub inline fn attachPage(self: *Self, page: *Page) void {
+    self.page_list.prepend(&page.node);
 }
 
-pub fn pagesNum(self: *const Self) u32 {
-    if (self.page_list.first) |n| {
-        @branchHint(.likely);
-        const page = Page.fromNode(n);
-        return page.pagesNum() + page.dim.idx;
-    }
-
-    return 0;
+pub inline fn detachLastPage(self: *Self) ?*Page {
+    return Page.fromNode(self.page_list.popFirst() orelse return null);
 }
 
-pub fn getPage(self: *const Self, idx: u32) ?*Page {
+pub inline fn unmap(self: *Self) void {
+    vm.getRootPt().unmap(self.base, self.pagesNum());
+}
+
+pub fn getPage(self: *const Self, idx: u32) ?*vm.Page {
     var node = self.page_list.first;
-
     while (node) |n| : (node = n.next) {
         const page = Page.fromNode(n);
         const begin: u32 = page.dim.idx;
         const end = begin + page.pagesNum();
 
-        if (begin == idx or idx < end) return page;
+        if (idx >= begin and idx < end) return page;
     }
 
     return null;
@@ -220,33 +203,25 @@ pub fn getTopAligned(self: *const Self, comptime alignment: u5) usize {
     return lib.misc.alignDown(usize, self.getTop() - 1, alignment);
 }
 
+pub inline fn size(self: *const Self) usize {
+    return self.pagesNum() * vm.page_size;
+}
+
+pub fn pagesNum(self: *const Self) u32 {
+    if (self.page_list.first) |n| {
+        @branchHint(.likely);
+        const page = Page.fromNode(n);
+        return page.pagesNum() + page.dim.idx;
+    }
+
+    return 0;
+}
+
 pub fn format(self: *const Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
     try writer.print("0x{x}-0x{x}", .{self.base, self.base + self.size()});
 }
 
 fn map(base: usize, page: *Page, pages: u32, map_flags: vm.MapFlags) !void {
     if (map_flags.none) return;
-    try vm.getPageTable().map(base, page.getPhysBase(), pages, map_flags);
-}
-
-fn allocPages(rank: u8) ?*Page {
-    const page = vm.auto.alloc(Page) orelse return null;
-    const phys = vm.PageAllocator.alloc(rank) orelse {
-        vm.auto.free(Page, page);
-        return null;
-    };
-
-    page.* = .{
-        .dim = .{ .rank = rank },
-        .base = @truncate(phys / vm.page_size)
-    };
-    return page;
-}
-
-inline fn freePages(page: *Page, free_phys: bool) void {
-    if (free_phys) {
-        vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
-    }
-
-    vm.auto.free(Page, page);
+    try vm.getRootPt().map(base, page.getPhysBase(), pages, map_flags);
 }
