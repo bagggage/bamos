@@ -140,6 +140,7 @@ pub fn createInode(kind: vfs.Inode.Type) !*vfs.Inode {
     inode.* = .{
         .index = 0,
         .type = kind,
+        .cache_ctrl = .{ .write_back = &vfs.internals.cache.noWriteBack },
         .access_time = @intCast(time),
         .create_time = @intCast(time),
         .modify_time = @intCast(time)
