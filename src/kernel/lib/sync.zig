@@ -5,6 +5,7 @@
 const arch = @import("../lib.zig").arch;
 
 pub const RwLock = @import("sync/RwLock.zig");
+pub const RwSemaphore = @import("sync/RwSemaphore.zig");
 pub const Spinlock = @import("sync/Spinlock.zig");
 
 pub inline fn halt() noreturn {
