@@ -14,44 +14,44 @@ const text_output = video.text_output;
 const video = @import("video.zig");
 const vm = @import("vm.zig");
 
-/// Represents a symbol (function) from the kernel's debugging information.
-const Symbol = struct {
-    addr: usize = undefined,
-    name: []const u8 = undefined,
-};
-
-const CodeDump = struct {
+pub const CodeDump = struct {
     code: ?[]const u8,
 
     pub fn init(addr: usize) @This() {
-        if (addr == 0) return .{ .code = null };
+        if (addr == 0 or vm.getPageTable().translateVirtToPhys(addr) == null) return .{ .code = null };
         return .{ .code = @as([*]const u8, @ptrFromInt(addr))[0..10] };
     }
 
     pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        if (self.code == null) {
+        const code = self.code orelse {
             try writer.print("invalid instruction pointer...", .{});
             return;
-        }
+        };
 
-        for (self.code.?) |byte| { try writer.print("{x:0>2} ", .{byte}); }
+        for (code) |byte| { try writer.print("{x:0>2} ", .{byte}); }
     }
 };
 
-const StackDump = struct {
-    stack: []const usize,
+pub const StackDump = struct {
+    stack: ?[]const usize,
 
     pub fn init(addr: usize) @This() {
+        if (addr == 0 or vm.getPageTable().translateVirtToPhys(addr) == null) return .{ .stack = null };
         return .{ .stack = @as([*]const usize, @ptrFromInt(addr))[0..10] };
     }
 
     pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+        const stack = self.stack orelse {
+            try writer.print("invalid stack pointer...", .{});
+            return;
+        };
+
         try writer.print(
             "<{s}>" ++ logger.new_line,
-            .{if (@intFromPtr(self.stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned"}
+            .{if (@intFromPtr(stack.ptr) % (@sizeOf(usize) * 2) == 0) "aligned" else "unaligned"}
         );
 
-        for (self.stack, 0..) |entry, i| {
+        for (stack, 0..) |entry, i| {
             try writer.print(
                 "+0x{x:0>2}: 0x{x:.>16}" ++ logger.new_line,
                 .{i * @sizeOf(usize),entry}
@@ -60,7 +60,15 @@ const StackDump = struct {
     }
 };
 
-const tty_config: std.io.tty.Config = .escape_codes;
+/// Represents a symbol (function) from the kernel's debugging information.
+const Symbol = struct {
+    addr: usize = undefined,
+    name: []const u8 = undefined,
+};
+
+const tty_config: std.Io.tty.Config = .escape_codes;
+const panic_color: std.Io.tty.Color = .bright_red;
+const trace_color: std.Io.tty.Color = .bright_yellow;
 
 /// External function to retrieve the debug symbols from the kernel.
 /// This function is generating by `debug-maker`, it makes possible to
@@ -78,19 +86,11 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     defer logger.flush() catch {};
 
     {
-        tty_config.setColor(&logger.log_writer, .bright_red) catch {};
+        tty_config.setColor(&logger.log_writer, panic_color) catch return;
+        logger.log_writer.print("[KERNEL PANIC]: {s}\n\r", .{msg}) catch return;
 
-        _ = logger.log_writer.writeAll("[KERNEL PANIC]: ") catch {};
-        _ = logger.log_writer.writeAll(msg) catch {};
-        _ = logger.log_writer.writeAll("\n\r") catch {};
-
-        var it = std.debug.StackIterator.init(
-            @returnAddress(),
-            @frameAddress()
-        );
-
-        // `trace` also flushing writer
-        trace(&it, &logger.log_writer);
+        var it: std.debug.StackIterator = .init(@returnAddress(), @frameAddress());
+        if (it.next() != null) trace(&it, &logger.log_writer);
     }
 }
 
@@ -102,21 +102,15 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
 /// - `fp`: frame pointer to make stack trace.
 /// - `fmt`: additional message format string.
 /// - `args`: argumenets used within formating.
-pub fn exception(
-    ip: usize,
-    sp: usize,
-    fp: usize,
-    comptime fmt: []const u8,
-    args: anytype
-) void {
+pub fn exception(ip: usize, sp: usize, fp: usize, comptime fmt: []const u8, args: anytype) void {
     logger.capture();
     defer logger.release();
     defer logger.flush() catch {};
 
-    tty_config.setColor(&logger.log_writer, .bright_red) catch return;
+    tty_config.setColor(&logger.log_writer, panic_color) catch return;
     logger.log_writer.print("<<EXCEPTION>> CPU: {}" ++ logger.new_line, .{smp.getIdx()}) catch return;
 
-    tty_config.setColor(&logger.log_writer, .bright_yellow) catch return;
+    tty_config.setColor(&logger.log_writer, trace_color) catch return;
     logger.log_writer.print(fmt ++ logger.new_line, args) catch return;
     logger.log_writer.print(
         logger.new_line ++
@@ -135,9 +129,9 @@ pub fn exception(
 /// Traces the stack frames and prints the corresponding function names with offsets.
 /// This function is used to provide a detailed trace of the function calls leading up to a panic.
 pub fn trace(it: *std.debug.StackIterator, writer: *std.io.Writer) void {
-    tty_config.setColor(writer, .bright_yellow) catch return;
+    tty_config.setColor(writer, trace_color) catch return;
 
-    writer.print("[TRACE]: <0x{x:0<16}>" ++ logger.new_line, .{if (it.first_address) |ip| ip else 0}) catch return;
+    writer.print("[TRACE]: <0x{x:0>16}>" ++ logger.new_line, .{if (it.first_address) |ip| ip else 0}) catch return;
 
     if (comptime builtin.mode == .ReleaseFast) {
         writer.writeAll(
@@ -154,7 +148,7 @@ pub fn trace(it: *std.debug.StackIterator, writer: *std.io.Writer) void {
         const addr_offset = if (symbol) |sym| ret_addr - sym.addr else 0;
 
         writer.print(
-            "{:2}. 0x{x:0<16}: {s}+0x{x}" ++ logger.new_line,
+            "{:2}. 0x{x:0>16}: {s}+0x{x}" ++ logger.new_line,
             .{ i, ret_addr, sym_name, addr_offset }
         ) catch return;
     }
