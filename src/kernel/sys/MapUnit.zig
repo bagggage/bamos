@@ -5,6 +5,7 @@
 const std = @import("std");
 
 const lib = @import("../lib.zig");
+const log = std.log.scoped(.@"sys.MapUnit");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
@@ -20,11 +21,20 @@ pub const Flags = packed struct {
     grow_down: bool = false,
 
     comptime { std.debug.assert(@sizeOf(Flags) == 2); }
+
+    pub fn toPermissions(flags: Flags) vfs.Permissions {
+        if (flags.map.none) return .none;
+
+        var result: u16 = @intFromEnum(vfs.Permissions.r);
+        if (flags.map.exec) result |= @intFromEnum(vfs.Permissions.x);
+        if (flags.shared & flags.map.write) result |= @intFromEnum(vfs.Permissions.w);
+        return @enumFromInt(result);
+    }
 };
 
 pub const Operations = struct {
     pub const PageFaultFn = *const fn(*Self, pt: *vm.PageTable, offset: usize, cause: vm.FaultCause) vfs.Error!void;
-    pub const UnmapPageFn = *const fn(*const Self, pt: *const vm.PageTable, page: Page) void;
+    pub const UnmapPageFn = *const fn(*const Self, pt: *const vm.PageTable, page: vm.Page) void;
 
     pageFault: PageFaultFn = &defaultPageFault,
     unmapPage: UnmapPageFn = &defaultUnmapPage,
@@ -33,14 +43,12 @@ pub const Operations = struct {
         return vfs.Error.SegFault;
     }
 
-    fn defaultUnmapPage(_: *const Self, _: *const vm.PageTable, _: Page) void {}
+    fn defaultUnmapPage(_: *const Self, _: *const vm.PageTable, _: vm.Page) void {}
 };
 
-pub const Page = vm.VirtualRegion.Page;
-
 pub const PageHandle = struct {
-    prev: ?*Page.Node,
-    page: *Page,
+    prev: ?*vm.Page.Node,
+    page: *vm.Page,
 };
 
 pub const alloc_config: vm.auto.Config = .{
@@ -48,7 +56,7 @@ pub const alloc_config: vm.auto.Config = .{
     .capacity = 256
 };
 
-pub const max_pages = Page.max_index + vm.PageAllocator.max_alloc_pages;
+pub const max_pages = vm.Page.max_index + vm.PageAllocator.max_alloc_pages;
 pub const max_size = max_pages * vm.page_size;
 
 pub const default_ops: Operations = .{};
@@ -114,6 +122,16 @@ pub inline fn isAnonymous(self: *const Self) bool {
     return self.file == null;
 }
 
+pub fn map(self: *Self, pt: *vm.PageTable) !void {
+    if (self.flags.map.none) return;
+
+    var node = self.region.page_list.first;
+    while (node) |n| : (node = n.next) {
+        const page = vm.Page.fromNode(n);
+        try page.map(pt, self.region.base, self.flags.map);
+    }
+}
+
 pub inline fn unmap(self: *Self, pt: *vm.PageTable) void {
     self.unmapPages(self.region.page_list, pt);
     self.region.page_list.first = null;
@@ -142,15 +160,28 @@ pub fn shrinkBottom(self: *Self, pages: u32, pt: *vm.PageTable) !void {
     self.page_capacity -= pages;
 }
 
-pub fn attachAndMapPage(self: *Self, pt: *vm.PageTable, page_offset: u32, phys_base: u32, rank: u8) !void {
-    const new_page = vm.auto.alloc(Page) orelse return error.NoMemory;
-    new_page.* = .{ .base = phys_base, .dim = .{ .idx = @intCast(page_offset), .rank = rank } };
-    errdefer vm.auto.free(Page, new_page);
+pub fn attachAndMapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !void {
+    const new_page = vm.auto.alloc(vm.Page) orelse return error.NoMemory;
+    new_page.* = page;
+    errdefer vm.auto.free(vm.Page, new_page);
 
-    const virt = self.base() + new_page.getOffset();
-    try pt.map(virt, new_page.getPhysBase(), vm.rankToPages(rank), self.flags.map);
+    try page.map(pt, self.base(), map_flags);
+    self.region.attachPage(new_page);
+}
 
-    self.region.page_list.prepend(&new_page.node);
+pub fn detachLastPage(self: *Self) ?vm.Page {
+    const page = self.region.detachLastPage() orelse return null;
+    const tmp = page.*;
+
+    vm.auto.free(vm.Page, page);
+    return tmp;
+}
+
+pub fn remapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !void {
+    const target_page = self.region.getPage(page.dim.idx) orelse return error.NoEnt;
+    target_page.* = page;
+
+    try page.map(pt, self.base(), map_flags);
 }
 
 pub inline fn reinsertRegion(self: *Self, target: *Self, page_offset: u32, pages: u32) !void {
@@ -170,11 +201,17 @@ pub fn pageFault(self: *Self, pt: *vm.PageTable, address: usize, cause: vm.Fault
     if (!self.isAnonymous()) return try self.ops.pageFault(self, pt, offset, cause);
 
     // Anonymous page
+    if (self.flags.grow_down) {
+        @branchHint(.cold);
+        log.warn("grow down mapping is not implemented", .{});
+        return error.BadOperation;
+    }
+
     const page_offset: u32 = @truncate(offset / vm.page_size);
-    const page = Page.new(page_offset, 0) orelse return error.NoMemory;
+    const page = vm.Page.new(page_offset, 0) orelse return error.NoMemory;
     errdefer page.delete();
 
-    try pt.map(address, page.getPhysBase(), 1, self.flags.map);
+    try pt.map(lib.misc.alignDown(usize, address, vm.page_size), page.getPhysBase(), 1, self.flags.map);
     self.region.attachPage(page);
 }
 
@@ -189,39 +226,39 @@ pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
 
     try writer.print("{x:0>8} - {x:0>8}: {s}: {x:0>8} ", .{
         self.base(), self.base() + self.size(),
-        &flags_str, @as(usize, self.page_offset),
+        &flags_str, @as(usize, self.page_offset) * vm.page_size,
     });
 
     if (self.file) |f| try f.dentry.path().format(writer);
 }
 
-fn unmapPages(self: *Self, list: Page.List, pt: *vm.PageTable) void {
+fn unmapPages(self: *Self, list: vm.Page.List, pt: *vm.PageTable) void {
     var node = list.first;
     if (self.isAnonymous()) {
         while (node) |n| {
-            const page = Page.fromNode(n);
-            page.unmap(self.base(), pt);
+            const page = vm.Page.fromNode(n);
+            page.unmap(pt, self.base());
             vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
 
             node = n.next;
-            vm.auto.free(Page, page);
+            vm.auto.free(vm.Page, page);
         }
     } else {
         while (node) |n| {
-            const page = Page.fromNode(n);
+            const page = vm.Page.fromNode(n);
             self.ops.unmapPage(self, pt, page.*);
-            page.unmap(self.base(), pt);
+            page.unmap(pt, self.base());
 
             node = n.next;
-            vm.auto.free(Page, page);
+            vm.auto.free(vm.Page, page);
         }
     }
 }
 
 /// Detach mapped pages from the
 /// specified region and return a list of them.
-inline fn detachPages(self: *Self, page_offset: u32, pages: u32) !Page.List {
-    var list: Page.List = .{};
+inline fn detachPages(self: *Self, page_offset: u32, pages: u32) !vm.Page.List {
+    var list: vm.Page.List = .{};
     try detachPagesTo(self, page_offset, pages, &list);
 
     return list;
@@ -229,7 +266,7 @@ inline fn detachPages(self: *Self, page_offset: u32, pages: u32) !Page.List {
 
 /// Detach mapped pages from the
 /// specified region to the list.
-fn detachPagesTo(self: *Self, page_base: u32, page_len: u32, list: *Page.List) !void {
+fn detachPagesTo(self: *Self, page_base: u32, page_len: u32, list: *vm.Page.List) !void {
     const page_top = page_base + page_len;
 
     while (self.findPage(page_base, page_len)) |h| {
@@ -256,7 +293,7 @@ fn detachPagesTo(self: *Self, page_base: u32, page_len: u32, list: *Page.List) !
     }
 }
 
-fn detachPage(self: *Self, list: *Page.List, handle: *const PageHandle) void {
+fn detachPage(self: *Self, list: *vm.Page.List, handle: *const PageHandle) void {
     const node = &handle.page.node;
 
     // Remove page from the list.
@@ -272,11 +309,11 @@ fn detachPage(self: *Self, list: *Page.List, handle: *const PageHandle) void {
 fn findPage(self: *Self, page_base: u32, page_len: u32) ?PageHandle {
     const page_top = page_base + page_len;
 
-    var prev: ?*Page.Node = null;
-    var node: ?*Page.Node = self.region.page_list.first;
+    var prev: ?*vm.Page.Node = null;
+    var node: ?*vm.Page.Node = self.region.page_list.first;
 
     while (node) |n| : ({prev = node; node = n.next;}) {
-        const page = Page.fromNode(n);
+        const page = vm.Page.fromNode(n);
         const n_base: u32 = page.dim.idx;
         const n_len: u32 = page.pagesNum();
         const n_top: u32 = n_base + n_len;
@@ -289,7 +326,7 @@ fn findPage(self: *Self, page_base: u32, page_len: u32) ?PageHandle {
     return null;
 }
 
-fn shrinkPageTop(list: *Page.List, page: *Page, new_top_idx: u32) !void {
+fn shrinkPageTop(list: *vm.Page.List, page: *vm.Page, new_top_idx: u32) !void {
     const page_len = page.pagesNum();
     const page_top_idx = page_len + page.dim.idx;
     const detach_len = page_top_idx - new_top_idx;
@@ -300,7 +337,7 @@ fn shrinkPageTop(list: *Page.List, page: *Page, new_top_idx: u32) !void {
     const list_end = list.first;
 
     // Free new pages on error.
-    var dummy_list: Page.List = .{ .first = &page.node };
+    var dummy_list: vm.Page.List = .{ .first = &page.node };
 
     try buildPage( // Detached pages
         list, detach_base,
@@ -316,7 +353,7 @@ fn shrinkPageTop(list: *Page.List, page: *Page, new_top_idx: u32) !void {
     );
 }
 
-fn shrinkPageBottom(list: *Page.List, page: *Page, new_idx: u32) !void {
+fn shrinkPageBottom(list: *vm.Page.List, page: *vm.Page, new_idx: u32) !void {
     const detach_len = new_idx - page.dim.idx;
     const page_new_base = page.base + detach_len;
     const page_new_len = page.pagesNum() - detach_len;
@@ -324,7 +361,7 @@ fn shrinkPageBottom(list: *Page.List, page: *Page, new_idx: u32) !void {
     const page_dump = page.*;
     const list_end = list.first;
 
-    var dummy_list: Page.List = .{ .first = &page.node };
+    var dummy_list: vm.Page.List = .{ .first = &page.node };
     try buildPage( // Detached pages.
         list, page.base,
         page.dim.idx, detach_len, false
@@ -339,7 +376,7 @@ fn shrinkPageBottom(list: *Page.List, page: *Page, new_idx: u32) !void {
     );
 }
 
-fn dividePages(list: *Page.List, page: *Page, div_idx: u32, div_top_idx: u32) !void {
+fn dividePages(list: *vm.Page.List, page: *vm.Page, div_idx: u32, div_top_idx: u32) !void {
     const page_new_len = div_idx - page.dim.idx;
     const div_len = div_top_idx - div_idx;
     const div_base = page.base + page_new_len;
@@ -348,7 +385,7 @@ fn dividePages(list: *Page.List, page: *Page, div_idx: u32, div_top_idx: u32) !v
 
     const page_dump = page.*;
     const dummy_end = page.node.next;
-    var dummy_list: Page.List = .{ .first = &page.node };
+    var dummy_list: vm.Page.List = .{ .first = &page.node };
 
     errdefer page.* = page_dump;
 
@@ -357,7 +394,7 @@ fn dividePages(list: *Page.List, page: *Page, div_idx: u32, div_top_idx: u32) !v
         page.dim.idx, page_new_len, true
     );
     errdefer {
-        var clean_list: Page.List = .{ .first = page.node.next };
+        var clean_list: vm.Page.List = .{ .first = page.node.next };
         freePageList(&clean_list, dummy_end);
     }
 
@@ -373,7 +410,7 @@ fn dividePages(list: *Page.List, page: *Page, div_idx: u32, div_top_idx: u32) !v
 }
 
 fn buildPage(
-    list: *Page.List, phys_base: u32,
+    list: *vm.Page.List, phys_base: u32,
     idx: u32, len: u32, comptime reuse_first: bool
 ) !void {
     var temp_base = phys_base;
@@ -384,7 +421,7 @@ fn buildPage(
     const list_end = if (insert_after) list.first.?.next else list.first;
 
     errdefer if (insert_after) {
-        var dummy_list: Page.List = .{ .first = list.first.?.next };
+        var dummy_list: vm.Page.List = .{ .first = list.first.?.next };
         defer list.first.?.next = list_end;
 
         freePageList(&dummy_list, list_end);
@@ -395,9 +432,9 @@ fn buildPage(
     while (temp_len > 0) {
         const new_page =
             if (reuse_first and temp_base == phys_base)
-                Page.fromNode(list.first.?)
+                vm.Page.fromNode(list.first.?)
             else
-                (vm.auto.alloc(Page) orelse return error.NoMemory);
+                (vm.auto.alloc(vm.Page) orelse return error.NoMemory);
 
         var temp_rank: u8 = std.math.log2_int(u32, temp_len);
         var rank_pages_num: u32 = @as(u32, 1) << @truncate(temp_rank);
@@ -431,11 +468,11 @@ fn buildPage(
     }
 }
 
-fn freePageList(list: *Page.List, end: ?*Page.Node) void {
+fn freePageList(list: *vm.Page.List, end: ?*vm.Page.Node) void {
     while (list.first) |n| {
         if (n == end) break;
 
         list.first = n.next;
-        vm.auto.free(Page, Page.fromNode(n));
+        vm.auto.free(vm.Page, vm.Page.fromNode(n));
     }
 }
