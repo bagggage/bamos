@@ -240,15 +240,6 @@ pub const Permissions = enum(u16) {
     rwx  = 0b111_111_111,
     _,
 
-    pub fn fromMapFlags(map_flags: vm.MapFlags) Permissions {
-        var result: u16 = 0;
-        if (!map_flags.none) result |= @intFromEnum(Permissions.r);
-        if (map_flags.write) result |= @intFromEnum(Permissions.w);
-        if (map_flags.exec)  result |= @intFromEnum(Permissions.x);
-
-        return @enumFromInt(result);
-    }
-
     pub inline fn makeInt(user: Permissions, group: Permissions, others: Permissions) u16 {
         return
             @intFromEnum(user) & @intFromEnum(Role.user)   |
