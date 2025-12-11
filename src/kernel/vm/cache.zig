@@ -1,419 +1,460 @@
-//! # Cache subsystem **DRAFT**
+//! # Cache subsystem
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
 const lib = @import("../lib.zig");
+const log = std.log.scoped(.@"vm.cache");
+const sched = @import("../sched.zig");
 const vm = @import("../vm.zig");
 
-const LruList = std.DoublyLinkedList;
-const LruNode = LruList.Node;
-
-pub const block_size = 16 * lib.kb_size;
-pub const block_pages = block_size / vm.page_size;
-pub const block_rank = std.math.log2_int(u32, block_pages);
-
-pub const Error = error {
-    NoMemory
-};
+const LruList = lib.rcu.DoublyLinkedList;
 
 pub const Block = struct {
-    const List = std.DoublyLinkedList;
+    pub const Size = struct {
+        pub const small: Size = .{ .shift = small_shift };
+        pub const small_size = 64 * lib.kb_size;
+        pub const small_shift = std.math.log2_int(u32, small_size);
+
+        pub const medium: Size = .{ .shift = medium_shift };
+        pub const medium_size = 2 * lib.mb_size;
+        pub const medium_shift = std.math.log2_int(u32, medium_size);
+
+        shift: u5,
+
+        pub inline fn toRank(self: Size) u8 {
+            @setRuntimeSafety(false);
+            return self.shift -% comptime std.math.log2_int(u32, vm.page_size);
+        }
+
+        pub inline fn toPages(self: Size) u32 {
+            return @as(u32, 1) << self.toRank();
+        }
+
+        pub inline fn toBytes(self: Size) u32 {
+            return @as(u32, 1) << self.shift;
+        }
+
+        pub inline fn offsetToIdx(self: Size, offset: usize) usize {
+            return offset >> self.shift;
+        }
+
+        pub inline fn idxToOffset(self: Size, idx: usize) usize {
+            return idx << self.shift;
+        }
+
+        pub inline fn quantPages(self: Size) u32 {
+            @setRuntimeSafety(false);
+            return self.toPages() / max_quants;
+        }
+
+        pub inline fn quantSize(self: Size) u32 {
+            @setRuntimeSafety(false);
+            return self.toBytes() / max_quants;
+        }
+
+        pub inline fn quantShift(self: Size) u5 {
+            return self.shift - comptime std.math.log2_int(u8, max_quants);
+        }
+    };
+
+    pub const Quant = struct {
+        base: u32,
+        top: u32
+    };
+
+    pub const max_quants = @bitSizeOf(BitSet);
+
+    const List = lib.rcu.SinglyLinkedList;
     const Node = List.Node;
 
-    lba_key: usize = 0,
-    phys_base: u32 = 0,
+    const BitSet = std.bit_set.IntegerBitSet(16);
 
-    ref_count: lib.atomic.RefCount(u32) = .{},
+    ctrl: *Control,
+    index: u32,
 
     node: Node = .{},
-    lru_node: LruNode = .{},
+    lru_node: LruList.Node = .{},
 
-    pub inline fn getPhysBase(self: Block) usize {
-        return @as(usize, self.phys_base) * block_size;
-    }
+    /// 1-base reference counter.
+    ref_count: lib.atomic.RefCount(u16) = .init(1),
+    rw_sem: lib.sync.RwSemaphore = .{},
 
-    pub inline fn getVirtBase(self: Block) usize {
-        return vm.getVirtLma(self.getPhysBase());
-    }
+    phys_base: u32,
+    dirty_map: BitSet = .initEmpty(),
+    lock_map: BitSet = .initEmpty(),
 
-    pub inline fn getOffset(self: Block) usize {
-        return blockToOffset(self.lba_key);
-    }
-
-    pub inline fn asSlice(self: Block) []u8 {
-        return @as([*]u8, @ptrFromInt(self.getVirtBase()))[0..block_size];
-    }
-
-    pub inline fn asSliceOffset(self: Block, offset: usize) []u8 {
-        const inner_offset = offset % block_size;
-        return @as([*]u8, @ptrFromInt(self.getVirtBase()))[inner_offset..block_size];
-    }
-
-    pub inline fn asObject(self: Block, comptime T: type, offset: usize) *T {
-        const inner_offset = offset % block_size;
-        return @as(*T, @ptrFromInt(self.getVirtBase() + inner_offset));
-    }
-
-    pub inline fn asArray(self: Block, comptime T: type) []T {
-        const len = comptime block_size / @sizeOf(T);
-        return @as([*]T, @ptrFromInt(self.getVirtBase()))[0..len];
-    }
-
-    pub inline fn asArrayOffset(self: Block, comptime T: type, offset: usize) []T {
-        const inner_offset = offset % block_size;
-        const len = (block_size - inner_offset) / @sizeOf(T);
-        return @as([*]T, @ptrFromInt(self.getVirtBase() + inner_offset))[0..len];
-    }
-
-    pub inline fn isLocked(self: Block) bool {
-        return self.ref_count.count() != 0;
-    }
-
-    pub inline fn lock(self: *Block) void {
-        self.ref_count.inc();
-    }
-
-    pub inline fn release(self: *Block) void {
-        self.ref_count.dec();
-    }
+    size: Size = .{ .shift = Size.small_shift },
 
     inline fn fromNode(node: *Node) *Block {
         return @fieldParentPtr("node", node);
     }
 
-    inline fn fromLruNode(lru_node: *LruNode) *Block {
+    inline fn fromLruNode(lru_node: *LruList.Node) *Block {
         return @fieldParentPtr("lru_node", lru_node);
     }
-};
 
-pub const Cursor = struct {
-    blk: ?*Block = null,
-    offset: usize = 0,
-
-    pub fn blank() Cursor { return .{}; }
-
-    pub fn from(blk: *Block, offset: usize) Cursor {
-        return .{ .blk = blk, .offset = offset };
-    }
-
-    pub inline fn asObject(self: *const Cursor, T: type) *T {
-        return self.blk.?.asObject(T, self.offset);
-    }
-
-    pub inline fn asSlice(self: *const Cursor) []u8 {
-        return self.blk.?.asSliceOffset(self.offset);
-    }
-
-    pub inline fn asSliceAbsolute(self: *const Cursor) []u8 {
-        return self.blk.?.asSlice();
-    }
-
-    pub inline fn asArray(self: *const Cursor, T: type) []T {
-        return self.blk.?.asArrayOffset(T, self.offset);
-    }
-
-    pub inline fn asArrayAbsolute(self: *const Cursor, T: type) []T {
-        return self.blk.?.asArray(T);
-    }
-
-    pub inline fn isValid(self: *const Cursor) bool {
-        return self.blk != null;
-    }
-};
-
-/// Specific page-cache hash table
-const HashTable = struct {
-    const Page = struct {
-        pub const alloc_config: vm.auto.Config = .{
-            .allocator = .oma,
-            .capacity = 128
-        };
-
-        const List = std.SinglyLinkedList;
-        const Node = List.Node;
-
-        base: u32,
-        rank: u8 = 0,
-
-        node: Page.Node = .{},
-
-        pub inline fn getPhysBase(self: Page) usize {
-            return @as(usize, self.base) * vm.page_size;
-        }
-
-        pub inline fn fromNode(node: *Page.Node) *Page {
-            return @fieldParentPtr("node", node);
-        }
-    };
-
-    const Bucket = struct {
-        list: Block.List = .{},
-
-        pub inline fn push(self: *Bucket, block: *Block) void {
-            self.list.append(&block.node);
-        }
-
-        pub inline fn remove(self: *Bucket, block: *Block) void {
-            self.list.remove(&block.node);
-        }
-
-        pub fn get(self: *const Bucket, key: usize) ?*Block {
-            var node = self.list.first;
-            while (node) |n| : (node = n.next) {
-                const block = Block.fromNode(n);
-                if (block.lba_key == key) return block;
+    fn tableGet(self: *Block) bool {
+        var old = self.ref_count.count();
+        while (true) {
+            if (old == 0) { @branchHint(.unlikely); return false; }
+            if (self.ref_count.value.cmpxchgWeak(
+                old, old + 1,
+                .acquire, .monotonic)
+            ) |new_old| {
+                old = new_old; continue;
             }
 
-            return null;
+            if (old == 1) lru_list.remove(&self.lru_node);
+            return true;
         }
-    };
-
-    const initial_capacity = 512;
-    const initial_pages = std.math.divCeil(comptime_int, initial_capacity * @sizeOf(Bucket), vm.page_size) catch unreachable;
-    const initial_rank = std.math.log2_int_ceil(u8, initial_pages);
-    const virt_pages = (64 * lib.mb_size) / vm.page_size;
-
-    pages: Page.List = .{},
-    buckets: []Bucket = &.{},
-
-    pub fn init() Error!HashTable {
-        var self: HashTable = .{};
-
-        const phys = try self.allocPages(initial_rank);
-        errdefer self.freePages();
-
-        const virt = vm.heapReserve(virt_pages);
-        vm.getRootPt().map(
-            virt, phys, initial_pages,
-            .{ .global = true, .write = true },
-        ) catch return error.NoMemory;
-
-        self.buckets.ptr = @ptrFromInt(virt);
-        self.buckets.len = (initial_pages * vm.page_size) / @sizeOf(Bucket);
-
-        @memset(self.buckets, Bucket{});
-        return self;
     }
 
-    pub fn deinit(self: *HashTable) void {
-        vm.heapRelease(@intFromPtr(self.buckets.ptr), virt_pages);
-
-        while (self.pages.first != null) self.freePages();
+    inline fn lruGet(self: *Block) bool {
+        return self.ref_count.value.cmpxchgStrong(1, 2, .release, .monotonic) == null;
     }
 
-    pub fn add(self: *HashTable, entry: *Block) void {
-        const idx = entry.lba_key % self.buckets.len;
-        self.buckets[idx].push(entry);
+    inline fn lruTake(self: *Block) bool {
+        return self.ref_count.value.cmpxchgStrong(2, 0, .release, .monotonic) == null;
     }
 
-    pub fn remove(self: *HashTable, entry: *Block) void {
-        const idx = entry.lba_key % self.buckets.len;
-        self.buckets[idx].remove(entry);
+    pub inline fn free(self: *Block) void {
+        const base = @as(usize, self.phys_base) * vm.page_size;
+        vm.PageAllocator.free(base, self.size.toRank());
     }
 
-    pub fn get(self: *const HashTable, key: usize) ?*Block {
-        const idx = key % self.buckets.len;
-        return self.buckets[idx].get(key);
+    pub inline fn ref(self: *Block) void {
+        return self.ref_count.inc();
     }
 
-    fn allocPages(self: *HashTable, rank: u8) Error!usize {
-        const page = vm.auto.alloc(Page) orelse return error.NoMemory;
-        errdefer vm.auto.free(Page, page);
+    pub fn deref(self: *Block) void {
+        const refs = self.ref_count.value.fetchSub(1, .release) - 1;
+        if (refs > 1) { @branchHint(.likely); return; }
 
-        const phys = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
-    
-        page.base = @truncate(phys / vm.page_size);
-        page.rank = rank;
-
-        self.pages.prepend(&page.node);
-        return phys;
+        std.debug.assert(refs == 1);
+        lru_list.prepend(&self.lru_node);
     }
 
-    fn freePages(self: *HashTable) void {
-        const node = self.pages.popFirst() orelse unreachable;
-        const page = Page.fromNode(node);
+    pub fn writeDown(self: *Block) void {
+        self.rw_sem.writeLock();
 
-        vm.PageAllocator.free(page.getPhysBase(), page.rank);
-        vm.auto.free(Page, page);
+        self.rw_sem.lock.lock();
+        if (self.lock_map.mask != 0) {
+            @branchHint(.unlikely);
+            sched.waitUnlock(&self.rw_sem.wait_queue, &self.rw_sem.lock);
+        } else {
+            self.rw_sem.lock.unlock();
+        }
+    }
+
+    pub inline fn writeUp(self: *Block) void {
+        self.rw_sem.writeUnlock();
+    }
+
+    pub inline fn readDown(self: *Block) void {
+        self.rw_sem.readLock();
+    }
+
+    pub inline fn readUp(self: *Block) void {
+        self.rw_sem.readUnlock();
+    }
+
+    pub inline fn writeBack(self: *Block) bool {
+        return self.ctrl.writeBack(self);
+    }
+
+    pub fn asSlice(self: *const Block) []u8 {
+        const ptr: [*]u8 = @ptrFromInt(self.getAddress());
+        return ptr[0..self.size.toBytes()];
+    }
+
+    pub fn offsetToQuant(self: *const Block, global_offset: usize) u8 {
+        const inner_offset = self.innerOffset(global_offset);
+        const quant_shift = self.size.quantShift();
+        return @truncate(inner_offset >> quant_shift);
+    }
+
+    pub inline fn innerOffset(self: *const Block, global_offset: usize) usize {
+        return global_offset & (self.size.toBytes() - 1);
+    }
+
+    pub inline fn getOffset(self: *const Block) usize {
+        return idxToOffset(self.index);
+    }
+
+    pub inline fn getAddress(self: *const Block) usize {
+        return vm.getVirtLma(@as(usize, self.phys_base) * vm.page_size);
     }
 };
 
-pub const ControlBlock = struct {
-    const List = std.DoublyLinkedList;
+const Table = struct {
+    const EntryList = lib.rcu.SinglyLinkedList;
 
-    pub const alloc_config: vm.auto.Config = .{
-        .allocator = .oma,
-        .capacity = 32
-    };
+    entries: []EntryList = &.{},
+    mod_mask: u64 = 0,
 
-    hash_table: HashTable = .{},
-    hash_lock: lib.sync.Spinlock = .init(.unlocked),
-
-    lru_list: LruList = .{},
-    lru_lock: lib.sync.Spinlock = .init(.unlocked),
-
-    block_oma: vm.ObjectAllocator = .initCapacity(@sizeOf(Block), 256),
-
-    node: List.Node = .{},
-
-    pub inline fn init() Error!ControlBlock {
-        return .{ .hash_table = try .init() };
+    fn init(phys: usize, len: usize) Table {
+        std.debug.assert(std.math.isPowerOfTwo(len));
+        const entries_ptr: [*]EntryList = @ptrFromInt(vm.getVirtLma(phys));
+        @memset(entries_ptr[0..len], EntryList{});
+        return .{
+            .entries = entries_ptr[0..len],
+            .mod_mask = len - 1
+        };
     }
 
-    pub fn deinit(self: *ControlBlock) void {
-        self.hash_table.deinit();
-        self.block_oma.deinit();
+    fn getOrNull(self: *Table, ctrl: *Control, index: usize) ?*Block {
+        const entry_idx = self.calcIdx(ctrl, index);
+        const list = &self.entries[entry_idx];
+
+        const gen = list.ctrl.readLock();
+        defer list.ctrl.readUnlock(gen);
+
+        var node = list.head.load(.acquire);
+        while (node) |n| : (node = n.next) {
+            const block = Block.fromNode(n);
+            if (block.ctrl != ctrl or block.index != index) continue;
+            if (block.tableGet()) { @branchHint(.likely); return block; }
+
+            return null;
+        }
+
+        return null;
     }
 
-    pub fn get(self: *ControlBlock, key: usize) ?*Block {
-        self.lru_lock.lock();
-        self.hash_lock.lock();
-        defer self.lru_lock.unlock();
-        defer self.hash_lock.unlock();
+    fn putOrGet(self: *Table, new_block: *Block) ?*Block {
+        const entry_idx = self.calcIdx(new_block.ctrl, new_block.index);
+        const list = &self.entries[entry_idx];
 
-        const block = self.hash_table.get(key) orelse return null;
+        list.ctrl.writeLock();
+        defer list.ctrl.writeUnlock();
 
-        if (!block.isLocked()) self.untrack(block);
-        block.lock();
+        var node = list.head.load(.acquire);
+        while (node) |n| : (node = n.next) {
+            const block = Block.fromNode(n);
+            if (block.ctrl != new_block.ctrl or block.index != new_block.index) continue;
 
-        return block;
+            block.ref();
+            return block;
+        }
+
+        new_block.ref();
+        list.prependRaw(&new_block.node);
+        list.ctrl.update();
+
+        return null;
     }
 
-    pub fn put(self: *ControlBlock, block: *Block) void {
-        self.lru_lock.lock();
-        defer self.lru_lock.unlock();
+    fn remove(self: *Table, block: *Block) void {
+        std.debug.assert(block.ref_count.count() == 0);
+        const entry_idx = self.calcIdx(block.ctrl, block.index);
 
-        block.release();
-        if (!block.isLocked()) self.track(block);
+        const list = &self.entries[entry_idx];
+        _ = list.remove(&block.node) orelse unreachable;
     }
 
-    pub fn add(self: *ControlBlock, key: usize) ?*Block {
-        const block = self.makeBlock(key) orelse return null;
+    fn calcIdx(self: *const Table, ctrl: *Control, idx: usize) u64 {
+        var hasher = std.hash.Fnv1a_64.init();
+        hasher.update(std.mem.asBytes(&ctrl));
+        hasher.update(std.mem.asBytes(&idx));
+
+        return hasher.final() & self.mod_mask;
+    }
+};
+
+pub const Control = struct {
+    pub const WriteBackFn = *const fn (block: *Block, quants: []const Block.Quant, quant_shift: u5) bool;
+
+    write_back: ?WriteBackFn,
+
+    pub fn writeBack(self: *Control, block: *Block) bool {
+        if (self.write_back == null) return true;
+
+        if (block.dirty_map.mask == 0) return true;
+        if (block.lock_map.mask != 0) return false;
 
         {
-            self.hash_lock.lock();
-            defer self.hash_lock.unlock();
+            block.rw_sem.writeLock();
+            defer block.rw_sem.writeUnlock();
 
-            self.hash_table.add(block);
+            block.rw_sem.lock.lock();
+            defer block.rw_sem.lock.unlock();
+
+            if (block.lock_map.mask != 0) return false;
+            if (block.dirty_map.mask == 0) return true;
+            block.lock_map.mask = block.dirty_map.mask;
         }
 
-        block.lock();
-        return block;
+        const result = self.writeBackRaw();
+        const writer_waiting = blk: {
+            block.rw_sem.lock.lock();
+            defer block.rw_sem.lock.unlock();
+
+            block.lock_map.mask = 0;
+            break :blk block.rw_sem.writing;
+        };
+
+        if (writer_waiting) sched.awakeAll(&block.rw_sem.wait_queue);
+        return result;
     }
 
-    fn swap(self: *ControlBlock, target_num: u32) u32 {
-        self.lru_lock.lock();
-        defer self.lru_lock.unlock();
+    fn writeBackRaw(self: *Control, block: *Block) bool {
+        const quant_shift = block.size.quantShift();
 
-        const num = target_num;
-        var node = self.lru_list.first;
-        while (node) |n| : (node = n.next) {
-            if (num >= target_num) break;
+        var quants_buffer: [Block.max_quants]Block.Quant = undefined;
+        var quants: std.ArrayList(Block.Quant) = .initBuffer(&quants_buffer);
+
+        var iter = block.dirty_map.iterator(.{ .kind = .set });
+        var base_idx: usize = 0;
+        var top_idx: usize = 0;
+        while (iter.next()) |i| {
+            if (top_idx == i +% 1) {
+                top_idx +%= 1;
+            } else {
+                if (top_idx != 0) quants.addOneAssumeCapacity().* = .{
+                    .base = base_idx << quant_shift,
+                    .top = top_idx << quant_shift
+                };
+
+                base_idx = i;
+                top_idx = i +% 1;
+            }
         }
 
-        return num;
-    }
-
-    fn makeBlock(self: *ControlBlock, key: usize) ?*Block {
-        const block = self.block_oma.alloc(Block) orelse return null;
-        const phys = vm.PageAllocator.alloc(block_rank) orelse {
-            self.block_oma.free(block);
-            return null;
+        if (top_idx != 0) quants.addOneAssumeCapacity().* = .{
+            .base = base_idx << quant_shift,
+            .top = top_idx << quant_shift
         };
 
-        block.* = .{
-            .phys_base = @truncate(phys / block_size),
-            .lba_key = key
-        };
-        return block;
-    }
-
-    //fn freeBlocks(self: *ControlBlock, first: *LruNode) void {
-    //    self.node_oma.lock.lock();
-    //    defer self.node_oma.lock.unlock();
-    //
-    //    vm.PageAllocator.free(node.data.data.getPhysBase(), block_rank);
-    //}
-
-    inline fn track(self: *ControlBlock, block: *Block) void {
-        self.lru_list.prepend(&block.lru_node);
-        total_blocks += 1;
-    }
-
-    inline fn untrack(self: *ControlBlock, block: *Block) void {
-        self.lru_list.remove(&block.lru_node);
-        total_blocks -= 1;
-    }
-
-    inline fn fromNode(node: *List.Node) *ControlBlock {
-        return @fieldParentPtr("node", node);
+        return self.write_back.?(block, quants.items, quant_shift);
     }
 };
 
-var total_blocks: u32 = 0;
+var block_oma: vm.ObjectAllocator = undefined;
+var block_table: Table = .{};
+var lru_list: LruList = .{};
 
-var ctrl_lock: lib.sync.Spinlock = .init(.unlocked);
-var ctrl_list: ControlBlock.List = .{};
+pub fn init() !void {
+    const assumed_pages = vm.PageAllocator.getTotalPages() - vm.PageAllocator.getAllocatedPages();
+    const max_blocks = std.math.divCeil(usize, assumed_pages, comptime Block.Size.small.toPages()) catch unreachable;
+    const oma_size = max_blocks * @sizeOf(Block);
+    const table_size = max_blocks * @sizeOf(Table.EntryList);
 
-pub fn makeCtrl() Error!*ControlBlock {
-    const ctrl = vm.auto.alloc(ControlBlock) orelse return error.NoMemory;
-    errdefer vm.auto.free(ControlBlock, ctrl);
+    const oma_raw_pages = blk: {
+        const temp = std.math.divCeil(usize, oma_size, vm.page_size) catch unreachable;
+        break :blk @min(vm.PageAllocator.max_alloc_pages, temp);
+    };
+    const table_raw_pages = blk: {
+        const temp = std.math.divCeil(usize, table_size, vm.page_size) catch unreachable;
+        break :blk if (temp > vm.PageAllocator.max_alloc_pages) {
+            log.warn(
+                "Table size must be {} MB, but the PageAllocator is limited to {} MB",
+                .{temp * vm.page_size / lib.mb_size, vm.PageAllocator.max_alloc_pages * vm.page_size / lib.mb_size}
+            );
+            break :blk vm.PageAllocator.max_alloc_pages;
+        } else temp;
+    };
 
-    ctrl.* = try .init();
+    const table_rank = vm.pagesToRank(@intCast(table_raw_pages));
+    const oma_rank = vm.pagesToRankExact(@intCast(oma_raw_pages));
 
-    ctrl_lock.lock();
-    defer ctrl_lock.unlock();
+    const table_phys = vm.PageAllocator.alloc(table_rank) orelse return error.CacheNoMemory;
+    errdefer vm.PageAllocator.free(table_phys, table_rank);
 
-    ctrl_list.append(&ctrl.node);
-    return ctrl;
+    const oma_phys = vm.PageAllocator.alloc(oma_rank) orelse return error.CacheNoMemory;
+    errdefer vm.PageAllocator.free(oma_phys, oma_rank);
+
+    block_oma = try .initRaw(@sizeOf(Block), oma_phys, @intCast(vm.rankToPages(oma_rank)));
+
+    const real_table_size = vm.rankToBytes(table_rank) / @sizeOf(Table.EntryList);
+    block_table = .init(table_phys, real_table_size);
 }
 
-pub fn deleteCtrl(ctrl: *ControlBlock) void {
-    {
-        ctrl_lock.lock();
-        defer ctrl_lock.unlock();
+pub fn deinit() void {
+    const table_size = block_table.entries.len * @sizeOf(Table.EntryList);
+    const table_pages = std.math.divCeil(usize, table_size, vm.page_size) catch unreachable;
+    const table_rank = std.math.log2_int_ceil(u32, @truncate(table_pages));
+    const table_phys = vm.getPhysLma(@ptrFromInt(block_table.entries.ptr));
 
-        ctrl_list.remove(&ctrl.node);
-    }
-
-    ctrl.deinit();
-    vm.auto.free(ControlBlock, ctrl);
+    vm.PageAllocator.free(table_phys, table_rank);
+    block_oma.deinit();
 }
 
-pub fn swap(target_num: u32) u32 {
-    var num = 0;
+pub inline fn idxToPages(idx: usize) usize {
+    return idx * comptime Block.Size.small.toPages();
+}
 
-    {
-        ctrl_lock.lock();
-        defer ctrl_lock.unlock();
+pub inline fn pagesToIdx(pages: usize) usize {
+    return pages / comptime Block.Size.small.toPages();
+}
 
-        const node = ctrl_list.first;
-        while (node) |n| : (node = n.next) {
-            const ctrl = ControlBlock.fromNode(n);
-            num += ctrl.swap(target_num);
+pub inline fn idxToOffset(idx: usize) usize {
+    return idx * comptime Block.Size.small.toBytes();
+}
 
-            if (num >= target_num) break;
+pub inline fn offsetToIdx(offset: usize) usize {
+    return offset / comptime Block.Size.small.toBytes();
+}
+
+pub fn createBlock(ctrl: *Control, index: usize, size: Block.Size) !*Block {
+    const block = block_oma.alloc(Block) orelse return error.NoMemory;
+    errdefer block_oma.free(block);
+
+    const phys = vm.PageAllocator.alloc(size.toRank()) orelse return error.NoMemory;
+    block.* = .{
+        .ctrl = ctrl,
+        .index = @intCast(index),
+        .phys_base = @intCast(phys / vm.page_size)
+    };
+
+    return block;
+}
+
+pub fn insertBlockOrFree(block: *Block) ?*Block {
+    const other = block_table.putOrGet(block) orelse return null;
+
+    block.free();
+    return other;
+}
+
+pub fn getOrNull(ctrl: *Control, index: usize) ?*Block {
+    return block_table.getOrNull(ctrl, index);
+}
+
+pub fn getNoRef(ctrl: *Control, index: usize) error{NoEnt}!*Block {
+    const block = block_table.getOrNull(ctrl, index) orelse return error.NoEnt;
+    block.ref_count.dec();
+
+    return block;
+}
+
+pub fn cleanup(pages: u32) bool {
+    var freed: u32 = 0;
+    while (freed < pages) {
+        const block = blk: {
+            const gen = lru_list.ctrl.readLock();
+            defer lru_list.ctrl.readUnlock(gen);
+
+            const node = lru_list.last.load(.acquire) orelse return false;
+            const block = Block.fromLruNode(node);
+
+            break :blk if (block.lruGet()) block else continue;
+        };
+
+        lru_list.remove(&block.lru_node);
+        if (block.writeBack()) {
+            if (!block.lruTake()) continue;
+
+            freed +%= block.size.toPages();
+            removeBlock(block);
         }
     }
 
-    return num;
+    return freed >= pages;
 }
 
-pub inline fn offsetToBlock(offset: usize) usize {
-    return offset / block_size;
-}
-
-pub inline fn offsetModBlock(offset: usize) usize {
-    return offset % block_size;
-}
-
-pub inline fn blockToOffset(block: usize) usize {
-    return block * block_size;
-}
-
-/// Returns the total number of cache pages.
-pub inline fn getTotalPages() u32 {
-    return total_blocks * block_pages;
+inline fn removeBlock(block: *Block) void {
+    block_table.remove(block);
+    block.free();
 }
