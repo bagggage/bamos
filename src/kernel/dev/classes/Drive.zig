@@ -438,8 +438,8 @@ fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, 
     return num == quants.len and successed;
 }
 
-fn filePartitionRead(dentry: *const vfs.Dentry, offset: usize, buffer: []u8) vfs.Error!usize {
-    const dev_file = devfs.DevFile.fromDentry(dentry);
+fn filePartitionRead(file: *const vfs.File, offset: usize, buffer: []u8) vfs.Error!usize {
+    const dev_file = devfs.DevFile.fromDentry(file.dentry);
     const part = vfs.Partition.fromDevFile(dev_file);
     const self = dev_file.data.as(Self).?;
 

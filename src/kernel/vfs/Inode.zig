@@ -21,7 +21,7 @@ pub const Type = enum(u8) {
 
 pub const alloc_config: vm.auto.Config = .{
     .allocator = .oma,
-    .capacity = 512
+    .capacity = 1024
 };
 
 index: u32,
@@ -39,8 +39,10 @@ uid: u16 = 0,
 links_num: u16 = 1,
 
 ref_count: lib.atomic.RefCount(u32) = .init(0),
+lock: lib.sync.Spinlock = .{},
 
 fs_data: lib.AnyData = .{},
+cache_ctrl: vm.cache.Control,
 
 pub inline fn new() ?*Inode {
     const inode = vm.auto.alloc(Inode) orelse return null;
