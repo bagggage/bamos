@@ -151,10 +151,15 @@ pub const PageTable = struct {
         return handle.pte.getBase() | getInpageOffset(3 - handle.pt_idx, virt);
     }
 
-    pub fn accessPageAttributes(self: *const PageTable, virt: usize) vm.PageAttributes {
+    pub fn accessPageAttributes(self: *const PageTable, virt: usize) vm.Page.Attributes {
         const pte = @constCast((self.translateVirtToPte(virt) orelse return .{}).pte);
         defer { pte.accessed = 0; pte.dirty = 0; }
-        return .{ .mapped = true, .accessed = pte.accessed != 0, .dirty = pte.dirty != 0 };
+        return .{
+            .mapped = true,
+            .writeable = pte.writeable != 0,
+            .accessed = pte.accessed != 0,
+            .dirty = pte.dirty != 0
+        };
     }
 
     /// Maps a virtual memory range to a physical memory range.
