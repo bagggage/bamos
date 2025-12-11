@@ -112,16 +112,15 @@ pub fn wait(self: *Self, state: State) void {
 }
 
 pub fn tryLock(self: *Self) bool {
-    const state: State = if (intr.saveAndDisableForCpu())
-        .locked_intr else .locked_no_intr;
-    return self.exclusion.cmpxchgWeak(
+    const state: State = if (intr.saveAndDisableForCpu()) .locked_intr else .locked_no_intr;
+    return self.exclusion.cmpxchgStrong(
         .unlocked, state,
         .acquire, .monotonic
     ) == null;
 }
 
 pub inline fn tryLockAtomic(self: *Self) bool {
-    return self.exclusion.cmpxchgWeak(
+    return self.exclusion.cmpxchgStrong(
         .unlocked, .locked_no_intr,
         .acquire, .monotonic
     ) == null;
