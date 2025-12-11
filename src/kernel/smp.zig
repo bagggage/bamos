@@ -38,7 +38,7 @@ pub const LocalData = struct {
     }
 
     pub fn tryIfNotNestedInterrupt(self: *LocalData) bool {
-        return self.nested_intr.cmpxchgWeak(
+        return self.nested_intr.cmpxchgStrong(
             0, 1,
             .acquire, .monotonic
         ) == null;
@@ -54,7 +54,7 @@ pub const LocalData = struct {
 
     /// Do atomic compare and change if is in interrupt on expected level.
     pub inline fn tryExitInterrupt(self: *LocalData, expected: u8) void {
-        _ = self.nested_intr.cmpxchgWeak(
+        _ = self.nested_intr.cmpxchgStrong(
             expected, expected - 1,
             .monotonic, .monotonic
         );
