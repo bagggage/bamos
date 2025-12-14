@@ -126,6 +126,12 @@ pub inline fn create(comptime T: type) ?*T {
     return @ptrCast(@alignCast(alloc(@sizeOf(T))));
 }
 
+pub inline fn allocMany(comptime T: type, n: usize) ?[]T {
+    const size = @sizeOf(T) * n;
+    const ptr: [*]T = @ptrCast(@alignCast(alloc(size) orelse return null));
+    return ptr[0..n];
+}
+
 /// Allocates a block of memory of the specified `size`.
 /// 
 /// - `size`: The size of memory to allocate. Must be great than zero.
