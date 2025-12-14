@@ -11,5 +11,8 @@ pub const default_max_open_files = 1024;
 pub const default_max_threads = 8192;
 pub const default_max_process = 65565;
 
+pub const max_stack_size = lib.mb_size * 32;
+pub const max_args_size = lib.mb_size * 8;
+
 pub var max_threads = default_max_threads;
 pub var max_process = default_max_process;
