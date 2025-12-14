@@ -384,22 +384,20 @@ pub fn getFs(name: []const u8) ?*FileSystem {
     return null;
 }
 
-pub fn lookup(dir: ?*Dentry, path: []const u8) Error!*Dentry {
+pub fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
     if (path.len == 0) return error.InvalidArgs;
-
     log.debug("lookup for: \"{s}\"", .{path});
 
-    const start_dent = if (path[0] == '/') root_dentry else dir orelse root_dentry;
+    const root_dent = root orelse root_dentry;
+    const start_dent = if (path[0] == '/') root_dent else dir orelse root_dent;
 
+    start_dent.ref();
     var ent: ?*Dentry = start_dent;
     var it = std.mem.splitScalar(
         u8,
         if (path[0] == '/') path[1..] else path[0..],
         '/'
     );
-
-    start_dent.ref();
-    defer if (ent == start_dent) start_dent.deref();
 
     while (it.next()) |element| {
         const dentry = ent.?;
@@ -431,8 +429,8 @@ pub fn lookup(dir: ?*Dentry, path: []const u8) Error!*Dentry {
 
 /// Same as `vfs.lookup`, but returns `null` if dentry not found.
 /// If any other error occurs, prints error message.
-pub fn tryLookup(dir: ?*Dentry, path: []const u8) ?*Dentry {
-    return lookup(dir, path) catch |err| {
+pub fn tryLookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) ?*Dentry {
+    return lookup(root, dir, path) catch |err| {
         if (err != Error.NoEnt) {
             @branchHint(.unlikely);
             log.err("lookup for \"{s}\" failed: {s}", .{path, @errorName(err)});
@@ -485,7 +483,7 @@ pub inline fn getRootWeak() *Dentry {
 /// Returns root dentry of initrd filesystem if mounted,
 /// `null` otherwise.
 pub fn getInitRamDisk() ?*Dentry {
-    return tryLookup(getRoot(), initrd.mount_dir_name);
+    return tryLookup(getRootWeak(), null, initrd.mount_dir_name);
 }
 
 /// Returns current system time that might be
