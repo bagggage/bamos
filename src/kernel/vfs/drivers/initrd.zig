@@ -90,7 +90,7 @@ var file_name: [max_name]u8 = .{ 0 } ** max_name;
 var link_name: [max_name]u8 = .{ 0 } ** max_name;
 
 pub const fs_name = "initramfs";
-pub const mount_dir_name: []const u8 = "initrd";
+pub const mount_dir_name: []const u8 = "/initrd";
 
 pub fn init() !void {
     if (!vfs.registerFs(&fs)) return error.RegisterFailed;
