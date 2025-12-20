@@ -41,7 +41,7 @@ pub const Descriptor = packed struct {
     rsrvd_1: u32 = 0,
 
     pub fn init(isr_ptr: u64, stack: u3, attr: u8) @This() {
-        var result: @This() = .{ .ist = stack, .type_attr = attr, .selector = regs.getCs() };
+        var result: @This() = .{ .ist = stack, .type_attr = attr, .selector = @bitCast(gdt.kernel_cs_sel) };
 
         result.offset_1 = @truncate(isr_ptr);
         result.offset_2 = @truncate(isr_ptr >> 16);
