@@ -32,7 +32,7 @@ map_lock: lib.sync.RwLock = .{},
 rb_tree: RbTree = .{},
 
 /// The last map unit before heap first free region starts.
-heap_unit: ?*MapUnit = null,
+//heap_unit: ?*MapUnit = null,
 
 /// Stack size in pages.
 stack_pages: u16,
@@ -81,7 +81,10 @@ pub inline fn deref(self: *Self) void {
 pub fn heapAllocRegion(self: *Self, pages: u32) ?usize {
     const size = pages * vm.page_size;
 
-    var base_unit = self.heap_unit orelse return 0;
+    // TODO: More efficient searching for the address?
+    //       The allocated address maybe allocated twise,
+    //       if two threads call this simultaneously.
+    var base_unit = MapUnit.fromRbNode(self.rb_tree.first() orelse return vm.page_size);
     var free_base = base_unit.top();
 
     if (free_base + size > vm.max_user_heap_addr) return null;
@@ -100,6 +103,16 @@ pub fn heapAllocRegion(self: *Self, pages: u32) ?usize {
     }
 
     return free_base;
+}
+
+pub fn mapRegion(self: *Self, region: *const vm.VirtualRegion, flags: MapUnit.Flags) !void {
+    const map_unit = vm.auto.alloc(MapUnit) orelse return error.NoMemory;
+    errdefer vm.auto.free(MapUnit, map_unit);
+
+    map_unit.* = .init(null, region.base, 0, region.pagesNum(), flags);
+    map_unit.region = region.*;
+
+    try self.map(map_unit);
 }
 
 pub fn map(self: *Self, map_unit: *MapUnit) !void {
@@ -135,7 +148,9 @@ pub fn map(self: *Self, map_unit: *MapUnit) !void {
             break;
         }
     }
+    errdefer self.rb_tree.remove(&map_unit.rb_node);
 
+    try map_unit.map(self.page_table);
     self.map_units.prepend(&map_unit.node);
 }
 
@@ -169,6 +184,16 @@ pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
         try map_unit.format(writer);
         try writer.writeByte('\n');
     }
+}
+
+pub fn calculateUsedRegion(self: *Self) [2]usize {
+    self.map_lock.readLock();
+    defer self.map_lock.readUnlock();
+
+    const first = MapUnit.fromRbNode(self.rb_tree.first() orelse return .{ 0, 0 });
+    const last = MapUnit.fromRbNode(self.rb_tree.last() orelse return .{ first.base(), first.top() });
+
+    return .{ first.base(), last.top() };
 }
 
 fn lookupMapUnit(self: *Self, base: usize, top: usize) ?*MapUnit {
