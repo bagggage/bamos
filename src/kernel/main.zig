@@ -96,9 +96,15 @@ fn kernelStartupTask() noreturn {
         };
     }
 
-    //const fake_task = sched.newKernelTask("fake", fakeTask).?;
-    //sched.enqueue(fake_task);
-    //const other_task = sched.newKernelTask("other_task", fakeTask).?;
+    //const debug_task = sched.Task.create(
+    //    .{ .kernel = .{ .name = "debug_task" } },
+    //    @intFromPtr(&debugTask)
+    //) catch unreachable;
+    //sched.enqueue(debug_task);
+    //const other_task =  sched.Task.create(
+    //    .{ .kernel = .{ .name = "other_task" } },
+    //    @intFromPtr(&debugTask)
+    //) catch unreachable;
     //sched.enqueue(other_task);
 
     init(vfs);
@@ -110,17 +116,20 @@ fn kernelStartupTask() noreturn {
     unreachable;
 }
 
-fn fakeTask() noreturn {
+fn debugTask() noreturn {
     const scheduler: *volatile sched.Scheduler = sched.getCurrent();
 
     while (true) {
         log.debug("{s}: {} - {}", .{
-            scheduler.current_task.asKernelTask().name,
-            scheduler.current_task.common.time_slice,
-            @as(u32, 32) - scheduler.current_task.common.getPriority(),
+            scheduler.current_task.spec.kernel.name,
+            scheduler.current_task.stats.time_slice,
+            @as(u32, 32) - scheduler.current_task.stats.getPriority(),
         });
 
-        for (0..10) |_| sched.yield();
+        const begin = sys.time.getCachedUpTime().sec;
+        while (begin == sys.time.getCachedUpTime().sec) {
+            sched.yield();
+        }
     }
 
     unreachable;

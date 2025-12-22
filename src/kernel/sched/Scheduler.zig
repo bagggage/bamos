@@ -338,6 +338,8 @@ fn switchTask(self: *Self, task: *sched.Task) void {
     const local = self.getCpuLocal();
     const curr_task = self.current_task;
 
+    intr.disableForCpu();
+
     if (task == curr_task) {
         // Don't waste time on switch.
         self.switchEnd(local);
@@ -352,6 +354,8 @@ inline fn switchEnd(self: *Self, local: *smp.LocalData) void {
     // Handle special case when `reschedule` called from `dev.intr.onIntrExit`.
     local.tryExitInterrupt(1);
     self.current_task.stats.state = .running;
+
+    intr.enableForCpu();
 }
 
 /// Used from arch-specific implementation to complete swtiching.
@@ -359,5 +363,6 @@ export fn switchEndEx() void {
     const self = sched.getCurrent();
     const local = self.getCpuLocal();
 
+    self.current_task.onSwitch();
     self.switchEnd(local);
 }

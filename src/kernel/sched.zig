@@ -10,8 +10,6 @@ const smp = @import("smp.zig");
 const sys = @import("sys.zig");
 const vm = @import("vm.zig");
 
-const kernel_stack_size = 32 * lib.kb_size;
-
 /// Scheduler timer target frequency.
 pub const hz = 1000;
 pub const min_slice_ticks = 3;
@@ -24,8 +22,6 @@ pub const Priority = u5;
 pub const Ticks = u4;
 
 pub const Scheduler = @import("sched/Scheduler.zig");
-pub const thread = @import("sched/thread.zig");
-
 pub const Task = @import("sched/Task.zig");
 
 pub const PrivilegeLevel = enum(u8) {
@@ -102,7 +98,7 @@ pub inline fn getCurrentTask() *Task {
 
 pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     const scheduler = getScheduler(cpu_idx);
-    const task = newKernelTask("startup", taskHandler) orelse return error.NoMemory;
+    const task = try Task.create(.{ .kernel = .{ .name = "startup" } }, @intFromPtr(taskHandler));
 
     scheduler.preinit();
     scheduler.current_task = task;
@@ -114,29 +110,6 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
 
 pub inline fn waitStartup() noreturn {
     getCurrent().begin();
-}
-
-pub fn newKernelTask(name: []const u8, handler: *const fn() noreturn) ?*Task {
-    const task = vm.auto.alloc(Task) orelse return null;
-    task.* = Task.init(
-        .{ .kernel = .{ .name = name }},
-        @intFromPtr(handler), kernel_stack_size
-    ) catch {
-        vm.auto.free(Task, task);
-        return null;
-    };
-
-    return task;
-}
-
-pub fn freeTask(task: *Task) void {
-    std.debug.assert(task.stats.state == .free);
-
-    thread.deinitStack(
-        &task.kernel_stack,
-        kernel_stack_size
-    );
-    vm.auto.free(Task, task);
 }
 
 pub inline fn enqueue(task: *Task) void {
