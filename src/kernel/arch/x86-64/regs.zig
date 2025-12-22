@@ -48,7 +48,38 @@ pub const EFER = packed struct {
     reserved_3: u48,
 };
 
-pub const Flags = packed struct { carry: bool = false, reserved_1: u1 = 1, parity: bool = false, reserved_2: u1 = 1, aux_carry: bool = false, reserved_3: u1 = 1, zero: bool = false, sign: bool = false, trap: bool = false, intr_enable: bool = false, direction: bool = false, overflow: bool = false, io_privilege: u2 = undefined, nested_task: u1 = undefined, reserved_4: u1 = 0, @"resume": bool = false, virt_mode: bool = false, align_check: bool = false, virt_intr: bool = false, virt_intr_pending: bool = false, cpuid: bool = true, reserved_5: u8 = 0, aes: bool = false, alt_instr_set: bool = false };
+pub const STAR = packed struct {
+    eip: u32,
+    kernel_segment_sel: u16,
+    user_segment_sel: u16
+};
+
+pub const Flags = packed struct {
+    carry: bool = false,
+    reserved_1: u1 = 1,
+    parity: bool = false,
+    reserved_2: u1 = 1,
+    aux_carry: bool = false,
+    reserved_3: u1 = 1,
+    zero: bool = false,
+    sign: bool = false,
+    trap: bool = false,
+    intr_enable: bool = false,
+    direction: bool = false,
+    overflow: bool = false,
+    io_privilege: u2 = undefined,
+    nested_task: u1 = undefined,
+    reserved_4: u1 = 0,
+    @"resume": bool = false,
+    virt_mode: bool = false,
+    align_check: bool = false,
+    virt_intr: bool = false,
+    virt_intr_pending: bool = false,
+    cpuid: bool = true,
+    reserved_5: u8 = 0,
+    aes: bool = false,
+    alt_instr_set: bool = false
+};
 
 pub const ScratchRegs = extern struct {
     rax: u64 = 0,
@@ -187,9 +218,8 @@ pub inline fn getCs() u16 {
 }
 
 pub inline fn setGs(selector: u16) void {
-    asm volatile ("mov %[res],%%gs"
-        :
-        : [res] "r" (selector),
+    asm volatile ("mov %[val],%%gs"
+        :: [val] "r" (selector),
     );
 }
 
@@ -200,9 +230,20 @@ pub inline fn getSs() u16 {
 }
 
 pub inline fn setSs(selector: u16) void {
-    asm volatile ("mov %[res],%%ss"
-        :
-        : [res] "r" (selector),
+    asm volatile ("mov %[val],%%ss"
+        :: [val] "r" (selector),
+    );
+}
+
+pub inline fn setDs(selector: u16) void {
+    asm volatile ("mov %[val],%%ds"
+        :: [val] "r" (selector),
+    );
+}
+
+pub inline fn setEs(selector: u16) void {
+    asm volatile ("mov %[val],%%es"
+        :: [val] "r" (selector),
     );
 }
 
