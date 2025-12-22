@@ -8,6 +8,7 @@ const tar = std.tar;
 const boot = @import("../../boot.zig");
 const log = std.log.scoped(.initrd);
 const vfs = @import("../../vfs.zig");
+const vm = @import("../../vm.zig");
 
 const TarIterator = tar.Iterator;
 const TarFile = TarIterator.File;
@@ -71,6 +72,10 @@ const TarHeader = extern struct {
     }
 };
 
+const file_ops: vfs.internals.file.Cached = .{
+    .readCacheBlock = fileReadCacheBlock
+};
+
 const max_name = 256;
 
 var fs = vfs.FileSystem.init(
@@ -80,6 +85,7 @@ var fs = vfs.FileSystem.init(
         .unmount = undefined
     }},
     .{
+        .open = dentryOpen,
         .lookup = dentryLookup,
     }
 );
@@ -90,11 +96,10 @@ var file_name: [max_name]u8 = .{ 0 } ** max_name;
 var link_name: [max_name]u8 = .{ 0 } ** max_name;
 
 pub const fs_name = "initramfs";
-pub const mount_dir_name: []const u8 = "/initrd";
+pub const mount_dir_name: []const u8 = "initrd";
 
 pub fn init() !void {
     if (!vfs.registerFs(&fs)) return error.RegisterFailed;
-
     const mount_dir = vfs.getRootWeak().makeDirectory(mount_dir_name) catch |err| {
         log.err("failed to create mount point: {}", .{err});
         return error.MountFailed;
@@ -128,8 +133,12 @@ fn mount() vfs.Error!vfs.Context.Virt {
     return .{ .root = dentry };
 }
 
+fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
+    file.ops = &file_ops.ops;
+}
+
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
-    const offset = parent.inode.index;
+    const offset = @intFromPtr(parent.inode.fs_data.ptr);
 
     var reader = getStream();
     reader.seek = offset;
@@ -155,7 +164,8 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
 
     const parent_name_str = parent.name.str();
 
-    while (try tar_iter.next()) |file| {
+    var i: u32 = 0;
+    while (try tar_iter.next()) |file| : (i += 1) {
         var name_iter = std.mem.splitBackwardsScalar(u8, file.name, '/');
         const entry_name = name_iter.first();
         const parent_name: []const u8 = name_iter.next() orelse &.{};
@@ -175,7 +185,7 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
             const inode = vfs.Inode.new() orelse return error.NoMemory;
             errdefer inode.free();
 
-            setupInode(inode, &file, tar_iter.reader.seek);
+            setupInode(inode, &file, i, tar_iter.reader.seek);
             try dentry.setup(entry_name, parent.ctx, inode, &fs.dentry_ops);
 
             return dentry;
@@ -185,20 +195,31 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
     return null;
 }
 
-fn setupInode(inode: *vfs.Inode, file: *const TarFile, pos: usize) void {
+fn setupInode(inode: *vfs.Inode, file: *const TarFile, idx: u32, pos: usize) void {
     inode.* = .{
-        // Offset in tar
-        .index = @truncate(pos - @sizeOf(TarHeader)),
+        .index = idx,
 
         .type = switch (file.kind) {
             .directory => .directory,
             .file => .regular_file,
             .sym_link => .symbolic_link
         },
+        .perm = @intCast(file.mode),
         .size = file.size,
         .cache_ctrl = .{ .write_back = &vfs.internals.cache.noWriteBack },
 
         // Data pointer
-        .fs_data = .from(@constCast(&initrd.ptr[pos]))
+        .fs_data = .from(@ptrFromInt(pos)),
     };
+}
+
+fn fileReadCacheBlock(dentry: *const vfs.Dentry, block: *vm.cache.Block) vfs.Error!void {
+    const inode = dentry.inode;
+    const data_offset: usize = @intFromPtr(inode.fs_data.ptr);
+
+    const offset = block.getOffset();
+    const end = @min(inode.size, offset + block.size.toBytes());
+    const len = end - offset;
+
+    @memcpy(block.asSlice()[0..len], initrd[data_offset..][offset..end]);
 }
