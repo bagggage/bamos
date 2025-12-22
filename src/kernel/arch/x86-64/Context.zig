@@ -4,6 +4,7 @@
 
 const std = @import("std");
 
+const lib = @import("../../lib.zig");
 const intr = @import("intr.zig");
 const gdt = @import("gdt.zig");
 const regs = @import("regs.zig");
@@ -25,11 +26,15 @@ const CtxRegs = extern struct { callee: regs.CalleeRegs, ret_ptr: usize };
 stack_ptr: StackPointer,
 
 pub fn init(stack_ptr: usize, ip: usize) Self {
-    const ptr = stack_ptr - @sizeOf(CtxRegs);
+    comptime std.debug.assert(!std.mem.isAligned(@sizeOf(CtxRegs), 16));
+
+    const ptr = lib.misc.alignDown(usize, stack_ptr - @sizeOf(CtxRegs), 16);
     const ctx_regs: *CtxRegs = @ptrFromInt(ptr);
 
-    ctx_regs.ret_ptr = ip;
-    ctx_regs.callee.rbp = ptr;
+    ctx_regs.* = .{
+        .callee = .{ .rbp = ptr + @offsetOf(regs.CalleeRegs, "rbp") },
+        .ret_ptr = ip
+    };
 
     return .{ .stack_ptr = .{ .ptr = @ptrFromInt(ptr) } };
 }
@@ -42,12 +47,12 @@ pub inline fn getInstrPtr(self: *Self) usize {
     return self.stack_ptr.asCtxRegs().ret_ptr;
 }
 
-pub inline fn setStackPtr(self: *Self, value: usize) void {
+pub inline fn setFramePtr(self: *Self, value: usize) void {
     @setRuntimeSafety(false);
     self.stack_ptr.ptr = @ptrFromInt(value);
 }
 
-pub inline fn getStackPtr(self: *Self) usize {
+pub inline fn getFramePtr(self: *Self) usize {
     @setRuntimeSafety(false);
     return @intFromPtr(self.stack_ptr.ptr);
 }
@@ -55,11 +60,10 @@ pub inline fn getStackPtr(self: *Self) usize {
 pub fn jumpTo(self: *Self) noreturn {
     @setRuntimeSafety(false);
 
-    regs.setStack(self.getStackPtr());
+    regs.setStack(self.getFramePtr());
     regs.restoreCallerRegs();
 
     asm volatile ("retq");
-
     unreachable;
 }
 
@@ -87,7 +91,10 @@ export fn switchToEx(_: *Self, _: *Self) callconv(.naked) void {
     asm volatile (
         \\ mov %rsp, (%rdi)
         \\ mov (%rsi), %rsp
+        \\ mov %rsp, %rbp
+        \\ and $-16, %rsp
         \\ call switchEndEx
+        \\ mov %rbp, %rsp
         ::: .{ .memory = true }
     );
 }

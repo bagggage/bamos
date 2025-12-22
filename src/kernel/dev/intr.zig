@@ -410,16 +410,16 @@ pub fn init() !void {
 }
 
 fn initSoftIntr(cpus_num: u16) !void {
-    soft_tasks.ptr = @alignCast(@ptrCast(
-        vm.gpa.alloc(@sizeOf(SoftIntrTask) * cpus_num) orelse return error.NoMemory
-    ));
+    soft_tasks = vm.gpa.allocMany(SoftIntrTask, cpus_num) orelse return error.NoMemory;
     errdefer vm.gpa.free(soft_tasks.ptr);
 
-    soft_tasks.len = cpus_num;
     for (soft_tasks, 0..) |*soft_task, i| {
-        const task = sched.newKernelTask("soft_intr", SoftIntrTask.handler) orelse {
-            for (0..i) |j| sched.freeTask(soft_tasks[j].task);
-            return error.NoMemory;
+        const task = sched.Task.create(
+            .{ .kernel = .{ .name = "soft_intr" } },
+            @intFromPtr(&SoftIntrTask.handler)
+        ) catch |err| {
+            for (0..i) |j| soft_tasks[j].task.delete();
+            return err;
         };
 
         soft_task.* = .{ .task = task };

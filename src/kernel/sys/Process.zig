@@ -140,12 +140,9 @@ pub fn create(stack_size: usize, root_dir: *vfs.Dentry, work_dir: *vfs.Dentry) !
     self.* = try .init(stack_size, root_dir, work_dir);
     errdefer self.deinit();
 
-    const task = vm.auto.alloc(sched.Task) orelse return error.NoMemory;
-    errdefer vm.auto.free(sched.Task, task);
-
-    task.* = try .init(.{ .user = .{ .process = self } }, undefined, stack_size);
-
+    const task = try sched.Task.create(.{ .user = .{ .process = self } }, undefined);
     self.pushTask(task);
+
     return self;
 }
 
@@ -187,7 +184,7 @@ pub fn deinit(self: *Self) void {
         node = n.next;
 
         const task = sched.Task.UserSpecific.fromNode(n).toTask();
-        sched.deleteTask(task);
+        task.delete();
     }
 
     self.tasks.first = null;

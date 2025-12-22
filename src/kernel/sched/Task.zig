@@ -3,12 +3,12 @@
 // Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const arch = lib.arch;
 const lib = @import("../lib.zig");
 const sched = @import("../sched.zig");
 const sys = @import("../sys.zig");
-const thread = @import("thread.zig");
 const vm = @import("../vm.zig");
 
 pub const Self = @This();
@@ -36,6 +36,9 @@ const PriorDelta: type = std.meta.Int(
     @bitSizeOf(Priority) - 1
 );
 const Ticks = sched.Ticks;
+
+const kernel_stack_size = if (builtin.mode == .Debug) 8 * vm.page_size else 2 * vm.page_size;
+const kernel_stack_rank = vm.bytesToRank(kernel_stack_size);
 
 const max_prior_delta = std.math.maxInt(PriorDelta) + 1;
 const base_priority = sched.max_priority / 2;
@@ -135,20 +138,23 @@ pub const UserSpecific = struct {
     pub const UNode = UList.Node;
 
     process: *sys.Process,
-    user_stack: *sys.AddressSpace.MapUnit,
 
     /// Used by `sys.Process` to put task in list.
     node: UNode = .{},
+
+    pub inline fn fromNode(node: *UNode) *UserSpecific {
+        return @fieldParentPtr("node", node);
+    }
+
+    pub inline fn toTask(self: *UserSpecific) *sched.Task {
+        const spec: *Specific = @fieldParentPtr("user", self);
+        return @fieldParentPtr("spec", spec);
+    }
 };
 
-pub const Specific = union {
+pub const Specific = union(enum) {
     kernel: KernelSpecific,
     user: UserSpecific,
-};
-
-pub const alloc_config: vm.auto.Config = .{
-    .allocator = .oma,
-    .capacity = 128,
 };
 
 stats: Stats = .{},
@@ -156,24 +162,68 @@ stats: Stats = .{},
 context: arch.Context,
 node: Node = .{},
 
-/// Kernel stack is not appear as
-/// map unit and hidden from userspace,
-/// so it handles different via `vm.VirtualRegion`.
-kernel_stack: vm.VirtualRegion,
-
 /// Specific data which is different for
 /// kernel and user tasks.
 spec: Specific,
 
-pub fn init(spec: Specific, ip: usize, stack_size: usize) !Self {
-    const stack = thread.makeStack(stack_size) orelse return error.NoMemory;
-    return .{
+pub fn create(spec: Specific, ip: usize) !*Self {
+    const phys = vm.PageAllocator.alloc(kernel_stack_rank) orelse return error.NoMemory;
+    errdefer vm.PageAllocator.free(phys, kernel_stack_rank);
+
+    // Reserve N+1 pages to make a gap below the stack
+    // to protect a kernel from memory corruption if stack is overflow.
+    const virt_pages = vm.bytesToPages(kernel_stack_size) + 1;
+    const virt_base = vm.heapReserve(virt_pages);
+    errdefer vm.heapRelease(virt_base, virt_pages);
+
+    const virt = virt_base + vm.page_size;
+    try vm.getRootPt().map(
+        virt, phys, vm.bytesToPages(kernel_stack_size),
+        .{ .global = true, .write = true }
+    );
+
+    const task: *Self = @ptrFromInt(virt + kernel_stack_size - @sizeOf(Self));
+    const stack_top = @intFromPtr(task);
+
+    task.* = .{
         .spec = spec,
-        .kernel_stack = stack,
-        .context = .init(stack.getTopAligned(thread.stack_alignment), ip),
+        .context = .init(stack_top, ip),
     };
+
+    return task;
+}
+
+pub fn delete(self: *Self) void {
+    std.debug.assert(self.stats.state == .free);
+
+    const virt = @intFromPtr(self) - (kernel_stack_size - @sizeOf(Self));
+    const virt_base = virt - vm.page_size;
+    const phys = vm.getRootPt().translateVirtToPhys(virt) orelse unreachable;
+
+    vm.getRootPt().unmap(virt, vm.bytesToPages(kernel_stack_size));
+    vm.heapRelease(virt_base, vm.bytesToPages(kernel_stack_size) + 1);
+    vm.PageAllocator.free(phys, kernel_stack_rank);
 }
 
 pub inline fn fromNode(node: *Node) *Self {
     return @fieldParentPtr("node", node);
+}
+
+pub inline fn getKernelStackTop(self: *const Self) usize {
+    return @intFromPtr(self);
+}
+
+pub inline fn onSwitch(self: *Self) void {
+    switch (self.spec) {
+        .kernel => {
+            const pt = vm.getRootPt();
+            if (vm.getPageTable() != pt) vm.setPageTable(pt);
+        },
+        .user => |u| {
+            const pt = u.process.addr_space.page_table;
+            if (vm.getPageTable() != pt) vm.setPageTable(pt);
+
+            arch.syscall.setupTaskAbi(self, u.process.abi);
+        }
+    }
 }
