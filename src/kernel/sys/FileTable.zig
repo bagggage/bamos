@@ -41,7 +41,7 @@ pub fn deinit(self: *Self) void {
         defer self.lock.unlock();
 
         // prevent further allocations
-        break :blk self.num_files.fetchOr(self.max_files, .release);
+        break :blk self.num_files.swap(self.max_files, .release);
     };
 
     var i: u32 = 0;
