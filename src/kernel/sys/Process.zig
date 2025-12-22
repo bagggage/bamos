@@ -293,7 +293,9 @@ pub fn mmap(
     return map_unit.base();
 }
 
-pub inline fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) void {
+pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) void {
+    if (!vm.isUserVirtAddr(address)) self.sendSignal(.SegFault);
+
     self.addr_space.pageFault(address, cause) catch |err| {
         log.debug("page fault failed: {s}: {f}", .{@errorName(err), self.addr_space});
         self.sendSignal(.SegFault);

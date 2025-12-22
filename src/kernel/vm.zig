@@ -12,6 +12,7 @@ const arch = lib.arch;
 const boot = @import("boot.zig");
 const lib = @import("lib.zig");
 const log = std.log.scoped(.vm);
+const sched = @import("sched.zig");
 const smp = @import("smp.zig");
 
 /// The size of a memory page, specific to the architecture.
@@ -260,9 +261,12 @@ pub inline fn pagesToRankExact(pages: u32) u8 {
 pub fn pageFaultHandler(address: usize, cause: FaultCause, userspace: bool) bool {
     const sys = @import("sys.zig");
 
-    if (arch.vm.isUserVirtAddr(address)) {
-        sys.Process.getCurrent().pageFault(address, cause);
-        return true;
+    if (userspace or arch.vm.isUserVirtAddr(address)) {
+        const task = sched.getCurrentTask();
+        if (task.spec == .user) {
+            task.spec.user.process.pageFault(address, cause);
+            return true;
+        }
     }
 
     log.warn(
