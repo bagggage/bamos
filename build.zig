@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const src_dir = "src";
 
 const qemu_cores_default = 4;
-const qemu_mem_mb_default = 64;
+const qemu_ram_default = "64M";
 
 // Build tools
 var dbg_make_exe: *std.Build.Step.Compile = undefined;
@@ -178,8 +178,9 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     const enable_gdb = b.option(bool, "qemu-gdb", "Enable GDB server (default: false)") orelse false;
     const enable_serial = b.option(bool, "qemu-serial", "Serial output to stdout (default: true)") orelse true;
     const enable_trace = b.option(bool, "qemu-trace", "Enable interrupts tracing (deafault: false)") orelse false;
-    const core_num = b.option(u5, "qemu-cores", "QEMU machine cores number (default: 4)") orelse qemu_cores_default;
-    const mem_mb = b.option(u16, "qemu-ram-mb", "QEMU machine RAM size in megabytes (default: 16)") orelse qemu_mem_mb_default;
+    const enable_kvm = b.option(bool, "qemu-kvm", "Enable KVM acceleration") orelse true;
+    const cpu_num = b.option(u5, "qemu-cpus", "QEMU machine cpus number (default: 4)") orelse qemu_cores_default;
+    const ram_size = b.option([]const u8, "qemu-ram", "QEMU machine RAM size (default: 64 M)") orelse qemu_ram_default;
     const drives = b.option([]const []const u8, "qemu-drives", "QEMU additional NVMe drives (paths to images)") orelse &.{};
     const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse false;
     const no_uefi = b.option(bool, "qemu-noefi", "Legacy BIOS firmware") orelse false;
@@ -195,7 +196,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
         "-nic", "none",
         "-no-reboot",
         "-machine", "q35",
-        "-m", b.fmt("{}M", .{mem_mb})
+        "-m", ram_size
     });
 
     if (no_uefi == false) {
@@ -215,8 +216,8 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
 
     if (no_gui) qemu_run.addArg("-nographic");
 
-    if (core_num > 1) {
-        qemu_run.addArgs(&.{"-smp", b.fmt("cores={}", .{core_num})});
+    if (cpu_num > 1) {
+        qemu_run.addArgs(&.{"-smp", b.fmt("cores={}", .{cpu_num})});
     }
 
     // Add boot drive
@@ -234,7 +235,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     }
 
     // Enable KVM on linux
-    if (builtin.os.tag == .linux and !enable_trace) {
+    if (enable_kvm and builtin.os.tag == .linux and !enable_trace) {
         qemu_run.addArgs(&.{
             "-enable-kvm", "-cpu", "host"
         });
