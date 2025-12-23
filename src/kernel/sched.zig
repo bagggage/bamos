@@ -79,9 +79,14 @@ pub const WaitQueue = struct {
 
 /// Minimal timer interrupt interval in milliseconds.
 var time_granule_ms: u32 = 0;
+var initialized: bool = false;
 
 pub inline fn init() !void {
     sys.time.initPerCpu();
+}
+
+pub inline fn isInitialized() bool {
+    return initialized;
 }
 
 pub inline fn getScheduler(cpu_idx: u16) *Scheduler {
@@ -104,6 +109,7 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     scheduler.current_task = task;
 
     scheduler.enqueueTask(task);
+    initialized = true;
 
     if (cpu_idx == smp.getIdx()) scheduler.begin();
 }
