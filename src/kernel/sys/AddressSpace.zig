@@ -163,7 +163,11 @@ pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) vfs.Error!vo
         self.map_lock.readLock();
         defer self.map_lock.readUnlock();
 
-        break :blk self.lookupMapUnit(base, top) orelse return error.NoEnt;
+        if (self.lookupMapUnit(base, top)) |map_unit| break :blk map_unit;
+
+        // Lookup grow down unit
+        const map_unit = self.lookupMapUnit(top, top + vm.page_size) orelse return error.NoEnt;
+        break :blk if (map_unit.flags.grow_down) map_unit else return error.NoEnt;
     };
 
     try map_unit.pageFault(self.page_table, address, cause);

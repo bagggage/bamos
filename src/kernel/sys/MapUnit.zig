@@ -195,24 +195,26 @@ pub fn pageFault(self: *Self, pt: *vm.PageTable, address: usize, cause: vm.Fault
     if (self.flags.map.none or
         (cause == .exec and !self.flags.map.exec) or
         (cause == .write and !self.flags.map.write)
-    ) return vfs.Error.SegFault;
+    ) return error.SegFault;
+
+    if (self.flags.grow_down and address < self.base()) {
+        @branchHint(.unlikely);
+        std.debug.assert(address >= self.base() - vm.page_size);
+        return try self.growDownFault(pt, cause);
+    }
 
     const offset = address - self.base();
     if (!self.isAnonymous()) return try self.ops.pageFault(self, pt, offset, cause);
 
     // Anonymous page
-    if (self.flags.grow_down) {
-        @branchHint(.cold);
-        log.warn("grow down mapping is not implemented", .{});
-        return error.BadOperation;
-    }
-
     const page_offset: u32 = @truncate(offset / vm.page_size);
     const page = vm.Page.new(page_offset, 0) orelse return error.NoMemory;
     errdefer page.delete();
 
-    try pt.map(lib.misc.alignDown(usize, address, vm.page_size), page.getPhysBase(), 1, self.flags.map);
+    try page.map(pt, self.base(), self.flags.map);
     self.region.attachPage(page);
+
+    page.fillZeroes();
 }
 
 pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
@@ -324,6 +326,44 @@ fn findPage(self: *Self, page_base: u32, page_len: u32) ?PageHandle {
     }
 
     return null;
+}
+
+fn growDownFault(self: *Self, pt: *vm.PageTable, cause: vm.FaultCause) !void {
+    std.debug.assert(self.flags.grow_down);
+
+    var node = self.region.page_list.first;
+
+    if (self.isAnonymous()) {
+        const page = vm.Page.new(0, 0) orelse return error.NoMemory;
+        errdefer page.delete();
+
+        try page.map(pt, self.base() - vm.page_size, self.flags.map);
+        self.region.attachPage(page);
+
+        self.page_capacity += 1;
+        self.region.base -= vm.page_size;
+
+        page.fillZeroes();
+    } else {
+        @branchHint(.unlikely);
+        if (self.page_offset == 0) return error.SegFault;
+
+        self.page_offset -= 1;
+        self.page_capacity += 1;
+        self.region.base -= vm.page_size;
+        errdefer {
+            self.page_offset += 1;
+            self.page_capacity -= 1;
+            self.region.base += vm.page_size;
+        }
+
+        try self.ops.pageFault(self, pt, 0, cause);
+    }
+
+    while (node) |n| : (node = n.next) {
+        const page = vm.Page.fromNode(n);
+        page.dim.idx += 1;
+    }
 }
 
 fn shrinkPageTop(list: *vm.Page.List, page: *vm.Page, new_top_idx: u32) !void {
