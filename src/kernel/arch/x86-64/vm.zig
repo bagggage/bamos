@@ -15,7 +15,7 @@ pub const page_size = 4096;
 /// Linear Memory Access (LMA) region start address.
 pub const lma_start = 0xFFFF800000000000;
 
-pub const max_userspace_addr = 0x0000_8FFF_FFFF_FFFF;
+pub const max_userspace_addr = 0x0000_7FFF_FFFF_FFFF;
 pub const max_user_heap_addr = max_userspace_addr - lib.gb_size + 1;
 
 const pages_per_2mb = (lib.mb_size * 2) / page_size;
@@ -452,7 +452,7 @@ pub inline fn heapStart() usize {
 }
 
 pub inline fn isUserVirtAddr(virt: usize) bool {
-    return (virt & 0xFFFF_0000_0000_0000) == 0;
+    return (virt & 0xFFFF_8000_0000_0000) == 0;
 }
 
 pub inline fn getPageTable() *PageTable {
