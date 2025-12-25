@@ -62,7 +62,7 @@ pub fn initPerCpu(isr: intr.isr.Fn) !void {
         .vector = @truncate(intr_vec.vec)
     };
 
-    intr.setupIsr(intr_vec, isr, .kernel, intr.intr_gate_flags);
+    intr.setupIsr(intr_vec, isr, .self, intr.intr_gate_flags);
     lapic.set(.lvt_timer, @bitCast(lvt_timer));
 }
 
