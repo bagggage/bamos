@@ -168,7 +168,7 @@ fn bindIrq(irq: *const intr.Irq) void {
     arch.intr.setupIsr(
         irq.vector,
         arch.intr.isr.irqHandler(irq.pin, .irq, 32),
-        .kernel,
+        .self,
         arch.intr.intr_gate_flags,
     );
 
@@ -233,7 +233,7 @@ fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) void {
     arch.intr.setupIsr(
         msi.vector,
         arch.intr.isr.irqHandler(idx, .msi, intr.max_msi),
-        .kernel,
+        .self,
         arch.intr.intr_gate_flags,
     );
 

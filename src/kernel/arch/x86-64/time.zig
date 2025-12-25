@@ -48,20 +48,17 @@ pub inline fn getSysTimer() ?*Timer {
 }
 
 fn timerIntrRoutin() callconv(.naked) noreturn {
-    asm volatile ("call isr.entry");
-    defer asm volatile ("jmp isr.exit");
+    asm volatile ("call interruptEntry");
+    defer asm volatile ("jmp interruptExit");
 
-    const local = arch.getCpuLocalData();
-    asm volatile ("push %[local]"
-        :
-        : [local] "r" (local),
-    );
+    dev.intr.handlerEnter(arch.getCpuLocalData());
 
-    dev.intr.handlerEnter(local);
-    defer asm volatile (
-        \\ pop %rdi
+    asm volatile (
+        \\ call timerIntrHandler
         \\ call intrHandlerExit
     );
+}
 
-    asm volatile ("call timerIntrHandler");
+export fn intrHandlerExit() void {
+    dev.intr.handlerExit(arch.getCpuLocalData());
 }

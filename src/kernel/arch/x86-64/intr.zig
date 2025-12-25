@@ -3,6 +3,7 @@
 // Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 const apic = @import("intr/apic.zig");
 const boot = @import("../../boot.zig");
@@ -15,6 +16,7 @@ const smp = @import("../../smp.zig");
 const vm = @import("../../vm.zig");
 
 pub const isr = @import("intr/isr.zig");
+pub const except = @import("intr/except.zig");
 
 pub const table_len = max_vectors;
 
@@ -27,7 +29,7 @@ pub const avail_vectors = max_vectors - reserved_vectors;
 
 pub const irq_base_vec = reserved_vectors;
 
-const irq_stack_size = vm.page_size;
+const irq_stack_size = std.math.ceilPowerOfTwoAssert(usize, @sizeOf(regs.InterruptFrame) * 2);
 
 pub const Descriptor = packed struct {
     offset_1: u16 = 0,
@@ -40,8 +42,8 @@ pub const Descriptor = packed struct {
 
     rsrvd_1: u32 = 0,
 
-    pub fn init(isr_ptr: u64, stack: u3, attr: u8) @This() {
-        var result: @This() = .{ .ist = stack, .type_attr = attr, .selector = @bitCast(gdt.kernel_cs_sel) };
+    pub fn init(isr_ptr: u64, stack: Stack, attr: u8) @This() {
+        var result: @This() = .{ .ist = @intFromEnum(stack), .type_attr = attr, .selector = @bitCast(gdt.kernel_cs_sel) };
 
         result.offset_1 = @truncate(isr_ptr);
         result.offset_2 = @truncate(isr_ptr >> 16);
@@ -69,43 +71,35 @@ pub const TaskStateSegment = extern struct {
     }
 };
 
-pub const Stack = enum(u3) { kernel = 0x0, nmi = 0x1, double_fault = 0x2 };
+pub const Stack = enum(u3) { self = 0x0, double_fault = 0x1 };
 
-pub var except_handlers: [reserved_vectors]isr.ExceptionFn = undefined;
+pub var except_handlers: [reserved_vectors]except.Fn = undefined;
 
 const IrqStack = [irq_stack_size / @sizeOf(u64)]u64;
 
 var idts: []DescTable = &.{};
-var tss_pool: []TaskStateSegment = &.{};
 var irq_stacks: []IrqStack = &.{};
 
 pub fn preinit() void {
-    const cpus_num = smp.getNum();
-    const idts_pages = std.math.divCeil(u32, @as(u32, cpus_num) * @sizeOf(DescTable), vm.page_size) catch unreachable;
+    const cpus_num: u32 = smp.getNum();
+ 
+    const stacks_pages = vm.bytesToPages(cpus_num * @sizeOf(IrqStack));
+    const idts_pages = vm.bytesToPages(cpus_num * @sizeOf(DescTable));
 
-    const tss_pages = std.math.divCeil(u32, cpus_num * @sizeOf(TaskStateSegment), vm.page_size) catch unreachable;
+    const idts_phys = boot.alloc(idts_pages) orelse @panic("No memory to allocate IDTs per each cpu");
+    const stacks_phys = boot.alloc(stacks_pages) orelse @panic("No memory to allocate IRQ stacks per each cpu");
 
-    const base = boot.alloc(idts_pages + tss_pages) orelse @panic("No memory to allocate IDTs per each cpu");
-    const tss_base = base + (vm.page_size * idts_pages);
-
-    idts.ptr = @ptrFromInt(vm.getVirtLma(base));
+    idts.ptr = @ptrFromInt(vm.getVirtLma(idts_phys));
     idts.len = cpus_num;
 
-    tss_pool.ptr = @ptrFromInt(vm.getVirtLma(tss_base));
-    tss_pool.len = cpus_num;
-
-    @memset(tss_pool, std.mem.zeroes(TaskStateSegment));
-
-    for (tss_pool) |*tss| {
-        gdt.addTss(tss) catch @panic("Failed to add TSS to GDT: Overflow");
-    }
+    irq_stacks.ptr = @ptrFromInt(vm.getVirtLma(stacks_phys));
+    irq_stacks.len = cpus_num;
 
     initExceptHandlers();
     initStubHandlers();
 }
 
 pub fn init() !intr.Chip {
-    try initTss();
     try initIdts();
 
     pic.init() catch return error.PicIoBusy;
@@ -124,12 +118,22 @@ pub inline fn setupCpu(cpu_idx: u16) void {
     // 2048 - because of `gdt.getTssOffset` (see it for details).
     comptime std.debug.assert(smp.max_cpus == 2048);
 
+    const local = smp.getCpuData(cpu_idx);
+    const tss = &local.arch_specific.tss;
+    tss.* = std.mem.zeroes(TaskStateSegment);
+
+    const stack = &irq_stacks[cpu_idx];
+    const stack_top = @intFromPtr(stack) + @sizeOf(IrqStack);
+
+    tss.ists[@intFromEnum(Stack.double_fault) - 1] = stack_top;
+    gdt.addTss(tss) catch @panic("Failed to add TSS into GDT");
+
     useIdt(&idts[cpu_idx]);
-    regs.setTss(gdt.getTssOffset(cpu_idx));
+    regs.setTss(gdt.getTssSelectorOffset(cpu_idx));
 }
 
 pub fn setupIsr(vec: intr.Vector, isr_ptr: isr.Fn, stack: Stack, type_attr: u8) void {
-    idts[vec.cpu][vec.vec] = .init(@intFromPtr(isr_ptr), @intFromEnum(stack), type_attr);
+    idts[vec.cpu][vec.vec] = .init(@intFromPtr(isr_ptr), stack, type_attr);
 }
 
 pub inline fn useIdt(idt: *DescTable) void {
@@ -139,12 +143,10 @@ pub inline fn useIdt(idt: *DescTable) void {
 }
 
 pub inline fn enableForCpu() void {
-    @setRuntimeSafety(false);
     asm volatile ("sti");
 }
 
 pub inline fn disableForCpu() void {
-    @setRuntimeSafety(false);
     asm volatile ("cli");
 }
 
@@ -154,8 +156,11 @@ pub inline fn isEnabledForCpu() bool {
     return flags.intr_enable;
 }
 
-pub inline fn iret() void {
+pub inline fn iret() noreturn {
+    @setRuntimeSafety(false);
+
     asm volatile ("iretq");
+    unreachable;
 }
 
 fn initIdts() !void {
@@ -164,43 +169,24 @@ fn initIdts() !void {
     }
 }
 
-fn initTss() !void {
-    const cpus_num = smp.getNum();
-    const stacks_pages = std.math.divCeil(u32, @as(u32, cpus_num) * irq_stack_size, vm.page_size) catch unreachable;
-    const rank = std.math.log2_int_ceil(u32, stacks_pages);
-
-    const base = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
-
-    irq_stacks.ptr = @ptrFromInt(vm.getVirtLma(base));
-    irq_stacks.len = cpus_num;
-
-    for (irq_stacks, tss_pool) |*stack, *tss| {
-        const stack_ptr: u64 = @intFromPtr(stack) + irq_stack_size;
-        const aligned_ptr = stack_ptr & 0xFFFF_FFFF_FFFF_FFF0;
-
-        inline for (tss.ists[0..]) |*ist| {
-            ist.* = aligned_ptr;
-        }
-        inline for (tss.rsps[0..]) |*rsp| {
-            rsp.* = aligned_ptr;
-        }
-    }
-}
-
 fn initExceptHandlers() void {
     inline for (0..reserved_vectors) |vec| {
-        const Handler = isr.ExcpHandler(vec);
+        const handler = except.handler(vec);
+        const vector = except.Vector.fromInt(@intCast(vec));
 
-        idts[0][vec] = .init(@intFromPtr(&Handler.isr), 0, trap_gate_flags);
-        except_handlers[vec] = switch (vec) {
-            isr.page_fault_vec => &isr.pageFaultHandler,
-            else => &isr.commonExcpHandler,
+        const args = switch (vector) {
+            .page_fault   => .{ .self,         &handler.isr, &except.pageFaultHandler },
+            //.double_fault => .{ .double_fault, &handler.isr, &except.commonHandler },
+            else          => .{ .self,         &handler.isr, &except.commonHandler }
         };
+
+        idts[0][vec] = .init(@intFromPtr(args.@"1"), args.@"0", trap_gate_flags);
+        except_handlers[vec] = args.@"2";
     }
 }
 
 fn initStubHandlers() void {
     inline for (reserved_vectors..max_vectors) |vec| {
-        idts[0][vec] = .init(@intFromPtr(isr.stubIrqHandler(vec)), 0, intr_gate_flags);
+        idts[0][vec] = .init(@intFromPtr(isr.stubIrqHandler(vec)), .self, intr_gate_flags);
     }
 }

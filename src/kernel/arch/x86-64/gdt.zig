@@ -174,7 +174,7 @@ pub fn addTss(tss: *const intr.TaskStateSegment) !void {
     );
 }
 
-pub inline fn getTssOffset(idx: u16) u16 {
+pub inline fn getTssSelectorOffset(idx: u16) u16 {
     return @truncate((tss_base_idx * @sizeOf(SegmentDescriptor)) + (idx * @sizeOf(SystemSegmentDescriptor)));
 }
 

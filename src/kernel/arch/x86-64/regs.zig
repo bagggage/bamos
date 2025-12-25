@@ -7,6 +7,8 @@
 
 const std = @import("std");
 
+const arch = @import("arch.zig");
+const intr = arch.intr;
 const smp = @import("../../smp.zig");
 
 // Model-Specific Register (MSR) addresses.
@@ -19,6 +21,8 @@ pub const MSR_FG_BASE = 0xC0000100;
 pub const MSR_GS_BASE = 0xC0000101;
 pub const MSR_SWAPGS_BASE = 0xC0000102;
 pub const MSR_APIC_BASE = 0x1B;
+
+const gs_tss_offset = @offsetOf(smp.LocalData, "arch_specific") + @offsetOf(arch.CpuLocalData, "tss");
 
 /// Interrupt Descriptor Table Register.
 pub const IDTR = packed struct {
@@ -263,15 +267,40 @@ pub inline fn swapgs() void {
 
 pub inline fn swapStackToKernel() void {
     asm volatile (std.fmt.comptimePrint(
-            \\ movq %rsp, %gs:{}
-            \\ movq %gs:{}, %rsp
-        , .{ @offsetOf(smp.LocalData, "current_sp"), @offsetOf(smp.LocalData, "kernel_sp") }));
+        \\ xchg %rsp, %gs:{}
+        \\ push %gs:{0}
+        , .{gs_tss_offset + @offsetOf(intr.TaskStateSegment, "rsps")}
+    ));
 }
 
-pub inline fn swapStackToUser() void {
+pub inline fn restoreUserStack() void {
     asm volatile (std.fmt.comptimePrint(
-            \\ movq %gs:{}, %rsp
-        , .{@offsetOf(smp.LocalData, "current_sp")}));
+        \\ cli
+        \\ pop %gs:{}
+        \\ xchg %rsp, %gs:{0}
+        , .{gs_tss_offset + @offsetOf(intr.TaskStateSegment, "rsps")}
+    ));
+}
+
+pub inline fn alignStackUnsafe() void {
+    asm volatile (
+        \\ mov %rsp, %rbp
+        \\ and $-16, %rsp
+    );
+}
+
+pub inline fn restoreStackUnsafe() void {
+    asm volatile ("mov %rbp, %rsp");
+}
+
+pub inline fn alignStackSafe() void {
+    asm volatile ("push %rbp");
+    alignStackUnsafe();
+}
+
+pub inline fn restoreStackSafe() void {
+    restoreStackUnsafe();
+    asm volatile ("pop %rbp");
 }
 
 pub inline fn saveCallerRegs() void {
@@ -321,6 +350,34 @@ pub inline fn restoreScratchRegs() void {
         \\pop %r9
         \\pop %r10
         \\pop %r11
+    );
+}
+
+pub inline fn saveFpuRegs() void {
+    asm volatile (
+        \\ sub $512, %rsp
+        \\ fxsave64 (%rsp)
+    );
+}
+
+pub inline fn saveFpuRegsUnaligned() void {
+    asm volatile (
+        \\ sub $520, %rsp
+        \\ fxsave64 (%rsp)
+    );
+}
+
+pub inline fn restoreFpuRegs() void {
+    asm volatile (
+        \\ fxrstor64 (%rsp)
+        \\ add $512, %rsp
+    );
+}
+
+pub inline fn restoreFpuRegsUnaligned() void {
+    asm volatile (
+        \\ fxrstor64 (%rsp)
+        \\ add $520, %rsp
     );
 }
 

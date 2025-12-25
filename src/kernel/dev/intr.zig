@@ -193,7 +193,6 @@ pub const Irq = struct {
         defer self.pending.store(false, .release);
 
         var node = self.handlers.first;
-
         while (node) |n| : (node = n.next) {
             const handler = Handler.fromNode(n);
             if (handler.func(handler.device)) return true;
@@ -697,8 +696,23 @@ fn reorderCpus(cpu_idx: u16, comptime direction: enum{forward, backward}) void {
     }
 }
 
-fn onIntrExit(local: *smp.LocalData) void {
+/// Used only in `handleMsi`, `handleIrq` and in
+/// arch-specific interrupt routines.
+pub inline fn handlerEnter(local: *smp.LocalData) void {
+    local.scheduler.disablePreemption();
+    local.enterInterrupt();
+}
+
+/// Used only in `handleMsi`, `handleIrq` and in
+/// arch-specific interrupt routines.
+pub fn handlerExit(local: *smp.LocalData) void {
     @setRuntimeSafety(false);
+    local.exitInterrupt();
+
+    chip.eoi();
+    enableForCpu();
+
+    local.scheduler.enablePreemptionNoResched();
 
     if (local.tryIfNotNestedInterrupt()) {
         if (local.scheduler.needRescheduling()) {
@@ -707,31 +721,4 @@ fn onIntrExit(local: *smp.LocalData) void {
             local.exitInterrupt();
         }
     }
-}
-
-/// Used only in `handleMsi`, `handleIrq` and in
-/// arch-specific timer interrupt routine.
-pub inline fn handlerEnter(local: *smp.LocalData) void {
-    local.scheduler.disablePreemption();
-    local.enterInterrupt();
-}
-
-/// Used only in `handleMsi`, `handleIrq` and `intrHandlerExit`.
-fn handlerExit(local: *smp.LocalData) void {
-    @setRuntimeSafety(false);
-
-    local.exitInterrupt();
-
-    enableForCpu();
-    chip.eoi();
-
-    local.scheduler.enablePreemptionNoResched();
-    onIntrExit(local);
-}
-
-/// Used in arch-specific code to exit from
-/// timer interrupt routin.
-export fn intrHandlerExit() callconv(.c) void {
-    const local = smp.getLocalData();
-    handlerExit(local);
 }

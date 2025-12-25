@@ -41,7 +41,12 @@ pub const io = @import("io.zig");
 pub const time = @import("time.zig");
 pub const vm = @import("vm.zig");
 
-pub const CpuLocalData = struct { self_ptr: usize, apic_id: u8 };
+pub const CpuLocalData = struct {
+    self_ptr: usize,
+    apic_id: u8,
+
+    tss: intr.TaskStateSegment,
+};
 
 pub const cpuid_features = 1;
 
