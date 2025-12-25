@@ -19,18 +19,13 @@ pub const boot_cpu = 0;
 pub const max_cpus = 2048;
 
 /// Size of the initial stack in memory pages.
-pub const init_stack_pages = if (builtin.mode == .Debug) 4 else 1; 
+pub const init_stack_pages = if (builtin.mode == .Debug) 8 else 1;
 
 pub const LocalData = struct {
     idx: u16 = 0,
 
-    current_sp: usize = 0,
-    kernel_sp: usize = 0,
-
     scheduler: sched.Scheduler = .{},
-
     nested_intr: std.atomic.Value(u8) = .init(0),
-
     arch_specific: arch.CpuLocalData = undefined,
 
     pub inline fn isInInterrupt(self: *const LocalData) bool {
@@ -128,7 +123,7 @@ pub fn initCpu(ret: *const fn() noreturn) void {
 
     arch.setCpuLocalData(local_data);
     arch.setupCpu(cpu_idx);
-    
+
     initStack(is_boot, ret);
 }
 
