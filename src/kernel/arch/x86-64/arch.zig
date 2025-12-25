@@ -38,6 +38,7 @@ const CpuId = packed struct { a: u32, b: u32, c: u32, d: u32 };
 pub const Context = @import("Context.zig");
 pub const intr = @import("intr.zig");
 pub const io = @import("io.zig");
+pub const syscall = @import("syscall.zig");
 pub const time = @import("time.zig");
 pub const vm = @import("vm.zig");
 
