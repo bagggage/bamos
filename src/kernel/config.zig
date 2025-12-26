@@ -32,7 +32,7 @@ const Value = struct {
         .allocator = .oma
     };
 
-    string: []const u8 = &.{},
+    string: [:0]const u8 = &.{},
     map_ent: Map.Entry = .{},
 
     inline fn fromEntry(entry: *Map.Entry) *Value {
@@ -51,7 +51,7 @@ pub fn init() !void {
     try parseConfig();
 }
 
-pub inline fn get(key: []const u8) ?[]const u8 {
+pub inline fn get(key: []const u8) ?[:0]const u8 {
     return Value.fromEntry(map.get(key) orelse return null).string;
 }
 
@@ -193,7 +193,7 @@ fn validateKey(key: []const u8) bool {
     return true;
 }
 
-fn readValue(buf: []const u8) ?[]const u8 {
+fn readValue(buf: []const u8) ?[:0]const u8 {
     if (buf.len == 0 or std.ascii.isWhitespace(buf[0])) return null;
 
     const c = buf[0];
@@ -202,7 +202,10 @@ fn readValue(buf: []const u8) ?[]const u8 {
         if (i != buf.len - 1) return null;
     }
 
-    return buf;
+    const raw = @constCast(buf.ptr);
+    raw[buf.len] = 0;
+
+    return @ptrCast(raw[0..buf.len]);
 }
 
 fn parseValue(comptime T: type, value: []const u8) !T {
@@ -254,7 +257,9 @@ fn parseBool(value: []const u8) !bool {
     return error.InvalidValue;
 }
 
-fn put(key: []const u8, value: []const u8) !void {
+fn put(key: []const u8, value: [:0]const u8) !void {
+    std.log.debug("config: add '{s}'='{s}'", .{key, value});
+
     const val = vm.auto.alloc(Value) orelse return error.NoMemory;
     val.* = .{ .string = value };
 
