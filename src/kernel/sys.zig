@@ -4,16 +4,23 @@
 
 const std = @import("std");
 
-const config = utils.config;
+const arch = lib.arch;
+const config = @import("config.zig");
 const devfs = vfs.devfs;
+const lib = @import("lib.zig");
 const log = std.log.scoped(.sys);
-const utils = @import("utils.zig");
+const sched = @import("sched.zig");
 const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
 
+pub const AddressSpace = Process.AddressSpace;
+pub const call = @import("sys/call.zig");
+pub const exe = @import("sys/exe.zig");
+pub const limits = @import("sys/limits.zig");
+pub const Process = @import("sys/Process.zig");
 pub const time = @import("sys/time.zig");
 
-const init_paths: []const []const u8 = &.{
+const init_paths: []const [:0]const u8 = &.{
     "/init",
     "/bin/init",
     "/sbin/init",
@@ -21,47 +28,80 @@ const init_paths: []const []const u8 = &.{
     "/usr/sbin/init"
 };
 
+const InitSource = struct {
+    dentry: *vfs.Dentry,
+    path: [:0]const u8
+};
+
 pub fn init() !void {
+    arch.syscall.init();
+
     startInit() catch |err| {
-        //if (err == error.InitNotFound) @panic("Init executable not found.");
+        if (err == error.InitNotFound) @panic("Init executable not found.");
         return err;
     };
 }
 
 fn startInit() !void {
-    const init_dent = try findInit();
-    const buf: [*]u8 = @ptrFromInt(vm.getVirtLma(
-        vm.PageAllocator.alloc(0) orelse return error.NoMemory
-    ));
+    const init_task = blk: {
+        const root = getInitRoot() orelse return error.NoRootFs;
+        defer root.deref();
 
-    const init_fd = try vfs.open(init_dent);
-    _ = try init_fd.read(buf[0..vm.page_size]);
+        const init_src = try findInit(root);
+        defer init_src.dentry.deref();
 
-    log.info("readed:\n{s}", .{buf[0..vm.page_size]});
+        const init_proc = try Process.create(
+            limits.default_stack_size,
+            root, root
+        );
+        errdefer init_proc.delete();
+
+        var bin: exe.Binary = try .init(init_src.dentry, init_proc);
+        defer bin.deinit();
+
+        try bin.load(&.{init_src.path}, &.{});
+
+        log.debug("{f}", .{init_proc.addr_space});
+        arch.syscall.startProcess(init_proc, bin.data.run_ctx);
+
+        break :blk init_proc.getMainTask().?;
+    };
+
+    //_ = init_task;
+    sched.enqueue(init_task);
 }
 
-fn findInit() !*vfs.Dentry {
-    const root = getInitRoot() orelse return error.NoRootFs;
-
-    var init_dent: ?*vfs.Dentry = null;
-
-    for (init_paths) |path| {
-        const dentry = vfs.lookup(root, path[1..]) catch |err| {
-            if (err == vfs.Error.NoEnt) continue;
+fn findInit(root: *vfs.Dentry) !InitSource {
+    var init_dent: ?*vfs.Dentry = if (config.get("init")) |path| blk: {
+        const dent = vfs.lookup(root, null, path) catch |err| {
+            if (err == vfs.Error.NoEnt) {
+                log.warn("Init not found at specified path \"{s}\".", .{path});
+                break :blk null;
+            }
             return err;
         };
+        return .{ .dentry = dent, .path = path };
+    } else null;
 
-        if (dentry.inode.type != .regular_file) {
-            dentry.deref();
-            continue;
+    const init_path = blk: {
+        for (init_paths) |path| {
+            const dentry = vfs.lookup(root, null, path) catch |err| {
+                if (err == vfs.Error.NoEnt) continue;
+                return err;
+            };
+
+            if (dentry.inode.type != .regular_file) {
+                dentry.deref();
+                continue;
+            }
+
+            init_dent = dentry;
+            break :blk path;
         }
+        return error.InitNotFound;
+    };
 
-        init_dent = dentry;
-        break;
-    }
-
-    if (init_dent == null) return error.InitNotFound;
-    return init_dent.?;
+    return .{ .dentry = init_dent.?, .path = init_path };
 }
 
 fn getInitRoot() ?*vfs.Dentry {
@@ -94,13 +134,12 @@ fn getInitRoot() ?*vfs.Dentry {
 
 fn findRoot(root_path: []const u8) !*vfs.Dentry {
     const dev_path = "/dev/";
-
     if (std.mem.startsWith(u8, root_path, dev_path)) {
         const blk_path = root_path[dev_path.len..];
-        return try vfs.lookup(devfs.getRoot(), blk_path);
+        return try vfs.lookup(null, devfs.getRoot(), blk_path);
     }
 
-    return try vfs.lookup(null, root_path);
+    return try vfs.lookup(null, null, root_path);
 }
 
 fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
@@ -112,7 +151,7 @@ fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
         .block_device => blk: {
             const blk_dev = devfs.BlockDev.fromDentry(dentry);
 
-            const mnt_dir = try vfs.getRoot().makeDirectory("rootfs");
+            const mnt_dir = try vfs.getRootWeak().makeDirectory("rootfs");
             defer mnt_dir.deref();
 
             break :blk try if (config.get("rootfs")) |fs_name|
