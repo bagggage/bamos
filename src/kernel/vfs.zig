@@ -27,16 +27,17 @@ pub const Partition = parts.Partition;
 pub const Superblock = @import("vfs/Superblock.zig");
 
 pub const Error = vm.Error || parts.Error || error {
-    InvalidArgs,
-    IoFailed,
-    Busy,
-    NoFs,
-    NoEnt,
-    NoAccess,
-    BadOperation,
     BadDentry,
     BadInode,
+    BadOperation,
     BadSuperblock,
+    Busy,
+    Exists,
+    InvalidArgs,
+    IoFailed,
+    NoAccess,
+    NoEnt,
+    NoFs,
 };
 
 /// Filesystem context.

@@ -274,22 +274,16 @@ pub fn mmap(
     const map_unit = vm.auto.alloc(AddressSpace.MapUnit) orelse return error.NoMemory;
     errdefer vm.auto.free(AddressSpace.MapUnit, map_unit);
 
-    const base = if (virt) |v| lib.misc.alignDown(usize, v, vm.page_size) else blk: {
-        self.addr_space.map_lock.readLock();
-        defer self.addr_space.map_lock.readUnlock();
+    const base =
+        if (virt) |v|
+            lib.misc.alignDown(usize, v, vm.page_size)
+        else
+            self.addr_space.allocRegion(pages) orelse return error.NoMemory;
 
-        break :blk self.addr_space.heapAllocRegion(pages) orelse return error.NoMemory;
-    };
-    // TODO: improve heap alloc ?
-
-    log.debug("mapping base: 0x{x}", .{base});
     map_unit.* = .init(file, base, page_offset, pages, flags);
     if (file) |f| try f.mmapPrepare(map_unit);
 
-    self.addr_space.map_lock.writeLock();
-    defer self.addr_space.map_lock.writeUnlock();
-
-    try self.addr_space.map(map_unit);
+    try self.addr_space.mapFixed(map_unit);
     return map_unit.base();
 }
 
