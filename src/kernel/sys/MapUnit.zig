@@ -90,9 +90,9 @@ pub fn init(
     };
 }
 
-pub inline fn deinit(self: *Self) void {
+pub inline fn deinit(self: *Self, pt: *vm.PageTable) void {
+    self.unmap(pt);
     if (self.file) |f| f.deref();
-    self.region.deinit();
 }
 
 pub inline fn fromNode(node: *Node) *Self {
@@ -143,7 +143,7 @@ pub fn unmapRegion(self: *Self, page_offset: u32, pages: u32, pt: *vm.PageTable)
 }
 
 pub fn shrinkTop(self: *Self, pages: u32, pt: *vm.PageTable) !void {
-    std.debug.assert(self.page_capacity > pages);
+    std.debug.assert(self.page_capacity >= pages);
 
     const idx = self.page_capacity - pages;
     try self.unmapRegion(idx, pages, pt);
