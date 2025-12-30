@@ -250,6 +250,10 @@ pub inline fn bytesToPages(bytes: usize) u32 {
     return @intCast((bytes + page_size - 1) >> page_shift);
 }
 
+pub inline fn bytesToPagesExact(bytes: usize) u32 {
+    return @intCast(bytes >> page_shift);
+}
+
 pub inline fn pagesToRank(pages: u32) u8 {
     return std.math.log2_int_ceil(u32, pages);
 }

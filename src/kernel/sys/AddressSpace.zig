@@ -8,9 +8,6 @@ const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
-const VmList = MapUnit.List;
-const VmNode = MapUnit.Node;
-
 const RbTree = lib.rb.Tree(compareMapUnits);
 const RbNode = lib.rb.Node;
 
@@ -27,12 +24,11 @@ page_table: *vm.PageTable,
 
 users: lib.atomic.RefCount(u32) = .init(0),
 
-map_units: VmList = .{},
-map_lock: lib.sync.RwLock = .{},
+map_units: MapUnit.List = .{},
+map_lock: lib.sync.RwSemaphore = .{},
 rb_tree: RbTree = .{},
 
-/// The last map unit before heap first free region starts.
-//heap_unit: ?*MapUnit = null,
+heap: ?*MapUnit = null,
 
 /// Stack size in pages.
 stack_pages: u16,
@@ -55,10 +51,14 @@ pub fn create(stack_pages: u16) !*Self {
 }
 
 pub fn deinit(self: *Self) void {
+    if (self.heap) |h| {
+        if (h.page_capacity == 0) vm.auto.free(MapUnit, h);
+    }
+
     while (self.map_units.popFirst()) |n| {
         const map_unit = MapUnit.fromNode(n);
 
-        map_unit.deinit();
+        map_unit.deinit(self.page_table);
         vm.auto.free(MapUnit, map_unit);
     }
 
@@ -78,13 +78,16 @@ pub inline fn deref(self: *Self) void {
     if (self.users.put()) self.delete();
 }
 
-pub fn heapAllocRegion(self: *Self, pages: u32) ?usize {
+pub fn allocRegion(self: *Self, pages: u32) ?usize {
     const size = pages * vm.page_size;
 
     // TODO: More efficient searching for the address?
     //       The allocated address maybe allocated twise,
     //       if two threads call this simultaneously.
-    var base_unit = MapUnit.fromRbNode(self.rb_tree.first() orelse return vm.page_size);
+    self.map_lock.readLock();
+    defer self.map_lock.readUnlock();
+
+    var base_unit = self.heap orelse MapUnit.fromRbNode(self.rb_tree.first() orelse return vm.page_size);
     var free_base = base_unit.top();
 
     if (free_base + size > vm.max_user_heap_addr) return null;
@@ -105,7 +108,71 @@ pub fn heapAllocRegion(self: *Self, pages: u32) ?usize {
     return free_base;
 }
 
-pub fn mapRegion(self: *Self, region: *const vm.VirtualRegion, flags: MapUnit.Flags) !void {
+pub fn heapInit(self: *Self, base: usize) vfs.Error!void {
+    std.debug.assert(self.heap == null and vm.isUserVirtAddr(base));
+
+    const heap = vm.auto.alloc(MapUnit) orelse return error.NoMemory;
+    heap.* = .init(null, base, 0, 0, .{ .map = .{ .user = true, .write = true } });
+
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
+    if (self.heap != null) return error.Exists;
+    self.heap = heap;
+}
+
+pub fn heapGrow(self: *Self, pages: u32) ?usize {
+    std.debug.assert(pages > 0);
+
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
+    const heap = self.heap orelse return null;
+    const top = heap.top();
+
+    const new_top = top + (pages * vm.page_size);
+    if (!vm.isUserVirtAddr(new_top)) return null;
+
+    if (heap.page_capacity == 0) {
+        heap.page_capacity += pages;
+        if (self.rb_tree.insert(&heap.rb_node)) |_| {
+            heap.page_capacity = 0;
+            return null;
+        }
+
+        self.map_units.prepend(&heap.node);
+    } else {
+        if (heap.rb_node.next()) |n| {
+            const next = MapUnit.fromRbNode(n);
+            if (new_top > next.base()) return null;
+        }
+
+        heap.page_capacity += pages;
+    }
+
+    return top;
+}
+
+pub fn heapShrink(self: *Self, pages: u32) vm.Error!void {
+    std.debug.assert(pages > 0);
+
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
+    const heap = self.heap orelse return;
+    if (heap.page_capacity == 0) return error.MaxSize;
+
+    if (heap.page_capacity <= pages) {
+        self.removeMapping(heap);
+        heap.unmap(self.page_table);
+
+        heap.page_capacity = 0;
+    } else {
+        try heap.shrinkTop(pages, self.page_table);
+    }
+}
+
+pub fn mapRegion(self: *Self, region: *const vm.VirtualRegion, flags: MapUnit.Flags) vfs.Error!void {
     const map_unit = vm.auto.alloc(MapUnit) orelse return error.NoMemory;
     errdefer vm.auto.free(MapUnit, map_unit);
 
@@ -115,7 +182,21 @@ pub fn mapRegion(self: *Self, region: *const vm.VirtualRegion, flags: MapUnit.Fl
     try self.map(map_unit);
 }
 
-pub fn map(self: *Self, map_unit: *MapUnit) !void {
+pub fn map(self: *Self, map_unit: *MapUnit) vfs.Error!void {
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
+    if (self.rb_tree.insert(&map_unit.rb_node)) |_| return error.Exists;
+    errdefer self.rb_tree.remove(&map_unit.rb_node);
+
+    try map_unit.map(self.page_table);
+    self.map_units.prepend(&map_unit.node);
+}
+
+pub fn mapFixed(self: *Self, map_unit: *MapUnit) vfs.Error!void {
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
     // Handle collisions.
     while (self.rb_tree.insert(&map_unit.rb_node)) |node| {
         const col_unit = MapUnit.fromRbNode(node);
@@ -170,15 +251,25 @@ pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) vfs.Error!vo
         break :blk if (map_unit.flags.grow_down) map_unit else return error.NoEnt;
     };
 
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
     try map_unit.pageFault(self.page_table, address, cause);
 }
 
-pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
+pub fn format(self: *Self, writer: *std.Io.Writer) !void {
     const stack_size = self.stack_pages * (vm.page_size / lib.kb_size);
-
     try writer.print("{*}: refs: {}\n\t{*}, stack size: {} KB\n", .{
         self, self.users.count(), self.page_table, stack_size
     });
+
+    self.map_lock.readLock();
+    defer self.map_lock.readUnlock();
+
+    const stack = blk: {
+        const last_unit = MapUnit.fromRbNode(self.rb_tree.last() orelse return);
+        break :blk if (last_unit.flags.grow_down) last_unit else null;
+    };
 
     var node = self.rb_tree.first();
     while (node) |n| : (node = n.next()) {
@@ -186,7 +277,13 @@ pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
 
         try writer.writeByte('\t');
         try map_unit.format(writer);
-        try writer.writeByte('\n');
+
+        if (map_unit == self.heap)
+            try writer.writeAll("[heap]\n")
+        else if (map_unit == stack)
+            try writer.writeAll("[stack]\n")
+        else
+            try writer.writeByte('\n');
     }
 }
 
@@ -194,10 +291,11 @@ pub fn calculateUsedRegion(self: *Self) [2]usize {
     self.map_lock.readLock();
     defer self.map_lock.readUnlock();
 
-    const first = MapUnit.fromRbNode(self.rb_tree.first() orelse return .{ 0, 0 });
-    const last = MapUnit.fromRbNode(self.rb_tree.last() orelse return .{ first.base(), first.top() });
+    const base = MapUnit.fromRbNode(self.rb_tree.first() orelse return .{ 0, 0 }).base();
+    const last_top = MapUnit.fromRbNode(self.rb_tree.last().?).top();
+    const top = if (self.heap) |h| @max(h.top(), last_top) else last_top;
 
-    return .{ first.base(), last.top() };
+    return .{ base, top };
 }
 
 fn lookupMapUnit(self: *Self, base: usize, top: usize) ?*MapUnit {
@@ -271,17 +369,20 @@ fn divideMapping(self: *Self, map_unit: *MapUnit, div_unit: *MapUnit) !void {
 
 fn replaceMapping(self: *Self, old: *MapUnit, new: *MapUnit) void {
     self.rb_tree.replace(&old.rb_node, &new.rb_node);
-
     self.map_units.remove(&old.node);
-    old.unmap(self.page_table);
 
-    vm.auto.delete(MapUnit, old);
+    old.deinit(self.page_table);
+    vm.auto.free(MapUnit, old);
 }
 
 fn deleteMapping(self: *Self, map_unit: *MapUnit) void {
+    self.removeMapping(map_unit);
+
+    map_unit.deinit(self.page_table);
+    vm.auto.free(MapUnit, map_unit);
+}
+
+fn removeMapping(self: *Self, map_unit: *MapUnit) void {
     self.rb_tree.remove(&map_unit.rb_node);
     self.map_units.remove(&map_unit.node);
-    map_unit.unmap(self.page_table);
-
-    vm.auto.delete(MapUnit, map_unit);
 }
