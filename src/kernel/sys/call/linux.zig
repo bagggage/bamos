@@ -9,6 +9,7 @@ const arch = lib.arch;
 const lib = @import("../../lib.zig");
 const linux = std.os.linux;
 const log = std.log.scoped(.@"sys.call.linux");
+const trace = std.log.scoped(.@"sys.call.trace");
 const sys = @import("../../sys.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
@@ -20,7 +21,10 @@ const table_len = 256;
 pub const table = initSyscallTable();
 
 fn initSyscallTable() [table_len]SyscallFn {
-    const result: [table_len]SyscallFn = .{ null } ** table_len;
+    var result: [table_len]SyscallFn = .{ null } ** table_len;
+
+    result[@intFromEnum(linux.SYS.brk)] = @ptrCast(&brk);
+
     return result;
 }
 
@@ -62,4 +66,30 @@ pub inline fn badCallHandler(id: usize) isize {
 
     sys.call.badCallHandler(proc, id, name, .{});
     return errorFromE(.NOSYS);
+}
+
+fn brk(new_brk: usize) callconv(.c) usize {
+    const proc = sys.Process.getCurrent();
+    const curr_brk,
+    const curr_pages = blk: {
+        proc.addr_space.map_lock.readLock();
+        defer proc.addr_space.map_lock.readUnlock();
+
+        const heap = proc.addr_space.heap.?;
+        break :blk .{ heap.top(), heap.page_capacity };
+    };
+
+    trace.info("brk(0x{x}); curr: 0x{x}", .{new_brk, curr_brk});
+
+    if (new_brk > curr_brk) {
+        const pages = vm.bytesToPages(new_brk - curr_brk);
+        _ = proc.addr_space.heapGrow(pages) orelse return curr_brk;
+    } else {
+        const pages = vm.bytesToPagesExact(curr_brk - new_brk);
+        if (pages == 0) return if (curr_pages > 0) new_brk else curr_brk;
+        
+        proc.addr_space.heapShrink(pages) catch return curr_brk;
+    }
+
+    return new_brk;
 }
