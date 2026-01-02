@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const opts = @import("opts");
 
 const arch = lib.arch;
 const lib = @import("../../lib.zig");
@@ -28,6 +29,7 @@ fn initSyscallTable() [table_len]SyscallFn {
     }
 
     result[@intFromEnum(linux.SYS.brk)] = @ptrCast(&brk);
+    result[@intFromEnum(linux.SYS.uname)] = @ptrCast(&uname);
 
     return result;
 }
@@ -174,4 +176,23 @@ fn brk(new_brk: usize) callconv(.c) usize {
     }
 
     return new_brk;
+}
+
+fn uname(buf: *linux.utsname) isize {
+    trace.info("uname(0x{x})", .{@intFromPtr(buf)});
+
+    if (!vm.isUserVirtAddr(@intFromPtr(buf))) return errorFromE(.FAULT);
+    @memset(std.mem.asBytes(buf), 0);
+
+    const sysname = opts.os_name;
+    const machine = @tagName(builtin.cpu.arch);
+    const version = opts.build;
+    const release = opts.version_string;
+
+    @memcpy(buf.sysname[0..sysname.len], sysname);
+    @memcpy(buf.version[0..version.len], version);
+    @memcpy(buf.release[0..release.len], release);
+    @memcpy(buf.machine[0..machine.len], machine);
+
+    return 0;
 }
