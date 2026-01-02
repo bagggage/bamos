@@ -23,6 +23,10 @@ pub const table = initSyscallTable();
 fn initSyscallTable() [table_len]SyscallFn {
     var result: [table_len]SyscallFn = .{ null } ** table_len;
 
+    if (comptime builtin.cpu.arch == .x86_64) {
+        result[@intFromEnum(linux.SYS.arch_prctl)] = @ptrCast(&archPrCtl);
+    }
+
     result[@intFromEnum(linux.SYS.brk)] = @ptrCast(&brk);
 
     return result;
@@ -66,6 +70,84 @@ pub inline fn badCallHandler(id: usize) isize {
 
     sys.call.badCallHandler(proc, id, name, .{});
     return errorFromE(.NOSYS);
+}
+
+fn archPrCtl(op: c_int, addr: usize) isize {
+    const ARCH_SET_GS = 0x1001;
+    const ARCH_SET_FS = 0x1002;
+    const ARCH_GET_FS = 0x1003;
+    const ARCH_GET_GS = 0x1004;
+    const ARCH_GET_CPUID = 0x1011;
+    const ARCH_SET_CPUID = 0x1012;
+    const ARCH_GET_XCOMP_SUPP = 0x1021;
+    const ARCH_GET_XCOMP_PERM = 0x1022;
+    const ARCH_REQ_XCOMP_PERM = 0x1023;
+    const ARCH_GET_XCOMP_GUEST_PERM = 0x1024;
+    const ARCH_REQ_XCOMP_GUEST_PERM = 0x1025;
+    const ARCH_XCOMP_TILECFG = 17;
+    const ARCH_XCOMP_TILEDATA = 18;
+    const ARCH_MAP_VDSO_X32 = 0x2001;
+    const ARCH_MAP_VDSO_32 = 0x2002;
+    const ARCH_MAP_VDSO_64 = 0x2003;
+    const ARCH_GET_UNTAG_MASK = 0x4001;
+    const ARCH_ENABLE_TAGGED_ADDR = 0x4002;
+    const ARCH_GET_MAX_TAG_BITS = 0x4003;
+    const ARCH_FORCE_TAGGED_SVA = 0x4004;
+    const ARCH_SHSTK_ENABLE = 0x5001;
+    const ARCH_SHSTK_DISABLE = 0x5002;
+    const ARCH_SHSTK_LOCK = 0x5003;
+    const ARCH_SHSTK_UNLOCK = 0x5004;
+    const ARCH_SHSTK_STATUS = 0x5005;
+
+    trace.info("arch_prctl({x}, 0x{x})", .{op, addr});
+    const dest: ?*usize = @ptrFromInt(addr);
+
+    switch (op) {
+        ARCH_SET_GS => {
+            arch.intr.disableForCpu();
+            defer arch.intr.enableForCpu();
+
+            arch.regs.swapgs();
+            defer arch.regs.swapgs();
+
+            arch.regs.setMsr(arch.regs.MSR_GS_BASE, addr);
+        },
+        ARCH_SET_FS => arch.regs.setMsr(arch.regs.MSR_FS_BASE, addr),
+        ARCH_GET_FS => dest.?.* = arch.regs.getMsr(arch.regs.MSR_FS_BASE),
+        ARCH_GET_GS => {
+            arch.intr.disableForCpu();
+            defer arch.intr.enableForCpu();
+
+            arch.regs.swapgs();
+            defer arch.regs.swapgs();
+
+            dest.?.* = arch.regs.getMsr(arch.regs.MSR_GS_BASE);
+        },
+        ARCH_GET_CPUID,
+        ARCH_SET_CPUID,
+        ARCH_GET_XCOMP_SUPP,
+        ARCH_GET_XCOMP_PERM,
+        ARCH_REQ_XCOMP_PERM,
+        ARCH_GET_XCOMP_GUEST_PERM,
+        ARCH_REQ_XCOMP_GUEST_PERM,
+        ARCH_XCOMP_TILECFG,
+        ARCH_XCOMP_TILEDATA,
+        ARCH_MAP_VDSO_X32,
+        ARCH_MAP_VDSO_32,
+        ARCH_MAP_VDSO_64,
+        ARCH_GET_UNTAG_MASK,
+        ARCH_ENABLE_TAGGED_ADDR,
+        ARCH_GET_MAX_TAG_BITS,
+        ARCH_FORCE_TAGGED_SVA,
+        ARCH_SHSTK_ENABLE,
+        ARCH_SHSTK_DISABLE,
+        ARCH_SHSTK_LOCK,
+        ARCH_SHSTK_UNLOCK,
+        ARCH_SHSTK_STATUS => return errorFromE(.INVAL),
+        else => return errorFromE(.INVAL)
+    }
+
+    return 0;
 }
 
 fn brk(new_brk: usize) callconv(.c) usize {
