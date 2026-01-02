@@ -136,12 +136,12 @@ pub inline fn getVirtLma(address: anytype) @TypeOf(address) {
 /// Translates a virtual address of the linear memory access (LMA) region to a physical.
 /// Can be used only with address returned from `getVirtLma`, UB otherwise.
 /// - Returns: The translated physical address.
-pub inline fn getPhysLma(address: anytype) @TypeOf(address) {
+pub inline fn getPhysLma(address: anytype) usize {
     const type_info = @typeInfo(@TypeOf(address));
 
     return switch (type_info) {
         .int, .comptime_int => address - lma_start,
-        .pointer => @ptrFromInt(@intFromPtr(address) - lma_start),
+        .pointer => @intFromPtr(address) - lma_start,
         else => @compileError(intPtrErrorStr),
     };
 }

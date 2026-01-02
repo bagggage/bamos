@@ -375,7 +375,7 @@ pub fn deinit() void {
     const table_size = block_table.entries.len * @sizeOf(Table.EntryList);
     const table_pages = std.math.divCeil(usize, table_size, vm.page_size) catch unreachable;
     const table_rank = std.math.log2_int_ceil(u32, @truncate(table_pages));
-    const table_phys = vm.getPhysLma(@ptrFromInt(block_table.entries.ptr));
+    const table_phys = vm.getPhysLma(block_table.entries.ptr);
 
     vm.PageAllocator.free(table_phys, table_rank);
     block_oma.deinit();

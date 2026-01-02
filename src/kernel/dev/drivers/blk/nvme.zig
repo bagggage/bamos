@@ -219,7 +219,7 @@ const Namespace = struct {
     pub fn handleIo(self: *Drive, request: *const Drive.io.Request) bool {
         const ns = &@as(*NamespaceDrive, @ptrCast(self)).derived;
         const pages = request.lba_num / (vm.page_size / self.lba_size);
-        const prp1 = @intFromPtr(vm.getPhysLma(request.lma_buf));
+        const prp1 = vm.getPhysLma(request.lma_buf);
         const prp2: usize = switch (pages) {
             0 => 0,
             1 => prp1 + vm.page_size,
@@ -276,7 +276,7 @@ const Namespace = struct {
         const cmd_id = ns.ctrl.admin_submission.tail +% 1;
 
         ns.ctrl.admin_fail = 0;
-        ns.ctrl.sendAdminCmd(ns.id, .identify, cmd_id, vm.getPhysLma(buffer), &.{}, true);
+        ns.ctrl.sendAdminCmd(ns.id, .identify, cmd_id, buffer, &.{}, true);
         ns.ctrl.adminInitialWait(cmd_id);
         if (ns.ctrl.admin_fail != 0) return error.CommandsFailed;
 
@@ -630,7 +630,7 @@ const Controller = struct {
     }
 
     fn deinitAdminQueues(self: *Controller) void {
-        vm.PageAllocator.free(@intFromPtr(vm.getPhysLma(self.admin_submission.ptr)), 1);
+        vm.PageAllocator.free(vm.getPhysLma(self.admin_submission.ptr), 1);
     }
 
     fn initIoQueues(self: *Controller) !void {
@@ -680,7 +680,7 @@ const Controller = struct {
             const cq = &self.io_completion[i];
             const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .create_completion_queue, cmd_id, @ptrCast(vm.getPhysLma(cq.ptr)), &.{
+            self.sendAdminCmd(0, .create_completion_queue, cmd_id, cq.ptr, &.{
                 id   | (@as(u32, cq.size - 1) << 16), // (doorbell id) | (size - 1)
                 0b11 | (@as(u32, id - 1) << 16) // (phys contiguous,intr enable) | (intr vector)
             }, false);
@@ -693,7 +693,7 @@ const Controller = struct {
             const sq = &self.io_submission[i];
             const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .create_submission_queue, cmd_id, @ptrCast(vm.getPhysLma(sq.ptr)), &.{
+            self.sendAdminCmd(0, .create_submission_queue, cmd_id, sq.ptr, &.{
                 id   | (@as(u32, sq_len - 1) << 16), // (doorbell id) | (size - 1)
                 0b01 | (@as(u32, id) << 16) // (phys contiguous) | (completion queue id)
             }, false);
@@ -735,7 +735,7 @@ const Controller = struct {
 
         // Free memory
         const phys = vm.getPhysLma(self.io_submission[0].ptr);
-        vm.PageAllocator.free(@intFromPtr(phys), self.io_queues_rank);
+        vm.PageAllocator.free(phys, self.io_queues_rank);
     }
 
     pub fn adminInitialWait(self: *Controller, cmd_id: u16) void {
@@ -756,7 +756,7 @@ const Controller = struct {
             const info: *volatile Info = @ptrFromInt(buffer);
             const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(phys_buffer), &.{
+            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(buffer), &.{
                 0x01 // (CNS) Controller identify
             }, true);
             self.adminInitialWait(cmd_id);
@@ -775,7 +775,7 @@ const Controller = struct {
             const ids: [*:0]volatile u32 = @ptrFromInt(buffer);
             const cmd_id = self.admin_submission.tail +% 1;
 
-            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(phys_buffer), &.{
+            self.sendAdminCmd(0, .identify, cmd_id, @ptrFromInt(buffer), &.{
                 0x02 // (CNS) Namespace ID list
             }, true);
 
@@ -812,7 +812,7 @@ const Controller = struct {
         self.admin_lock.lock();
         defer self.admin_lock.unlock();
 
-        const prp1: usize = if (data) |ptr| @intFromPtr(ptr) else 0;
+        const prp1: usize = if (data) |ptr| vm.getPhysLma(ptr) else 0;
         const cmd = self.admin_submission.nextTail();
         cmd.* = SubmissionEntry.init(
             .{ .admin = command }, id,
