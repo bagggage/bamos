@@ -56,6 +56,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         .strip = true,
         .red_zone = false,
     });
+
     const kernel_obj = b.addObject(.{
         .name = "bamos",
         .root_module = b.createModule(.{
@@ -69,8 +70,31 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         }),
         .use_llvm = true
     });
+
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
     kernel_obj.addIncludePath(b.path("third-party/boot"));
+
+    const zon = @import("build.zig.zon");
+    const kernel_opts = b.addOptions();
+
+    const timestamp = makeTimestamp(b, optimize);
+    defer b.allocator.free(timestamp);
+
+    const build_string = b.fmt("{s}-{t}: Zig {f} # {s}", .{
+        zon.version, optimize, builtin.zig_version, timestamp
+    });
+    const kernel_ver = std.SemanticVersion.parse(zon.version) catch blk: {
+        const parse_fail = b.addFail("Failed to parse version from build.zig.zon");
+        kernel_obj.step.dependOn(&parse_fail.step);
+        break :blk std.SemanticVersion{.major = 0, .minor = 0, .patch = 0};
+    };
+
+    kernel_opts.addOption([]const u8, "os_name", "BamOS");
+    kernel_opts.addOption(std.SemanticVersion, "version", kernel_ver);
+    kernel_opts.addOption([]const u8, "version_string", b.fmt("{f}", .{kernel_ver}));
+    kernel_opts.addOption([]const u8, "build", build_string);
+
+    kernel_obj.root_module.addOptions("opts", kernel_opts);
 
     const maker_run = b.addRunArtifact(dbg_make_exe);
     maker_run.addArtifactArg(kernel_obj);
@@ -272,6 +296,29 @@ fn makeTools(b: *std.Build) void {
             .strip = true
         })
     });
+}
+
+fn makeTimestamp(b: *std.Build, optimize: std.builtin.OptimizeMode) []const u8 {
+    const timestamp: std.time.epoch.EpochSeconds = .{ .secs = @intCast(std.time.timestamp()) };
+    const day_secs = timestamp.getDaySeconds();
+    const day_year = timestamp.getEpochDay().calculateYearDay();
+    const day_month = day_year.calculateMonthDay();
+
+    const time_string = b.fmt(
+        "{:0>2}:{:0>2}:{:0>2}",
+        .{day_secs.getHoursIntoDay(), day_secs.getMinutesIntoHour(), day_secs.getSecondsIntoMinute()}
+    );
+    defer b.allocator.free(time_string);
+
+    const timestamp_postfix = switch (optimize) {
+        .Debug, .ReleaseSafe => "--:--:--",
+        else => time_string
+    };
+
+    return b.fmt(
+        "{} {t} {:0>4} {s}",
+        .{day_month.day_index + 1, day_month.month, day_year.year, timestamp_postfix}
+    );
 }
 
 fn getMkbootimg(b: *std.Build, step: *std.Build.Step) !std.Build.LazyPath {
