@@ -10,7 +10,6 @@ const std = @import("std");
 const boot = @import("../../boot.zig");
 const gdt = @import("gdt.zig");
 const lapic = @import("intr/lapic.zig");
-const regs = @import("regs.zig");
 const smp = @import("../../smp.zig");
 
 const Cpu = struct {
@@ -34,6 +33,8 @@ const Cpu = struct {
 };
 
 const CpuId = packed struct { a: u32, b: u32, c: u32, d: u32 };
+
+pub const regs = @import("regs.zig");
 
 pub const Context = @import("Context.zig");
 pub const intr = @import("intr.zig");
