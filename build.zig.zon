@@ -1,6 +1,6 @@
 .{
     .name = .bamos,
-    .version = "0.0.1",
+    .version = "0.0.1-dev",
 
     .fingerprint = 0xcd2c4ccb5b1efab1, // Changing this has security and trust implications.
 
