@@ -185,7 +185,7 @@ pub fn getMappings() vm.Error![]MappingEntry {
 
 /// Frees the memory allocated for the mapping entries.
 pub inline fn freeMappings(mappings: []MappingEntry) void {
-    vm.PageAllocator.free(@intFromPtr(vm.getPhysLma(mappings.ptr)), 0);
+    vm.PageAllocator.free(vm.getPhysLma(mappings.ptr), 0);
 }
 
 /// Returns a pointer to the memory map.

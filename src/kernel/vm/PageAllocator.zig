@@ -287,7 +287,7 @@ inline fn getPageNodeBase(node: *Node) u32 {
 ///
 /// @export
 inline fn getPageNodePhys(node: *Node) usize {
-    return vm.getPhysLma(@intFromPtr(node));
+    return vm.getPhysLma(node);
 }
 
 inline fn clearPageBit(base: u32, rank: u8) void {
