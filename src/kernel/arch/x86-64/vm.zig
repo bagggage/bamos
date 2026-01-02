@@ -85,7 +85,7 @@ pub const PageTable = struct {
 
             const pt = PageTable.new() orelse return vm.Error.NoMemory;
 
-            pte.base = @truncate(@intFromPtr(vm.getPhysLma(pt)) / page_size);
+            pte.base = @truncate(vm.getPhysLma(pt) / page_size);
             pte.size = 0;
             pte.global = 0;
 
@@ -110,7 +110,7 @@ pub const PageTable = struct {
             } else if (level != 3 and self.size == 0) {
                 writer.print("{s}P{} [{}]: 0x{x}->0x{x}\n", .{
                     prefix, 4 - level, pte_idx,
-                    vm.getPhysLma(@intFromPtr(self)), self.getBase()
+                    vm.getPhysLma(self), self.getBase()
                 });
             } else {
                 writer.print("{s}P{} [{}] -> 0x{x} {} {s}\n", .{
@@ -198,7 +198,7 @@ pub const PageTable = struct {
                     pte[0] = template_pte;
                     pte[0].size = 0;
                     pte[0].global = 0;
-                    pte[0].base = @truncate(@intFromPtr(vm.getPhysLma(new_pt)) / page_size);
+                    pte[0].base = @truncate(vm.getPhysLma(new_pt) / page_size);
                 } else if (pte[0].size == 1) {
                     // Remap large page
                     try pte[0].remapLarge(pt_idx == 1);
@@ -461,7 +461,7 @@ pub inline fn getPageTable() *PageTable {
 }
 
 pub inline fn setPageTable(pt: *const PageTable) void {
-    const pt_phys = vm.getPhysLma(@intFromPtr(pt));
+    const pt_phys = vm.getPhysLma(pt);
     const cr3 = pt_phys | (regs.getCr3() & @as(u64, 0xFFF));
 
     regs.setCr3(cr3);
@@ -483,7 +483,7 @@ fn earlyMapLma() void {
     lma_end = lma_start + lma_size;
     heap_start = lma_end + lib.gb_size;
 
-    const pt = vm.getPhysLma(getPageTable());
+    const pt: *PageTable = @ptrFromInt(vm.getPhysLma(getPageTable()));
     const p4_idx = comptime PageTable.getPxeIdx(3, lma_start);
 
     const pt3: *PageTable = @ptrFromInt(boot.alloc(1).?);

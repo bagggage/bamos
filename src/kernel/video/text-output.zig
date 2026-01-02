@@ -47,8 +47,7 @@ pub fn init(framebuffer: *Framebuffer) !void {
 pub fn deinit() void {
     if (comptime use_texture == false) return;
 
-    const phys = vm.getPhysLma(font_tex.ptr);
-    vm.PageAllocator.free(@intFromPtr(phys), font_tex_rank);
+    vm.PageAllocator.free(vm.getPhysLma(font_tex.ptr), font_tex_rank);
 }
 
 /// Draws a single character at the specified row and column using the current color.
