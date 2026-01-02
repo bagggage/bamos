@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const opts = @import("opts");
 
 const arch = lib.arch;
 const boot = @import("boot.zig");
@@ -45,6 +46,8 @@ pub export fn main() noreturn {
 
     smp.preinit();
     arch.preinit();
+
+    log.info("{s} {s}", .{opts.os_name, opts.build});
 
     init(smp);
 
