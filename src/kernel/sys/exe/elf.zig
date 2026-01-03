@@ -9,6 +9,7 @@ const elf = std.elf;
 const exe = @import("../exe.zig");
 const lib = @import("../../lib.zig");
 const log = std.log.scoped(.@"exe.elf");
+const sys = @import("../../sys.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
@@ -106,32 +107,34 @@ fn loadProgramSegment(self: *exe.Binary, file: *vfs.File, phdr: *const elf.Phdr,
         (phdr.p_vaddr > 0 and !std.mem.isAligned(base + phdr.p_vaddr -| phdr.p_offset, phdr.p_align)))
     ) return error.BadFormat;
 
-    const map_flags = phdrFlagsToMapFlags(phdr.p_flags);
-    const pages_offset = phdr.p_offset / vm.page_size;
-
+    const virt = lib.misc.alignDown(usize, phdr.p_vaddr + base, vm.page_size);
     const offset_mod = phdr.p_offset % vm.page_size;
-    const virt = phdr.p_vaddr + base;
 
     const mem_size = phdr.p_memsz + offset_mod;
     const file_size = phdr.p_filesz + offset_mod;
 
-    const map_size = @min(file_size, mem_size);
-    const map_pages = (map_size + (vm.page_size - 1)) / vm.page_size;
-    const mem_pages = (mem_size + (vm.page_size - 1)) / vm.page_size;
+    const map_pages = vm.bytesToPages(@min(file_size, mem_size));
+    const mem_pages = vm.bytesToPages(mem_size);
+    const page_offset = vm.bytesToPagesExact(phdr.p_offset);
+    const map_flags = phdrFlagsToMapFlags(phdr.p_flags);
 
+    const addr_space = self.proc.addr_space;
     if (map_pages > 0) {
-        // Div ceil
-        _ = try self.proc.mmap(
-            file, virt, @truncate(pages_offset),
+        const map_unit = try sys.AddressSpace.MapUnit.new(
+            file, virt, @truncate(page_offset),
             @truncate(map_pages), .{ .map = map_flags }
         );
+        errdefer map_unit.delete(addr_space.page_table);
+        try addr_space.map(map_unit);
     }
 
     if (mem_pages > map_pages) {
-        _ = try self.proc.mmap(
+        const map_unit = try sys.AddressSpace.MapUnit.new(
             null, virt + (map_pages * vm.page_size), 0,
             @truncate(mem_pages - map_pages), .{ .map = map_flags }
         );
+        errdefer map_unit.delete(addr_space.page_table);
+        try addr_space.map(map_unit);
     }
 }
 

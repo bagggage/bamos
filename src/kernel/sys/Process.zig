@@ -265,35 +265,16 @@ pub fn pushTask(self: *Self, task: *sched.Task) void {
     self.tasks.prepend(&task.spec.user.node);
 }
 
-pub fn mmap(
-    self: *Self, file: ?*vfs.File, virt: ?usize,
-    page_offset: u32, pages: u32, flags: AddressSpace.MapUnit.Flags,
-) vfs.Error!usize {
-    if (file) |f| try f.validateAccess(flags.toPermissions());
-
-    const map_unit = vm.auto.alloc(AddressSpace.MapUnit) orelse return error.NoMemory;
-    errdefer vm.auto.free(AddressSpace.MapUnit, map_unit);
-
-    const base =
-        if (virt) |v|
-            lib.misc.alignDown(usize, v, vm.page_size)
-        else
-            self.addr_space.allocRegion(pages) orelse return error.NoMemory;
-
-    map_unit.* = .init(file, base, page_offset, pages, flags);
-    if (file) |f| try f.mmapPrepare(map_unit);
-
-    try self.addr_space.mapFixed(map_unit);
-    return map_unit.base();
-}
-
 pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) void {
-    if (!vm.isUserVirtAddr(address)) self.sendSignal(.SegFault);
+    const err = blk: {
+        if (!vm.isUserVirtAddr(address)) break :blk error.InvalidArgs;
+        self.addr_space.pageFault(address, cause) catch |err| break :blk err;
 
-    self.addr_space.pageFault(address, cause) catch |err| {
-        log.debug("page fault failed: {s}: {f}", .{@errorName(err), self.addr_space});
-        self.sendSignal(.SegFault);
+        return;
     };
+
+    log.debug("page fault failed: {s}: {f}", .{@errorName(err), self.addr_space});
+    self.sendSignal(.SegFault);
 }
 
 pub fn sendSignal(self: *Self, signal: Signal) void {

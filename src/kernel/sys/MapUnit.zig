@@ -80,6 +80,8 @@ pub fn init(
     file: ?*vfs.File, virt: usize,
     page_offset: u32, pages: u32, flags: Flags
 ) Self {
+    std.debug.assert(std.mem.isAligned(virt, vm.page_size));
+
     if (file) |f| f.ref();
     return .{
         .file = file,
@@ -93,6 +95,24 @@ pub fn init(
 pub inline fn deinit(self: *Self, pt: *vm.PageTable) void {
     self.unmap(pt);
     if (self.file) |f| f.deref();
+}
+
+pub fn new(
+    file: ?*vfs.File, virt: usize,
+    page_offset: u32, pages: u32, flags: Flags
+) vfs.Error!*Self {
+    const map_unit = vm.auto.alloc(Self) orelse return error.NoMemory;
+    errdefer map_unit.delete(undefined);
+
+    map_unit.* = .init(file, virt, page_offset, pages, flags);
+    if (file) |f| try f.mmapPrepare(map_unit);
+
+    return map_unit;
+}
+
+pub inline fn delete(self: *Self, pt: *vm.PageTable) void {
+    self.deinit(pt);
+    vm.auto.free(Self, self);
 }
 
 pub inline fn fromNode(node: *Node) *Self {
@@ -126,6 +146,16 @@ pub fn map(self: *Self, pt: *vm.PageTable) !void {
     if (self.flags.map.none) return;
 
     var node = self.region.page_list.first;
+    errdefer {
+        var tmp = self.region.page_list.first;
+        while (tmp) |n| : (tmp = n.next) {
+            if (tmp == node) break;
+
+            const page = vm.Page.fromNode(n);
+            page.unmap(pt, self.region.base);
+        }
+    }
+
     while (node) |n| : (node = n.next) {
         const page = vm.Page.fromNode(n);
         try page.map(pt, self.region.base, self.flags.map);
