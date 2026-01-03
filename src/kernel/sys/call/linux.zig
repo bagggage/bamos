@@ -10,8 +10,9 @@ const arch = lib.arch;
 const lib = @import("../../lib.zig");
 const linux = std.os.linux;
 const log = std.log.scoped(.@"sys.call.linux");
-const trace = std.log.scoped(.@"sys.call.trace");
+const sched = @import("../../sched.zig");
 const sys = @import("../../sys.zig");
+const trace = std.log.scoped(.@"sys.call.trace");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
@@ -29,6 +30,7 @@ fn initSyscallTable() [table_len]SyscallFn {
     }
 
     result[@intFromEnum(linux.SYS.brk)] = @ptrCast(&brk);
+    result[@intFromEnum(linux.SYS.mmap)] = @ptrCast(&mmap);
     result[@intFromEnum(linux.SYS.uname)] = @ptrCast(&uname);
 
     return result;
@@ -65,12 +67,12 @@ fn errorFromZig(e: vfs.Error) isize {
 
 pub inline fn badCallHandler(id: usize) isize {
     const proc = sys.Process.getCurrent();
-    const name = blk: {
-        const tag = std.enums.fromInt(linux.SYS, id) orelse break :blk null;
-        break :blk @tagName(tag);
-    };
+    const tag = std.enums.fromInt(linux.SYS, id);
+    const name = if (tag) |t| @tagName(t) else null;
 
     sys.call.badCallHandler(proc, id, name, .{});
+    if (tag == linux.SYS.exit) sched.pause();
+
     return errorFromE(.NOSYS);
 }
 
@@ -176,6 +178,58 @@ fn brk(new_brk: usize) callconv(.c) usize {
     }
 
     return new_brk;
+}
+
+fn mmap(virt: usize, len: usize, prot: c_int, flags: linux.MAP, fd: u32, offset: linux.off_t) usize {
+    trace.info("mmap(0x{x}, 0x{x}, {}, {any}, {}, {});", .{virt, len, prot, flags, fd, offset});
+
+    if (!std.mem.isAligned(virt, vm.page_size) or
+        !vm.isUserVirtAddr(virt +| len) or
+        @intFromEnum(flags.TYPE) == 0 or
+        flags.NONBLOCK or flags.POPULATE or flags.LOCKED or
+        flags.SYNC or flags.DENYWRITE or len == 0 or
+        (flags.FIXED and flags.FIXED_NOREPLACE) or
+        (flags.ANONYMOUS and offset != 0)
+    ) return @bitCast(errorFromE(.INVAL));
+
+    const mmap_flags: sys.AddressSpace.MapUnit.Flags = .{
+        .grow_down = flags.GROWSDOWN,
+        .shared = flags.TYPE != .PRIVATE,
+        .map = .{
+            .none = (prot == linux.PROT.NONE),
+            .exec = (prot & linux.PROT.EXEC) != 0,
+            .write = (prot & linux.PROT.WRITE) != 0,
+            .user = true,
+        }
+    };
+
+    const proc = sys.Process.getCurrent();
+    const file = if (!flags.ANONYMOUS) {
+        return @bitCast(errorFromE(.BADF));
+    } else null;
+
+    const map_unit = sys.AddressSpace.MapUnit.new(
+        file, virt,
+        vm.bytesToPagesExact(@intCast(offset)),
+        vm.bytesToPages(len), mmap_flags
+    ) catch |err| return @bitCast(errorFromZig(err));
+
+    _ = blk: {
+        if (flags.FIXED_NOREPLACE) {
+            break :blk proc.addr_space.map(map_unit);
+        } else if (flags.FIXED) {
+            break :blk proc.addr_space.mapReplace(map_unit);
+        } else if (virt == 0) {
+            break :blk proc.addr_space.mapAnyAddress(map_unit);
+        } else {
+            break :blk proc.addr_space.mapOrRebase(map_unit);
+        }
+    } catch |err| {
+        map_unit.delete(undefined);
+        return @bitCast(errorFromZig(err));
+    };
+
+    return map_unit.base();
 }
 
 fn uname(buf: *linux.utsname) isize {
