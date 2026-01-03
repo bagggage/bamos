@@ -57,11 +57,10 @@ pub fn deinit(self: *Self) void {
 
     while (self.map_units.popFirst()) |n| {
         const map_unit = MapUnit.fromNode(n);
-
-        map_unit.deinit(self.page_table);
-        vm.auto.free(MapUnit, map_unit);
+        map_unit.delete(self.page_table);
     }
 
+    self.rb_tree.root = null;
     self.page_table.free();
 }
 
@@ -78,41 +77,11 @@ pub inline fn deref(self: *Self) void {
     if (self.users.put()) self.delete();
 }
 
-pub fn allocRegion(self: *Self, pages: u32) ?usize {
-    const size = pages * vm.page_size;
-
-    // TODO: More efficient searching for the address?
-    //       The allocated address maybe allocated twise,
-    //       if two threads call this simultaneously.
-    self.map_lock.readLock();
-    defer self.map_lock.readUnlock();
-
-    var base_unit = self.heap orelse MapUnit.fromRbNode(self.rb_tree.first() orelse return vm.page_size);
-    var free_base = base_unit.top();
-
-    if (free_base + size > vm.max_user_heap_addr) return null;
-
-    var next_node = base_unit.rb_node.next();
-    while (next_node) |n| : (next_node = n.next()) {
-        const next_unit = MapUnit.fromRbNode(n);
-        const free_size = next_unit.base() - free_base;
-
-        if (free_size >= size) return free_base;
-
-        base_unit = next_unit;
-        free_base = base_unit.top();
-
-        if (free_base + size > vm.max_user_heap_addr) return null;
-    }
-
-    return free_base;
-}
-
 pub fn heapInit(self: *Self, base: usize) vfs.Error!void {
     std.debug.assert(self.heap == null and vm.isUserVirtAddr(base));
 
-    const heap = vm.auto.alloc(MapUnit) orelse return error.NoMemory;
-    heap.* = .init(null, base, 0, 0, .{ .map = .{ .user = true, .write = true } });
+    const heap = try MapUnit.new(null, base, 0, 0, .{ .map = .{ .user = true, .write = true } });
+    errdefer vm.auto.free(MapUnit, heap);
 
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
@@ -172,16 +141,6 @@ pub fn heapShrink(self: *Self, pages: u32) vm.Error!void {
     }
 }
 
-pub fn mapRegion(self: *Self, region: *const vm.VirtualRegion, flags: MapUnit.Flags) vfs.Error!void {
-    const map_unit = vm.auto.alloc(MapUnit) orelse return error.NoMemory;
-    errdefer vm.auto.free(MapUnit, map_unit);
-
-    map_unit.* = .init(null, region.base, 0, region.pagesNum(), flags);
-    map_unit.region = region.*;
-
-    try self.map(map_unit);
-}
-
 pub fn map(self: *Self, map_unit: *MapUnit) vfs.Error!void {
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
@@ -193,7 +152,41 @@ pub fn map(self: *Self, map_unit: *MapUnit) vfs.Error!void {
     self.map_units.prepend(&map_unit.node);
 }
 
-pub fn mapFixed(self: *Self, map_unit: *MapUnit) vfs.Error!void {
+pub fn mapAnyAddress(self: *Self, map_unit: *MapUnit) vfs.Error!void {
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
+    const old_base = map_unit.base();
+    errdefer map_unit.region.base = old_base;
+
+    map_unit.region.base = try self.allocRegion(map_unit.page_capacity);
+
+    if (self.rb_tree.insert(&map_unit.rb_node) != null) unreachable;
+    errdefer self.rb_tree.remove(&map_unit.rb_node);
+
+    try map_unit.map(self.page_table);
+    self.map_units.prepend(&map_unit.node);
+}
+
+pub fn mapOrRebase(self: *Self, map_unit: *MapUnit) vfs.Error!void {
+    const old_base = map_unit.base();
+    errdefer map_unit.region.base = old_base;
+
+    while (true) {
+        self.map(map_unit) catch |err| {
+            if (err != error.Exists) return err;
+
+            self.map_lock.readLock();
+            defer self.map_lock.readUnlock();
+
+            map_unit.region.base = try self.allocRegion(map_unit.page_capacity);
+            continue;
+        };
+        break;
+    }
+}
+
+pub fn mapReplace(self: *Self, map_unit: *MapUnit) vfs.Error!void {
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
@@ -233,6 +226,14 @@ pub fn mapFixed(self: *Self, map_unit: *MapUnit) vfs.Error!void {
 
     try map_unit.map(self.page_table);
     self.map_units.prepend(&map_unit.node);
+}
+
+pub fn mapRegion(self: *Self, region: *const vm.VirtualRegion, flags: MapUnit.Flags) vfs.Error!void {
+    const map_unit = try MapUnit.new(null, region.base, 0, region.pagesNum(), flags);
+    errdefer map_unit.delete(undefined);
+
+    map_unit.region = region.*;
+    try self.map(map_unit);
 }
 
 pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) vfs.Error!void {
