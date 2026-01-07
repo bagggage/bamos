@@ -76,7 +76,7 @@ pub fn init() vm.Error!void {
     const virt_pool = vm.getVirtLma(mem_pool);
 
     log.warn("mem pool size: {} bytes ~ {} KiB", .{bitmap_size, @as(usize, bitmap_pages) * (vm.page_size / lib.kb_size)});
-    initAreas(virt_pool, bitmap_size);
+    initAreas(virt_pool, bitmap_size, max_pages);
 
     allocated_pages += bitmap_pages;
     allocated_pages += @intCast((@intFromPtr(vm.kernel_end) - @intFromPtr(vm.kernel_start)) / vm.page_size);
@@ -217,19 +217,21 @@ pub inline fn getAllocatedPages() u32 {
 
 /// Initializes the free areas and bitmap based on the memory map.
 /// Sets up the bitmaps and populates the free areas with initial free nodes.
-fn initAreas(bitmap_base: usize, bitmap_size: u32) void {
+fn initAreas(bitmap_base: usize, bitmap_size: u32, pages: u32) void {
     const mem_map = boot.getMemMap();
 
     var curr_bitmap_base = bitmap_base;
     var curr_bitmap_size = std.math.divCeil(u32, bitmap_size, 2) catch unreachable;
+    var curr_bitmap_bits = std.math.divCeil(u32, pages, 2) catch unreachable;
 
     // Initialize bitmaps
     for (0..max_areas) |i| {
-        const bits: [*]u8 = @ptrFromInt(curr_bitmap_base);
-        free_areas[i].bitmap = .init(bits[0..curr_bitmap_size], true);
+        const bytes: [*]u8 = @ptrFromInt(curr_bitmap_base);
+        free_areas[i].bitmap = .init(bytes[0..curr_bitmap_size], curr_bitmap_bits, true);
 
         curr_bitmap_base += curr_bitmap_size;
         curr_bitmap_size = @max((curr_bitmap_size >> 1) + (curr_bitmap_size & 1), 1);
+        curr_bitmap_bits = @max((curr_bitmap_bits >> 1) + (curr_bitmap_bits & 1), 1);
     }
 
     // Fill free lists

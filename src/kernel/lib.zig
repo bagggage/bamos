@@ -1,6 +1,6 @@
 //! # Kernel utilities library
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -11,6 +11,7 @@ pub const is_debug = (builtin.mode == .Debug or builtin.mode == .ReleaseSafe);
 pub const fp_scale = 32;
 
 pub const byte_size = 8;
+pub const byte_shift = 3;
 pub const kb_size = 1024;
 pub const mb_size = kb_size * 1024;
 pub const gb_size = mb_size * 1024;
@@ -39,7 +40,8 @@ pub const AnyData = struct {
 pub const atomic = @import("lib/atomic.zig");
 pub const AutoHashTable = hash_table.AutoHashTable;
 pub const BinaryTree = @import("lib/binary-tree.zig").BinaryTree;
-pub const Bitmap = @import("lib/Bitmap.zig");
+pub const Bitmap = bitmap.Bitmap;
+pub const BitmapUnbounded = bitmap.BitmapUnbounded;
 pub const hash_table = @import("lib/hash-table.zig");
 pub const HashTable = hash_table.HashTable;
 pub const Heap = @import("lib/Heap.zig");
@@ -54,4 +56,5 @@ pub const rcu = @import("lib/rcu.zig");
 pub const sync = @import("lib/sync.zig");
 pub const VirtualArray = @import("lib/virtual-array.zig").VirtualArray;
 
+const bitmap = @import("lib/bitmap.zig");
 const num_alloc = @import("lib/num-alloc.zig");
