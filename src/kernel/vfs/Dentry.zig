@@ -234,6 +234,8 @@ pub fn open(self: *Dentry, perm: vfs.Permissions) Error!*File {
     errdefer self.deref();
 
     const file = vm.auto.alloc(File) orelse return error.NoMemory;
+    errdefer vm.auto.free(File, file);
+
     file.* = .{
         .dentry = self,
         .perm = perm
