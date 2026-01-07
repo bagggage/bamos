@@ -1,6 +1,6 @@
 //! # Linux ABI compatible syscalls implementation
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -10,6 +10,7 @@ const arch = lib.arch;
 const lib = @import("../../lib.zig");
 const linux = std.os.linux;
 const log = std.log.scoped(.@"sys.call.linux");
+const posix = std.posix;
 const sched = @import("../../sched.zig");
 const sys = @import("../../sys.zig");
 const trace = std.log.scoped(.@"sys.call.trace");
@@ -31,12 +32,18 @@ fn initSyscallTable() [table_len]SyscallFn {
 
     result[@intFromEnum(linux.SYS.brk)] = @ptrCast(&brk);
     result[@intFromEnum(linux.SYS.mmap)] = @ptrCast(&mmap);
+    result[@intFromEnum(linux.SYS.open)] = @ptrCast(&open);
+    result[@intFromEnum(linux.SYS.read)] = @ptrCast(&read);
+    result[@intFromEnum(linux.SYS.readv)] = @ptrCast(&readv);
     result[@intFromEnum(linux.SYS.uname)] = @ptrCast(&uname);
+    result[@intFromEnum(linux.SYS.write)] = @ptrCast(&write);
+    result[@intFromEnum(linux.SYS.writev)] = @ptrCast(&writev);
 
     return result;
 }
 
 inline fn errorFromE(comptime e: linux.E) isize {
+    trace.info("return error: {t}", .{e});
     const code: isize = comptime @intFromEnum(e);
     return -code;
 }
@@ -44,25 +51,37 @@ inline fn errorFromE(comptime e: linux.E) isize {
 fn errorFromZig(e: vfs.Error) isize {
     return switch (e) {
         error.BadDentry,
-        error.BadInode       => errorFromE(.BADF),
+        error.BadInode,
+        error.BadFileDescriptor => errorFromE(.BADF),
         error.BadLbaSize,
-        error.BadName        => errorFromE(.INVAL),
-        error.BadOperation   => errorFromE(.OPNOTSUPP),
-        error.BadSuperblock  => errorFromE(.INVAL),
-        error.Busy           => errorFromE(.BUSY),
-        error.DevMajorLimit  => errorFromE(.BUSY),
-        error.DevMinorLimit  => errorFromE(.BUSY),
-        error.Exists         => errorFromE(.EXIST),
-        error.InvalidArgs    => errorFromE(.INVAL),
-        error.IoFailed       => errorFromE(.IO),
-        error.MaxSize        => errorFromE(.FBIG),
-        error.NoAccess       => errorFromE(.ACCES),
-        error.NoEnt          => errorFromE(.NOENT),
-        error.NoMemory       => errorFromE(.NOMEM),
-        error.SegFault       => errorFromE(.FAULT),
+        error.BadName           => errorFromE(.INVAL),
+        error.BadOperation      => errorFromE(.OPNOTSUPP),
+        error.BadSuperblock     => errorFromE(.INVAL),
+        error.Busy              => errorFromE(.BUSY),
+        error.DevMajorLimit     => errorFromE(.BUSY),
+        error.DevMinorLimit     => errorFromE(.BUSY),
+        error.Exists            => errorFromE(.EXIST),
+        error.InvalidArgs       => errorFromE(.INVAL),
+        error.IoFailed          => errorFromE(.IO),
+        error.MaxSize           => errorFromE(.FBIG),
+        error.NoAccess          => errorFromE(.ACCES),
+        error.NoEnt             => errorFromE(.NOENT),
+        error.NoMemory          => errorFromE(.NOMEM),
+        error.SegFault          => errorFromE(.FAULT),
         error.NoFs,
-        error.Uninitialized => errorFromE(.NODEV)
+        error.Uninitialized     => errorFromE(.NODEV)
     };
+}
+
+inline fn validateMemoryArgs(base: usize, len: usize) vm.Error!void {
+    if (!vm.isUserVirtAddr(base) or !vm.isUserVirtAddr(base +| len)) {
+        return error.SegFault;
+    }
+}
+
+inline fn validateFileMemoryArgs(fd: linux.fd_t, base: usize, len: usize) vfs.Error!void {
+    if (fd < 0) return error.BadFileDescriptor;
+    try validateMemoryArgs(base, len);
 }
 
 pub inline fn badCallHandler(id: usize) isize {
@@ -104,6 +123,8 @@ fn archPrCtl(op: c_int, addr: usize) isize {
     const ARCH_SHSTK_STATUS = 0x5005;
 
     trace.info("arch_prctl({x}, 0x{x})", .{op, addr});
+
+    validateMemoryArgs(addr, @sizeOf(usize)) catch return errorFromE(.FAULT);
     const dest: ?*usize = @ptrFromInt(addr);
 
     switch (op) {
@@ -180,7 +201,7 @@ fn brk(new_brk: usize) callconv(.c) usize {
     return new_brk;
 }
 
-fn mmap(virt: usize, len: usize, prot: c_int, flags: linux.MAP, fd: u32, offset: linux.off_t) usize {
+fn mmap(virt: usize, len: usize, prot: c_int, flags: linux.MAP, fd: linux.fd_t, offset: linux.off_t) usize {
     trace.info("mmap(0x{x}, 0x{x}, {}, {any}, {}, {});", .{virt, len, prot, flags, fd, offset});
 
     if (!std.mem.isAligned(virt, vm.page_size) or
@@ -232,10 +253,78 @@ fn mmap(virt: usize, len: usize, prot: c_int, flags: linux.MAP, fd: u32, offset:
     return map_unit.base();
 }
 
+fn open(path: [*c]const u8, flags: linux.O, mode: linux.mode_t) isize {
+    trace.info("open(0x{x}, {any}, 0x{x})", .{@intFromPtr(path), flags, mode});
+
+    if (!vm.isUserVirtAddr(@intFromPtr(path))) return @intCast(errorFromE(.FAULT));
+
+    const proc = sys.Process.getCurrent();
+    if (proc.files.isFull()) return @intCast(errorFromE(.MFILE));
+
+    const path_slice = path[0..std.mem.len(path)];
+    const dentry = vfs.lookup(
+        proc.root_dir, proc.work_dir, path_slice
+    ) catch |err| return @intCast(errorFromZig(err));
+    defer dentry.deref();
+
+    const inode = dentry.inode;
+    if (inode.type == .directory and (flags.ACCMODE != .RDONLY or !flags.DIRECTORY)) return @intCast(errorFromE(.ISDIR));
+    if (inode.type != .directory and flags.DIRECTORY) return @intCast(errorFromE(.NOTDIR));
+
+    const role = inode.getRole(proc.uid, proc.gid);
+    const perm: vfs.Permissions = switch (flags.ACCMODE) {
+        .RDONLY => .r,
+        .WRONLY => .w,
+        .RDWR => .rw,
+    };
+
+    if (!inode.checkAccess(perm, role)) return @intCast(errorFromE(.ACCES));
+    const desc = proc.files.open(dentry, perm) catch |err| {
+        if (err == error.MaxSize) return @bitCast(errorFromE(.NFILE));
+        return @bitCast(errorFromZig(err));
+    };
+
+    return @intCast(desc.idx);
+}
+
+fn read(fd: linux.fd_t, buf: [*]u8, len: usize) isize {
+    trace.info("read({}, 0x{x}, {})", .{fd, @intFromPtr(buf), len});
+
+    validateFileMemoryArgs(fd, @intFromPtr(buf), len) catch |err| return errorFromZig(err);
+
+    const proc = sys.Process.getCurrent();
+    const file = proc.files.get(@intCast(fd)) orelse return errorFromE(.BADF);
+    defer file.deref();
+
+    const readed = file.read(buf[0..len]) catch |err| return errorFromZig(err);
+    return @intCast(readed);
+}
+
+fn readv(fd: linux.fd_t, iov: [*]posix.iovec, num: c_int) isize {
+    trace.info("readv({}, 0x{x}, {})", .{fd, @intFromPtr(iov), num});
+
+    if (num <= 0) return errorFromE(.INVAL);
+    validateFileMemoryArgs(
+        fd, @intFromPtr(iov), @intCast(num * @sizeOf(posix.iovec))
+    ) catch |err| return errorFromZig(err);
+
+    const proc = sys.Process.getCurrent();
+    const file = proc.files.get(@intCast(fd)) orelse return errorFromE(.BADF);
+    defer file.deref();
+
+    var readed: usize = 0;
+    for (iov[0..@intCast(num)]) |*io| {
+        validateMemoryArgs(@intFromPtr(io.base), io.len) catch return errorFromE(.FAULT);
+        readed += file.read(io.base[0..io.len]) catch |err| return errorFromZig(err);
+    }
+
+    return @intCast(readed);
+}
+
 fn uname(buf: *linux.utsname) isize {
     trace.info("uname(0x{x})", .{@intFromPtr(buf)});
 
-    if (!vm.isUserVirtAddr(@intFromPtr(buf))) return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(buf), @sizeOf(linux.utsname)) catch return errorFromE(.FAULT);
     @memset(std.mem.asBytes(buf), 0);
 
     const sysname = opts.os_name;
@@ -249,4 +338,38 @@ fn uname(buf: *linux.utsname) isize {
     @memcpy(buf.machine[0..machine.len], machine);
 
     return 0;
+}
+
+fn write(fd: linux.fd_t, buf: [*]const u8, len: usize) isize {
+    trace.info("write({}, 0x{x}, {})", .{fd, @intFromPtr(buf), len});
+
+    validateFileMemoryArgs(fd, @intFromPtr(buf), len) catch |err| return errorFromZig(err);
+
+    const proc = sys.Process.getCurrent();
+    const file = proc.files.get(@intCast(fd)) orelse return errorFromE(.BADF);
+    defer file.deref();
+
+    const writen = file.write(buf[0..len]) catch |err| return errorFromZig(err);
+    return @intCast(writen);
+}
+
+fn writev(fd: linux.fd_t, iov: [*]posix.iovec_const, num: c_int) isize {
+    trace.info("writev({}, 0x{x}, {})", .{fd, @intFromPtr(iov), num});
+
+    if (num <= 0) return errorFromE(.INVAL);
+    validateFileMemoryArgs(
+        fd, @intFromPtr(iov), @intCast(num * @sizeOf(posix.iovec_const))
+    ) catch |err| return errorFromZig(err);
+
+    const proc = sys.Process.getCurrent();
+    const file = proc.files.get(@intCast(fd)) orelse return errorFromE(.BADF);
+    defer file.deref();
+
+    var writen: usize = 0;
+    for (iov[0..@intCast(num)]) |*io| {
+        validateMemoryArgs(@intFromPtr(io.base), io.len) catch return errorFromE(.FAULT);
+        writen += file.write(io.base[0..io.len]) catch |err| return errorFromZig(err);
+    }
+
+    return @intCast(writen);
 }
