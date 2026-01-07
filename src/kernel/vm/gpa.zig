@@ -69,6 +69,8 @@ const HugeFrame = struct {
 const HugeTree = lib.BinaryTree(HugeFrame, HugeFrame.cmp);
 const HugeNode = HugeTree.Node;
 
+pub const max_alloc_size = (vm.PageAllocator.max_alloc_pages * vm.page_size);
+
 /// High-level general purpose allocator interface.
 /// Implements `std.mem.Allocator` interface for use with Zig Standard Library `std`.
 pub const std_interface = std.mem.Allocator{
