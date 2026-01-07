@@ -1,6 +1,6 @@
 //! # Device virtual file system
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -127,7 +127,7 @@ var fs = vfs.FileSystem.init(
 );
 
 var root: *vfs.Dentry = undefined;
-var major_bitmap: lib.Bitmap = .{};
+var major_bitmap: lib.BitmapUnbounded = undefined;
 var major_lock: lib.sync.Spinlock = .{};
 
 var inode_idx: u32 = init_inode_idx;
@@ -154,7 +154,7 @@ pub fn allocMajor() ?u16 {
     major_lock.lock();
     defer major_lock.unlock();
 
-    const idx = major_bitmap.find(false) orelse return null;
+    const idx = major_bitmap.find(max_major, false) orelse return null;
     major_bitmap.set(idx);
 
     return @truncate(idx);

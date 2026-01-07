@@ -6,7 +6,7 @@
 //! This allocator is suitable for scenarios where objects of the same size are frequently allocated and freed,
 //! offering low fragmentation and quick allocations.
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -29,13 +29,12 @@ const Bucket = struct {
     /// - `capacity`: The number of objects that can be stored in this bucket.
     /// - `pool_addr`: The virtual address of the memory pool.
     pub fn init(bitmap_addr: usize, capacity: usize, pool_addr: usize) Bucket {
-        const bits: [*]u8 = @ptrFromInt(bitmap_addr);
-        const bitmap_size = std.math.divCeil(usize, capacity, lib.byte_size) catch unreachable;
+        const bytes: [*]u8 = @ptrFromInt(bitmap_addr);
+        const bitmap_size = (capacity + (lib.byte_size - 1)) >> lib.byte_shift;
 
-        defer bits[bitmap_size - 1] = @as(u8, 0xFF) << @truncate(capacity % lib.byte_size);
         return .{
             .pool_addr = pool_addr,
-            .bitmap = .init(bits[0..bitmap_size], false)
+            .bitmap = .init(bytes[0..bitmap_size], capacity, false)
         };
     }
 
@@ -70,7 +69,7 @@ const Bucket = struct {
     /// - `addr`: The address to check.
     /// - Returns: `true` if the address is within this bucket's pool, `false` otherwise.
     pub inline fn isContainingAddr(self: *@This(), addr: usize) bool {
-        return (addr >= self.pool_addr and addr < @intFromPtr(self.bitmap.bits.ptr));
+        return (addr >= self.pool_addr and addr < @intFromPtr(self.bitmap.unbounded.bytes));
     }
 };
 

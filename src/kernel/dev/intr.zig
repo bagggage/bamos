@@ -239,8 +239,8 @@ const Cpu = struct {
     bitmap: lib.Bitmap = .{},
     allocated: u16 = 0,
 
-    pub fn init(bits: []u8) Cpu {
-        return .{ .bitmap = .init(bits, false) };
+    pub fn init(bytes: []u8) Cpu {
+        return .{ .bitmap = .init(bytes, bytes.len * lib.byte_size, false) };
     }
 
     pub fn allocVector(self: *Cpu) ?u16 {
