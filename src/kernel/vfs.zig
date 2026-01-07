@@ -28,6 +28,7 @@ pub const Superblock = @import("vfs/Superblock.zig");
 
 pub const Error = vm.Error || parts.Error || error {
     BadDentry,
+    BadFileDescriptor,
     BadInode,
     BadOperation,
     BadSuperblock,
