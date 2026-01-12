@@ -1,6 +1,6 @@
 //! # Symmetric multiprocessing
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -11,6 +11,7 @@ const lib = @import("lib.zig");
 const log = std.log.scoped(.smp);
 const sys = @import("sys.zig");
 const sched = @import("sched.zig");
+const intr = @import("dev.zig").intr;
 const vm = @import("vm.zig");
 
 /// Index of the CPU that boots the system.
@@ -26,6 +27,7 @@ pub const LocalData = struct {
 
     scheduler: sched.Scheduler = .{},
     nested_intr: std.atomic.Value(u8) = .init(0),
+    immediate_intrs: intr.ImmediateHandler.List = .{},
     arch_specific: arch.CpuLocalData = undefined,
 
     pub inline fn isInInterrupt(self: *const LocalData) bool {

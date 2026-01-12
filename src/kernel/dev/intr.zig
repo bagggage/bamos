@@ -1,6 +1,6 @@
 //! # Interrupt subsystem
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -15,6 +15,13 @@ const smp = @import("../smp.zig");
 const vm = @import("../vm.zig");
 
 const cpu_any: u16 = 0xFFFF;
+
+pub const Error = error {
+    NoMemory,
+    NoVector,
+    IntrBusy,
+    AlreadyUsed,
+};
 
 pub const Chip = struct {
     pub const Operations = struct {
@@ -63,13 +70,6 @@ pub const Chip = struct {
     }
 };
 
-pub const Error = error {
-    NoMemory,
-    NoVector,
-    IntrBusy,
-    AlreadyUsed,
-};
-
 pub const TriggerMode = enum(u2) {
     edge,
     level_high,
@@ -92,6 +92,22 @@ pub const Handler = struct {
     node: Node = .{},
 
     inline fn fromNode(node: *Node) *Handler {
+        return @fieldParentPtr("node", node);
+    }
+};
+
+pub const ImmediateHandler = struct {
+    pub const List = std.SinglyLinkedList;
+    pub const Fn = *const fn(?*anyopaque) void;
+
+    const Node = List.Node;
+
+    ctx: ?*anyopaque = null,
+    func: Fn,
+
+    node: Node = .{},
+
+    inline fn fromNode(node: *Node) *ImmediateHandler {
         return @fieldParentPtr("node", node);
     }
 };
@@ -460,6 +476,23 @@ pub export fn releaseIrq(pin: u8, device: *const dev.Device) void {
     freeVector(irq.vector);
 }
 
+fn handleImmediates(local: *smp.LocalData) void {
+    while (true) {
+        const handler = blk: {
+            disableForCpu();
+            defer enableForCpu();
+
+            const temp = local.immediate_intrs.first orelse break;
+            local.immediate_intrs.first = if (temp.next == temp) null else temp.next;
+
+            break :blk ImmediateHandler.fromNode(temp);
+        };
+
+        handler.func(handler.ctx);
+        handler.node.next = null;
+    }
+}
+
 export fn handleIrq(pin: u8) void {
     @setRuntimeSafety(false);
     const local = smp.getLocalData();
@@ -579,6 +612,25 @@ pub fn freeVector(vec: Vector) void {
 //
 //    vm.obj.free(SoftHandler, node.data);
 //}
+
+pub fn scheduleImmediate(intr: *ImmediateHandler) void {
+    const local = smp.getLocalData();
+
+    // Immediate handler can be scheduled only in IRQ context and
+    //only once after interrupt is received.
+    std.debug.assert(
+        local.isInInterrupt() and
+        isEnabledForCpu() == false
+    );
+
+    // Is already scheduled?
+    if (intr.node.next != null) return;
+
+    local.immediate_intrs.prepend(&intr.node);
+    if (local.immediate_intrs.first == &intr.node) {
+        intr.node.next = &intr.node;
+    }
+}
 
 pub fn scheduleSoft(intr: *SoftHandler) void {
     const soft_task = &soft_tasks[smp.getIdx()];
@@ -715,6 +767,8 @@ pub fn handlerExit(local: *smp.LocalData) void {
     local.scheduler.enablePreemptionNoResched();
 
     if (local.tryIfNotNestedInterrupt()) {
+        handleImmediates(local);
+
         if (local.scheduler.needRescheduling()) {
             local.scheduler.reschedule();
         } else {
