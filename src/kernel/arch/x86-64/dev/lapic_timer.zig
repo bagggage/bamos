@@ -1,5 +1,7 @@
 //! # LAPIC Timer driver
 
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const Clock = dev.classes.Clock;
@@ -34,20 +36,22 @@ const vtable: Timer.VTable = .{
     .setFrequency = setFrequencyCallback
 };
 
-var eval_lock: lib.sync.Spinlock = .init(.unlocked);
+var device: dev.Device = .init(.init(device_name), null);
 var timer: *Timer = undefined;
 
+var eval_lock: lib.sync.Spinlock = .init(.unlocked);
+
 pub fn init() !void {
+    dev.getKernelDriver().attachDevice(&device);
+
     timer = try dev.obj.new(Timer);
     errdefer dev.obj.free(Timer, timer);
 
+    timer.* = .init(&device, &vtable, 0, .system_high, .both, .once);
+
     try evalTimerFrequency();
+    try dev.obj.add(Timer, timer);
 
-    const device = try dev.getKernelDriver()
-        .addDevice(dev.Name.init(device_name), null);
-    errdefer dev.removeDevice(device);
-
-    timer.* = .init(device, &vtable, timer.base_frequency, .system_high, .both, .once);
     log.info("frequency: {} MHz, ns per tick: {}", .{timer.base_frequency / 1000_000, accur_config.ns_per_tick});
 }
 
