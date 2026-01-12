@@ -1,6 +1,6 @@
 //! # Device representation
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -24,19 +24,22 @@ pub const alloc_config: vm.auto.Config = .{
 name: dev.Name = .{},
 bus: *Bus,
 
-driver: ?*const Driver,
-driver_data: lib.AnyData,
+driver: ?*const Driver = null,
+driver_data: lib.AnyData = .{},
 
 node: Node = .{},
 
-pub fn new(name: dev.Name, bus: *Bus, driver: ?*const Driver, data: ?*anyopaque) ?*Self {
-    const self = vm.auto.alloc(Self) orelse return null;
-    self.* = .{
+pub fn init(name: dev.Name, data: ?*anyopaque) Self {
+    return .{
         .name = name,
-        .bus = bus,
-        .driver = driver,
+        .bus = undefined,
         .driver_data = .from(data),
     };
+}
+
+pub inline fn new(name: dev.Name, data: ?*anyopaque) ?*Self {
+    const self = vm.auto.alloc(Self) orelse return null;
+    self.* = init(name, data);
 
     return self;
 }

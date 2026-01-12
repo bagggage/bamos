@@ -1,6 +1,6 @@
 //! # Real-time Clock platform driver
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -58,11 +58,10 @@ const vtable: Clock.VTable = .{
     .configIrq = configIrq
 };
 
-var device: *dev.Device = undefined;
+var device: dev.Device = .init(.init(device_name), null);
 var regs: RtcRegs = .{};
 
 var clock: *Clock = undefined;
-
 var intr_callback: ?Clock.IntrCallbackFn = null;
 
 pub fn init() void {
@@ -77,27 +76,25 @@ pub inline fn getObject() *Clock {
 
 fn initDevice(self: *const dev.Driver) !void {
     regs = try RtcRegs.init();
-
-    device = try self.addDevice(dev.Name.init(device_name), null);
-    errdefer dev.removeDevice(device);
+    self.attachDevice(&device);
 
     clock = try dev.obj.new(Clock);
     errdefer dev.obj.free(Clock, clock);
 
     try dev.intr.requestIrq(
         rtc_irq,
-        device,
+        &device,
         irqHandler,
         .edge,
         false
     );
-    errdefer dev.intr.releaseIrq(rtc_irq, device);
+    errdefer dev.intr.releaseIrq(rtc_irq, &device);
 
     // Select status register A, and disable NMI (by setting the 0x80 bit).
     // Then write to CMOS/RTC RAM.
     cmos.write(0x8A, 0x20);
 
-    clock.* = .init(device, &vtable, rtc_frequency, .system_low);
+    clock.* = .init(&device, &vtable, rtc_frequency, .system_low);
     try dev.obj.add(Clock, clock);
 }
 

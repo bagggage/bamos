@@ -1,6 +1,6 @@
 //! # PCI Bus builtin driver
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -197,14 +197,15 @@ fn enumDevice(seg_idx: u16, bus_idx: u8, dev_idx: u8, func_idx: u8) !bool {
 
     errdefer dev_oma.free(pci_dev);
 
-    const device = bus.addDevice(
+    const device = dev.Device.new(
         try dev.Name.print(
             "{x:0>4}:{x:0>2}:{x:0>2}.{}",
             .{seg_idx,bus_idx,dev_idx,func_idx}
-        ), null, pci_dev
+        ), pci_dev
     ) orelse return error.NoMemory;
 
     pci_dev.device = device;
+    bus.addDevice(device, null);
 
     log.debug("device: {f}: VEN_ID 0x{x:0>4} : DEV_ID 0x{x:0>4}", .{
         device.name, vendor_id, pci_dev.id.device_id

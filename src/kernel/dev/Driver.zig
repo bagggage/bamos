@@ -1,6 +1,6 @@
 //! # Driver representation
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -63,8 +63,13 @@ pub inline fn removeDevice(self: *const Self, device: *Device) void {
     return self.ops.remove(device);
 }
 
-pub inline fn addDevice(self: *const Self, name: dev.Name, data: ?*anyopaque) !*Device {
-    return self.bus.addDevice(name, self, data) orelse return error.NoMemory;
+pub inline fn attachDevice(self: *const Self, device: *Device) void {
+    self.bus.addDevice(device, self);
+}
+
+pub inline fn detachDevice(self: *const Self, device: *Device) void {
+    std.debug.assert(device.driver == self);
+    self.bus.removeDevice(device);
 }
 
 pub inline fn fromNode(node: *Node) *Self {
