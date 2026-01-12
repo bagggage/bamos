@@ -1,5 +1,7 @@
 //! # Bus representation
 
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const Device = @import("Device.zig");
@@ -54,8 +56,14 @@ pub inline fn fromNode(node: *Node) *Self {
     return @fieldParentPtr("node", node);
 }
 
-pub export fn addDevice(self: *Self, name: dev.Name, driver: ?*const Driver, data: ?*anyopaque) ?*Device {
-    const device = Device.new(name, self, driver, data) orelse return null;
+pub export fn addDevice(self: *Self, device: *Device, driver: ?*const Driver) void {
+    std.debug.assert(
+        device.driver == null and
+        device.node.next == null and
+        device.node.prev == null
+    );
+    device.bus = self;
+
     if (driver) |drv| {
         {
             // FIXME
@@ -68,8 +76,6 @@ pub export fn addDevice(self: *Self, name: dev.Name, driver: ?*const Driver, dat
     } else {
         self.matchDevice(device);
     }
-
-    return device;
 }
 
 pub export fn removeDevice(self: *Self, device: *Device) void {
@@ -91,8 +97,6 @@ pub export fn removeDevice(self: *Self, device: *Device) void {
 
         self.unmatched_devs.remove(&device.node);
     }
-
-    device.delete();
 }
 
 pub export fn addDriver(self: *Self, driver: *Driver) void {

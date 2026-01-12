@@ -1,5 +1,7 @@
 //! # ACPI timer driver
 
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const acpi = dev.acpi;
@@ -35,11 +37,12 @@ inline fn isAvailable() bool {
 }
 
 fn initDevice(self: *const dev.Driver) !void {
-    const device = try self.addDevice(dev.Name.init(device_name), null);
-    errdefer dev.removeDevice(device);
-
     try initTimer();
     errdefer deinitTimer();
+
+    const device = dev.Device.new(.init(device_name), null) orelse return error.NoMemory;
+    self.attachDevice(device);
+    // Don't remove device on error, it should be registered in the system anyway
 
     const obj = try dev.obj.new(Timer);
     errdefer dev.obj.free(Timer, obj);

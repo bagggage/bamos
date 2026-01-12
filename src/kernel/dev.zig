@@ -1,6 +1,6 @@
 //! # Device module
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -130,7 +130,7 @@ var buses_lock: lib.sync.Spinlock = .init(.unlocked);
 /// @noexport
 const AutoInit = struct {
     const modules = .{
-        @import("dev/drivers/uart.zig"),
+        @import("dev/drivers/uart/8250.zig"),
         pci,
         @import("dev/drivers/blk/nvme.zig")
     };
@@ -183,16 +183,18 @@ pub export fn registerBus(bus: *Bus) void {
     log.info("{s} bus was registered", .{bus.name});
 }
 
-pub inline fn registerDevice(
-    comptime bus_name: []const u8,
-    name: Name, driver: ?*const Driver, data: ?*anyopaque
-) !*Device {
+pub fn registerDevice(comptime bus_name: []const u8, dev: *Device, driver: ?*const Driver) !void {
     const bus = try getBus(bus_name);
-    return bus.addDevice(name, driver, data) orelse return error.NoMemory;
+    bus.addDevice(dev, driver);
 }
 
 pub inline fn removeDevice(dev: *Device) void {
     dev.bus.removeDevice(dev);
+}
+
+pub inline fn deleteDevice(dev: *Device) void {
+    dev.bus.removeDevice(dev);
+    dev.delete();
 }
 
 pub inline fn registerDriver(comptime bus_name: []const u8, driver: *Driver) !void {
