@@ -1,6 +1,6 @@
 //! # Virtual file system
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -244,9 +244,9 @@ pub const Permissions = enum(u16) {
 
     pub inline fn makeInt(user: Permissions, group: Permissions, others: Permissions) u16 {
         return
-            @intFromEnum(user) & @intFromEnum(Role.user)   |
-            @intFromEnum(group) & @intFromEnum(Role.group) |
-            @intFromEnum(others) & @intFromEnum(Role.others)
+            (@intFromEnum(user) & @intFromEnum(Role.user))    |
+            (@intFromEnum(group) & @intFromEnum(Role.group))  |
+            (@intFromEnum(others) & @intFromEnum(Role.others))
         ;
     }
 
@@ -256,6 +256,28 @@ pub const Permissions = enum(u16) {
 
     pub inline fn checkAccess(perm: Permissions, access: Permissions) bool {
         return (@intFromEnum(access) & @intFromEnum(perm)) == @intFromEnum(access);
+    }
+
+    pub fn format(perm: Permissions, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        const Helper = enum(u8) {
+            @"---" = 0b000,
+            @"--x" = 0b001,
+            @"-w-" = 0b010,
+            @"-wx" = 0b011,
+            @"r--" = 0b100,
+            @"r-x" = 0b101,
+            @"rw-" = 0b110,
+            @"rwx" = 0b111,
+        };
+
+        const int = @intFromEnum(perm);
+        const user:   Helper = @enumFromInt(int >> 6);
+        const group:  Helper = @enumFromInt(int >> 3 & 0b111);
+        const others: Helper = @enumFromInt(int >> 0 & 0b111);
+
+        try writer.writeAll(@tagName(user));
+        try writer.writeAll(@tagName(group));
+        try writer.writeAll(@tagName(others));
     }
 };
 
