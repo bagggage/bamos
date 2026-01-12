@@ -4,6 +4,8 @@
 //! atomic execution of declared operations.
 //! The implementation may have a slight overhead compared to non-atomic ones.
 
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const sched = @import("../sched.zig");
@@ -35,7 +37,7 @@ pub fn RefCount(comptime UintType: type) type {
                 if (old == 0) return false;
                 if (self.value.cmpxchgWeak(
                     old, old + 1,
-                    .acquire, .monotonic)
+                    .release, .acquire)
                 ) |new_old| {
                     old = new_old; continue;
                 }
