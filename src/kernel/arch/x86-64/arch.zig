@@ -32,7 +32,15 @@ const Cpu = struct {
     }
 };
 
-const CpuId = packed struct { a: u32, b: u32, c: u32, d: u32 };
+const CpuId = packed struct {
+    a: u32, b: u32, c: u32, d: u32,
+
+    pub fn format(self: CpuId, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        try writer.print("eax: 0x{x}, ebx: 0x{x}, ecx: 0x{x}, edx: 0x{x}", .{
+            self.a, self.b, self.c, self.d
+        });
+    }
+};
 
 pub const regs = @import("regs.zig");
 
@@ -137,11 +145,39 @@ pub inline fn getCpuLocalData() *smp.LocalData {
 /// This function initializes the CPU's essential features and settings, such as enabling the
 /// No-Execute bit, system call extensions, and AVX.
 pub inline fn initCpu() void {
-    enableExtentions();
+    var efer = regs.getEfer();
+    efer.noexec_enable = 1;
+    efer.syscall_ext = 1;
+    regs.setEfer(efer);
+
+    var cr0 = regs.getCr0();
+    cr0 &= ~@as(u64, 1 << 2); // clear EM bit
+    cr0 |= @as(u64, 1 << 1);  // set MP bit
+    regs.setCr0(cr0);
+
+    const feat = cpuid(cpuid_features, undefined, undefined, undefined);
+    if (feat.c | (1 << 28) != feat.c) {
+        std.log.warn("AVX is not supported", .{});
+        return;
+    }
+
+    var cr4 = regs.getCr4();
+    cr4 |= @as(u64, 1 << 18); // enable OSXSAVE
+    regs.setCr4(cr4);
+
+    // Enable AVX
+    asm volatile (
+        \\ xor %rcx,%rcx
+        \\ xgetbv
+        \\ or $7, %rax
+        \\ xsetbv
+        ::: .{ .rax = true, .rcx = true, .rdx = true }
+    );
 }
 
 pub fn setupCpu(cpu_idx: u16) void {
     gdt.setupCpu();
+    syscall.init();
 
     intr.setupCpu(cpu_idx);
     intr.enableForCpu();
@@ -160,33 +196,6 @@ pub inline fn setupStack(stack: usize, ret: *const fn () noreturn) noreturn {
         : [stack] "{rdi}" (stack),
           [ret] "{rsi}" (ret),
     );
-}
-
-pub inline fn timestamp() usize {
-    return regs.getTsc();
-}
-
-/// Enables kernel needed CPUs extentions
-/// - syscall/sysret
-/// - non-executable pages
-inline fn enableExtentions() void {
-    var efer = regs.getEfer();
-    efer.noexec_enable = 1;
-    efer.syscall_ext = 1;
-    regs.setEfer(efer);
-}
-
-/// Enable AVX
-inline fn enableAvx() void {
-    asm volatile (
-        \\mov %%cr4,%%rax
-        \\or $0x40600,%%rax
-        \\mov %%rax,%%cr4
-        \\xor %%rcx,%%rcx
-        \\xgetbv
-        \\or $7,%%rax
-        \\xsetbv
-        ::: .{ .rcx = true, .rax = true, .rdx = true });
 }
 
 fn collectCpuInfo() void {
