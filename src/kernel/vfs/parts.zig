@@ -1,6 +1,6 @@
 //! # Partitions handling for block devices.
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -43,12 +43,12 @@ pub const Partition = struct {
 
     pub fn registerDevice(
         self: *Partition, name: dev.Name, num: devfs.DevNum,
-        fops: *const vfs.File.Operations, data: ?*anyopaque
+        ops: *const devfs.DevFile.Operations, data: ?*anyopaque
     ) !void {
         self.dev_file = .{
             .name = name,
             .num = num,
-            .fops = fops,
+            .ops = ops,
             .data = .from(data)
         };
         try devfs.registerBlockDev(&self.dev_file);
@@ -178,7 +178,7 @@ pub fn probe(drive: *Drive) Error!void {
         drive.parts.append(&part.node);
         errdefer drive.parts.remove(&part.node);
 
-        try part.registerDevice(dev_name, dev_num, &Drive.file_operations, drive);
+        try part.registerDevice(dev_name, dev_num, &Drive.devfile_ops, drive);
     }
 }
 

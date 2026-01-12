@@ -200,11 +200,10 @@ pub const Flags = packed struct {
     partitionable: bool = false
 };
 
-pub const file_operations: vfs.File.Operations = .{
-    .ioctl = undefined,
-    .mmapPrepare = undefined,
-    .read = filePartitionRead,
-    .write = undefined
+pub const devfile_ops: devfs.DevFile.Operations = .{
+    .fops = .{
+        .read = filePartitionRead,
+    }
 };
 
 base_part: vfs.parts.Partition,
@@ -254,7 +253,7 @@ pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: b
         try self.base_part.registerDevice(
             name,
             dev_num,
-            &file_operations,
+            &devfile_ops,
             self
         );
 

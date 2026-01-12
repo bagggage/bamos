@@ -52,13 +52,23 @@ pub const Region = struct {
 };
 
 pub const DevFile = struct {
+    pub const Operations = struct {
+        const OpenFn = *const fn (*DevFile, *vfs.File) vfs.Error!void;
+        const CloseFn = *const fn (*DevFile, *vfs.File) void;
+
+        open: ?OpenFn = null,
+        close: ?CloseFn = null,
+
+        fops: vfs.File.Operations = .{},
+    };
+
     const List = std.SinglyLinkedList;
     const Node = List.Node;
 
     name: dev.Name,
     num: DevNum,
 
-    fops: *const vfs.File.Operations,
+    ops: *const Operations,
     data: lib.AnyData = .{},
 
     node: Node = .{},
@@ -123,6 +133,7 @@ var fs = vfs.FileSystem.init(
         .makeDirectory = tmpfs.DentryOps.makeDirectory,
 
         .open = dentryOpen,
+        .close = dentryClose,
     },
 );
 
@@ -198,11 +209,19 @@ fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
 
 fn dentryOpen(dentry: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
     const devf = dentry.inode.fs_data.as(DevFile).?;
-    file.ops = devf.fops;
+    file.ops = &devf.ops.fops;
+
+    if (devf.ops.open) |open| try open(devf, file);
+}
+
+fn dentryClose(dentry: *const vfs.Dentry, file: *vfs.File) void {
+    const devf = dentry.inode.fs_data.as(DevFile).?;
+    if (devf.ops.close) |close| close(devf, file);
 }
 
 fn createInode(kind: vfs.Inode.Type) Error!*vfs.Inode {
     const inode = try tmpfs.createInode(kind);
+    inode.perm = vfs.Permissions.makeInt(.rw, .rw, .none);
     inode.index = inode_idx;
     inode_idx += 1;
 
