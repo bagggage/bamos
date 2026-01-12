@@ -190,6 +190,19 @@ pub inline fn setGdtr(gdtr: GDTR) void {
     );
 }
 
+pub inline fn getCr0() u64 {
+    return asm volatile ("mov %%cr0,%[res]"
+        : [res] "=r" (-> u64),
+    );
+}
+
+pub inline fn setCr0(cr0: u64) void {
+    asm volatile ("mov %[val],%%cr0"
+        :
+        : [val] "r" (cr0),
+    );
+}
+
 pub inline fn getCr2() u64 {
     return asm volatile ("mov %%cr2,%[res]"
         : [res] "=r" (-> u64),
@@ -212,6 +225,13 @@ pub inline fn setCr3(cr3: u64) void {
 pub inline fn getCr4() u64 {
     return asm volatile ("mov %%cr4,%[res]"
         : [res] "=r" (-> u64),
+    );
+}
+
+pub inline fn setCr4(cr4: u64) void {
+    asm volatile ("mov %[val],%%cr4"
+        :
+        : [val] "r" (cr4),
     );
 }
 

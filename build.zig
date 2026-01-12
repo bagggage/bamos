@@ -260,9 +260,9 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
 
     // Enable KVM on linux
     if (enable_kvm and builtin.os.tag == .linux and !enable_trace) {
-        qemu_run.addArgs(&.{
-            "-enable-kvm", "-cpu", "host"
-        });
+        qemu_run.addArgs(&.{"-enable-kvm", "-cpu", "host"});
+    } else {
+        qemu_run.addArgs(&.{"-cpu", "max"});
     }
 
     return qemu_run;
