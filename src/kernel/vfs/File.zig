@@ -66,6 +66,11 @@ pub fn read(self: *File, buf: []u8) Error!usize {
     return readed;
 }
 
+pub inline fn readAt(self: *File, offset: usize, buf: []u8) Error!usize {
+    std.debug.assert(self.dentry.inode.type != .directory);
+    return try self.ops.read(self, offset, buf);
+}
+
 pub fn readAll(self: *File, buf: []u8) Error!void {
     const offset = self.offset;
     const readed = try self.ops.read(self, offset, buf);
@@ -81,6 +86,11 @@ pub inline fn write(self: *File, buf: []const u8) Error!usize {
     self.offset = offset + size;
 
     return size;
+}
+
+pub inline fn writeAt(self: *File, offset: usize, buf: []const u8) Error!usize {
+    std.debug.assert(self.dentry.inode.type != .directory);
+    return try self.ops.write(self, offset, buf);
 }
 
 pub inline fn mmapPrepare(self: *File, map_unit: *sys.AddressSpace.MapUnit) Error!void {
