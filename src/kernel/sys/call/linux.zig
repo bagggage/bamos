@@ -35,6 +35,7 @@ fn initSyscallTable() [table_len]SyscallFn {
     result[@intFromEnum(linux.SYS.open)] = @ptrCast(&open);
     result[@intFromEnum(linux.SYS.read)] = @ptrCast(&read);
     result[@intFromEnum(linux.SYS.readv)] = @ptrCast(&readv);
+    result[@intFromEnum(linux.SYS.set_tid_address)] = @ptrCast(&setTidAddress);
     result[@intFromEnum(linux.SYS.uname)] = @ptrCast(&uname);
     result[@intFromEnum(linux.SYS.write)] = @ptrCast(&write);
     result[@intFromEnum(linux.SYS.writev)] = @ptrCast(&writev);
@@ -128,26 +129,10 @@ fn archPrCtl(op: c_int, addr: usize) isize {
     const dest: ?*usize = @ptrFromInt(addr);
 
     switch (op) {
-        ARCH_SET_GS => {
-            arch.intr.disableForCpu();
-            defer arch.intr.enableForCpu();
-
-            arch.regs.swapgs();
-            defer arch.regs.swapgs();
-
-            arch.regs.setMsr(arch.regs.MSR_GS_BASE, addr);
-        },
+        ARCH_SET_GS => arch.regs.setMsr(arch.regs.MSR_SWAPGS_BASE, addr),
         ARCH_SET_FS => arch.regs.setMsr(arch.regs.MSR_FS_BASE, addr),
         ARCH_GET_FS => dest.?.* = arch.regs.getMsr(arch.regs.MSR_FS_BASE),
-        ARCH_GET_GS => {
-            arch.intr.disableForCpu();
-            defer arch.intr.enableForCpu();
-
-            arch.regs.swapgs();
-            defer arch.regs.swapgs();
-
-            dest.?.* = arch.regs.getMsr(arch.regs.MSR_GS_BASE);
-        },
+        ARCH_GET_GS => dest.?.* = arch.regs.getMsr(arch.regs.MSR_SWAPGS_BASE),
         ARCH_GET_CPUID,
         ARCH_SET_CPUID,
         ARCH_GET_XCOMP_SUPP,
@@ -319,6 +304,13 @@ fn readv(fd: linux.fd_t, iov: [*]posix.iovec, num: c_int) isize {
     }
 
     return @intCast(readed);
+}
+
+fn setTidAddress(addr: usize) sys.Process.Pid {
+    trace.info("set_tid_address(0x{x})", .{addr});
+    log.warn("{t} is not yet implemented", .{linux.SYS.set_tid_address});
+
+    return sys.Process.getCurrent().pid;
 }
 
 fn uname(buf: *linux.utsname) isize {
