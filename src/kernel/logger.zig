@@ -3,14 +3,14 @@
 //! Provides implementation for `defaultLog(...)` used within `std.log`.
 //! Manages thread-safe text output with color formatting.
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
 
 const arch = lib.arch;
 const lib = @import("lib.zig");
-const serial = @import("dev/drivers/uart.zig");
+const serial = @import("dev/drivers/uart/8250.zig");
 const smp = @import("smp.zig");
 const sys = @import("sys.zig");
 const terminal = video.terminal;
@@ -139,8 +139,17 @@ pub fn defaultLog(
     comptime format: []const u8,
     args: anytype
 ) void {
+    const new_owner = smp.getIdx();
+    if (lock.isLocked() and new_owner == lock_owner) {
+        @branchHint(.cold);
+
+        tty_config.setColor(&log_writer, .bright_red) catch {};
+        log_writer.print("<LOGGER DEADLOCK>" ++ new_line, .{}) catch {};
+        return;
+    }
+
     lock.lock();
-    lock_owner = smp.getIdx();
+    lock_owner = new_owner;
     defer lock.unlock();
 
     logFmtPrint(
@@ -150,7 +159,6 @@ pub fn defaultLog(
         args
     ) catch |erro| {
         tty_config.setColor(&log_writer, .bright_red) catch {};
-
         log_writer.print("<LOGGER ERROR>: {s}", .{@errorName(erro)}) catch {
             log_writer.writeAll("<LOGGER PANIC>") catch {};
         };
