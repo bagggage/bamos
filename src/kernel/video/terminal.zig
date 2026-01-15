@@ -203,10 +203,24 @@ inline fn cacheChar(char: u8) void {
     }
 }
 
+inline fn cacheTab(old_col: u16) void {
+    const row_pos = cursor.row * cols;
+
+    for (old_col..cursor.col) |i| {
+        color_buffer[row_pos + i] = curr_col;
+        char_buffer[row_pos + i] = ' ';
+    }
+}
+
 inline fn handleControlChar(char: u8) void {
     switch (char) {
         cc.cr => cursor.col = 0,
-        cc.ht => cursor.tab(),
+        cc.ht => {
+            const old_col = cursor.col;
+            cursor.tab();
+
+            cacheTab(old_col);
+        },
         cc.bs => cursor.left(),
         cc.lf,
         cc.vt,
