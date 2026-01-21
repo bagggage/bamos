@@ -339,21 +339,22 @@ pub fn mount(dentry: *Dentry, fs_name: []const u8, blk_dev: ?*devfs.BlockDev) Er
 }
 
 pub fn tryMount(dentry: *Dentry, blk_dev: *devfs.BlockDev) Error!*Dentry {
-    const gen = fs_list.ctrl.readLock();
+    var gen = fs_list.ctrl.readLock();
     defer fs_list.ctrl.readUnlock(gen);
 
     var curr_fs = getFirstFs();
+    defer if (curr_fs) |fs| fs.deref();
+
     while (curr_fs) |fs| : (curr_fs = getNextFs(fs)) {
         if (fs.kind() == .virtual) continue;
 
+        fs_list.ctrl.readUnlock(gen);
+        defer gen = fs_list.ctrl.readLock();
+
         const fs_root = mountFs(dentry, fs, blk_dev) catch |err| {
             if (err == error.BadSuperblock) continue;
-
-            fs.deref();
             return err;
         };
-
-        fs.deref();
         return fs_root;
     }
 
