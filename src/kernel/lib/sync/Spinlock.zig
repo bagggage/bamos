@@ -5,7 +5,7 @@
 //! from concurrent access by multiple threads in a multiprocessor environment.
 //! It "spins" in a loop, repeatedly checking if the lock is available.
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -58,6 +58,8 @@ pub fn lockSaveIntr(self: *Self) void {
 
 /// Acquire the lock, disable local interrupts.
 pub inline fn lockIntr(self: *Self) void {
+    std.debug.assert(intr.isEnabledForCpu());
+
     intr.disableForCpu();
     self.rawLock(.locked_intr);
 }
@@ -77,7 +79,7 @@ pub inline fn unlock(self: *Self) void {
 }
 
 /// Restore local interrupt state and releases the lock.
-pub fn unlockSaveIntr(self: *Self) void {
+pub fn unlockRestoreIntr(self: *Self) void {
     const intr_enable = self.exclusion.raw == .locked_intr;
 
     self.unlockAtomic();
@@ -112,11 +114,35 @@ pub fn wait(self: *Self, state: State) void {
 }
 
 pub fn tryLock(self: *Self) bool {
+    const scheduler = sched.getCurrent();
+    scheduler.disablePreemption();
+    if (self.tryLockAtomic()) return true;
+
+    scheduler.enablePreemption();
+    return false;
+}
+
+pub inline fn tryLockIntr(self: *Self) bool {
+    std.debug.assert(intr.isEnabledForCpu());
+
+    intr.disableForCpu();
+    if (self.exclusion.cmpxchgStrong(
+        .unlocked, .locked_intr, .release, .monotonic
+    ) == null) return true;
+
+    intr.enableForCpu();
+    return false;
+}
+
+
+pub fn tryLockSaveIntr(self: *Self) bool {
     const state: State = if (intr.saveAndDisableForCpu()) .locked_intr else .locked_no_intr;
-    return self.exclusion.cmpxchgStrong(
-        .unlocked, state,
-        .release, .monotonic
-    ) == null;
+    if (self.exclusion.cmpxchgStrong(
+        .unlocked, state, .release, .monotonic
+    ) == null) return true;
+
+    intr.restoreForCpu(state == .locked_intr);
+    return false;
 }
 
 pub inline fn tryLockAtomic(self: *Self) bool {
