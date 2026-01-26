@@ -96,32 +96,15 @@ pub const Handler = struct {
     }
 };
 
-pub const ImmediateHandler = struct {
-    pub const List = std.SinglyLinkedList;
-    pub const Fn = *const fn(?*anyopaque) void;
-
-    const Node = List.Node;
-
-    ctx: ?*anyopaque = null,
-    func: Fn,
-
-    node: Node = .{},
-
-    inline fn fromNode(node: *Node) *ImmediateHandler {
-        return @fieldParentPtr("node", node);
-    }
-};
-
 pub const SoftHandler = struct {
-    const List = std.SinglyLinkedList;
+    pub const List = std.SinglyLinkedList;
 
     pub const Node = List.Node;
     pub const Fn = *const fn(?*anyopaque) void;
 
-    ctx: ?*anyopaque,
     func: Fn,
+    ctx: ?*anyopaque = null,
 
-    pending: bool = false,
     node: Node = .{},
 
     pub fn init(func: Fn, ctx: ?*anyopaque) SoftHandler {
@@ -129,6 +112,17 @@ pub const SoftHandler = struct {
             .func = func,
             .ctx = ctx
         };
+    }
+
+    pub inline fn acquire(self: *SoftHandler) bool {
+        return @cmpxchgStrong(
+            ?*Node, &self.node.next, null,
+            &self.node, .release, .monotonic
+        ) == null;
+    }
+
+    pub inline fn release(self: *SoftHandler) void {
+        @atomicStore(?*Node, &self.node.next, null, .release);
     }
 
     inline fn fromNode(node: *Node) *SoftHandler {
@@ -283,57 +277,77 @@ const Cpu = struct {
     }
 };
 
-const SoftIntrTask = struct {
+const SoftTask = struct {
     task: *sched.Task,
+    immediate: SoftHandler = .init(&schedulingImmediate, null),
+    sched_list: std.SinglyLinkedList = .{},
+    sched_lock: lib.sync.Spinlock = .{},
+    pause_lock: lib.sync.Spinlock = .{},
 
-    sched_list: SoftHandler.List = .{},
-    num_pending: std.atomic.Value(u8) = .init(0),
+    initialized: bool = false,
 
     pub fn handler() noreturn {
         const local = smp.getLocalData();
         const self = &soft_tasks[local.idx];
 
         while (true) {
-            while (self.isPending()) {
-                const soft_intr = self.pickSoftIntr();
-                soft_intr.func(soft_intr.ctx);
+            self.sched_lock.lockIntr();
+
+            while (self.popHandlerAtomic()) |soft_intr| {
+                self.sched_lock.unlockIntr();
+                defer self.sched_lock.lockIntr();
+
+                const callback = soft_intr.func;
+                const ctx = soft_intr.ctx;
+
+                soft_intr.release();
+                callback(ctx);
             }
 
-            sched.pause();
+            self.pause_lock.unlockAtomic();
+            sched.pauseUnlockIntr(&self.sched_lock);
         }
     }
 
-    pub fn isPending(self: *SoftIntrTask) bool {
-        return self.num_pending.raw != 0;
+    pub fn schedule(self: *SoftTask, intr: *SoftHandler) void {
+        if (!self.prependHandler(intr)) return;
+
+        self.immediate.ctx = self;
+        scheduleImmediate(&self.immediate);
     }
 
-    pub fn schedule(self: *SoftIntrTask, intr: *SoftHandler) void {
-        if (intr.pending) return;
+    fn schedulingImmediate(ctx: ?*anyopaque) void {
+        const self: *SoftTask = @alignCast(@ptrCast(ctx.?));
 
-        intr.pending = true;
-        self.sched_list.prepend(&intr.node);
-        self.num_pending.raw += 1;
-
-        switch (self.task.stats.state) {
-            .free => {
-                self.task.stats.static_prior = sched.Task.high_static_prior;
-                sched.enqueue(self.task);
-            },
-            .waiting => sched.resumeTask(self.task),
-            else => {}
+        if (!self.pause_lock.tryLockAtomic()) return;
+        if (!self.initialized) {
+            @branchHint(.unlikely);
+            self.task.stats.static_prior = sched.Task.high_static_prior;
+            self.initialized = true;
+            sched.enqueue(self.task);
+            return;
         }
+
+        sched.resumeTask(self.task);
     }
 
-    inline fn pickSoftIntr(self: *SoftIntrTask) *SoftHandler {
-        disableForCpu();
-        defer enableForCpu();
+    inline fn prependHandler(self: *SoftTask, intr: *SoftHandler) bool {
+        if (!intr.acquire()) return false;
 
-        const intr = SoftHandler.fromNode(self.sched_list.popFirst().?);
+        self.sched_lock.lockAtomic();
+        defer self.sched_lock.unlockAtomic();
 
-        self.num_pending.raw -= 1;
-        intr.pending = false;
+        if (self.sched_list.first) |next| intr.node.next = next;
+        self.sched_list.first = &intr.node;
 
-        return intr;
+        return true;
+    }
+
+    inline fn popHandlerAtomic(self: *SoftTask) ?*SoftHandler {
+        const node = self.sched_list.popFirst() orelse return null;
+        if (self.sched_list.first == node) self.sched_list.first = null;
+
+        return SoftHandler.fromNode(node);
     }
 };
 
@@ -357,7 +371,7 @@ var msis_used: u8 = 0;
 var cpus_lock: lib.sync.Spinlock = .init(.unlocked);
 var msis_lock: lib.sync.Spinlock = .init(.unlocked);
 
-var soft_tasks: []SoftIntrTask = undefined;
+var soft_tasks: []SoftTask = undefined;
 
 pub var chip: Chip = undefined;
 
@@ -425,13 +439,13 @@ pub fn init() !void {
 }
 
 fn initSoftIntr(cpus_num: u16) !void {
-    soft_tasks = vm.gpa.allocMany(SoftIntrTask, cpus_num) orelse return error.NoMemory;
+    soft_tasks = vm.gpa.allocMany(SoftTask, cpus_num) orelse return error.NoMemory;
     errdefer vm.gpa.free(soft_tasks.ptr);
 
     for (soft_tasks, 0..) |*soft_task, i| {
         const task = sched.Task.create(
             .{ .kernel = .{ .name = "soft_intr" } },
-            @intFromPtr(&SoftIntrTask.handler)
+            @intFromPtr(&SoftTask.handler)
         ) catch |err| {
             for (0..i) |j| soft_tasks[j].task.delete();
             return err;
@@ -482,14 +496,16 @@ fn handleImmediates(local: *smp.LocalData) void {
             disableForCpu();
             defer enableForCpu();
 
-            const temp = local.immediate_intrs.first orelse break;
+            const temp = local.immediate_intrs.first orelse {
+                local.force_immediate_intrs = true;
+                break;
+            };
             local.immediate_intrs.first = if (temp.next == temp) null else temp.next;
-
-            break :blk ImmediateHandler.fromNode(temp);
+            break :blk SoftHandler.fromNode(temp);
         };
 
         handler.func(handler.ctx);
-        handler.node.next = null;
+        handler.release();
     }
 }
 
@@ -613,11 +629,11 @@ pub fn freeVector(vec: Vector) void {
 //    vm.obj.free(SoftHandler, node.data);
 //}
 
-pub fn scheduleImmediate(intr: *ImmediateHandler) void {
+pub fn scheduleImmediate(intr: *SoftHandler) void {
     const local = smp.getLocalData();
 
     // Immediate handler can be scheduled only in IRQ context and
-    //only once after interrupt is received.
+    // only once after interrupt is received.
     std.debug.assert(
         local.isInInterrupt() and
         isEnabledForCpu() == false
@@ -627,12 +643,14 @@ pub fn scheduleImmediate(intr: *ImmediateHandler) void {
     if (intr.node.next != null) return;
 
     local.immediate_intrs.prepend(&intr.node);
-    if (local.immediate_intrs.first == &intr.node) {
+    if (intr.node.next == null) {
         intr.node.next = &intr.node;
     }
 }
 
-pub fn scheduleSoft(intr: *SoftHandler) void {
+pub inline fn scheduleSoft(intr: *SoftHandler) void {
+    std.debug.assert(isEnabledForCpu() == false);
+
     const soft_task = &soft_tasks[smp.getIdx()];
     soft_task.schedule(intr);
 }
@@ -751,28 +769,42 @@ fn reorderCpus(cpu_idx: u16, comptime direction: enum{forward, backward}) void {
 /// Used only in `handleMsi`, `handleIrq` and in
 /// arch-specific interrupt routines.
 pub inline fn handlerEnter(local: *smp.LocalData) void {
-    local.scheduler.disablePreemption();
     local.enterInterrupt();
+
+    if (local.nested_intr == 1) {
+        @branchHint(.likely);
+        local.force_immediate_intrs = false;
+    }
 }
 
 /// Used only in `handleMsi`, `handleIrq` and in
 /// arch-specific interrupt routines.
-pub fn handlerExit(local: *smp.LocalData) void {
-    @setRuntimeSafety(false);
-    local.exitInterrupt();
+pub fn handlerExit(local: *smp.LocalData) callconv(.c) void {
+    std.debug.assert(!isEnabledForCpu());
 
     chip.eoi();
     enableForCpu();
 
-    local.scheduler.enablePreemptionNoResched();
+    if (local.force_immediate_intrs) handleImmediates(local);
 
-    if (local.tryIfNotNestedInterrupt()) {
+    const scheduler = &local.scheduler;
+    if (local.nested_intr == 1) {
         handleImmediates(local);
 
-        if (local.scheduler.needRescheduling()) {
-            local.scheduler.reschedule();
+        // An atomic check to see if rescheduling is necessary ensures
+        // that upon exit from an interrupt, the flag will only be set
+        // if the kernel context has disabled preemption.
+
+        disableForCpu();
+        if (scheduler.isPreemptive() and scheduler.needRescheduling()) {
+            enableForCpu();
+            scheduler.reschedule();
+            return;
         } else {
             local.exitInterrupt();
+            enableForCpu();
         }
+    } else {
+        local.exitInterrupt();
     }
 }
