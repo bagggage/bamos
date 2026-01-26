@@ -1,6 +1,6 @@
 //! # x86-64 context switching
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -57,44 +57,66 @@ pub inline fn getFramePtr(self: *Self) usize {
     return @intFromPtr(self.stack_ptr.ptr);
 }
 
-pub fn jumpTo(self: *Self) noreturn {
+pub fn jumpInto(self: *Self, new_task: ?*sched.Task) noreturn {
     @setRuntimeSafety(false);
+    self.run();
 
-    regs.setStack(self.getFramePtr());
-    regs.restoreCallerRegs();
+    const scheduler = sched.getCurrent();
+    scheduler.completeSwitch(new_task);
 
+    self.restore();
     asm volatile ("retq");
+
     unreachable;
 }
 
 pub inline fn switchTo(from: *Self, to: *Self) void {
-    asm volatile ("call switchToEx"
-        :
-        : [arg1] "{rdi}" (from),
-          [arg2] "{rsi}" (to),
-        : .{
-            .rax = true, .rdi = true, .rsi = true, .rdx = true,
-            .rcx = true, .r8 = true, .r9 = true, .r10 = true,
-            .r11 = true, .memory = true
-        }
+    asm volatile ("call switchToNaked"
+        :: [arg1] "{rdi}" (from), [arg2] "{rsi}" (to),
+        : regs.call_clobers
     );
 }
 
-export fn switchToEx(_: *Self, _: *Self) callconv(.naked) void {
-    defer asm volatile ("retq");
+pub inline fn switchToHalf(from: *Self, to: *Self) void {
+    from.save();
+    to.run();
+}
 
-    regs.saveCallerRegs();
-    defer regs.restoreCallerRegs();
+export fn switchToNaked() callconv(.naked) void {
+    const from: *Self = asm volatile("" : [arg1] "={rdi}" (-> *Self));
+    const to: *Self = asm volatile("" : [arg2] "={rsi}" (-> *Self));
 
-    // Swap stack.
-    comptime std.debug.assert(@offsetOf(Self, "stack_ptr") == 0);
+    comptime @export(&sched.Scheduler.postSwitch, .{ .name = "sched.Scheduler.postSwitch" });
+
+    from.switchToHalf(to);
+
+    const scheduler = sched.getCurrent();
+    asm volatile ("call sched.Scheduler.postSwitch"
+        :: [arg1] "{rdi}" (scheduler), [arg2] "{rsi}" (to)
+        : regs.call_clobers
+    );
+
+    to.restore();
+    asm volatile ("retq");
+}
+
+inline fn run(self: *Self) void {
     asm volatile (
-        \\ mov %rsp, (%rdi)
-        \\ mov (%rsi), %rsp
-        \\ mov %rsp, %rbp
-        \\ and $-16, %rsp
-        \\ call switchEndEx
-        \\ mov %rbp, %rsp
-        ::: .{ .memory = true }
+        "mov (%[rsp]), %rsp"
+        :: [rsp] "r" (&self.stack_ptr.ptr)
     );
 }
+
+inline fn save(self: *Self) void {
+    regs.saveCallerRegs();
+    asm volatile (
+        "mov %rsp, (%[rsp])"
+        :: [rsp] "r" (&self.stack_ptr)
+        : .{ .memory = true }
+    );
+}
+
+inline fn restore(_: *Self) void {
+    regs.restoreCallerRegs();
+}
+

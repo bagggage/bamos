@@ -1,9 +1,10 @@
 //! # Scheduling and Task Management Module
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
+const dev = @import("dev.zig");
 const lib = @import("lib.zig");
 const log = std.log.scoped(.sched);
 const smp = @import("smp.zig");
@@ -19,6 +20,7 @@ pub const max_priority = 1 << @bitSizeOf(Priority);
 
 /// Less is better.
 pub const Priority = u5;
+pub const PriorityDelta = i4;
 pub const Ticks = u4;
 
 pub const Scheduler = @import("sched/Scheduler.zig");
@@ -59,7 +61,10 @@ pub const WaitQueue = struct {
 
     pub inline fn pop(self: *WaitQueue) ?*Entry {
         const node = self.list.popFirst() orelse return null;
-        return Entry.fromNode(node);
+        const entry = Entry.fromNode(node);
+
+        if (!entry.task.tryWakeup()) return null;
+        return entry;
     }
 
     pub fn remove(self: *WaitQueue, task: *Task) ?*Entry {
@@ -81,10 +86,6 @@ pub const WaitQueue = struct {
 var time_granule_ms: u32 = 0;
 var initialized: bool = false;
 
-pub inline fn init() !void {
-    sys.time.initPerCpu();
-}
-
 pub inline fn isInitialized() bool {
     return initialized;
 }
@@ -98,66 +99,104 @@ pub inline fn getCurrent() *Scheduler {
 }
 
 pub inline fn getCurrentTask() *Task {
-    return getCurrent().current_task;
+    return getCurrent().current_task.?;
 }
 
 pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     const scheduler = getScheduler(cpu_idx);
     const task = try Task.create(.{ .kernel = .{ .name = "startup" } }, @intFromPtr(taskHandler));
 
-    scheduler.preinit();
-    scheduler.current_task = task;
-
     scheduler.enqueueTask(task);
     initialized = true;
 
-    if (cpu_idx == smp.getIdx()) scheduler.begin();
+    if (cpu_idx == smp.getIdx()) scheduler.start();
 }
 
 pub inline fn waitStartup() noreturn {
-    getCurrent().begin();
+    getCurrent().start();
 }
 
 pub inline fn enqueue(task: *Task) void {
+    std.debug.assert(dev.intr.isEnabledForCpu());
     // TODO: CPU balancing.
     getCurrent().enqueueTask(task);
 }
 
 /// Yield current task time.
-pub fn yield() void {
+pub inline fn yield() void {
     const scheduler = getCurrent();
+    std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
 
-    // Don't disable preemtion because task is pushed
-    // into queue under spinlock, so preemtion would be disabled.
-    // After lock release, task wouldn't be in `.running` state
-    // so cannot be preempted.
     scheduler.yield();
-    scheduler.reschedule();
 }
 
 pub inline fn pause() void {
     const scheduler = getCurrent();
-    waitEx(scheduler, &scheduler.pause_queue);
+    std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
+
+    waitRaw(scheduler, &scheduler.pause_queue);
+}
+
+pub fn pauseUnlock(lock: *lib.sync.Spinlock) void {
+    std.debug.assert(lock.exclusion.raw == .locked_no_intr);
+
+    const scheduler = getCurrent();
+    std.debug.assert(!scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
+
+    var entry = scheduler.initWait();
+    scheduler.pause_queue.push(&entry);
+
+    lock.unlockAtomic();
+    scheduler.rescheduleAtomic();
+}
+
+pub fn pauseUnlockIntr(lock: *lib.sync.Spinlock) void {
+    std.debug.assert(lock.exclusion.raw != .unlocked);
+
+    const scheduler = getCurrent();
+    std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
+
+    var entry = scheduler.initWait();
+
+    scheduler.disablePreemption();
+    scheduler.pause_queue.push(&entry);
+
+    lock.unlockRestoreIntr();
+    scheduler.rescheduleAtomic();
 }
 
 pub inline fn wait(queue: *WaitQueue) void {
     const scheduler = getCurrent();
-    waitEx(scheduler, queue);
+    std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
+
+    waitRaw(scheduler, queue);
 }
 
 pub fn waitUnlock(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
+    std.debug.assert(lock.exclusion.raw == .locked_no_intr);
+
     const scheduler = getCurrent();
+    std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
+
     var entry = scheduler.initWait();
     queue.push(&entry);
-    lock.unlock();
+    lock.unlockAtomic();
 
-    scheduler.doWait();
+    scheduler.rescheduleAtomic();
 }
 
 pub fn resumeTask(task: *Task) void {
+    std.debug.assert(dev.intr.isEnabledForCpu());
+
+    // TODO: Make sure this code is correct!
     const scheduler = getCurrent();
     const entry = scheduler.pause_queue.remove(task)
-        orelse @panic("trying to resume non-paused task");
+        orelse @panic("Trying to resume non-paused task");
+
+    if (!task.tryWakeup()) {
+        log.warn("cannot resume task", .{});
+        return;
+    }
 
     const sleep_time = sys.time.getFastTimestamp() - entry.timestamp;
     entry.task.stats.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
@@ -168,6 +207,8 @@ pub fn resumeTask(task: *Task) void {
 /// Awake one task from wait queue.
 /// Returns awaked task or `null` if queue is empty.
 pub fn awake(queue: *WaitQueue) ?*Task {
+    std.debug.assert(dev.intr.isEnabledForCpu());
+
     const scheduler = getCurrent();
     const entry = queue.pop() orelse return null;
 
@@ -179,6 +220,8 @@ pub fn awake(queue: *WaitQueue) ?*Task {
 
 /// Awake all tasks in wait queue.
 pub fn awakeAll(queue: *WaitQueue) void {
+    std.debug.assert(dev.intr.isEnabledForCpu());
+
     const scheduler = getCurrent();
     const timestamp = sys.time.getFastTimestamp();
     const ns_per_tick = sys.time.getNsPerTick();
@@ -195,8 +238,11 @@ pub inline fn getTimeGranuleMs() u32 {
     return time_granule_ms;
 }
 
-fn waitEx(scheduler: *Scheduler, queue: *WaitQueue) void {
+fn waitRaw(scheduler: *Scheduler, queue: *WaitQueue) void {
     var entry = scheduler.initWait();
+
+    scheduler.disablePreemption();
     queue.push(&entry);
-    scheduler.doWait();
+
+    scheduler.rescheduleAtomic();
 }
