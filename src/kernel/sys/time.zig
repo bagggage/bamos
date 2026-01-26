@@ -8,6 +8,7 @@ const epoch = std.time.epoch;
 const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"sys.time");
 const smp = @import("../smp.zig");
+const vm = @import("../vm.zig");
 
 pub const Clock = dev.classes.Clock;
 pub const Timer = dev.classes.Timer;
@@ -189,12 +190,21 @@ const Keeper = struct {
     last_count: usize,
     ns_per_ticks: usize,
 
-    pub fn init() Keeper {
+    immediates: [*]dev.intr.SoftHandler,
+
+    pub fn init() !Keeper {
+        const immediates = vm.gpa.allocMany(dev.intr.SoftHandler, smp.getNum()) orelse return error.NoMemory;
+        for (immediates, 0..) |*imm, i| {
+            const local = smp.getCpuData(@intCast(i));
+            imm.* = .{ .func = &timerImmediateHandler, .ctx = local };
+        }
+
         const date_time = sys_clock.getDateTime();
         return .{
             .time = Time.fromDateTime(date_time),
             .last_count = sys_timer.getCounter(),
-            .ns_per_ticks = std.time.ns_per_s / sys_timer.base_frequency
+            .ns_per_ticks = std.time.ns_per_s / sys_timer.base_frequency,
+            .immediates = immediates.ptr
         };
     }
 
@@ -242,7 +252,7 @@ pub fn init() !void {
     sys_timer = try chooseSysTimer();
     sched_timer = try chooseSchedTimer();
 
-    keeper = .init();
+    keeper =  try.init();
     log.debug("count: {}, ns per tick: {}", .{keeper.last_count,keeper.ns_per_ticks});
 
     log.info("clock: {f}, timer: {f}", .{ sys_clock.device.name, sys_timer.device.name });
@@ -330,15 +340,19 @@ pub inline fn getHz() u32 {
     return sys_timer_hz;
 }
 
-export fn timerIntrHandler(_: *Timer) void {
-    const local = smp.getLocalData();
+pub fn timerInterruptHandler(local: *smp.LocalData) callconv(.c) void {
+    const imm = &keeper.immediates[local.idx];
+    dev.intr.scheduleImmediate(imm);
+}
 
+fn timerImmediateHandler(ctx: ?*anyopaque) void {
+    const local: *smp.LocalData = @alignCast(@ptrCast(ctx.?));
     if (local.idx == smp.boot_cpu) {
         _ = sys_up_ticks.fetchAdd(1, .monotonic);
         keeper.update();
     }
 
-    local.scheduler.tick();
+    local.scheduler.timerEvent(1);
 }
 
 inline fn chooseClock() !*Clock {
