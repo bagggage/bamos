@@ -266,10 +266,14 @@ pub fn pageFaultHandler(address: usize, cause: FaultCause, userspace: bool) bool
     const sys = @import("sys.zig");
 
     if (userspace or arch.vm.isUserVirtAddr(address)) {
-        const task = sched.getCurrentTask();
-        if (task.spec == .user) {
-            task.spec.user.process.pageFault(address, cause);
-            return true;
+        @branchHint(.likely);
+
+        if (sched.getCurrent().current_task) |task| {
+            @branchHint(.likely);
+            if (task.spec == .user) {
+                task.spec.user.process.pageFault(address, cause);
+                return true;
+            }
         }
     }
 

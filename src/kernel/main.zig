@@ -1,8 +1,6 @@
-// @noexport
-
 //! # Kernel entry point
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -31,6 +29,10 @@ pub const std_options = std.Options {
         .ReleaseSafe => .debug,
         .ReleaseSmall,
         .ReleaseFast => .info
+    },
+    .log_scope_levels = &.{
+        //.{ .level = .warn, .scope = .@"sys.call.trace" },
+        .{ .level = .info, .scope = .@"intr.except" },
     }
 };
 
@@ -47,8 +49,6 @@ pub export fn main() noreturn {
     smp.preinit();
     arch.preinit();
 
-    log.info("{s} {s}", .{opts.os_name, opts.build});
-
     init(smp);
 
     smp.initCpu(&main2);
@@ -60,6 +60,7 @@ pub export fn main() noreturn {
 fn main2() noreturn {
     defer @panic("reached end of the main2");
 
+    log.info("{s} {s}", .{opts.os_name, opts.build});
     {
         const cpu = arch.getCpuInfo();
         log.info("CPUs detected: {}, vendor: {s}, model: {s}", .{
@@ -77,7 +78,7 @@ fn main2() noreturn {
     preinit(dev);
 
     init(sys.time);
-    init(sched);
+    sys.time.initPerCpu();
 
     sched.startup(0, kernelStartupTask) catch |err| {
         log.err("startup failed: {s}", .{@errorName(err)});
@@ -92,12 +93,6 @@ fn kernelStartupTask() noreturn {
     logger.switchFromEarly();
 
     smp.initAll();
-
-    for (1..smp.getNum()) |cpu| {
-        sched.startup(@truncate(cpu), awaitTask) catch |err| {
-            log.err("cpu {}: startup failed: {s}", .{cpu, @errorName(err)});
-        };
-    }
 
     //const debug_task = sched.Task.create(
     //    .{ .kernel = .{ .name = "debug_task" } },
@@ -120,13 +115,13 @@ fn kernelStartupTask() noreturn {
 }
 
 fn debugTask() noreturn {
-    const scheduler: *volatile sched.Scheduler = sched.getCurrent();
+    const task = sched.getCurrentTask();
 
     while (true) {
-        log.debug("{s}: {} - {}", .{
-            scheduler.current_task.spec.kernel.name,
-            scheduler.current_task.stats.time_slice,
-            @as(u32, 32) - scheduler.current_task.stats.getPriority(),
+        log.info("{s}: {} - {}", .{
+            task.spec.kernel.name,
+            task.stats.time_slice,
+            @as(u32, 32) - task.stats.getPriority(),
         });
 
         const begin = sys.time.getCachedUpTime().sec;

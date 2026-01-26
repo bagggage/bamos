@@ -1,6 +1,6 @@
 //! # Syscall Handler
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -85,8 +85,6 @@ pub fn init() void {
 }
 
 pub fn setupTaskAbi(task: *sched.Task, abi: sys.call.Abi) void {
-    std.debug.assert(arch.intr.isEnabledForCpu() == false);
-
     const local = smp.getLocalData();
     local.arch_specific.tss.rsps[0] = lib.misc.alignDown(usize, task.getKernelStackTop(), 16);
 
@@ -111,7 +109,7 @@ export fn linuxRunProcess() noreturn {
     const stack_ptr = asm volatile ("": [_] "={r13}" (-> usize));
 
     const local = smp.getLocalData();
-    const task = local.scheduler.current_task;
+    const task = local.scheduler.current_task.?;
 
     const rflags: regs.Flags = .{
         .cpuid = true,
