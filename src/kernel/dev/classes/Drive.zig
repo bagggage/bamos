@@ -1,6 +1,6 @@
 //! # Block device high-level interface
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -392,7 +392,7 @@ fn submitRequestAndWait(self: *Self, request: *io.Request) void {
     if (self.submitRequest(request) == false) {
         log.warn("request: {} is cached", .{request.id});
     }
-    scheduler.doWait();
+    scheduler.wait();
 }
 
 fn calcPartitionRegion(self: *const Self, part: *const vfs.Partition, offset: usize, len: usize) [2]usize {
