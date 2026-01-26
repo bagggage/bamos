@@ -107,6 +107,7 @@ pub fn switchFromEarly() void {
     log_writer = KernelWriter.setup(&log_buffer);
 }
 
+// FIXME
 pub fn capture() void {
     const cpu_idx = smp.getIdx();
 
@@ -115,17 +116,20 @@ pub fn capture() void {
         return;
     }
 
-    lock.lock();
-    lock_owner = cpu_idx;
+    if (!smp.getLocalData().isInInterrupt()) {
+        lock.lock();
+        lock_owner = cpu_idx;
+    }
 }
 
+// FIXME
 pub fn release() void {
     if (double_lock) {
         double_lock = false;
         return;
     }
 
-    lock.unlock();
+    if (!smp.getLocalData().isInInterrupt()) lock.unlock();
 }
 
 pub inline fn flush() !void {
@@ -139,8 +143,8 @@ pub fn defaultLog(
     comptime format: []const u8,
     args: anytype
 ) void {
-    const new_owner = smp.getIdx();
-    if (lock.isLocked() and new_owner == lock_owner) {
+    const local = smp.getLocalData();
+    if (lock.isLocked() and local.idx == lock_owner) {
         @branchHint(.cold);
 
         tty_config.setColor(&log_writer, .bright_red) catch {};
@@ -148,8 +152,9 @@ pub fn defaultLog(
         return;
     }
 
+    // FIXME
     lock.lock();
-    lock_owner = new_owner;
+    lock_owner = local.idx;
     defer lock.unlock();
 
     logFmtPrint(

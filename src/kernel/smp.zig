@@ -26,34 +26,28 @@ pub const LocalData = struct {
     idx: u16 = 0,
 
     scheduler: sched.Scheduler = .{},
-    nested_intr: std.atomic.Value(u8) = .init(0),
-    immediate_intrs: intr.ImmediateHandler.List = .{},
+    nested_intr: u8 = 0,
+    force_immediate_intrs: bool = false,
+    immediate_intrs: intr.SoftHandler.List = .{},
     arch_specific: arch.CpuLocalData = undefined,
 
     pub inline fn isInInterrupt(self: *const LocalData) bool {
-        return self.nested_intr.raw > 0;
-    }
-
-    pub fn tryIfNotNestedInterrupt(self: *LocalData) bool {
-        return self.nested_intr.cmpxchgStrong(
-            0, 1,
-            .acquire, .monotonic
-        ) == null;
+        return self.nested_intr > 0;
     }
 
     pub inline fn enterInterrupt(self: *LocalData) void {
-        self.nested_intr.raw += 1;
+        self.nested_intr += 1;
     }
 
     pub inline fn exitInterrupt(self: *LocalData) void {
-        self.nested_intr.raw -= 1;
+        self.nested_intr -= 1;
     }
 
     /// Do atomic compare and change if is in interrupt on expected level.
     pub inline fn tryExitInterrupt(self: *LocalData, expected: u8) void {
-        _ = self.nested_intr.cmpxchgStrong(
-            expected, expected - 1,
-            .monotonic, .monotonic
+        _ = @cmpxchgStrong(
+            u8, &self.nested_intr, expected,
+            expected - 1, .release, .monotonic
         );
     }
 };
@@ -95,7 +89,10 @@ pub fn init() !void {
     cpus_data.ptr = @ptrFromInt(vm.getVirtLma(phys));
     cpus_data.len = cpus_num;
 
-    @memset(cpus_data, LocalData{});
+    for (cpus_data) |*data| {
+        data.* = .{};
+        data.scheduler.preinit();
+    }
 }
 
 /// @noexport
@@ -175,8 +172,8 @@ inline fn initStack(is_boot: bool, ret: *const fn() noreturn) noreturn {
 fn waitForInit() noreturn {
     init_lock.unlockAtomic();
 
-    sched.init() catch unreachable;
+    sys.time.initPerCpu();
 
     log.warn("CPU {} initialized", .{getIdx()});
-    sched.waitStartup();
+    sched.getCurrent().start();
 }
