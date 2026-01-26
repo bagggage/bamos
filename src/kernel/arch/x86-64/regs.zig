@@ -3,7 +3,7 @@
 //! Provides access to various x86-64 CPU registers, Global/Interrupt Descriptor Tables (GDT/IDT).
 //! It includes functions for reading/writing MSRs and saving/restoring CPU state.
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -23,6 +23,13 @@ pub const MSR_SWAPGS_BASE = 0xC0000102;
 pub const MSR_APIC_BASE = 0x1B;
 
 const gs_tss_offset = @offsetOf(smp.LocalData, "arch_specific") + @offsetOf(arch.CpuLocalData, "tss");
+
+pub const call_clobers: std.builtin.assembly.Clobbers = .{
+    .rax = true, .rcx = true, .rdx = true,
+    .rdi = true, .rsi = true, .r8 = true,
+    .r9 = true, .r10 = true, .r11 = true,
+    .memory = true
+};
 
 /// Interrupt Descriptor Table Register.
 pub const IDTR = packed struct {
