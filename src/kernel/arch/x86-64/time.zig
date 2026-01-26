@@ -1,6 +1,6 @@
 //! # x86-64 Executor Implementation
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -11,6 +11,7 @@ const lapic = @import("intr/apic.zig").lapic;
 const log = std.log.scoped(.@"arch.time");
 const regs = @import("regs.zig");
 const rtc_cmos = @import("dev/rtc_cmos.zig");
+const sched = @import("../../sched.zig");
 const smp = @import("../../smp.zig");
 const sys = @import("../../sys.zig");
 const Timer = dev.classes.Timer;
@@ -48,17 +49,18 @@ pub inline fn getSysTimer() ?*Timer {
 }
 
 fn timerIntrRoutin() callconv(.naked) noreturn {
-    asm volatile ("call interruptEntry");
+    @setRuntimeSafety(false);
+
+    comptime @export(&dev.intr.handlerExit, .{ .name = "interruptHandlerExit" });
+    comptime @export(&sys.time.timerInterruptHandler, .{ .name = "timerInterruptHandler" });
+
+    asm volatile ("call interruptEntry" ::: regs.call_clobers);
     defer asm volatile ("jmp interruptExit");
 
-    dev.intr.handlerEnter(arch.getCpuLocalData());
+    const local = smp.getLocalData();
+    dev.intr.handlerEnter(local);
 
-    asm volatile (
-        \\ call timerIntrHandler
-        \\ call intrHandlerExit
-    );
-}
-
-export fn intrHandlerExit() void {
-    dev.intr.handlerExit(arch.getCpuLocalData());
+    asm volatile ("call timerInterruptHandler" :: [arg1] "{rdi}" (local) : regs.call_clobers);
+    // This code is buggy (if pass arg1 as `local` variable), I have no idea why this happens
+    asm volatile ("call interruptHandlerExit" :: [arg1] "{rdi}" (smp.getLocalData()) : regs.call_clobers);
 }
