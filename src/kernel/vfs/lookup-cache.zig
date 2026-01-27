@@ -1,6 +1,6 @@
 //! # VFS Lookup cache
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -68,7 +68,7 @@ pub fn calcHash(parent: *const Dentry, name: []const u8) u64 {
     return hasher.final();
 }
 
-pub inline fn cache(dentry: *const Dentry) void {
+pub inline fn cache(dentry: *Dentry) void {
     const hash = calcHash(dentry.parent, dentry.name.str());
     insert(hash, dentry);
 }

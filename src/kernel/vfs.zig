@@ -4,6 +4,7 @@
 
 const std = @import("std");
 
+const config = @import("config.zig");
 const dev = @import("dev.zig");
 const lib = @import("lib.zig");
 const log = std.log.scoped(.vfs);
@@ -56,7 +57,8 @@ pub const Context = union(enum) {
         data: lib.AnyData = .{},
 
         pub inline fn getMountPoint(self: *Virt) *MountPoint {
-            return @fieldParentPtr("virt", self);
+            const ctx: *Context = @fieldParentPtr("virt", self);
+            return @fieldParentPtr("ctx", ctx);
         }
 
         pub inline fn validateRoot(self: *const Virt) bool {
@@ -315,6 +317,11 @@ pub fn init() !void {
             log.err("failed to initialize '"++@typeName(Fs)++"' filesystem: {s}", .{@errorName(err)});  
         };
     }
+
+    const mount_devfs = config.getAs(bool, "devtmpfs.mount") orelse true;
+    if (mount_devfs) try initMountFs("dev", devfs.fs_name);
+
+    try initMountFs("initrd", initrd.fs_name);
 }
 
 pub fn deinit() void {
@@ -474,9 +481,56 @@ pub fn resolveSymLink(sym_dent: *Dentry) Error!*Dentry {
     return error.BadOperation;
 }
 
-pub fn changeRoot(new: *Dentry) void {
-    // TODO: Implement.
-    _ = new;
+pub fn changeRoot(new: *Dentry) Error!void {
+    if (root_dentry == new) return;
+
+    const old = root_dentry;
+    new.ref_count = root_dentry.ref_count;
+    root_dentry = new;
+
+    // Move all directories to the new root
+    var node = old.child.first;
+    while (node) |n| {
+        const dentry = Dentry.fromNode(n);
+        const name = dentry.name.str();
+        node = n.next;
+
+        if (dentry == new or
+            dentry.inode.type != .directory or
+            name.len != 1 or name[0] != '/'
+        ) continue;
+
+        const mnt = dentry.ctx.virt.getMountPoint();
+        const orig_dentry = mnt.getHiddenDentry();
+
+        switch (mnt.fs.hash) {
+            hashFn(devfs.fs_name) => {},
+            else => continue
+        }
+
+        const mnt_name = orig_dentry.name.str();
+        const new_mnt_dentry = lookup(null, new, mnt_name) catch |err| blk: {
+            if (err != error.NoEnt) return err;
+            break :blk try new.makeDirectory(mnt_name);
+        };
+
+        log.debug("move /{s} to new root", .{mnt_name});
+
+        // Move mount point
+        dentry.parent = new;
+        old.child.remove(&dentry.node);
+        new.child.prepend(&dentry.node);
+        mnt.dentry.deref();
+        mnt.dentry = new_mnt_dentry;
+
+        const old_hash = lookup_cache.calcHash(old, mnt_name);
+        _ = lookup_cache.remove(old_hash);
+
+        const new_hash = lookup_cache.calcHash(new, mnt_name);
+        lookup_cache.insert(new_hash, dentry);
+    }
+
+    // TODO: Complete implementation, unmount old root and free resources
 }
 
 pub fn isMountPoint(dentry: *const Dentry) bool {
@@ -508,7 +562,7 @@ pub inline fn getRootWeak() *Dentry {
 /// Returns root dentry of initrd filesystem if mounted,
 /// `null` otherwise.
 pub fn getInitRamDisk() ?*Dentry {
-    return tryLookup(getRootWeak(), null, initrd.mount_dir_name);
+    return tryLookup(getRootWeak(), null, "initrd");
 }
 
 /// Returns current system time that might be
@@ -626,8 +680,18 @@ fn initRoot() !void {
         defer root_dentry = virt.root;
 
         mnt_point.* = .init(tmp_fs, virt.root, .{ .virt = virt });
+        virt.root.ctx = .{ .virt = &mnt_point.ctx.virt };
+
         mount_list.prepend(&mnt_point.node);
     }
 
     log.info("tmpfs was mounted as \"{s}\"", .{root_dentry.name.str()});
+}
+
+fn initMountFs(dir: []const u8, fs_name: []const u8) Error!void {
+    const mnt_dent = try root_dentry.makeDirectory(dir);
+    defer mnt_dent.deref();
+
+    const root = try mount(mnt_dent, fs_name, null);
+    defer root.deref();
 }
