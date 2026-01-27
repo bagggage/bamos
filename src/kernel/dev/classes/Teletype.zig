@@ -63,7 +63,7 @@ pub const Buffer = struct {
     }
 
     pub fn write(self: *Buffer, buf: []const u8) usize {
-        if (self.pos == self.len) return 0;
+        if (self.pos == self.len) { @branchHint(.unlikely); return 0; }
 
         const end_pos = @min(self.len, self.pos + buf.len);
         const len = end_pos - self.pos;
@@ -71,6 +71,16 @@ pub const Buffer = struct {
         @memcpy(self.ptr[self.pos..end_pos], buf[0..len]);
         self.pos = end_pos;
         return len;
+    }
+
+    pub fn writeByte(self: *Buffer, byte: u8) bool {
+        if (self.pos == self.len) { @branchHint(.unlikely); return false; }
+
+        const end_pos = @min(self.len, self.pos + 1);
+
+        self.ptr[self.pos] = byte;
+        self.pos = end_pos;
+        return true;
     }
 
     fn writeRaw(self: *Buffer, buf: []const u8) void {
@@ -211,13 +221,14 @@ pub fn bufferInputByteAtomic(self: *Self, byte: u8) bool {
     return true;
 }
 
-pub fn eraseInputAtomic(self: *Self, num: u32) void {
-    if (self.inputEmpty()) return;
+pub fn eraseInputAtomic(self: *Self, num: u32) bool {
+    if (self.inputEmpty()) return false;
 
     const mask = self.in_buffer.len - 1;
     const avail = (self.in_buffer.pos -% self.in_seek) & mask;
 
     self.in_buffer.pos = (self.in_buffer.pos -% @min(num, avail)) & mask;
+    return true;
 }
 
 pub fn eraseInputLineAtomic(self: *Self) void {
@@ -299,6 +310,32 @@ pub fn writeOutput(self: *Self, buffer: []const u8) Error!usize {
     return writen;
 }
 
+pub fn writeOutputAtomic(self: *Self, buffer: []const u8) Error!usize {
+    var writen: usize = 0;
+    while (true) {
+        if (self.out_buffer.len == 0) {
+            try self.flushRaw(buffer);
+            return buffer.len;
+        }
+
+        const tmp = self.out_buffer.write(buffer[writen..]);
+        writen += tmp;
+
+        if (writen >= buffer.len) break;
+        try self.flushAtomic();
+    }
+
+    return writen;
+}
+
+pub fn writeOutputByteAtomic(self: *Self, byte: u8) Error!void {
+    if (!self.out_buffer.writeByte(byte)) {
+        @branchHint(.unlikely);
+        try self.flushAtomic();
+        if (!self.out_buffer.writeByte(byte)) try self.flushRaw(&.{byte});
+    }
+}
+
 pub fn bufferOutput(self: *Self, output: []const u8) usize {
     if (output.len == 0) return 0;
 
@@ -312,6 +349,10 @@ pub fn flush(self: *Self) Error!void {
     self.out_lock.lock();
     defer self.out_lock.unlock();
 
+    try self.flushAtomic();
+}
+
+pub inline fn flushAtomic(self: *Self) Error!void {
     try self.flushRaw(self.out_buffer.ptr[0..self.out_buffer.len]);
     self.out_buffer.pos = 0;
 }
@@ -345,10 +386,14 @@ fn devOpen(dev_file: *devfs.DevFile, _: *vfs.File) vfs.Error!void {
         tty.users.dec();
         return error.Uninitialized;
     }
+
+    if (tty.proc == null) tty.proc = sys.Process.getCurrent();
 }
 
 fn devClose(dev_file: *devfs.DevFile, _: *vfs.File) void {
     const tty = dev_file.data.as(Self).?;
+
+    if (sys.Process.getCurrent() == tty.proc) tty.proc = null;
     if (tty.users.put()) {
         tty.setLineDiscipline(&LineDiscipline.null_disc) catch {};
         tty.ops.disable(tty);
@@ -367,7 +412,8 @@ fn fileWrite(file: *vfs.File, _: usize, buffer: []const u8) vfs.Error!usize {
     const dev_file = devfs.DevFile.fromDentry(file.dentry);
     const tty = dev_file.data.as(Self).?;
 
-    return tty.writeOutput(buffer);
+    if (tty.config.oflag.OPOST) return tty.line_disc.write(tty, buffer);
+    return LineDiscipline.throw_disc.write(tty, buffer);
 }
 
 fn fileIoctl(file: *vfs.File, op: c_uint, value: usize) vfs.Error!void {

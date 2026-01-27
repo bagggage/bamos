@@ -17,6 +17,7 @@ pub const self: LineDiscipline = .{
         .setup = &setup,
         .read = &read,
         .receive = &receive,
+        .write = &write,
     }
 };
 
@@ -26,12 +27,18 @@ fn setup(tty: *Teletype) Teletype.Error!void {
         .IGNBRK = true,
         .BRKINT = true,
     };
+    tty.config.oflag = .{
+        .OPOST = true,
+        .ONLCR = true,
+        .ONOCR = true,
+    };
     tty.config.lflag = .{
         .ECHO = true,
         .ECHOE = true,
         .ECHOKE = true,
         .ECHOCTL = true,
-        .ICANON = true
+        .ICANON = true,
+        .ISIG = true
     };
 
     tty.config.cc[@intFromEnum(Teletype.V.ERASE)] = control_code.del;
@@ -102,8 +109,8 @@ fn canonicalReceive(tty: *Teletype, buffer: []const u8) void {
             const out: u8 = if (tty.config.iflag.ICRNL) control_code.lf else control_code.cr;
             putByte(tty, out);
         } else if (c == erase) {
-            tty.eraseInputAtomic(1);
-            if (tty.config.lflag.ECHOE) echoEraseSequence(tty);
+            const success = tty.eraseInputAtomic(1);
+            if (success and tty.config.lflag.ECHOE) echoEraseSequence(tty);
         } else if (c == kill) {
             const pos = tty.in_buffer.pos;
             tty.eraseInputLineAtomic();
@@ -132,6 +139,39 @@ fn canonicalReceive(tty: *Teletype, buffer: []const u8) void {
     }
 }
 
+fn write(tty: *Teletype, buffer: []const u8) Teletype.Error!usize {
+    const writen = if (tty.config.lflag.ICANON) blk: {
+        break :blk try canonicalWrite(tty, buffer);
+    } else blk: {
+        tty.out_lock.lock();
+        defer tty.out_lock.unlock();
+
+        break :blk try tty.writeOutput(buffer);
+    };
+
+    if (tty.out_buffer.pos > 0) try tty.flush();
+    return writen;
+}
+
+fn canonicalWrite(tty: *Teletype, buffer: []const u8) Teletype.Error!usize {
+    tty.out_lock.lock();
+    defer tty.out_lock.unlock();
+
+    for (buffer) |c| {
+        if (c == control_code.cr and tty.config.oflag.ONOCR) {
+            continue;
+        } else if (c == control_code.cr and tty.config.oflag.OCRNL) {
+            try tty.writeOutputByteAtomic('\n');
+        } else if (c == control_code.lf and tty.config.oflag.ONLCR) {
+            _ = try tty.writeOutputAtomic("\r\n");
+        } else {
+            try tty.writeOutputByteAtomic(c);
+        }
+    }
+
+    return buffer.len;
+}
+
 fn putByte(tty: *Teletype, byte: u8) void {
     if (!tty.bufferInputByteAtomic(byte)) {
         @branchHint(.unlikely);
@@ -146,7 +186,17 @@ fn putByte(tty: *Teletype, byte: u8) void {
 
     if (tty.config.lflag.ECHO or
         (byte == control_code.lf and tty.config.lflag.ECHONL)
-    ) tty.flushRaw(&.{byte}) catch {};
+    ) {
+        if (tty.config.oflag.OPOST) {
+            if (byte == control_code.lf and tty.config.oflag.ONLCR) {
+                tty.flushRaw("\r\n") catch {};
+            } else {
+                tty.flushRaw(&.{byte}) catch {};
+            }
+        } else {
+            tty.flushRaw(&.{byte}) catch {};
+        }
+    }
 
     if (byte == control_code.lf) tty.notifyInputReceived(); 
 }
