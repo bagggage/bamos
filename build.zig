@@ -1,4 +1,4 @@
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 const src_dir = "src";
 
 const qemu_cores_default = 4;
-const qemu_ram_default = "64M";
+const qemu_ram_default = "128M";
 
 // Build tools
 var dbg_make_exe: *std.Build.Step.Compile = undefined;
@@ -43,9 +43,15 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     const name = b.option([]const u8, "exe-name", "Name of the kernel executable");
     const optimize = b.standardOptimizeOption(.{});
 
+    var cpu_feat: std.Target.Cpu.Feature.Set = .empty;
+    if (arch == .x86_64) {
+        cpu_feat.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
+    }
+
     const target = b.resolveTargetQuery(.{
         .os_tag = .freestanding,
         .cpu_arch = arch,
+        .cpu_features_add = cpu_feat,
         .ofmt = .elf
     });
 
@@ -201,10 +207,10 @@ fn makeImage(b: *std.Build, step: *std.Build.Step, kernel: *std.Build.Step.Insta
 fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.InstallFile) *std.Build.Step.Run {
     const enable_gdb = b.option(bool, "qemu-gdb", "Enable GDB server (default: false)") orelse false;
     const enable_serial = b.option(bool, "qemu-serial", "Serial output to stdout (default: true)") orelse true;
-    const enable_trace = b.option(bool, "qemu-trace", "Enable interrupts tracing (deafault: false)") orelse false;
+    const enable_trace = b.option(bool, "qemu-trace", "Enable interrupts tracing (default: false)") orelse false;
     const enable_kvm = b.option(bool, "qemu-kvm", "Enable KVM acceleration") orelse true;
     const cpu_num = b.option(u5, "qemu-cpus", "QEMU machine cpus number (default: 4)") orelse qemu_cores_default;
-    const ram_size = b.option([]const u8, "qemu-ram", "QEMU machine RAM size (default: 64 M)") orelse qemu_ram_default;
+    const ram_size = b.option([]const u8, "qemu-ram", "QEMU machine RAM size (default: "++qemu_ram_default++")") orelse qemu_ram_default;
     const drives = b.option([]const []const u8, "qemu-drives", "QEMU additional NVMe drives (paths to images)") orelse &.{};
     const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse false;
     const no_uefi = b.option(bool, "qemu-noefi", "Legacy BIOS firmware") orelse false;
