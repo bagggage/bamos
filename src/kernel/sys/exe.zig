@@ -187,6 +187,8 @@ const Arguments = struct {
         .drain = drain
     };
 
+    const separators = " \n\t";
+
     entries: lib.VirtualArray(usize),
     content: vm.VirtualRegion = .init(start_args_addr),
     writer: std.Io.Writer = .{
@@ -323,3 +325,36 @@ const Arguments = struct {
         }
     }
 };
+
+pub fn parseArgs(args: [:0]u8) vm.Error![]const [*:0]const u8 {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos < args.len) {
+        pos = std.mem.indexOfNonePos(u8, args, pos, Arguments.separators) orelse break;
+        count += 1;
+
+        pos = std.mem.indexOfAnyPos(u8, args, pos, Arguments.separators) orelse break;
+    }
+
+    if (count == 0) return &.{};
+
+    const buffer = vm.gpa.allocMany([*:0]const u8, count) orelse return error.NoMemory;
+    return parseArgsBuffered(args, buffer);
+}
+
+pub fn parseArgsBuffered(args: [:0]u8, buffer: [][*:0]const u8) vm.Error![]const [*:0]const u8 {
+    const Array = std.ArrayListUnmanaged([*:0]const u8);
+    var array: Array = .initBuffer(buffer);
+
+    var pos: usize = 0;
+    while (pos < args.len) {
+        pos = std.mem.indexOfNonePos(u8, args, pos, Arguments.separators) orelse break;
+        array.appendBounded(args[pos..].ptr) catch return error.NoMemory;
+
+        pos = std.mem.indexOfAnyPos(u8, args, pos, Arguments.separators) orelse break;
+        args[pos] = 0;
+        pos += 1;
+    }
+
+    return array.items;
+}
