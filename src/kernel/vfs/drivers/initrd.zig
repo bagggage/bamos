@@ -1,12 +1,13 @@
 //! # Init ram-disk filesystem
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const tar = std.tar;
 
 const boot = @import("../../boot.zig");
 const log = std.log.scoped(.initrd);
+const tmpfs = vfs.tmpfs;
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
@@ -87,6 +88,9 @@ var fs = vfs.FileSystem.init(
     .{
         .open = dentryOpen,
         .lookup = dentryLookup,
+
+        .createFile = dentryCreateFile,
+        .makeDirectory = dentryMakeDirectory,
     }
 );
 
@@ -96,20 +100,9 @@ var file_name: [max_name]u8 = .{ 0 } ** max_name;
 var link_name: [max_name]u8 = .{ 0 } ** max_name;
 
 pub const fs_name = "initramfs";
-pub const mount_dir_name: []const u8 = "initrd";
 
 pub fn init() !void {
     if (!vfs.registerFs(&fs)) return error.RegisterFailed;
-    const mount_dir = vfs.getRootWeak().makeDirectory(mount_dir_name) catch |err| {
-        log.err("failed to create mount point: {}", .{err});
-        return error.MountFailed;
-    };
-    defer mount_dir.deref();
-
-    _ = vfs.mount(mount_dir, fs_name, null) catch |err| {
-        log.err("while mounting: {}", .{err});
-        return error.MountFailed;
-    };
 }
 
 pub fn deinit() void {
@@ -163,6 +156,7 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
     }
 
     const parent_name_str = parent.name.str();
+    if (tmpfs.DentryOps.lookup(parent, name)) |child| return child;
 
     var i: u32 = 0;
     while (try tar_iter.next()) |file| : (i += 1) {
@@ -211,6 +205,16 @@ fn setupInode(inode: *vfs.Inode, file: *const TarFile, idx: u32, pos: usize) voi
         // Data pointer
         .fs_data = .from(@ptrFromInt(pos)),
     };
+}
+
+fn dentryCreateFile(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
+    try tmpfs.DentryOps.createFile(parent, child);
+    child.ops = tmpfs.dentry_ops;
+}
+
+fn dentryMakeDirectory(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
+    try tmpfs.DentryOps.makeDirectory(parent, child);
+    child.ops = tmpfs.dentry_ops;
 }
 
 fn fileReadCacheBlock(dentry: *const vfs.Dentry, block: *vm.cache.Block) vfs.Error!void {
