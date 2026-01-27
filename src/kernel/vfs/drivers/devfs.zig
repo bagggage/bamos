@@ -112,6 +112,8 @@ pub const BlockDev = struct {
     }
 };
 
+pub const fs_name = "devtmpfs";
+
 const DevList = struct {
     list: DevFile.List = .{},
     max_no: u16,
@@ -121,8 +123,8 @@ const DevList = struct {
 
 const init_inode_idx = 1;
 
-var fs = vfs.FileSystem.init(
-    "devtmpfs",
+var fs: vfs.FileSystem = .init(
+    fs_name,
     .{ .virt = .{
         .mount = mount,
         .unmount = unmount

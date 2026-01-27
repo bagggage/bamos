@@ -62,6 +62,7 @@ pub fn getAs(comptime T: type, key: []const u8) ?T {
         log.warn("\"{s}\" has invalid value: \"{s}\" ({s}), expected format: {s}", .{
             key, value, @errorName(err), @typeName(T)
         });
+        return null;
     };
 }
 
