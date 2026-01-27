@@ -1,6 +1,6 @@
 //! # Generic OS subsystems
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -30,12 +30,11 @@ const init_paths: []const [:0]const u8 = &.{
 
 const InitSource = struct {
     dentry: *vfs.Dentry,
-    path: [:0]const u8
+    path: [:0]const u8,
+    args: [:0]const u8
 };
 
 pub fn init() !void {
-    arch.syscall.init();
-
     startInit() catch |err| {
         if (err == error.InitNotFound) @panic("Init executable not found.");
         return err;
@@ -46,6 +45,8 @@ fn startInit() !void {
     const init_task = blk: {
         const root = getInitRoot() orelse return error.NoRootFs;
         defer root.deref();
+
+        try vfs.changeRoot(root);
 
         const init_src = try findInit(root);
         defer init_src.dentry.deref();
@@ -59,7 +60,11 @@ fn startInit() !void {
         var bin: exe.Binary = try .init(init_src.dentry, init_proc);
         defer bin.deinit();
 
-        try bin.load(&.{init_src.path}, &.{});
+        const parsed_args = try exe.parseArgs(@constCast(init_src.args));
+        defer if (parsed_args.len > 0) vm.gpa.free(@ptrCast(@constCast(parsed_args.ptr)));
+
+        const args = if (parsed_args.len > 0) parsed_args else &.{init_src.path.ptr};
+        try bin.load(args, &.{});
 
         log.debug("{f}", .{init_proc.addr_space});
         arch.syscall.startProcess(init_proc, bin.data.run_ctx);
@@ -67,12 +72,14 @@ fn startInit() !void {
         break :blk init_proc.getMainTask().?;
     };
 
-    //_ = init_task;
     sched.enqueue(init_task);
 }
 
 fn findInit(root: *vfs.Dentry) !InitSource {
-    var init_dent: ?*vfs.Dentry = if (config.get("init")) |path| blk: {
+    var init_dent: ?*vfs.Dentry = if (config.get("init")) |cmd| blk: {
+        var it = std.mem.splitAny(u8, cmd, " \n\t");
+        const path: [:0]const u8 = @ptrCast(it.first());
+
         const dent = vfs.lookup(root, null, path) catch |err| {
             if (err == vfs.Error.NoEnt) {
                 log.warn("Init not found at specified path \"{s}\".", .{path});
@@ -80,7 +87,7 @@ fn findInit(root: *vfs.Dentry) !InitSource {
             }
             return err;
         };
-        return .{ .dentry = dent, .path = path };
+        return .{ .dentry = dent, .path = path, .args = cmd };
     } else null;
 
     const init_path = blk: {
@@ -101,7 +108,7 @@ fn findInit(root: *vfs.Dentry) !InitSource {
         return error.InitNotFound;
     };
 
-    return .{ .dentry = init_dent.?, .path = init_path };
+    return .{ .dentry = init_dent.?, .path = init_path, .args = &.{} };
 }
 
 fn getInitRoot() ?*vfs.Dentry {
