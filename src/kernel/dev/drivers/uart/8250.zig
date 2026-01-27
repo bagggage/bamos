@@ -29,6 +29,17 @@ const IntrEnReg = packed struct {
     reserved: u2 = 0,
 };
 
+const LineStatusReg = packed struct {
+    data_ready: bool = false,
+    overrun_error: bool = false,
+    parity_error: bool = false,
+    framing_error: bool = false,
+    break_intr: bool = false,
+    empty_thr: bool = false,
+    empty_dhr: bool = false,
+    fifo_error: bool = false,
+};
+
 const reg = dev.regs.reg;
 
 const Port = struct {
@@ -39,7 +50,6 @@ const Port = struct {
             // DLAB == 0
             reg("data",         0x0, null, .rw),
             reg("intr_enable",  0x1, null, .rw),
-
 
             // DLAB == 1
             reg("div_lo",       0x0, null, .rw),
@@ -63,10 +73,13 @@ const Port = struct {
         irq: comptime_int,
     };
 
+    // 8250 FIFO size
+    const fifo_size = 16;
+
     device: dev.Device = undefined,
     regs: Registers = undefined,
-    immediate_intr: dev.intr.ImmediateHandler = .{
-        .func = & immediateIrqHandler,
+    immediate_intr: dev.intr.SoftHandler = .{
+        .func = &immediateIrqHandler,
     },
 
     fn setup(self: *Port, driver: *dev.Driver, hw: Hardware) !void {
@@ -103,13 +116,38 @@ const Port = struct {
         self.regs.write(.intr_enable, 0x00); // Disable all interrupts
 
         self.regs.write(.line_ctrl, 0x80);   // Enable DLAB (set baud rate divisor)
-        self.regs.write(.div_lo, 0x03);      // Set divisor to 3 (lo byte) 38400 baud
+        self.regs.write(.div_lo, 0x01);      // Set divisor to 1 (lo byte) 115200 baud
         self.regs.write(.div_hi, 0x00);      //                  (hi byte)
 
         self.regs.write(.line_ctrl, 0x03);   // 8 bits, no parity, one stop bit
         self.regs.write(.fifo_ctrl, 0xC7);   // Enable FIFO, clear them, with 14-byte threshold
 
         self.regs.write(.modem_ctrl, 0x0B);  // IRQs enabled, RTS/DSR set
+    }
+
+    fn write(self: *Port, buffer: []const u8) void {
+        writeRaw(self.regs, buffer);
+    } 
+
+    fn writeRaw(regs: Registers, buffer: []const u8) void {
+        waitReadyToSend(regs);
+
+        var i: u32 = 0;
+        for (buffer) |byte| {
+            if (i == fifo_size) {
+                waitReadyToSend(regs);
+                i = 0;
+            }
+            
+            regs.write(.data, byte);
+            i += 1;
+        }
+    }
+
+    inline fn waitReadyToSend(regs: Registers) void {
+        while (!regs.get(LineStatusReg, .line_status).empty_thr) {
+            std.atomic.spinLoopHint();
+        }
     }
 
     inline fn enableIrq(self: *Port) void {
@@ -176,11 +214,9 @@ pub fn init() !void {
     }
 }
 
-pub fn write(bytes: []const u8) void {
+pub fn write(buffer: []const u8) void {
     const regs: Port.Registers = .{ .dyn_base = hw_ports[0].base };
-    for (bytes) |byte| {
-        regs.write(.data, byte);
-    }
+    Port.writeRaw(regs, buffer);
 }
 
 fn irqHandler(device: *dev.Device) bool {
@@ -218,9 +254,7 @@ fn immediateIrqHandler(ctx: ?*anyopaque) void {
 
 fn ttyFlush(tty: *Teletype, buffer: []const u8) Teletype.Error!void {
     const port = Port.fromTeletype(tty);
-    for (buffer) |byte| {
-        port.regs.write(.data, byte);
-    }
+    port.write(buffer);
 }
 
 fn ttyEnable(tty: *Teletype) Teletype.Error!void {
