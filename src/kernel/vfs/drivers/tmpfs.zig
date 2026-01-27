@@ -51,6 +51,8 @@ pub const DentryOps = opaque {
     pub const createFile = dentryCreateFile;
 };
 
+pub const dentry_ops = &fs.dentry_ops;
+
 var fs = vfs.FileSystem.init(
     "tmpfs",
     .{ .virt = .{
@@ -92,11 +94,15 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
 fn dentryMakeDirectory(_: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
     const inode = try createInode(.directory);
     child.assignInode(inode);
+    // Prevent auto-freeing
+    child.ref();
 }
 
 fn dentryCreateFile(_: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
     const inode = try createInode(.regular_file);
     child.assignInode(inode);
+    // Prevent auto-freeing
+    child.ref();
 }
 
 pub fn createRegularFile(name: []const u8, ctx: vfs.Context.Ptr) !*vfs.Dentry {
