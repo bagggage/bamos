@@ -31,7 +31,7 @@ pub fn alloc(T: type) ?*T {
 
     const config: Config = T.alloc_config;
     return switch (comptime config.allocator) {
-        .gpa => vm.alloc(T),
+        .gpa => vm.gpa.create(T),
         .oma => getOma(T).alloc(T)
     };
 }
@@ -41,7 +41,7 @@ pub fn free(T: type, ptr: *T) void {
 
     const config: Config = T.alloc_config;
     switch (comptime config.allocator) {
-        .gpa => vm.free(ptr),
+        .gpa => vm.gpa.free(ptr),
         .oma => getOma(T).free(ptr)
     }
 }
