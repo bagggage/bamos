@@ -10,6 +10,8 @@ const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"dev.io");
 const vm = @import("../vm.zig");
 
+pub const Error = error { Timeout };
+
 pub const inb = arch.io.inb;
 pub const inw = arch.io.inw;
 pub const inl = arch.io.inl;
@@ -334,6 +336,30 @@ pub const readw = readMmioFn(usize, u16);
 pub const readl = readMmioFn(usize, u32);
 /// Read quad word from mmio memory.
 pub const readq = readMmioFn(usize, u64);
+
+pub fn delay(iters: u32) void {
+    @setRuntimeSafety(false);
+    for (0..iters) |_| {
+        arch.io.delay();
+        std.atomic.spinLoopHint();
+    }
+}
+
+pub fn waitFor(
+    comptime check: fn (lib.AnyData) callconv(.@"inline") bool,
+    ctx: lib.AnyData, timeout: u32
+) Error!void {
+    @setRuntimeSafety(false);
+
+    for (0..timeout) |_| {
+        arch.io.delay();
+
+        if (check(ctx)) return;
+        std.atomic.spinLoopHint();
+    }
+
+    return error.Timeout;
+}
 
 pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime io_type: Type) ?usize {
     const end = base + size;
