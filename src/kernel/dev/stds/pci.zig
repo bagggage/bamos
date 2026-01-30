@@ -94,7 +94,7 @@ pub const Device = struct {
 
     pub inline fn from(device: *const dev.Device) *Device {
         std.debug.assert(device.bus == &bus);
-        return device.driver_data.as(Device) orelse unreachable;
+        return device.driver_data.asPtr(Device) orelse unreachable;
     }
 };
 
@@ -132,7 +132,7 @@ pub fn init() !void {
 }
 
 fn match(driver: *const dev.Driver, device: *const dev.Device) bool {
-    const pci_dev = device.driver_data.as(Device) orelse unreachable;
+    const pci_dev = device.driver_data.asPtr(Device) orelse unreachable;
     const pci_driver = Driver.from(driver);
 
     return (
@@ -151,7 +151,7 @@ fn match(driver: *const dev.Driver, device: *const dev.Device) bool {
 }
 
 fn remove(device: *dev.Device) void {
-    const pci_dev = device.driver_data.as(Device) orelse unreachable;
+    const pci_dev = device.driver_data.asPtr(Device) orelse unreachable;
 
     pci_dev.deinit();
     dev_oma.free(pci_dev);

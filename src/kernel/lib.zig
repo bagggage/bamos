@@ -24,16 +24,53 @@ pub const arch = switch (builtin.cpu.arch) {
 pub const AnyData = struct {
     ptr: ?*anyopaque = null,
 
-    pub inline fn from(ptr: ?*anyopaque) AnyData {
+    pub inline fn from(val: anytype) AnyData {
+        @setRuntimeSafety(false);
+
+        const T = @TypeOf(val);
+        const int: anytypeToInt(T) = @bitCast(val);
+
+        return .{ .ptr = @ptrFromInt(int) };
+    }
+
+    pub inline fn set(self: *AnyData, val: anytype) void {
+        @setRuntimeSafety(false);
+
+        const T = @TypeOf(val);
+        const int: anytypeToInt(T) = @bitCast(val);
+
+        self.ptr = @ptrFromInt(int);
+    }
+
+    pub inline fn as(self: *AnyData, comptime T: type) T {
+        @setRuntimeSafety(false);
+
+        const Int = anytypeToInt(T);
+        const ptr: usize = @intFromPtr(self.ptr);
+
+        if (comptime @bitSizeOf(usize) > @bitSizeOf(Int)) {
+            const int: Int = @truncate(@intFromPtr(ptr));
+            return @bitCast(int);
+        } else {
+            const int: Int = ptr;
+            return @bitCast(int);
+        }
+    }
+
+    pub inline fn fromPtr(ptr: ?*anyopaque) AnyData {
         return .{ .ptr = ptr };
     }
 
-    pub inline fn set(self: *AnyData, ptr: ?*anyopaque) void {
+    pub inline fn setPtr(self: *AnyData, ptr: ?*anyopaque) void {
         self.ptr = ptr;
     }
 
-    pub inline fn as(self: AnyData, comptime T: type) ?*T {
+    pub inline fn asPtr(self: AnyData, comptime T: type) ?*T {
         return if (self.ptr) |val| @as(*T, @ptrCast(@alignCast(val))) else null;
+    }
+
+    fn anytypeToInt(comptime T: type) type {
+        return std.meta.Int(.unsigned, @bitSizeOf(T));
     }
 };
 
@@ -53,6 +90,7 @@ pub const NumberAllocFloor = num_alloc.NumberAllocFloor;
 pub const NumberAllocRanged = num_alloc.NumberAllocRanged;
 pub const rb = @import("lib/rb-tree.zig");
 pub const rcu = @import("lib/rcu.zig");
+pub const RingBuffer = @import("lib/ring-buffer.zig").RingBuffer;
 pub const sync = @import("lib/sync.zig");
 pub const VirtualArray = @import("lib/virtual-array.zig").VirtualArray;
 

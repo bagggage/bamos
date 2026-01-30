@@ -169,8 +169,6 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
             !std.mem.eql(u8, parent_name_str, parent_name)
         ) break;
 
-        log.debug("name: \"{s}\"; parent: \"{s}\"", .{entry_name, parent_name});
-
         if (std.mem.eql(u8, entry_name, name)) {
             // Init new dentry
             const dentry = vfs.Dentry.new() orelse return error.NoMemory;
@@ -203,7 +201,7 @@ fn setupInode(inode: *vfs.Inode, file: *const TarFile, idx: u32, pos: usize) voi
         .cache_ctrl = .{ .write_back = &vfs.internals.cache.noWriteBack },
 
         // Data pointer
-        .fs_data = .from(@ptrFromInt(pos)),
+        .fs_data = .from(pos),
     };
 }
 
@@ -219,7 +217,7 @@ fn dentryMakeDirectory(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!
 
 fn fileReadCacheBlock(dentry: *const vfs.Dentry, block: *vm.cache.Block) vfs.Error!void {
     const inode = dentry.inode;
-    const data_offset: usize = @intFromPtr(inode.fs_data.ptr);
+    const data_offset = inode.fs_data.as(usize);
 
     const offset = block.getOffset();
     const end = @min(inode.size, offset + block.size.toBytes());

@@ -317,7 +317,7 @@ pub fn ioSync(self: *Self, op: io.Operation, lba_offset: usize, buffer: []u8) Er
     var status: io.Status = undefined;
     const request = try self.makeRequest(
         op, lba_offset, buffer,
-        .{ .func = syncCallback, .data = .from(&status) }
+        .{ .func = syncCallback, .data = .fromPtr(&status) }
     );
 
     self.submitRequestAndWait(request);
@@ -351,7 +351,7 @@ pub fn getPartition(self: *const Self, part: u32) ?*vfs.Partition {
 }
 
 fn syncCallback(_: *const io.Request, status: io.Status, data: lib.AnyData) void {
-    const status_ptr = data.as(io.Status).?;
+    const status_ptr = data.asPtr(io.Status).?;
     status_ptr.* = status;
 }
 
@@ -416,7 +416,7 @@ fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, 
             const lba_offset = self.offsetToLba(offset + q.base);
             self.ioAsync(
                 .read, lba_offset, buffer[q.base..q.top],
-                .{ .func = &syncCallback, .data = .from(&statuses[i]) }
+                .{ .func = &syncCallback, .data = .fromPtr(&statuses[i]) }
             ) catch break :blk i;
         }
         break :blk quants.len;
@@ -440,7 +440,7 @@ fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, 
 fn filePartitionRead(file: *const vfs.File, offset: usize, buffer: []u8) vfs.Error!usize {
     const dev_file = devfs.DevFile.fromDentry(file.dentry);
     const part = vfs.Partition.fromDevFile(dev_file);
-    const self = dev_file.data.as(Self).?;
+    const self = dev_file.data.asPtr(Self).?;
 
     const region = self.calcPartitionRegion(part, offset, buffer.len);
     if (region[0] == region[1]) return 0;

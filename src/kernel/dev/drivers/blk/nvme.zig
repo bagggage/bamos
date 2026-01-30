@@ -877,7 +877,7 @@ const Controller = struct {
 
     fn intrHandler(device: *dev.Device) bool {
         const pci_dev = pci.Device.from(device);
-        const controller = pci_dev.data.as(Controller) orelse return false;
+        const controller = pci_dev.data.asPtr(Controller) orelse return false;
 
         dev.intr.scheduleSoft(&controller.soft_intrs[smp.getIdx()]);
 
@@ -919,13 +919,13 @@ fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {
 
     const pci_dev = pci.Device.from(device);
     const controller = vm.gpa.create(Controller) orelse return .no_resources;
-    pci_dev.data.set(@ptrCast(controller));
+    pci_dev.data.setPtr(@ptrCast(controller));
 
     controller.init(pci_dev) catch |err| {
         log.err("initialization failed: {s}", .{@errorName(err)});
 
         vm.gpa.free(controller);
-        pci_dev.data.set(null);
+        pci_dev.data.setPtr(null);
 
         return .failed;
     };
@@ -936,7 +936,7 @@ fn probe(device: *dev.Device) dev.Driver.Operations.ProbeResult {
 
 fn remove(device: *dev.Device) void {
     const pci_dev = pci.Device.from(device);
-    const controller = pci_dev.data.as(Controller) orelse return;
+    const controller = pci_dev.data.asPtr(Controller) orelse return;
 
     controller.deinit();
     ctrl_idx -= 1;

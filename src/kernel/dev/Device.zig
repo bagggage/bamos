@@ -33,7 +33,7 @@ pub fn init(name: dev.Name, data: ?*anyopaque) Self {
     return .{
         .name = name,
         .bus = undefined,
-        .driver_data = .from(data),
+        .driver_data = .fromPtr(data),
     };
 }
 

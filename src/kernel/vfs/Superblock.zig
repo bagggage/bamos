@@ -53,7 +53,7 @@ pub fn init(
         .part_offset = drive.lbaToOffset(part.lba_start),
         .block_size = block_size,
         .block_shift = std.math.log2_int(u16, block_size),
-        .fs_data = .from(fs_data)
+        .fs_data = .fromPtr(fs_data)
     };
 }
 
