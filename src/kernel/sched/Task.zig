@@ -117,34 +117,35 @@ pub const Stats = struct {
     }
 };
 
-/// Kernel task specific data.
-pub const KernelSpecific = struct {
-    name: []const u8
-};
-
-/// User task specific data.
-pub const UserSpecific = struct {
-    pub const UList = std.SinglyLinkedList;
-    pub const UNode = UList.Node;
-
-    process: *sys.Process,
-
-    /// Used by `sys.Process` to put task in list.
-    node: UNode = .{},
-
-    pub inline fn fromNode(node: *UNode) *UserSpecific {
-        return @fieldParentPtr("node", node);
-    }
-
-    pub inline fn toTask(self: *UserSpecific) *sched.Task {
-        const spec: *Specific = @fieldParentPtr("user", self);
-        return @fieldParentPtr("spec", spec);
-    }
-};
-
 pub const Specific = union(enum) {
-    kernel: KernelSpecific,
-    user: UserSpecific,
+    /// Kernel task specific data.
+    pub const Kernel = struct {
+        name: []const u8
+    };
+
+    /// User task specific data.
+    pub const User = struct {
+        pub const UList = std.SinglyLinkedList;
+        pub const UNode = UList.Node;
+
+        process: *sys.Process,
+        abi_data: lib.AnyData = .{},
+
+        /// Used by `sys.Process` to put task in list.
+        node: UNode = .{},
+
+        pub inline fn fromNode(node: *UNode) *User {
+            return @fieldParentPtr("node", node);
+        }
+
+        pub inline fn toTask(self: *User) *sched.Task {
+            const spec: *Specific = @fieldParentPtr("user", self);
+            return @fieldParentPtr("spec", spec);
+        }
+    };
+
+    kernel: Kernel,
+    user: User,
 };
 
 stats: Stats = .{},

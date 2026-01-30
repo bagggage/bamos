@@ -20,7 +20,7 @@ const Node = List.Node;
 
 const RbNode = lib.rb.Node;
 
-const TaskList = sched.Task.UserSpecific.UList;
+const TaskList = sched.Task.Specific.User.UList;
 const TaskNode = TaskList.Node;
 
 /// Process identifier data type.
@@ -183,7 +183,7 @@ pub fn deinit(self: *Self) void {
     while (node) |n| {
         node = n.next;
 
-        const task = sched.Task.UserSpecific.fromNode(n).toTask();
+        const task = sched.Task.Specific.User.fromNode(n).toTask();
         task.delete();
     }
 
@@ -213,7 +213,7 @@ pub inline fn fromRbNode(rb_node: *RbNode) *Self {
 }
 
 pub inline fn getMainTask(self: *Self) ?*sched.Task {
-    const user = sched.Task.UserSpecific.fromNode(self.tasks.first orelse return null);
+    const user = sched.Task.Specific.User.fromNode(self.tasks.first orelse return null);
     const specific: *sched.Task.Specific = @ptrCast(user);
     return @fieldParentPtr("spec", specific);
 }

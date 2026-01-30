@@ -136,21 +136,18 @@ pub fn init() !void {
             cfg_io.getBase = MmioIo.getBase;
 
             try initMmio(entry.?);
-        }
-        else {
+        } else {
             cfg_io.read = PortsIo.read;
             cfg_io.write = PortsIo.write;
             cfg_io.getBase = PortsIo.getBase;
 
             log.info("i/o ports", .{});
         }
-    }
-    else if (entry) |hdr| {
+    } else if (entry) |hdr| {
         if (!hdr.checkSum()) return error.McfgInvalidChecksum;
 
         try initMmio(hdr);
-    }
-    else {
+    } else {
         return error.McfgEntryNotFound;
     }
 }
