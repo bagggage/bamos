@@ -565,7 +565,7 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
 }
 
 fn readBgd(super: *const vfs.Superblock, group: u32, cursor: *cache.Cursor) !*BlockGroupDescriptor {
-    const ext_super = super.fs_data.as(Superblock).?;
+    const ext_super = super.fs_data.asPtr(Superblock).?;
     const offset = super.part_offset + ((ext_super.sb_block + 1) * super.block_size) + (group * @sizeOf(BlockGroupDescriptor));
 
     try cursor.ensureCache(.read, offset);
@@ -577,7 +577,7 @@ inline fn calcBlockOffset(super: *const vfs.Superblock, block: u32) usize {
 }
 
 fn readInode(super: *const vfs.Superblock, inode: u32, cursor: *cache.Cursor) !*const Inode {
-    const ext_super = super.fs_data.as(Superblock).?;
+    const ext_super = super.fs_data.asPtr(Superblock).?;
 
     const idx = inode - 1;
     const group = idx / ext_super.inodes_per_group;

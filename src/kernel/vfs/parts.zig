@@ -49,7 +49,7 @@ pub const Partition = struct {
             .name = name,
             .num = num,
             .ops = ops,
-            .data = .from(data)
+            .data = .fromPtr(data)
         };
         try devfs.registerBlockDev(&self.dev_file);
     }

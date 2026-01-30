@@ -82,7 +82,7 @@ pub const DevFile = struct {
             dentry.inode.type == .block_device or
             dentry.inode.type == .char_device
         );
-        return dentry.inode.fs_data.as(DevFile).?;
+        return dentry.inode.fs_data.asPtr(DevFile).?;
     }
 };
 
@@ -104,7 +104,7 @@ pub const BlockDev = struct {
     }
 
     pub inline fn getDrive(self: *BlockDev) *vfs.Drive {
-        return self.dev_file.data.as(vfs.Drive).?;
+        return self.dev_file.data.asPtr(vfs.Drive).?;
     }
 
     pub inline fn getName(self: *const BlockDev) *const dev.Name {
@@ -189,7 +189,7 @@ pub inline fn registerCharDev(devf: *DevFile) Error!void {
 }
 
 pub inline fn getDevData(dentry: *const vfs.Dentry) lib.AnyData {
-    return dentry.inode.fs_data.as(DevFile).?.data;
+    return dentry.inode.fs_data.asPtr(DevFile).?.data;
 }
 
 pub inline fn getRoot() *vfs.Dentry {
@@ -203,21 +203,25 @@ fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
     const dentry = try tmpfs.createDentry(devf.name.str(), inode, root.ctx);
     dentry.ops = &fs.dentry_ops;
 
-    inode.fs_data.set(devf);
+    inode.fs_data.setPtr(devf);
     root.addChild(dentry);
 
     return dentry;
 }
 
+// TODO: implement
+//fn unregisterDevice(devf: *DevFile, kind: vfs.Inode.Type) void {
+//}
+
 fn dentryOpen(dentry: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
-    const devf = dentry.inode.fs_data.as(DevFile).?;
+    const devf = dentry.inode.fs_data.asPtr(DevFile).?;
     file.ops = &devf.ops.fops;
 
     if (devf.ops.open) |open| try open(devf, file);
 }
 
 fn dentryClose(dentry: *const vfs.Dentry, file: *vfs.File) void {
-    const devf = dentry.inode.fs_data.as(DevFile).?;
+    const devf = dentry.inode.fs_data.asPtr(DevFile).?;
     if (devf.ops.close) |close| close(devf, file);
 }
 

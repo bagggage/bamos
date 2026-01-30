@@ -112,7 +112,7 @@ pub fn createRegularFile(name: []const u8, ctx: vfs.Context.Ptr) !*vfs.Dentry {
     errdefer inode.free();
 
     const dentry = try createDentry(name, inode, ctx);
-    inode.fs_data.set(file);
+    inode.fs_data.setPtr(file);
 
     return dentry;
 }
@@ -157,7 +157,7 @@ pub fn createInode(kind: vfs.Inode.Type) !*vfs.Inode {
 
 fn deinitInode(inode: *const vfs.Inode) void {
     if (inode.type == .regular_file) {
-        const file = inode.fs_data.as(File).?;
+        const file = inode.fs_data.asPtr(File).?;
         file.delete();
     }
 }

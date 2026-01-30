@@ -103,7 +103,7 @@ const Port = struct {
 
         try tty.setup("ttyS", &dev_region, &tty_ops, self);
 
-        self.device.driver_data.set(tty);
+        self.device.driver_data.setPtr(tty);
         self.immediate_intr.ctx = tty;
 
         try dev.obj.add(Teletype, tty);
@@ -183,7 +183,7 @@ const Port = struct {
     }
 
     inline fn fromTeletype(tty: *Teletype) *Port {
-        return tty.data.as(Port).?;
+        return tty.data.asPtr(Port).?;
     }
 };
 

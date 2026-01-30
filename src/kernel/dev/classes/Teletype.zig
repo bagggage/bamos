@@ -155,10 +155,10 @@ pub fn setup(
             .name = try .print("{s}{}", .{name, dev_num.minor}),
             .num = dev_num,
             .ops = &devfile_ops,
-            .data = .from(self)
+            .data = .fromPtr(self)
         },
         .ops = ops,
-        .data = .from(data)
+        .data = .fromPtr(data)
     };
     errdefer self.dev_file.name.deinit();
 
@@ -376,7 +376,7 @@ pub fn controlSignal(self: *Self, sig: sys.Process.Signal) void {
 }
 
 fn devOpen(dev_file: *devfs.DevFile, _: *vfs.File) vfs.Error!void {
-    const tty = dev_file.data.as(Self).?;   
+    const tty = dev_file.data.asPtr(Self).?;   
     if (tty.users.value.fetchAdd(1, .release) == 0) {
         try tty.ops.enable(tty);
         tty.enabled.store(true, .release);
@@ -394,7 +394,7 @@ fn devOpen(dev_file: *devfs.DevFile, _: *vfs.File) vfs.Error!void {
 }
 
 fn devClose(dev_file: *devfs.DevFile, _: *vfs.File) void {
-    const tty = dev_file.data.as(Self).?;
+    const tty = dev_file.data.asPtr(Self).?;
 
     if (sys.Process.getCurrent() == tty.proc) tty.proc = null;
     if (tty.users.put()) {
@@ -406,14 +406,14 @@ fn devClose(dev_file: *devfs.DevFile, _: *vfs.File) void {
 
 fn fileRead(file: *const vfs.File, _: usize, buffer: []u8) vfs.Error!usize {
     const dev_file = devfs.DevFile.fromDentry(file.dentry);
-    const tty = dev_file.data.as(Self).?;
+    const tty = dev_file.data.asPtr(Self).?;
 
     return tty.line_disc.read(tty, buffer);
 }
 
 fn fileWrite(file: *vfs.File, _: usize, buffer: []const u8) vfs.Error!usize {
     const dev_file = devfs.DevFile.fromDentry(file.dentry);
-    const tty = dev_file.data.as(Self).?;
+    const tty = dev_file.data.asPtr(Self).?;
 
     if (tty.config.oflag.OPOST) return tty.line_disc.write(tty, buffer);
     return LineDiscipline.throw_disc.write(tty, buffer);
@@ -421,7 +421,7 @@ fn fileWrite(file: *vfs.File, _: usize, buffer: []const u8) vfs.Error!usize {
 
 fn fileIoctl(file: *vfs.File, op: c_uint, value: usize) vfs.Error!void {
     const dev_file = devfs.DevFile.fromDentry(file.dentry);
-    const tty = dev_file.data.as(Self).?;
+    const tty = dev_file.data.asPtr(Self).?;
 
     _ = tty;
     _ = op;
