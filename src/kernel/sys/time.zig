@@ -326,6 +326,10 @@ pub inline fn getTimestamp() u64 {
     return getUpTime().toNs();
 }
 
+pub inline fn getShortTimestamp() u32 {
+    return @truncate(getUpTime().toNs());
+}
+
 /// Returns timestamp relative
 /// to cached kernel uptime in nanoseconds.
 pub inline fn getFastTimestamp() u64 {
