@@ -59,3 +59,10 @@ pub inline fn inl(port: u16) u32 {
     );
     return res;
 }
+
+pub inline fn delay() void {
+    asm volatile(
+        \\ mul %rax
+        \\ sub $1, %rax
+        ::: .{ .rax = true, .rdx = true });
+}
