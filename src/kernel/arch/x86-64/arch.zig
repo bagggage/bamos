@@ -86,12 +86,14 @@ pub fn preinit() void {
 /// Initialize architecture dependent devices.
 pub inline fn devInit() !void {
     const cmos = @import("dev/cmos.zig");
+    const ps2 = @import("../../dev/stds/ps2.zig");
     const rtc_cmos = @import("dev/rtc_cmos.zig");
 
     try cmos.init();
     rtc_cmos.init();
 
     try lapic.timer.init();
+    try ps2.init();
 }
 
 pub inline fn cpuid(eax: u32, ebx: u32, ecx: u32, edx: u32) CpuId {
