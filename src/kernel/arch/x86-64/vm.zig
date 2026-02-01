@@ -51,11 +51,14 @@ pub const PageTable = struct {
             var result: @This() = .{};
 
             result.present = 1;
-
             result.writeable = if (flags.write) 1 else 0;
             result.user_access = if (flags.user) 1 else 0;
+
+            const caching = @intFromEnum(flags.cache);
+            result.write_through = @truncate(caching & 0b01);
+            result.cache_disabled = @truncate(caching >> 1);
+
             result.global = if (flags.global) 1 else 0;
-            result.cache_disabled = if (flags.cache_disable) 1 else 0;
             result.size = if (flags.large) 1 else 0;
             result.exec_disabled = if (flags.exec) 0 else 1;
 
@@ -75,8 +78,11 @@ pub const PageTable = struct {
         fn prioritizeFlags(self: *@This(), flags: vm.MapFlags) void {
             self.writeable |= @intFromBool(flags.write);
             self.user_access |= @intFromBool(flags.user);
-            self.cache_disabled &= @intFromBool(flags.cache_disable);
             self.exec_disabled &= @intFromBool(flags.exec == false);
+
+            const caching = @intFromEnum(flags.cache);
+            self.write_through &= @truncate(caching & 0b01);
+            self.cache_disabled &= @truncate(caching >> 1);
         }
 
         fn remapLarge(pte: *PageTable.Entry, is_gb_page: bool) vm.Error!void {
@@ -428,6 +434,27 @@ pub const PageTable = struct {
     }
 };
 
+const PageAttributeTable = packed struct {
+    const Attribute = enum(u8) {
+        uncachable      = 0b000,
+        write_combining = 0b001,
+
+        write_throw     = 0b100,
+        write_protected = 0b101,
+        write_back      = 0b110,
+        uncached        = 0b111
+    };
+
+    pa0: Attribute,
+    pa1: Attribute,
+    pa2: Attribute,
+    pa3: Attribute,
+    pa4: Attribute,
+    pa5: Attribute,
+    pa6: Attribute,
+    pa7: Attribute,
+};
+
 var lma_end: usize = 0;
 var heap_start: usize = 0;
 
@@ -441,6 +468,14 @@ pub fn init() vm.Error!void {
     const oma_pool = vm.PageAllocator.alloc(rank) orelse return vm.Error.NoMemory;
 
     PageTable.oma = try .initRaw(@sizeOf(PageTable), oma_pool, PageTable.oma_pool_pages);
+}
+
+pub fn setupCpu() void {
+    // Init PAT per each CPU core
+    var pat: PageAttributeTable = @bitCast(regs.getMsr(regs.MSR_PAT));
+    pat.pa3 = .write_combining;
+
+    regs.setMsr(regs.MSR_PAT, @bitCast(pat));
 }
 
 pub inline fn lmaEnd() usize {
@@ -490,9 +525,9 @@ fn earlyMapLma() void {
     @memset(@as(*[PageTable.len]u64, @ptrCast(pt3))[0..PageTable.len], 0);
 
     const pte: *PageTable.Entry = &pt.entries[p4_idx];
-    pte.* = .init(@intFromPtr(pt3), vm.MapFlags{ .write = true });
+    pte.* = .init(@intFromPtr(pt3), .{ .write = true });
 
-    var template_pte: PageTable.Entry = .init(0, vm.MapFlags{ .write = true, .global = true, .large = true });
+    var template_pte: PageTable.Entry = .init(0, .{ .write = true, .global = true, .large = true });
     const len = lma_size / lib.gb_size;
     const gb_pages = lib.gb_size / vm.page_size;
 

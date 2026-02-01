@@ -178,6 +178,7 @@ pub inline fn initCpu() void {
 }
 
 pub fn setupCpu(cpu_idx: u16) void {
+    vm.setupCpu();
     gdt.setupCpu();
     syscall.init();
 

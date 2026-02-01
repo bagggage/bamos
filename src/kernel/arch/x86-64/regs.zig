@@ -12,6 +12,7 @@ const intr = arch.intr;
 const smp = @import("../../smp.zig");
 
 // Model-Specific Register (MSR) addresses.
+pub const MSR_PAT = 0x277;
 pub const MSR_EFER = 0xC0000080;
 pub const MSR_STAR = 0xC0000081;
 pub const MSR_LSTAR = 0xC0000082;

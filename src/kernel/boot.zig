@@ -147,7 +147,7 @@ pub fn getMappings() vm.Error![]MappingEntry {
     );
     mappings[@intFromEnum(Order.Fb)] = MMap.init(
         @intFromPtr(&fb), bootboot.fb_ptr, 16 * lib.mb_size,
-        .{ .write = true, .global = true, .large = true, .cache_disable = true }
+        .{ .write = true, .global = true, .large = true, .cache = .write_combine }
     );
     mappings[@intFromEnum(Order.Boot)] = MMap.init(
         @intFromPtr(&bootboot), (vm.translateVirtToPhys(@intFromPtr(&bootboot)) orelse unreachable),
