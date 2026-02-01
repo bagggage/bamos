@@ -1,11 +1,9 @@
-// @noexport
-
 //! # Video Terminal
 //! 
 //! Responsible for drawing text to the framebuffer,
 //! handling cursor position and special characters.
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const cc = std.ascii.control_code;
@@ -27,6 +25,9 @@ const Cursor = struct {
 
     row: u16,
     col: u16,
+
+    /// Current color value used for rendering text.
+    color: u32,
 
     /// Moves the cursor to the next row.
     /// If the cursor is already on the last row,
@@ -71,22 +72,17 @@ const Cursor = struct {
 };
 
 var framebuffer: Framebuffer = undefined;
-var cursor: Cursor = Cursor{ .col = 0, .row = 0 };
+var cursor: Cursor = .{ .col = 0, .row = 0, .color = 0 };
 
 /// Number of columns on screen.
 var cols: u16 = undefined;
 /// Number of rows on screen.
 var rows: u16 = undefined;
-/// Current color value used for rendering text.
-var curr_col: u32 = undefined;
 
 /// Buffer storing the ascii characters.
 var char_buffer: []u8 = undefined;
-var char_buf_rank: u8 = undefined;
-
 /// Buffer storing the color of each character.
 var color_buffer: []u32 = undefined;
-var color_buf_rank: u8 = undefined;
 
 var is_initialized = false;
 
@@ -108,7 +104,7 @@ pub fn init() !void {
     try text_output.init(&framebuffer);
     errdefer text_output.deinit();
 
-    curr_col = Color.lgray.pack(framebuffer.format);
+    cursor.color = Color.lgray.pack(framebuffer.format);
 
     cols = @truncate(framebuffer.width / text_output.font.width);
     rows = @truncate(framebuffer.height / text_output.font.height);
@@ -117,22 +113,21 @@ pub fn init() !void {
         char_buffer.len = cols * rows;
         color_buffer.len = char_buffer.len;
 
-        // Allocate characters buffer
-        const buf_pages = std.math.divCeil(usize, char_buffer.len, vm.page_size) catch unreachable;
-        char_buf_rank = std.math.log2_int_ceil(usize, buf_pages);
-        const buf_phys = vm.PageAllocator.alloc(@truncate(char_buf_rank)) orelse return error.NoMemory;
-        errdefer vm.PageAllocator.free(buf_phys, char_buf_rank);
 
-        char_buffer.ptr = @ptrFromInt(vm.getVirtLma(buf_phys));
-        @memset(char_buffer, 0);
+        // Allocate characters buffer
+        const char_buffer_rank = vm.bytesToRank(char_buffer.len);
+        const buf_phys = vm.PageAllocator.alloc(char_buffer_rank) orelse return error.NoMemory;
+        errdefer vm.PageAllocator.free(buf_phys, char_buffer_rank);
 
         // Allocate color buffer
-        const color_buf_pages = std.math.divCeil(usize, color_buffer.len * @sizeOf(u32), vm.page_size) catch unreachable;
-        color_buf_rank = std.math.log2_int_ceil(usize, color_buf_pages);
-        const color_buf_phys = vm.PageAllocator.alloc(@truncate(color_buf_rank)) orelse return error.NoMemory;
+        const color_buffer_rank = vm.bytesToRank(color_buffer.len * @sizeOf(u32));
+        const color_buf_phys = vm.PageAllocator.alloc(color_buffer_rank) orelse return error.NoMemory;
 
+        char_buffer.ptr = @ptrFromInt(vm.getVirtLma(buf_phys));
         color_buffer.ptr = @ptrFromInt(vm.getVirtLma(color_buf_phys));
-        @memset(color_buffer, curr_col);
+
+        @memset(char_buffer, 0);
+        @memset(color_buffer, cursor.color);
     }
 
     is_initialized = true;
@@ -145,8 +140,8 @@ pub fn deinit() void {
     const char_buf_phys = vm.getPhysLma(char_buffer.ptr);
     const color_buf_phys = vm.getPhysLma(color_buffer.ptr);
 
-    vm.PageAllocator.free(@intFromPtr(char_buf_phys), char_buf_rank);
-    vm.PageAllocator.free(@intFromPtr(color_buf_phys), color_buf_rank);
+    vm.PageAllocator.free(char_buf_phys, vm.bytesToRank(char_buffer.len));
+    vm.PageAllocator.free(color_buf_phys, vm.bytesToRank(color_buffer.len * @sizeOf(u32)));
 }
 
 pub inline fn isInitialized() bool {
@@ -161,7 +156,7 @@ pub inline fn setCursor(row: u16, col: u16) void {
 
 /// Sets the current color used for text rendering.
 pub inline fn setColor(color: Color) void {
-    curr_col = color.pack(framebuffer.format);
+    cursor.color = color.pack(framebuffer.format);
 }
 
 pub inline fn getCursor() Cursor {
@@ -170,7 +165,7 @@ pub inline fn getCursor() Cursor {
 
 /// Returns the current color used for text rendering.
 pub inline fn getColor() Color {
-    return Color.unpack(framebuffer.format, curr_col);
+    return .unpack(framebuffer.format, cursor.color);
 }
 
 /// Writes the given string to the framebuffer.
@@ -188,25 +183,44 @@ pub fn write(str: []const u8) void {
         } else if (std.ascii.isAscii(char)) {
             cacheChar(char);
 
-            text_output.drawChar(char, curr_col, cursor.row, cursor.col);
+            text_output.drawChar(char, cursor.color, cursor.row, cursor.col);
             cursor.right();
         }
     }
+}
+
+pub fn clear() void {
+    setCursor(0, 0);
+    for (0..rows) |row| text_output.fillRow(@truncate(row), cols, 0);
 }
 
 inline fn cacheChar(char: u8) void {
     if (comptime use_buffers) {
         const idx = (cursor.row * cols) + cursor.col;
 
-        color_buffer[idx] = curr_col;
+        color_buffer[idx] = cursor.color;
         char_buffer[idx] = char;
+    }
+}
+
+inline fn cacheTab(old_col: u16) void {
+    const row_pos = cursor.row * cols;
+
+    for (old_col..cursor.col) |i| {
+        color_buffer[row_pos + i] = cursor.color;
+        char_buffer[row_pos + i] = ' ';
     }
 }
 
 inline fn handleControlChar(char: u8) void {
     switch (char) {
         cc.cr => cursor.col = 0,
-        cc.ht => cursor.tab(),
+        cc.ht => {
+            const old_col = cursor.col;
+            cursor.tab();
+
+            cacheTab(old_col);
+        },
         cc.bs => cursor.left(),
         cc.lf,
         cc.vt,
@@ -217,14 +231,12 @@ inline fn handleControlChar(char: u8) void {
 
 inline fn handleEscapeSequence(seq: []const u8) u32 {
     @setRuntimeSafety(false);
-
     if (seq.len < 3 or seq[1] != '[') return 1;
 
     var pos: u32 = 2;
-
     const len = std.mem.indexOf(u8, seq[2..], "m") orelse return pos;
-    var iter = std.mem.splitAny(u8, seq[2..len + 3], ";m");
 
+    var iter = std.mem.splitAny(u8, seq[2..len + 3], ";m");
     while (iter.next()) |subseq| {
         const code = std.fmt.parseUnsigned(u8, subseq, 10) catch return pos;
         handleEscapeCode(code);
@@ -282,16 +294,11 @@ inline fn handleEscapeCode(code: u8) void {
 fn scroll() void {
     @setRuntimeSafety(false);
 
-    const fb_size = (framebuffer.scanline * rows * text_output.font.height) * @sizeOf(u32);
-    const row_size = (framebuffer.scanline * text_output.font.height) * @sizeOf(u32);
-
     var buf_offset: usize = 0;
-
     for (1..rows) |row| {
         buf_offset += cols;
 
         var col: u16 = 0;
-
         while (col < cols) : (col += 1) {
             const prev_offset = buf_offset - cols;
             const char = char_buffer[buf_offset + col];
@@ -323,22 +330,5 @@ fn scroll() void {
         char_buffer[buf_offset + i] = 0;
     }
 
-    fastMemset256(@intFromPtr(framebuffer.base) + fb_size - row_size, row_size, 0);
+    text_output.fillRow(rows - 1, cols, 0);
 }
-
-const vec256_len = 256 / @sizeOf(u32);
-const Vec256 = @Vector(vec256_len, u32);
-
-/// Fast memory set operation using 256-bit vectorized instructions.
-fn fastMemset256(dest_addr: usize, size: usize, value: u32) void {
-    const val_arr = .{value} ** vec256_len;
-    const vec_val: Vec256 = val_arr;
-
-    const dest: [*]Vec256 = @ptrFromInt(dest_addr);
-    const iters = size / vec256_len;
-
-    for (0..iters) |i| {
-        dest[i] = vec_val;
-    }
-}
-
