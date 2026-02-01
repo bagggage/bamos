@@ -9,6 +9,7 @@ const config = @import("config.zig");
 const devfs = vfs.devfs;
 const lib = @import("lib.zig");
 const log = std.log.scoped(.sys);
+const logger = @import("logger.zig");
 const sched = @import("sched.zig");
 const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
@@ -16,9 +17,11 @@ const vm = @import("vm.zig");
 pub const AddressSpace = Process.AddressSpace;
 pub const call = @import("sys/call.zig");
 pub const exe = @import("sys/exe.zig");
+pub const input = @import("sys/input.zig");
 pub const limits = @import("sys/limits.zig");
 pub const Process = @import("sys/Process.zig");
 pub const time = @import("sys/time.zig");
+pub const VirtualTerminal = @import("sys/VirtualTerminal.zig");
 
 const init_paths: []const [:0]const u8 = &.{
     "/init",
@@ -35,6 +38,11 @@ const InitSource = struct {
 };
 
 pub fn init() !void {
+    try VirtualTerminal.init();
+    try VirtualTerminal.select(0);
+
+    logger.switchToUserspace();
+
     startInit() catch |err| {
         if (err == error.InitNotFound) @panic("Init executable not found.");
         return err;
@@ -66,9 +74,10 @@ fn startInit() !void {
         const args = if (parsed_args.len > 0) parsed_args else &.{init_src.path.ptr};
         try bin.load(args, &.{});
 
+        log.info("start process: {f} ", .{init_proc});
         log.debug("{f}", .{init_proc.addr_space});
-        arch.syscall.startProcess(init_proc, bin.data.run_ctx);
 
+        arch.syscall.startProcess(init_proc, bin.data.run_ctx);
         break :blk init_proc.getMainTask().?;
     };
 

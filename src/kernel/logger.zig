@@ -107,6 +107,10 @@ pub fn switchFromEarly() void {
     log_writer = KernelWriter.setup(&log_buffer);
 }
 
+pub fn switchToUserspace() void {
+    KernelWriter.vtable.drain = &KernelWriter.drainSerial;
+}
+
 // FIXME
 pub fn capture() void {
     const cpu_idx = smp.getIdx();
