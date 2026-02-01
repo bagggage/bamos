@@ -53,13 +53,20 @@ pub const isUserVirtAddr = arch.vm.isUserVirtAddr;
 
 /// Mapping flags used to enable/disable specific features for memory pages.
 pub const MapFlags = packed struct {
+    pub const Caching = enum(u2) {
+        write_back    = 0,
+        write_throw   = 1,
+        uncached      = 2,
+        write_combine = 3,
+    };
+
     none: bool = false,
     write: bool = false,
     user: bool = false,
     global: bool = false,
     large: bool = false,
     exec: bool = false,
-    cache_disable: bool = false,
+    cache: Caching = .write_back,
 
     // Ensure that the size of `MapFlags` matches the size of a byte.
     comptime {
