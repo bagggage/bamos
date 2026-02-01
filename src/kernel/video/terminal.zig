@@ -191,6 +191,8 @@ pub fn write(str: []const u8) void {
 
 pub fn clear() void {
     setCursor(0, 0);
+    @memset(char_buffer, 0);
+
     for (0..rows) |row| text_output.fillRow(@truncate(row), cols, 0);
 }
 

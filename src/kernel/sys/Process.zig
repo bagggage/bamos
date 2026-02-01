@@ -212,6 +212,10 @@ pub inline fn fromRbNode(rb_node: *RbNode) *Self {
     return @fieldParentPtr("rb_node", rb_node);
 }
 
+pub fn format(self: *const Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    try writer.print("{f}:{}", .{self.exe_file.?.dentry.path(), self.pid});
+}
+
 pub inline fn getMainTask(self: *Self) ?*sched.Task {
     const user = sched.Task.Specific.User.fromNode(self.tasks.first orelse return null);
     const specific: *sched.Task.Specific = @ptrCast(user);
@@ -279,9 +283,6 @@ pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) void {
 
 pub fn sendSignal(self: *Self, signal: Signal) void {
     // TODO: implement signals!
-    log.warn(
-        "unhandled signal: {s} -> {f}:{}",
-        .{ @tagName(signal), self.exe_file.?.dentry.path(), self.pid }
-    );
+    log.warn("unhandled signal: {s} -> {f}", .{@tagName(signal), self});
     sched.pause();
 }
