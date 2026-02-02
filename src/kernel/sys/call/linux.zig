@@ -21,12 +21,10 @@ const SyscallFn = ?*const fn () callconv(.c) isize;
 
 const table_len = 312;
 
-pub const table = initSyscallTable();
-
-fn initSyscallTable() [table_len]SyscallFn {
+pub const table: [table_len]SyscallFn = blk: {
     var result: [table_len]SyscallFn = .{ null } ** table_len;
 
-    if (comptime builtin.cpu.arch == .x86_64) {
+    if (builtin.cpu.arch == .x86_64) {
         result[@intFromEnum(linux.SYS.arch_prctl)] = @ptrCast(&archPrCtl);
     }
 
@@ -44,8 +42,29 @@ fn initSyscallTable() [table_len]SyscallFn {
     result[@intFromEnum(linux.SYS.write)] = @ptrCast(&write);
     result[@intFromEnum(linux.SYS.writev)] = @ptrCast(&writev);
 
-    return result;
-}
+    break :blk result;
+};
+
+pub const AbiData = struct {
+    pub const alloc_config: vm.auto.Config = .{
+        .allocator = .oma,
+        .capacity = 128,
+    };
+
+    arch_specific: arch.syscall.LinuxAbi = .{},
+    robust_list: ?*RobustList.Head = null,
+};
+
+/// Source: https://elixir.bootlin.com/linux/v6.18.6/source/include/uapi/linux/futex.h#L117
+const RobustList = extern struct {
+    const Head = extern struct {
+        list: RobustList,
+        futext_offset: c_long,
+        list_op_pending: ?*RobustList,
+    };
+
+    next: ?*RobustList = null,
+};
 
 inline fn errorFromE(comptime e: linux.E) isize {
     trace.info("return error: {t}", .{e});
@@ -84,6 +103,10 @@ inline fn validateMemoryArgs(base: usize, len: usize) vm.Error!void {
     }
 }
 
+inline fn validateMemoryPtr(base: usize) vm.Error!void {
+    if (!vm.isUserVirtAddr(base)) return error.SegFault;
+}
+
 inline fn validateFileMemoryArgs(fd: linux.fd_t, base: usize, len: usize) vfs.Error!void {
     if (fd < 0) return error.BadFileDescriptor;
     try validateMemoryArgs(base, len);
@@ -101,65 +124,14 @@ pub inline fn badCallHandler(id: usize) isize {
 }
 
 fn archPrCtl(op: c_int, addr: usize) isize {
-    const ARCH_SET_GS = 0x1001;
-    const ARCH_SET_FS = 0x1002;
-    const ARCH_GET_FS = 0x1003;
-    const ARCH_GET_GS = 0x1004;
-    const ARCH_GET_CPUID = 0x1011;
-    const ARCH_SET_CPUID = 0x1012;
-    const ARCH_GET_XCOMP_SUPP = 0x1021;
-    const ARCH_GET_XCOMP_PERM = 0x1022;
-    const ARCH_REQ_XCOMP_PERM = 0x1023;
-    const ARCH_GET_XCOMP_GUEST_PERM = 0x1024;
-    const ARCH_REQ_XCOMP_GUEST_PERM = 0x1025;
-    const ARCH_XCOMP_TILECFG = 17;
-    const ARCH_XCOMP_TILEDATA = 18;
-    const ARCH_MAP_VDSO_X32 = 0x2001;
-    const ARCH_MAP_VDSO_32 = 0x2002;
-    const ARCH_MAP_VDSO_64 = 0x2003;
-    const ARCH_GET_UNTAG_MASK = 0x4001;
-    const ARCH_ENABLE_TAGGED_ADDR = 0x4002;
-    const ARCH_GET_MAX_TAG_BITS = 0x4003;
-    const ARCH_FORCE_TAGGED_SVA = 0x4004;
-    const ARCH_SHSTK_ENABLE = 0x5001;
-    const ARCH_SHSTK_DISABLE = 0x5002;
-    const ARCH_SHSTK_LOCK = 0x5003;
-    const ARCH_SHSTK_UNLOCK = 0x5004;
-    const ARCH_SHSTK_STATUS = 0x5005;
-
     trace.info("arch_prctl({x}, 0x{x})", .{op, addr});
 
     validateMemoryArgs(addr, @sizeOf(usize)) catch return errorFromE(.FAULT);
     const dest: ?*usize = @ptrFromInt(addr);
 
-    switch (op) {
-        ARCH_SET_GS => arch.regs.setMsr(arch.regs.MSR_SWAPGS_BASE, addr),
-        ARCH_SET_FS => arch.regs.setMsr(arch.regs.MSR_FS_BASE, addr),
-        ARCH_GET_FS => dest.?.* = arch.regs.getMsr(arch.regs.MSR_FS_BASE),
-        ARCH_GET_GS => dest.?.* = arch.regs.getMsr(arch.regs.MSR_SWAPGS_BASE),
-        ARCH_GET_CPUID,
-        ARCH_SET_CPUID,
-        ARCH_GET_XCOMP_SUPP,
-        ARCH_GET_XCOMP_PERM,
-        ARCH_REQ_XCOMP_PERM,
-        ARCH_GET_XCOMP_GUEST_PERM,
-        ARCH_REQ_XCOMP_GUEST_PERM,
-        ARCH_XCOMP_TILECFG,
-        ARCH_XCOMP_TILEDATA,
-        ARCH_MAP_VDSO_X32,
-        ARCH_MAP_VDSO_32,
-        ARCH_MAP_VDSO_64,
-        ARCH_GET_UNTAG_MASK,
-        ARCH_ENABLE_TAGGED_ADDR,
-        ARCH_GET_MAX_TAG_BITS,
-        ARCH_FORCE_TAGGED_SVA,
-        ARCH_SHSTK_ENABLE,
-        ARCH_SHSTK_DISABLE,
-        ARCH_SHSTK_LOCK,
-        ARCH_SHSTK_UNLOCK,
-        ARCH_SHSTK_STATUS => return errorFromE(.INVAL),
-        else => return errorFromE(.INVAL)
-    }
+    arch.syscall.linuxArchPrCtl(op, dest) catch |err| {
+        return errorFromZig(err);
+    };
 
     return 0;
 }
