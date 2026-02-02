@@ -65,6 +65,12 @@ pub const Context = extern struct {
     }
 };
 
+/// Linux specific data stored per each task
+pub const LinuxAbi = struct {
+    gs_base: usize = 0,
+    fs_base: usize = 0,
+};
+
 /// Mask IE (interrupts enable) flag
 const rflags_mask = 1 << @bitOffsetOf(regs.Flags, "intr_enable");
 
@@ -89,19 +95,87 @@ pub fn setupTaskAbi(task: *sched.Task, abi: sys.call.Abi) void {
     local.arch_specific.tss.rsps[0] = lib.misc.alignDown(usize, task.getKernelStackTop(), 16);
 
     const syscall_handler: sys.call.Handler = switch (abi) {
-        .linux_sysv => linuxHandler
+        .linux_sysv => blk: {
+            linuxSetupAbi(task);
+            break :blk linuxHandler;
+        }
     };
 
     regs.setMsr(regs.MSR_LSTAR, @intFromPtr(syscall_handler));
 }
 
-pub fn startProcess(proc: *sys.Process, run_ctx: sys.exe.RunContext) void {
-    const task = proc.getMainTask().?;
+pub fn startThread(_: sys.call.Abi, task: *sched.Task, run_ctx: sys.exe.RunContext) void {
     const ctx_regs = task.context.stack_ptr.asCtxRegs();
 
     ctx_regs.callee.r12 = run_ctx.entry_ptr;
     ctx_regs.callee.r13 = run_ctx.stack_ptr;
     task.context.setInstrPtr(@intFromPtr(&linuxRunProcess));
+}
+
+pub fn linuxArchPrCtl(op: c_int, addr: ?*usize) !void {
+    const ARCH_SET_GS = 0x1001;
+    const ARCH_SET_FS = 0x1002;
+    const ARCH_GET_FS = 0x1003;
+    const ARCH_GET_GS = 0x1004;
+    const ARCH_GET_CPUID = 0x1011;
+    const ARCH_SET_CPUID = 0x1012;
+    const ARCH_GET_XCOMP_SUPP = 0x1021;
+    const ARCH_GET_XCOMP_PERM = 0x1022;
+    const ARCH_REQ_XCOMP_PERM = 0x1023;
+    const ARCH_GET_XCOMP_GUEST_PERM = 0x1024;
+    const ARCH_REQ_XCOMP_GUEST_PERM = 0x1025;
+    const ARCH_XCOMP_TILECFG = 17;
+    const ARCH_XCOMP_TILEDATA = 18;
+    const ARCH_MAP_VDSO_X32 = 0x2001;
+    const ARCH_MAP_VDSO_32 = 0x2002;
+    const ARCH_MAP_VDSO_64 = 0x2003;
+    const ARCH_GET_UNTAG_MASK = 0x4001;
+    const ARCH_ENABLE_TAGGED_ADDR = 0x4002;
+    const ARCH_GET_MAX_TAG_BITS = 0x4003;
+    const ARCH_FORCE_TAGGED_SVA = 0x4004;
+    const ARCH_SHSTK_ENABLE = 0x5001;
+    const ARCH_SHSTK_DISABLE = 0x5002;
+    const ARCH_SHSTK_LOCK = 0x5003;
+    const ARCH_SHSTK_UNLOCK = 0x5004;
+    const ARCH_SHSTK_STATUS = 0x5005;
+
+    const task = sched.getCurrentTask();
+    const abi_data = task.spec.user.abi_data.asPtr(sys.call.linux.AbiData).?;
+
+    switch (op) {
+        ARCH_SET_GS => {
+            abi_data.arch_specific.gs_base = @intFromPtr(addr);
+            regs.setMsr(regs.MSR_SWAPGS_BASE, @intFromPtr(addr));
+        },
+        ARCH_SET_FS => {
+            abi_data.arch_specific.fs_base = @intFromPtr(addr);
+            regs.setMsr(regs.MSR_FS_BASE, @intFromPtr(addr));
+        },
+        ARCH_GET_FS => addr.?.* = regs.getMsr(regs.MSR_FS_BASE),
+        ARCH_GET_GS => addr.?.* = regs.getMsr(regs.MSR_SWAPGS_BASE),
+        ARCH_GET_CPUID,
+        ARCH_SET_CPUID,
+        ARCH_GET_XCOMP_SUPP,
+        ARCH_GET_XCOMP_PERM,
+        ARCH_REQ_XCOMP_PERM,
+        ARCH_GET_XCOMP_GUEST_PERM,
+        ARCH_REQ_XCOMP_GUEST_PERM,
+        ARCH_XCOMP_TILECFG,
+        ARCH_XCOMP_TILEDATA,
+        ARCH_MAP_VDSO_X32,
+        ARCH_MAP_VDSO_32,
+        ARCH_MAP_VDSO_64,
+        ARCH_GET_UNTAG_MASK,
+        ARCH_ENABLE_TAGGED_ADDR,
+        ARCH_GET_MAX_TAG_BITS,
+        ARCH_FORCE_TAGGED_SVA,
+        ARCH_SHSTK_ENABLE,
+        ARCH_SHSTK_DISABLE,
+        ARCH_SHSTK_LOCK,
+        ARCH_SHSTK_UNLOCK,
+        ARCH_SHSTK_STATUS => return error.InvalidArgs,
+        else => return error.InvalidArgs
+    }
 }
 
 export fn linuxRunProcess() noreturn {
@@ -144,6 +218,13 @@ export fn linuxRunProcess() noreturn {
           [rflags] "{r11}" (rflags)
     );
     unreachable;
+}
+
+fn linuxSetupAbi(task: *sched.Task) void {
+    const abi_data = task.spec.user.abi_data.asPtr(sys.call.linux.AbiData).?;
+
+    regs.setMsr(regs.MSR_SWAPGS_BASE, abi_data.arch_specific.gs_base);
+    regs.setMsr(regs.MSR_FS_BASE, abi_data.arch_specific.fs_base);
 }
 
 fn linuxHandler() callconv(.naked) noreturn {

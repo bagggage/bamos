@@ -87,8 +87,10 @@ fn startInit() !void {
         log.info("start process: {f} ", .{init_proc});
         log.debug("{f}", .{init_proc.addr_space});
 
-        arch.syscall.startProcess(init_proc, bin.data.run_ctx);
-        break :blk init_proc.getMainTask().?;
+        const task = init_proc.getMainTask().?;
+        try call.startThread(init_proc.abi, task, bin.data.run_ctx);
+
+        break :blk task;
     };
 
     sched.enqueue(init_task);

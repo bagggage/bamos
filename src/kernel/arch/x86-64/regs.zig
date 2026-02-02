@@ -162,8 +162,8 @@ pub inline fn setMsr(msr_addr: u32, value: u64) void {
 
     asm volatile ("wrmsr"
         :
-        : [ret] "{eax}" (ptr[0]),
-          [ret_2] "{edx}" (ptr[1]),
+        : [in_1] "{eax}" (ptr[0]),
+          [in_2] "{edx}" (ptr[1]),
           [msr_addr] "{ecx}" (msr_addr),
     );
 }
