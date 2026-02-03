@@ -16,6 +16,7 @@ const vm = @import("vm.zig");
 
 pub const AddressSpace = Process.AddressSpace;
 pub const call = @import("sys/call.zig");
+pub const Console = @import("sys/Console.zig");
 pub const exe = @import("sys/exe.zig");
 pub const input = @import("sys/input.zig");
 pub const limits = @import("sys/limits.zig");
@@ -39,9 +40,7 @@ const InitSource = struct {
 
 pub fn init() !void {
     try VirtualTerminal.init();
-    try VirtualTerminal.select(0);
-
-    logger.switchToUserspace();
+    try Console.init();
 
     startInit() catch |err| {
         if (err == error.InitNotFound) @panic("Init executable not found.");
@@ -73,6 +72,17 @@ fn startInit() !void {
 
         const args = if (parsed_args.len > 0) parsed_args else &.{init_src.path.ptr};
         try bin.load(args, &.{});
+
+        const console = devfs.getRoot().lookup("console") orelse {
+            @branchHint(.cold);
+            log.err("/dev/console not found: cannot start init", .{});
+            return error.Uninitialized;
+        };
+        defer console.deref();
+
+        const console_fd = try init_proc.files.open(console, .rw);
+        _ = try init_proc.files.duplicate(console_fd.idx); // stdout
+        _ = try init_proc.files.duplicate(console_fd.idx); // stderr
 
         log.info("start process: {f} ", .{init_proc});
         log.debug("{f}", .{init_proc.addr_space});
