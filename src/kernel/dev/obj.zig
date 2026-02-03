@@ -31,6 +31,11 @@ fn Object(comptime T: type) type {
         inline fn fromPayload(payload: *T) *Self {
             return @fieldParentPtr("payload", payload);
         }
+
+        inline fn fromNode(node: *Node) *T {
+            const self: *Self = @fieldParentPtr("node", node);
+            return &self.payload;
+        }
     };
 }
 
@@ -109,6 +114,10 @@ pub inline fn getObjects(comptime T: type) ?*List {
 pub export fn putObjects(list: *List) void {
     const objects: *ObjectsList = @fieldParentPtr("list", list);
     objects.lock.unlock();
+}
+
+pub inline fn fromNode(comptime T: type, node: *Node) *T {
+    return Object(T).fromNode(node);
 }
 
 export fn removeByTypeId(id: u32, node: *Node) bool {
