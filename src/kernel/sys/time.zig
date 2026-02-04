@@ -144,7 +144,7 @@ pub const Time = extern struct {
     pub fn fromNs(ns: u64) Time {
         return .{
             .sec = ns / std.time.ns_per_s,
-            .ns = ns % std.time.ns_per_s
+            .ns = @truncate(ns % std.time.ns_per_s)
         };
     }
 
@@ -241,6 +241,7 @@ var sys_timer: *Timer = undefined;
 var sched_timer: *Timer = undefined;
 
 var keeper: Keeper = undefined;
+var boot_time: Time = .{};
 
 /// System timer frequency.
 var sys_timer_hz: u32 = default_hz;
@@ -252,7 +253,9 @@ pub fn init() !void {
     sys_timer = try chooseSysTimer();
     sched_timer = try chooseSchedTimer();
 
-    keeper =  try.init();
+    keeper = try.init();
+    boot_time = keeper.time;
+
     log.debug("count: {}, ns per tick: {}", .{keeper.last_count,keeper.ns_per_ticks});
 
     log.info("clock: {f}, timer: {f}", .{ sys_clock.device.name, sys_timer.device.name });
@@ -301,6 +304,10 @@ pub fn getTime() Time {
 /// To get update frequency use `sys.time.getHz()`.
 pub inline fn getCachedTime() Time {
     return keeper.time;
+}
+
+pub inline fn getBootTime() Time {
+    return boot_time;
 }
 
 /// Returns actual kernel uptime.
