@@ -32,6 +32,7 @@ heap: ?*MapUnit = null,
 
 /// Stack size in pages.
 stack_pages: u16,
+brk_offset: u16 = 0,
 
 pub fn init(pt: *vm.PageTable, stack_pages: u16) Self {
     return .{
@@ -48,6 +49,51 @@ pub fn create(stack_pages: u16) !*Self {
     self.* = .init(pt, stack_pages);
 
     return self;
+}
+
+pub fn cloneAndCopy(self: *Self) vm.Error!*Self {
+    const new = vm.auto.alloc(Self) orelse return error.NoMemory;
+    errdefer vm.auto.free(Self, new);
+
+    const pt = vm.createPageTable() orelse return error.NoMemory;
+    new.* = .{
+        .page_table = pt,
+        .stack_pages = self.stack_pages,
+    };
+    errdefer new.deinit();
+
+    self.map_lock.readLock();
+    defer self.map_lock.readUnlock();
+
+    new.brk_offset = self.brk_offset;
+
+    var node = self.map_units.first;
+    while (node) |n| : (node = n.next) {
+        const map_unit = MapUnit.fromNode(n);
+        const new_unit = try map_unit.fork();
+        errdefer new_unit.delete(new.page_table);
+
+        if (!map_unit.flags.shared and !map_unit.flags.map.none) {
+            // Allocate physical pages and copy all data
+            try map_unit.copyPages(new_unit);
+            try new_unit.map(new.page_table);
+        }
+
+        new.includeMapping(new_unit);
+        if (map_unit == self.heap) {
+            @branchHint(.unlikely);
+            new.heap = new_unit;
+        }
+    }
+
+    if (self.heap != null and self.heap.?.page_capacity == 0) {
+        @branchHint(.unlikely);
+        const heap = self.heap.?;
+        const new_heap = try heap.fork();
+        self.heap = new_heap;
+    }
+
+    return new;
 }
 
 pub fn deinit(self: *Self) void {
@@ -90,55 +136,85 @@ pub fn heapInit(self: *Self, base: usize) vfs.Error!void {
     self.heap = heap;
 }
 
-pub fn heapGrow(self: *Self, pages: u32) ?usize {
-    std.debug.assert(pages > 0);
+pub fn heapGrow(self: *Self, bytes: usize) vm.Error!usize {
+    std.debug.assert(bytes > 0);
 
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
-    const heap = self.heap orelse return null;
+    const heap = self.heap orelse return error.Uninitialized;
     const top = heap.top();
+    const brk = top - self.brk_offset;
+    const new_brk = brk +| bytes;
 
-    const new_top = top + (pages * vm.page_size);
-    if (!vm.isUserVirtAddr(new_top)) return null;
+    if (new_brk <= top) {
+        self.brk_offset -= @truncate(new_brk - brk);
+        return new_brk;
+    }
 
+    if (!vm.isUserVirtAddr(new_brk)) return error.MaxSize;
+
+    const pages = vm.bytesToPages(new_brk - top);
     if (heap.page_capacity == 0) {
         heap.page_capacity += pages;
         if (self.rb_tree.insert(&heap.rb_node)) |_| {
+            @branchHint(.unlikely);
             heap.page_capacity = 0;
-            return null;
+            return brk;
         }
 
         self.map_units.prepend(&heap.node);
     } else {
         if (heap.rb_node.next()) |n| {
             const next = MapUnit.fromRbNode(n);
-            if (new_top > next.base()) return null;
+            if (new_brk > next.base()) return error.MaxSize;
         }
 
         heap.page_capacity += pages;
     }
 
-    return top;
+    self.brk_offset = @truncate(vm.page_size - (new_brk & (vm.page_size - 1)));
+    return new_brk;
 }
 
-pub fn heapShrink(self: *Self, pages: u32) vm.Error!void {
-    std.debug.assert(pages > 0);
+pub fn heapShrink(self: *Self, bytes: usize) vm.Error!usize {
+    std.debug.assert(bytes > 0);
 
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
-    const heap = self.heap orelse return;
-    if (heap.page_capacity == 0) return error.MaxSize;
+    const heap = self.heap orelse return error.Uninitialized;
+    if (heap.page_capacity == 0) return heap.base();
 
-    if (heap.page_capacity <= pages) {
+    const top = heap.top();
+    const brk = top - self.brk_offset;
+    const new_brk = brk -| bytes;
+    if (new_brk <= heap.base()) {
         self.removeMapping(heap);
         heap.unmap(self.page_table);
 
+        self.brk_offset = 0;
         heap.page_capacity = 0;
-    } else {
+
+        return heap.base();
+    }
+
+    const diff = top - new_brk;
+    const pages = vm.bytesToPagesExact(diff);
+    if (pages > 0) {
         try heap.shrinkTop(pages, self.page_table);
     }
+
+    self.brk_offset = @truncate(vm.page_size - (new_brk & (vm.page_size - 1)));
+    return new_brk;
+}
+
+pub fn getHeapBreak(self: *Self) usize {
+    self.map_lock.readLock();
+    defer self.map_lock.readUnlock();
+
+    const heap = self.heap.?;
+    return heap.top() - self.brk_offset;
 }
 
 pub fn map(self: *Self, map_unit: *MapUnit) vfs.Error!void {
@@ -236,6 +312,59 @@ pub fn mapRegion(self: *Self, region: *const vm.VirtualRegion, flags: MapUnit.Fl
     try self.map(map_unit);
 }
 
+pub fn unmap(self: *Self, map_unit: *MapUnit) void {
+    {
+        self.map_lock.writeLock();
+        defer self.map_lock.writeUnlock();
+
+        self.removeMapping(map_unit);
+    }
+
+    map_unit.unmap(self.page_table);
+}
+
+pub fn protectRange(self: *Self, base: usize, pages: u32, flags: MapUnit.Flags) vfs.Error!void {
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
+    const top = base + (pages * vm.page_size);
+    const map_unit = self.lookupMapUnit(base, top) orelse return error.NoEnt;
+
+    var curr_top = map_unit.top();
+    const base_unit = if (map_unit.base() <= base) blk: {
+        if (curr_top >= top) {
+            try validateProtection(map_unit, flags);
+            return self.protectUnit(map_unit, base, top, flags);
+        }
+
+        try validateProtection(map_unit, flags);
+        break :blk map_unit;
+    } else blk: {
+        var base_unit = map_unit;
+        while (base < base_unit.base()) {
+            const prev = MapUnit.fromRbNode(map_unit.rb_node.prev() orelse return error.NoMemory);
+            if (prev.top() != base_unit.base()) return error.NoMemory; // gap!
+
+            try validateProtection(prev, flags);
+            base_unit = prev;
+        }
+        break :blk base_unit;
+    };
+
+    var top_unit = map_unit;
+    while (curr_top < top) {
+        const next = MapUnit.fromRbNode(top_unit.rb_node.next() orelse return error.NoMemory);
+        if (next.base() != curr_top) return error.NoMemory; // gap!
+
+        try validateProtection(next, flags);
+
+        curr_top = next.top();
+        top_unit = next;
+    }
+
+    try self.protectUnitsRange(base_unit, top_unit, base, top, flags);
+}
+
 pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) vfs.Error!void {
     // Page aligned base address.
     const base = address - (address % vm.page_size);
@@ -297,6 +426,82 @@ pub fn calculateUsedRegion(self: *Self) [2]usize {
     const top = if (self.heap) |h| @max(h.top(), last_top) else last_top;
 
     return .{ base, top };
+}
+
+fn protectUnit(self: *Self, map_unit: *MapUnit, base: usize, top: usize, flags: MapUnit.Flags) vfs.Error!void {
+    if (map_unit.flags.compatWith(flags)) map_unit.flags = flags;
+
+    if (base > map_unit.base()) {
+        const base_pages = vm.bytesToPagesExact(base - map_unit.base());
+        if (top < map_unit.top()) {
+            const middle_unit = try map_unit.fork();
+            const middle_pages = vm.bytesToPagesExact(top - base);
+            errdefer middle_unit.delete(self.page_table);
+
+            if (middle_unit.file != null) middle_unit.page_offset += base_pages;
+            middle_unit.flags = flags;
+            middle_unit.region.base = base;
+            middle_unit.page_capacity = middle_pages;
+
+            try self.divideMapping(map_unit, middle_unit);
+            self.includeMapping(middle_unit);
+        } else {
+            const top_unit = try map_unit.fork();
+            const top_pages = vm.bytesToPagesExact(map_unit.top() - base);
+            errdefer top_unit.delete(self.page_table);
+
+            if (top_unit.file != null) top_unit.page_offset += base_pages;
+            top_unit.flags = flags;
+            top_unit.region.base = base;
+            top_unit.page_capacity = top_pages;
+
+            try map_unit.shrinkTop(top_pages, self.page_table);
+            self.includeMapping(top_unit);
+        }
+    } else if (top < map_unit.top()) {
+        const base_unit = try map_unit.fork();
+        const base_pages = vm.bytesToPagesExact(top - map_unit.base());
+        errdefer base_unit.delete(self.page_table);
+
+        try map_unit.shrinkBottom(base_pages, self.page_table);
+
+        base_unit.flags = flags;
+        base_unit.page_capacity = base_pages;
+        self.includeMapping(base_unit);
+    } else {
+        map_unit.flags = flags;
+        try map_unit.map(self.page_table);
+    }
+}
+
+fn protectUnitsRange(
+    self: *Self, base_unit: *MapUnit, top_unit: *MapUnit,
+    base: usize, top: usize, flags: MapUnit.Flags
+) vfs.Error!void {
+    std.debug.assert(base_unit != top_unit);
+
+    var map_unit = MapUnit.fromRbNode(base_unit.rb_node.next().?);
+    try self.protectUnit(base_unit, base, top, flags);
+
+    while (map_unit != top_unit) {
+        if (map_unit.flags.compatWith(flags)) {
+            map_unit.flags = flags;
+        } else {
+            map_unit.flags = flags;
+            try map_unit.map(self.page_table);
+        }
+
+        map_unit = MapUnit.fromRbNode(map_unit.rb_node.next().?);
+    }
+
+    try self.protectUnit(top_unit, base, top, flags);
+}
+
+fn validateProtection(map_unit: *MapUnit, flags: MapUnit.Flags) error{NoAccess}!void {
+    if (map_unit.isAnonymous()) return;
+
+    const file = map_unit.file.?;
+    file.validateAccess(flags.toPermissions()) catch return error.NoAccess;
 }
 
 fn allocRegion(self: *Self, pages: u32) vm.Error!usize {
@@ -403,6 +608,11 @@ fn replaceMapping(self: *Self, old: *MapUnit, new: *MapUnit) void {
 
     old.deinit(self.page_table);
     vm.auto.free(MapUnit, old);
+}
+
+fn includeMapping(self: *Self, map_unit: *MapUnit) void {
+    if (self.rb_tree.insert(&map_unit.rb_node) != null) unreachable; 
+    self.map_units.prepend(&map_unit.node);
 }
 
 fn deleteMapping(self: *Self, map_unit: *MapUnit) void {
