@@ -30,16 +30,25 @@ pub const Flags = packed struct {
         if (flags.shared & flags.map.write) result |= @intFromEnum(vfs.Permissions.w);
         return @enumFromInt(result);
     }
+
+    pub fn compatWith(flags: Flags, other: Flags) bool {
+        return
+            flags.shared == other.shared and
+            flags.map.none == other.map.none and
+            flags.map.exec == other.map.exec and
+            flags.map.write == other.map.write
+        ;
+    }
 };
 
 pub const Operations = struct {
-    pub const PageFaultFn = *const fn(*Self, pt: *vm.PageTable, offset: usize, cause: vm.FaultCause) vfs.Error!void;
+    pub const PageFaultFn = *const fn(*Self, pt: *vm.PageTable, offset: usize, cause: vm.FaultCause) vfs.Error!*vm.Page;
     pub const UnmapPageFn = *const fn(*const Self, pt: *const vm.PageTable, page: vm.Page) void;
 
     pageFault: PageFaultFn = &defaultPageFault,
     unmapPage: UnmapPageFn = &defaultUnmapPage,
 
-    fn defaultPageFault(_: *Self, _: *vm.PageTable, _: usize, _: vm.FaultCause) vfs.Error!void {
+    fn defaultPageFault(_: *Self, _: *vm.PageTable, _: usize, _: vm.FaultCause) vfs.Error!*vm.Page {
         return vfs.Error.SegFault;
     }
 
@@ -106,6 +115,14 @@ pub fn new(
 
     map_unit.* = .init(file, virt, page_offset, pages, flags);
     if (file) |f| try f.mmapPrepare(map_unit);
+
+    return map_unit;
+}
+
+pub fn fork(self: *Self) vm.Error!*Self {
+    const map_unit = vm.auto.alloc(Self) orelse return error.NoMemory;
+    map_unit.* = .init(self.file, self.base(), self.page_offset, self.page_capacity, self.flags);
+    map_unit.ops = self.ops;
 
     return map_unit;
 }
@@ -188,15 +205,19 @@ pub fn shrinkBottom(self: *Self, pages: u32, pt: *vm.PageTable) !void {
 
     self.region.base += pages * vm.page_size;
     self.page_capacity -= pages;
+
+    if (self.file != null) self.page_offset += pages; 
 }
 
-pub fn attachAndMapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !void {
+pub fn attachAndMapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !*vm.Page {
     const new_page = vm.auto.alloc(vm.Page) orelse return error.NoMemory;
     new_page.* = page;
     errdefer vm.auto.free(vm.Page, new_page);
 
     try page.map(pt, self.base(), map_flags);
     self.region.attachPage(new_page);
+
+    return new_page;
 }
 
 pub fn detachLastPage(self: *Self) ?vm.Page {
@@ -207,11 +228,12 @@ pub fn detachLastPage(self: *Self) ?vm.Page {
     return tmp;
 }
 
-pub fn remapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !void {
+pub fn remapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !*vm.Page {
     const target_page = self.region.getPage(page.dim.idx) orelse return error.NoEnt;
     target_page.* = page;
 
     try page.map(pt, self.base(), map_flags);
+    return target_page;
 }
 
 pub inline fn reinsertRegion(self: *Self, target: *Self, page_offset: u32, pages: u32) !void {
@@ -219,6 +241,25 @@ pub inline fn reinsertRegion(self: *Self, target: *Self, page_offset: u32, pages
         page_offset, pages,
         &target.region.page_list
     );
+}
+
+pub fn getPageSafe(self: *Self, pt: *vm.PageTable, idx: u32, cause: vm.FaultCause) vfs.Error!*vm.Page {
+    return self.region.getPage(idx) orelse blk: {
+        break :blk try self.fillWithNewPage(pt, idx, cause);
+    };
+}
+
+pub fn copyPages(self: *Self, target: *Self) !void {
+    var node = self.region.page_list.first;
+    while (node) |n| : (node = n.next) {
+        const page = vm.Page.fromNode(n);
+        log.debug("copy: 0x{x}: {} KiB", .{self.base() + page.getOffset(), page.pagesNum() * 4});
+
+        const new_page = vm.Page.new(page.dim.idx, page.dim.rank) orelse return error.NoMemory;
+
+        @memcpy(new_page.asSlice(), page.asSlice());
+        target.region.page_list.prepend(&new_page.node);
+    }
 }
 
 pub fn pageFault(self: *Self, pt: *vm.PageTable, address: usize, cause: vm.FaultCause) vfs.Error!void {
@@ -234,17 +275,9 @@ pub fn pageFault(self: *Self, pt: *vm.PageTable, address: usize, cause: vm.Fault
     }
 
     const offset = address - self.base();
-    if (!self.isAnonymous()) return try self.ops.pageFault(self, pt, offset, cause);
+    const page_offset: u32 = vm.bytesToPagesExact(offset);
 
-    // Anonymous page
-    const page_offset: u32 = @truncate(offset / vm.page_size);
-    const page = vm.Page.new(page_offset, 0) orelse return error.NoMemory;
-    errdefer page.delete();
-
-    try page.map(pt, self.base(), self.flags.map);
-    self.region.attachPage(page);
-
-    page.fillZeroes();
+    _ = try self.fillWithNewPage(pt, page_offset, cause);
 }
 
 pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
@@ -262,6 +295,21 @@ pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
     });
 
     if (self.file) |f| try f.dentry.path().format(writer);
+}
+
+fn fillWithNewPage(self: *Self, pt: *vm.PageTable, idx: u32, cause: vm.FaultCause) vfs.Error!*vm.Page {
+    const offset = @as(usize, idx) * vm.page_size;
+    if (!self.isAnonymous()) return try self.ops.pageFault(self, pt, offset, cause);
+
+    // Anonymous page
+    const page = vm.Page.new(idx, 0) orelse return error.NoMemory;
+    errdefer page.delete();
+
+    try page.map(pt, self.base(), self.flags.map);
+    self.region.attachPage(page);
+
+    page.fillZeroes();
+    return page;
 }
 
 fn unmapPages(self: *Self, list: vm.Page.List, pt: *vm.PageTable) void {
@@ -387,7 +435,7 @@ fn growDownFault(self: *Self, pt: *vm.PageTable, cause: vm.FaultCause) !void {
             self.region.base += vm.page_size;
         }
 
-        try self.ops.pageFault(self, pt, 0, cause);
+        _ = try self.ops.pageFault(self, pt, 0, cause);
     }
 
     while (node) |n| : (node = n.next) {
