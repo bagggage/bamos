@@ -68,11 +68,14 @@ pub inline fn unmap(self: *Self, pt: *vm.PageTable, base: usize) void {
     pt.unmap(base + self.getOffset(), self.pagesNum());
 }
 
-pub fn fillZeroes(self: *const Self) void {
-    const virt: [*]u64 = @ptrFromInt(vm.getVirtLma(self.getPhysBase()));
-    const slice = virt[0..self.size() / @sizeOf(u64)];
-
+pub inline fn fillZeroes(self: *const Self) void {
+    const slice = self.asSlice();
     @memset(slice, 0);
+}
+
+pub fn asSlice(self: *const Self) []u8 {
+    const virt: [*]u8 = @ptrFromInt(vm.getVirtLma(self.getPhysBase()));
+    return virt[0..self.size()];
 }
 
 pub inline fn getOffset(self: Self) usize {

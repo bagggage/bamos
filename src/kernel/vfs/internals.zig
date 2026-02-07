@@ -109,7 +109,7 @@ pub const file = opaque {
 
             const MapUnit = sys.AddressSpace.MapUnit;
 
-            pub fn pageFault(map_unit: *MapUnit, pt: *vm.PageTable, offset: usize, cause: vm.FaultCause) Error!void {
+            pub fn pageFault(map_unit: *MapUnit, pt: *vm.PageTable, offset: usize, cause: vm.FaultCause) Error!*vm.Page {
                 const file_offset = (map_unit.page_offset * vm.page_size) + offset;
                 const block = try getCacheBlockOrRead(map_unit.file.?, file_offset);
                 errdefer block.deref();
@@ -140,17 +140,17 @@ pub const file = opaque {
                     page.base = @truncate(phys / vm.page_size);
 
                     if (map_unit.region.getPage(page.dim.idx)) |_| {
-                        try map_unit.remapPage(pt, page, map_unit.flags.map);
-                        block.deref();
+                        defer block.deref();
+                        return try map_unit.remapPage(pt, page, map_unit.flags.map);
                     } else {
-                        try map_unit.attachAndMapPage(pt, page, map_unit.flags.map);
+                        return try map_unit.attachAndMapPage(pt, page, map_unit.flags.map);
                     }
                 } else {
                     var map_flags = map_unit.flags.map;
                     map_flags.write &= map_unit.flags.shared;
 
                     page.base = @truncate(block.phys_base + (inner_offset / vm.page_size));
-                    try map_unit.attachAndMapPage(pt, page, map_flags);
+                    return try map_unit.attachAndMapPage(pt, page, map_flags);
                 }
             }
 
