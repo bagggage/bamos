@@ -107,25 +107,37 @@ fn loadProgramSegment(self: *exe.Binary, file: *vfs.File, phdr: *const elf.Phdr,
         (phdr.p_vaddr > 0 and !std.mem.isAligned(base + phdr.p_vaddr -| phdr.p_offset, phdr.p_align)))
     ) return error.BadFormat;
 
-    const virt = lib.misc.alignDown(usize, phdr.p_vaddr + base, vm.page_size);
-    const offset_mod = phdr.p_offset % vm.page_size;
-
+    const offset_mod = phdr.p_vaddr % vm.page_size;
     const mem_size = phdr.p_memsz + offset_mod;
     const file_size = phdr.p_filesz + offset_mod;
+    const file_offset = phdr.p_offset - offset_mod;
 
     const map_pages = vm.bytesToPages(@min(file_size, mem_size));
     const mem_pages = vm.bytesToPages(mem_size);
-    const page_offset = vm.bytesToPagesExact(phdr.p_offset);
     const map_flags = phdrFlagsToMapFlags(phdr.p_flags);
 
+    const virt = lib.misc.alignDown(usize, phdr.p_vaddr + base, vm.page_size);
     const addr_space = self.proc.addr_space;
+
     if (map_pages > 0) {
+        const page_offset = vm.bytesToPages(file_offset);
         const map_unit = try sys.AddressSpace.MapUnit.new(
-            file, virt, @truncate(page_offset),
-            @truncate(map_pages), .{ .map = map_flags }
+            file, virt, page_offset,
+            map_pages, .{ .map = map_flags }
         );
         errdefer map_unit.delete(addr_space.page_table);
+
         try addr_space.map(map_unit);
+        errdefer addr_space.unmap(map_unit);
+
+        const zero_start = file_size % vm.page_size;
+        if (mem_size > file_size and zero_start > 0) {
+            @branchHint(.unlikely);
+            // Need a garantee that a part of memory would be filled with zeroes,
+            // so use `.write` cause to prevent copy-on-write mechanism damage the memory.
+            const page = try map_unit.getPageSafe(addr_space.page_table, map_pages - 1, .write);
+            @memset(page.asSlice()[zero_start..], 0);
+        }
     }
 
     if (mem_pages > map_pages) {
@@ -239,13 +251,15 @@ fn buildAuxVectors(bin: *exe.Binary, elf_hdr: *const elf.Header, interp_base: ?u
 
     bin.args.writer.writeAll(std.mem.asBytes(&entropy)) catch return error.NoMemory;
 
+    try bin.args.appendAuxv(elf.AT_HWCAP, lib.arch.getCpuInfo().getHwCap());
     try bin.args.appendAuxv(elf.AT_PAGESZ, vm.page_size);
+    try bin.args.appendAuxv(elf.AT_CLKTCK, sys.time.getHz());
+    try bin.args.appendAuxv(elf.AT_PHDR, phdrs_ptr);
+    try bin.args.appendAuxv(elf.AT_PHENT, elf_hdr.phentsize);
+    try bin.args.appendAuxv(elf.AT_PHNUM, elf_hdr.phnum);
     try bin.args.appendAuxv(elf.AT_BASE, interp_base orelse bin.virt_base);
     try bin.args.appendAuxv(elf.AT_FLAGS, 0);
     try bin.args.appendAuxv(elf.AT_ENTRY, elf_hdr.entry + bin.virt_base);
-    try bin.args.appendAuxv(elf.AT_PHDR, phdrs_ptr);
-    try bin.args.appendAuxv(elf.AT_PHNUM, elf_hdr.phnum);
-    try bin.args.appendAuxv(elf.AT_PHENT, elf_hdr.phentsize);
     try bin.args.appendAuxv(elf.AT_UID, bin.proc.uid);
     try bin.args.appendAuxv(elf.AT_EUID, bin.proc.uid);
     try bin.args.appendAuxv(elf.AT_GID, bin.proc.gid);
