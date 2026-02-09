@@ -276,7 +276,7 @@ var lock: lib.sync.Spinlock = .init(.unlocked);
 var ports_list: Region.List = .{};
 var mmio_list: Region.List = .{};
 
-inline fn getIoList(comptime io_type: Type) *Region.List {
+inline fn getIoList(io_type: Type) *Region.List {
     return switch (io_type) {
         .io_ports => &ports_list,
         .mmio => &mmio_list
@@ -361,7 +361,7 @@ pub fn waitFor(
     return error.Timeout;
 }
 
-pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime io_type: Type) ?usize {
+pub fn request(name: [:0]const u8, base: usize, size: usize, io_type: Type) ?usize {
     const end = base + size;
     const list = getIoList(io_type);
 
@@ -387,7 +387,7 @@ pub fn request(comptime name: [:0]const u8, base: usize, size: usize, comptime i
     return base;
 }
 
-pub fn release(base: usize, comptime io_type: Type) void {
+pub fn release(base: usize, io_type: Type) void {
     const list = getIoList(io_type);
 
     lock.lock();
@@ -407,7 +407,7 @@ pub fn release(base: usize, comptime io_type: Type) void {
     unreachable;
 }
 
-pub fn isAvail(base: usize, size: usize, comptime io_type: Type) bool {
+pub fn isAvail(base: usize, size: usize, io_type: Type) bool {
     const end = base + size;
 
     lock.lock();

@@ -94,10 +94,6 @@ pub const Name = extern struct {
         return result;
     }
 
-    export fn devNameInit(value: [*]const u8, len: usize) Name {
-        return .init(value[0..len]);
-    }
-
     pub inline fn deinit(self: *Name) void {
         if (self.isAllocated()) vm.gpa.free(@constCast(self.ptr));
         self.meta = 0;
