@@ -26,9 +26,15 @@ const Cpu = struct {
     /// MHz
     bus_frequency: u32,
 
+    features: CpuId,
+
     pub fn getName(self: *const Cpu) []const u8 {
         const len = std.mem.indexOf(u8, &self.name, "  ") orelse max_name;
         return self.name[0..len];
+    }
+
+    pub fn getHwCap(self: *const Cpu) u32 {
+        return self.features.d;
     }
 };
 
@@ -210,6 +216,8 @@ fn collectCpuInfo() void {
     cpu.bus_frequency = result.c;
 
     getCpuModelName(&cpu.name);
+
+    cpu.features = cpuid(0x1, undefined, undefined, undefined);
 }
 
 fn getCpuVendor() Cpu.Vendor {
