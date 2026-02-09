@@ -71,7 +71,7 @@ pub inline fn isFull(self: *Self) bool {
     return self.num_files >= self.max_files;
 }
 
-pub fn clone(self: *const Self) vfs.Error!Self {
+pub fn clone(self: *Self) vfs.Error!Self {
     self.lock.readLock();
     defer self.lock.readUnlock();
 
@@ -80,10 +80,10 @@ pub fn clone(self: *const Self) vfs.Error!Self {
     errdefer vm.gpa.free(bitmap.ptr);
 
     const array = try allocArray(self.capacity);
-    var num_files = 0;
+    var num_files: u32 = 0;
     for (0..self.capacity) |i| {
         if (num_files >= self.num_files) {
-            @memset(array[i..], null);
+            @memset(array[i..self.capacity], null);
             break;
         }
 
@@ -110,33 +110,10 @@ pub fn clone(self: *const Self) vfs.Error!Self {
 
 pub fn open(self: *Self, dentry: *vfs.Dentry, perm: vfs.Permissions) vfs.Error!Descriptor {
     const file = try dentry.open(perm);
-
     file.ref();
     errdefer file.deref();
 
-    const idx: u32 = blk: {
-        self.lock.writeLock();
-        defer self.lock.writeUnlock();
-
-        if (self.num_files >= self.max_files) {
-            @branchHint(.unlikely);
-            return error.MaxSize;
-        }
-
-        try self.addOne();
-
-        const idx = self.bitmap.find(self.capacity, false) orelse unreachable;
-        self.bitmap.set(idx);
-        self.files[idx] = file;
-        self.num_files += 1;
-
-        break :blk @truncate(idx);
-    };
-
-    return .{
-        .idx = idx,
-        .file = file,
-    };
+    return try self.newDescriptor(file);
 }
 
 pub fn close(self: *Self, idx: u32) vfs.Error!void {
@@ -175,7 +152,9 @@ pub fn closeAll(self: *Self) void {
 
 pub inline fn duplicate(self: *Self, idx: u32) vfs.Error!Descriptor {
     const file = self.get(idx) orelse return error.BadFileDescriptor;
-    return try self.open(file.dentry, file.perm);
+    errdefer file.deref();
+
+    return try self.newDescriptor(file);
 }
 
 pub fn get(self: *Self, idx: u32) ?*vfs.File {
@@ -200,6 +179,25 @@ pub fn setMaxFiles(self: *Self, value: u32) vfs.Error!void {
 
     if (value < self.num_files) return error.Busy;
     self.max_files = value;
+}
+
+fn newDescriptor(self: *Self, file: *vfs.File) vfs.Error!Descriptor {
+    self.lock.writeLock();
+    defer self.lock.writeUnlock();
+
+    if (self.num_files >= self.max_files) {
+        @branchHint(.unlikely);
+        return error.MaxSize;
+    }
+
+    try self.addOne();
+
+    const idx = self.bitmap.find(self.capacity, false) orelse unreachable;
+    self.bitmap.set(idx);
+    self.files[idx] = file;
+    self.num_files += 1;
+
+    return .{ .idx = @truncate(idx), .file = file };
 }
 
 fn addOne(self: *Self) !void {
