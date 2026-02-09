@@ -15,26 +15,17 @@ const sys = @import("../../sys.zig");
 const vm = @import("../../vm.zig");
 
 pub const Context = extern struct {
+    fxsave: [512]u8 align(@alignOf(usize)),
+    rdi: usize,
+    rsi: usize,
+    rdx: usize,
+    rcx: usize,
+    rbp: usize,
+    r8:  usize,
+    r9:  usize,
+    r10: usize,
+    r11: usize,
     rsp: usize,
-    rip: usize,
-    rflags: usize,
-
-    pub inline fn setInstrPtr(self: *Context, value: usize) void {
-        self.rip = value;
-    }
-
-    pub inline fn getInstrPtr(self: *const Context) usize {
-        return self.rip;
-    }
-
-    pub inline fn setStackPtr(self: *Context, value: usize) void {
-        std.debug.assert(std.mem.isAligned(value, @alignOf(usize)));
-        self.rsp = value;
-    }
-
-    pub inline fn getStackPtr(self: *const Context) usize {
-        return self.rsp;
-    }
 
     inline fn save() void {
         asm volatile (
@@ -42,6 +33,7 @@ pub const Context = extern struct {
             \\ push %r10
             \\ push %r9
             \\ push %r8
+            \\ push %rbp
             \\ push %rcx
             \\ push %rdx
             \\ push %rsi
@@ -49,14 +41,19 @@ pub const Context = extern struct {
             \\
             \\ mov %r10, %rcx
         );
+
+        regs.saveFpuRegs();
     }
 
     inline fn restore() void {
+        regs.restoreFpuRegs();
+
         asm volatile (
             \\ pop %rdi
             \\ pop %rsi
             \\ pop %rdx
             \\ pop %rcx
+            \\ pop %rbp
             \\ pop %r8
             \\ pop %r9
             \\ pop %r10
@@ -191,7 +188,7 @@ export fn linuxRunProcess() noreturn {
     };
 
     arch.intr.disableForCpu();
-    local.arch_specific.tss.rsps[0] = lib.misc.alignDown(usize, task.getKernelStackTop(), 16); 
+    local.arch_specific.tss.rsps[0] = lib.misc.alignDown(usize, task.getKernelStackTop(), 16);
 
     asm volatile (
         \\ mov %[sp], %rsp
@@ -223,6 +220,10 @@ export fn linuxRunProcess() noreturn {
 fn linuxSetupAbi(task: *sched.Task) void {
     const abi_data = task.spec.user.abi_data.asPtr(sys.call.linux.AbiData).?;
 
+    if (abi_data.rseq) |rseq| {
+        @atomicStore(u32, &rseq.cpu_id, smp.getIdx(), .release);
+    }
+
     regs.setMsr(regs.MSR_SWAPGS_BASE, abi_data.arch_specific.gs_base);
     regs.setMsr(regs.MSR_FS_BASE, abi_data.arch_specific.fs_base);
 }
@@ -235,10 +236,8 @@ fn linuxHandler() callconv(.naked) noreturn {
     regs.swapStackToKernel();
 
     Context.save();
-    regs.saveFpuRegsUnaligned();
 
     defer {
-        regs.restoreFpuRegsUnaligned();
         Context.restore();
 
         regs.restoreUserStack();
