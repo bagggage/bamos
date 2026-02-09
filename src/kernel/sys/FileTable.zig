@@ -71,7 +71,7 @@ pub inline fn isFull(self: *Self) bool {
     return self.num_files >= self.max_files;
 }
 
-pub fn clone(self: *const Self) vfs.Error!Self {
+pub fn clone(self: *Self) vfs.Error!Self {
     self.lock.readLock();
     defer self.lock.readUnlock();
 
@@ -80,10 +80,10 @@ pub fn clone(self: *const Self) vfs.Error!Self {
     errdefer vm.gpa.free(bitmap.ptr);
 
     const array = try allocArray(self.capacity);
-    var num_files = 0;
+    var num_files: u32 = 0;
     for (0..self.capacity) |i| {
         if (num_files >= self.num_files) {
-            @memset(array[i..], null);
+            @memset(array[i..self.capacity], null);
             break;
         }
 
@@ -110,33 +110,7 @@ pub fn clone(self: *const Self) vfs.Error!Self {
 
 pub fn open(self: *Self, dentry: *vfs.Dentry, perm: vfs.Permissions) vfs.Error!Descriptor {
     const file = try dentry.open(perm);
-
-    file.ref();
-    errdefer file.deref();
-
-    const idx: u32 = blk: {
-        self.lock.writeLock();
-        defer self.lock.writeUnlock();
-
-        if (self.num_files >= self.max_files) {
-            @branchHint(.unlikely);
-            return error.MaxSize;
-        }
-
-        try self.addOne();
-
-        const idx = self.bitmap.find(self.capacity, false) orelse unreachable;
-        self.bitmap.set(idx);
-        self.files[idx] = file;
-        self.num_files += 1;
-
-        break :blk @truncate(idx);
-    };
-
-    return .{
-        .idx = idx,
-        .file = file,
-    };
+    return try self.newDescriptor(file);
 }
 
 pub fn close(self: *Self, idx: u32) vfs.Error!void {
@@ -175,7 +149,9 @@ pub fn closeAll(self: *Self) void {
 
 pub inline fn duplicate(self: *Self, idx: u32) vfs.Error!Descriptor {
     const file = self.get(idx) orelse return error.BadFileDescriptor;
-    return try self.open(file.dentry, file.perm);
+    defer file.deref();
+
+    return try self.newDescriptor(file);
 }
 
 pub fn get(self: *Self, idx: u32) ?*vfs.File {
@@ -202,6 +178,53 @@ pub fn setMaxFiles(self: *Self, value: u32) vfs.Error!void {
     self.max_files = value;
 }
 
+pub fn newDescriptor(self: *Self, file: *vfs.File) vfs.Error!Descriptor {
+    self.lock.writeLock();
+    defer self.lock.writeUnlock();
+
+    if (self.num_files >= self.max_files) {
+        @branchHint(.unlikely);
+        return error.MaxSize;
+    }
+
+    try self.addOne();
+
+    const idx = self.bitmap.find(self.capacity, false) orelse unreachable;
+    self.bitmap.set(idx);
+    self.files[idx] = file;
+    self.num_files += 1;
+
+    file.ref();
+    return .{ .idx = @truncate(idx), .file = file };
+}
+
+pub fn newDescriptorAt(self: *Self, idx: u32, file: *vfs.File, rebase: bool) vfs.Error!Descriptor {
+    self.lock.writeLock();
+    defer self.lock.writeUnlock();
+
+    if (self.num_files >= self.max_files) {
+        @branchHint(.unlikely);
+        return error.MaxSize;
+    }
+
+    try self.addOne();
+
+    const fd_idx = if (self.bitmap.get(idx) != 0) blk: {
+        if (!rebase) return error.Busy;
+        for (idx + 1..self.capacity) |i| {
+            if (self.bitmap.get(i) == 0) break :blk i;
+        }
+        return error.MaxSize;
+    } else idx;
+
+    self.bitmap.set(fd_idx);
+    self.files[fd_idx] = file;
+    self.num_files += 1;
+    file.ref();
+
+    return .{ .idx = @truncate(fd_idx), .file = file };
+}
+
 fn addOne(self: *Self) !void {
     if (self.capacity == 0) {
         const bitmap_size = comptime bitmapSize(min_capacity);
@@ -209,6 +232,8 @@ fn addOne(self: *Self) !void {
         errdefer vm.gpa.free(bitmap.ptr);
 
         self.files = (vm.gpa.allocMany(?*vfs.File, min_capacity) orelse return error.NoMemory).ptr;
+        @memset(self.files[0..min_capacity], null);
+
         self.bitmap = .init(bitmap[0..bitmap_size], false);
         self.capacity = min_capacity;
     } else if (self.num_files >= self.capacity) {
@@ -228,6 +253,7 @@ fn addOne(self: *Self) !void {
 
         const array = try allocArray(new_capacity);
         @memcpy(array[0..self.capacity], self.files[0..self.capacity]);
+        @memset(array[self.capacity..new_capacity], null);
 
         self.freeArray();
         self.files = array;
