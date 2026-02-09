@@ -99,6 +99,5 @@ pub inline fn mmapPrepare(self: *File, map_unit: *sys.AddressSpace.MapUnit) Erro
 }
 
 pub inline fn ioctl(self: *File, cmd: c_uint, arg: usize) Error!void {
-    if (true) return Error.BadOperation;
     return self.ops.ioctl(self, cmd, arg);
 }
