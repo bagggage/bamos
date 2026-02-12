@@ -277,10 +277,7 @@ pub fn pageFaultHandler(address: usize, cause: FaultCause, userspace: bool) bool
 
         if (sched.getCurrent().current_task) |task| {
             @branchHint(.likely);
-            if (task.spec == .user) {
-                task.spec.user.process.pageFault(address, cause);
-                return true;
-            }
+            if (task.spec == .user) return task.spec.user.process.pageFault(address, cause);
         }
     }
 

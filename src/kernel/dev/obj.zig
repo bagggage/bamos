@@ -173,4 +173,3 @@ export fn getObjectsByTypeId(id: u32) ?*List {
     objects.lock.lock();
     return &objects.list;
 }
-
