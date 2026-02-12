@@ -142,23 +142,23 @@ fn makeSrcTar(config: Config, allocator: std.mem.Allocator) !void {
             try std.fs.cwd().createFile(config.output.?, .{});
     defer tar_file.close();
 
-    var file_writer = tar_file.writer();
+    const buffer = try allocator.alloc(u8, std.heap.pageSize());
+    defer allocator.free(buffer);
 
-    var tar_writer = std.tar.writer(file_writer.any());
+    var file_writer = tar_file.writer(buffer);
+    var tar_writer: std.tar.Writer = .{ .underlying_writer = &file_writer.interface };
     try writeDir(src_dir, config.name orelse "", &tar_writer, allocator);
 
-    return tar_writer.finish();
+    return try file_writer.interface.flush();
 }
 
-fn writeDir(src_dir: std.fs.Dir, name: []const u8, tar_writer: anytype, allocator: std.mem.Allocator) !void {
+fn writeDir(src_dir: std.fs.Dir, name: []const u8, tar_writer: *std.tar.Writer, allocator: std.mem.Allocator) !void {
     var src_walker = try src_dir.walk(allocator);
     defer src_walker.deinit();
 
     var buffer: [512]u8 = undefined;
 
     while (try src_walker.next()) |entry| {
-        std.log.err("{s}", .{entry.path});
-
         switch (entry.kind) {
             .file => {
                 if (!std.mem.endsWith(u8, entry.basename, ".zig")) continue;
@@ -171,13 +171,13 @@ fn writeDir(src_dir: std.fs.Dir, name: []const u8, tar_writer: anytype, allocato
         const file = try src_dir.openFile(entry.path, .{});
         defer file.close();
 
-        var file_reader = try FileReader.init(file);
-        const reader: std.io.GenericReader(*FileReader, FileReader.Error, FileReader.read) = .{ .context = &file_reader };
+        var file_reader = file.reader(&.{});
         const sub_path = try std.fmt.bufPrint(&buffer, "{s}/{s}", .{name, entry.path});
 
         try tar_writer.writeFileStream(
             sub_path,
-            file_reader.getSize(), reader,
+            try file_reader.getSize(),
+            &file_reader.interface,
             .{ .mode = 0o0644, }
         );
     }
