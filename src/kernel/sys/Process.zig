@@ -1,6 +1,6 @@
 //! # Process Structure
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -138,6 +138,7 @@ pub fn create(stack_size: usize, root_dir: *vfs.Dentry, work_dir: *vfs.Dentry) !
     errdefer vm.auto.free(Self, self);
 
     self.* = try .init(stack_size, root_dir, work_dir);
+    self.parent = self;
     errdefer self.deinit();
 
     const task = try sched.Task.create(.{ .user = .{ .process = self } }, undefined);
@@ -150,15 +151,17 @@ pub fn clone(self: *Self) !*Self {
     const new = vm.auto.alloc(Self) orelse return error.NoMemory;
     errdefer vm.auto.free(Self, new);
 
+    const addr_space = try self.addr_space.cloneAndCopy();
     const file_table = try self.files.clone();
+
     if (self.exe_file) |f| f.ref();
     if (self.interp_file) |f| f.ref();
 
     self.root_dir.ref();
     self.work_dir.ref();
-    self.addr_space.ref();
+    addr_space.ref();
 
-    self.* = .{
+    new.* = .{
         .pid = allocId(),
         .flags = .{ .clone = true },
         .root_dir = self.root_dir,
@@ -166,14 +169,15 @@ pub fn clone(self: *Self) !*Self {
         .parent = self,
         .exe_file = self.exe_file,
         .interp_file = self.interp_file,
-        .addr_space = self.addr_space,
+        .addr_space = addr_space,
         .files = file_table,
     };
 
     self.list_lock.writeLock();
     defer self.list_lock.writeUnlock();
 
-    self.childs.append(new.asNode());
+    self.childs.append(&new.node);
+    return new;
 }
 
 pub fn deinit(self: *Self) void {
@@ -187,6 +191,11 @@ pub fn deinit(self: *Self) void {
         task.delete();
     }
 
+    if (self.parent != self) {
+        @branchHint(.likely);
+        self.parent.childs.remove(&self.node);
+    }
+
     self.tasks.first = null;
     self.root_dir.deref();
     self.work_dir.deref();
@@ -196,7 +205,6 @@ pub fn deinit(self: *Self) void {
     self.addr_space.deref();
 
     freeId(self.pid);
-
 }
 
 pub inline fn delete(self: *Self) void {
@@ -250,14 +258,34 @@ pub inline fn detachInterpreter(self: *Self) void {
 }
 
 pub fn addChild(self: *Self, child: *Self) void {
-    std.debug.assert(self.parent == self);
+    std.debug.assert(self != child);
 
     child.parent = self;
 
     self.list_lock.writeLock();
     defer self.list_lock.writeUnlock();
 
-    self.childs.append(child.asNode());
+    self.childs.append(&child.node);
+}
+
+pub fn removeChild(self: *Self, child: *Self) void {
+    std.debug.assert(child.parent == self);
+
+    child.parent = child;
+
+    self.list_lock.writeLock();
+    defer self.list_lock.writeUnlock();
+
+    self.childs.remove(&child.node);
+}
+
+pub fn createTask(self: *Self) vm.Error!*sched.Task {
+    const task = try sched.Task.create(
+        .{ .user = .{ .process = self } }, undefined
+    );
+
+    self.pushTask(task);
+    return task;
 }
 
 pub fn pushTask(self: *Self, task: *sched.Task) void {
@@ -269,20 +297,28 @@ pub fn pushTask(self: *Self, task: *sched.Task) void {
     self.tasks.prepend(&task.spec.user.node);
 }
 
-pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) void {
+pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) bool {
     const err = blk: {
         if (!vm.isUserVirtAddr(address)) break :blk error.InvalidArgs;
         self.addr_space.pageFault(address, cause) catch |err| break :blk err;
 
-        return;
+        return true;
     };
 
-    log.debug("page fault failed: {s}: {f}", .{@errorName(err), self.addr_space});
-    self.sendSignal(.SegFault);
+    log.debug("page fault failed: {s}, 0x{x} - {t}:\n\r\t{f}", .{
+        @errorName(err), address, cause, self.addr_space
+    });
+
+    self.sendSignalAtomic(.SegFault);
+    return false;
 }
 
 pub fn sendSignal(self: *Self, signal: Signal) void {
+    self.sendSignalAtomic(signal);
+    sched.pause();
+}
+
+pub fn sendSignalAtomic(self: *Self, signal: Signal) void {
     // TODO: implement signals!
     log.warn("unhandled signal: {s} -> {f}", .{@tagName(signal), self});
-    sched.pause();
 }
