@@ -632,7 +632,8 @@ fn mountDriveFs(
     fs: *FileSystem, dentry: *Dentry,
     mnt_point: *MountPoint, blk_dev: *devfs.BlockDev
 ) !*Dentry {
-    const super = try fs.mountDrive(blk_dev.getDrive(), blk_dev.getPartition());
+    const part = blk_dev.getPartition();
+    const super = try fs.mountDrive(part.data.asPtr(Drive).?, part);
     if (!super.validateRoot()) {
         @branchHint(.cold);
         log.err(

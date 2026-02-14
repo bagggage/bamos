@@ -244,7 +244,8 @@ pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: b
     {
         self.base_part = .{
             .lba_start = 0,
-            .lba_end = self.offsetToLba(self.capacity)
+            .lba_end = self.offsetToLba(self.capacity),
+            .data = .fromPtr(self)
         };
 
         const dev_num = self.dev_region.alloc() orelse return Error.DevMinorLimit;
@@ -253,8 +254,7 @@ pub fn setup(self: *Self, name: dev.Name, dev_region: *devfs.Region, multi_io: b
         try self.base_part.registerDevice(
             name,
             dev_num,
-            &devfile_ops,
-            self
+            &devfile_ops
         );
 
         self.parts = .{};
@@ -440,7 +440,7 @@ fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, 
 fn filePartitionRead(file: *const vfs.File, offset: usize, buffer: []u8) vfs.Error!usize {
     const dev_file = devfs.DevFile.fromDentry(file.dentry);
     const part = vfs.Partition.fromDevFile(dev_file);
-    const self = dev_file.data.asPtr(Self).?;
+    const self = part.data.asPtr(Self).?;
 
     const region = self.calcPartitionRegion(part, offset, buffer.len);
     if (region[0] == region[1]) return 0;

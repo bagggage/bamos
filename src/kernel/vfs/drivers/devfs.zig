@@ -69,8 +69,6 @@ pub const DevFile = struct {
     num: DevNum,
 
     ops: *const Operations,
-    data: lib.AnyData = .{},
-
     node: Node = .{},
 
     pub inline fn fromNode(node: *Node) *DevFile {
@@ -101,10 +99,6 @@ pub const BlockDev = struct {
 
     pub inline fn getPartition(self: *BlockDev) *vfs.Partition {
         return vfs.Partition.fromDevFile(&self.dev_file);
-    }
-
-    pub inline fn getDrive(self: *BlockDev) *vfs.Drive {
-        return self.dev_file.data.asPtr(vfs.Drive).?;
     }
 
     pub inline fn getName(self: *const BlockDev) *const dev.Name {

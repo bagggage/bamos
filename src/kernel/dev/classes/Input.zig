@@ -380,7 +380,6 @@ pub fn setup(self: *Self, name: dev.Name, kind: Kind) Error!void {
             .name = try .print("event{}", .{idx}),
             .num = num,
             .ops = &dev_ops,
-            .data = .fromPtr(self)
         },
     };
     errdefer self.dev_file.name.deinit();
