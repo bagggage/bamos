@@ -67,14 +67,25 @@ pub fn drawChar(char: u8, color: u32, row: u16, col: u16) void {
     }
 }
 
-pub fn fillRow(row: u16, n: u16, color: u32) void {
+pub fn fillRow(row: u16, col: u16, n: u16, color: u32) void {
     const fb_vec_scanline = fb.scanline / font.width;
     var fb_offset = fb_vec_scanline * row * font.height;
 
     const color_vec: FontVec = @splat(color);
 
     for (0..font.height) |_| {
-        for (0..n) |x| fb_vec[fb_offset + x] = color_vec;
+        for (col..col + n) |x| fb_vec[fb_offset + x] = color_vec;
+        fb_offset += fb_vec_scanline;
+    }
+}
+
+pub fn blink(row: u16, col: u16) void {
+    const rows = 2;
+    const fb_vec_scanline = fb.scanline / font.width;
+    var fb_offset = fb_vec_scanline * (row * font.height + (font.height - rows));
+
+    for (0..rows) |_| {
+        fb_vec[fb_offset + col] = ~fb_vec[fb_offset + col];
         fb_offset += fb_vec_scanline;
     }
 }
