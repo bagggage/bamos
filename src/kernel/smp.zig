@@ -25,10 +25,14 @@ pub const init_stack_pages = if (builtin.mode == .Debug) 8 else 1;
 pub const LocalData = struct {
     idx: u16 = 0,
 
+    /// Used by timer IRQ to calculate elapsed time.
+    sys_timer_delta: u64 = 0,
     scheduler: sched.Scheduler = .{},
+
     nested_intr: u8 = 0,
     force_immediate_intrs: bool = false,
     immediate_intrs: intr.SoftHandler.List = .{},
+
     arch_specific: arch.CpuLocalData = undefined,
 
     pub inline fn isInInterrupt(self: *const LocalData) bool {
