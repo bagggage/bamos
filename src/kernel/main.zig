@@ -32,6 +32,7 @@ pub const std_options = std.Options {
     },
     .log_scope_levels = &.{
         //.{ .level = .warn, .scope = .@"sys.call.trace" },
+        .{ .level = .info, .scope = .pci },
         .{ .level = .info, .scope = .@"intr.except" },
     }
 };
@@ -115,8 +116,9 @@ fn kernelStartupTask() noreturn {
 }
 
 fn debugTask() noreturn {
+    const Static = opaque { var cntr: std.atomic.Value(u32) = .init(0); };
+    const sec = Static.cntr.fetchAdd(1, .release) + 1;
     const task = sched.getCurrentTask();
-
     while (true) {
         log.info("{s}: {} - {}", .{
             task.spec.kernel.name,
@@ -124,10 +126,7 @@ fn debugTask() noreturn {
             @as(u32, 32) - task.stats.getPriority(),
         });
 
-        const begin = sys.time.getCachedUpTime().sec;
-        while (begin == sys.time.getCachedUpTime().sec) {
-            sched.yield();
-        }
+        sched.getCurrent().sleepFor(std.time.ns_per_s * sec);
     }
 
     unreachable;
