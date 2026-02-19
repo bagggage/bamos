@@ -34,8 +34,11 @@ pub const alloc_config: vm.auto.Config = .{
 
 dentry: *Dentry,
 ops: *const Operations = &Operations.default.ops,
+data: lib.AnyData = .{},
+
 ref_count: lib.atomic.RefCount(u32) = .init(0),
 perm: vfs.Permissions = .none,
+// TODO: Make `offset` atomic access
 offset: usize = 0,
 
 pub inline fn get(self: *File) bool {
