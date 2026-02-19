@@ -31,6 +31,88 @@ pub const PrivilegeLevel = enum(u8) {
     kernel
 };
 
+pub const SleepQueue = struct {
+    pub const QList = std.SinglyLinkedList;
+    pub const QNode = QList.Node;
+
+    pub const max_sleep_sec = std.math.maxInt(u64) / std.time.ns_per_s;
+
+    pub const Entry = struct {
+        wait_entry: WaitQueue.Entry,
+        /// Number of nanosecond that task wants to sleep
+        /// relative to a previouse task in the queue
+        delta_ns: u64 = 0,
+
+        pub inline fn fromNode(node: *QNode) *Entry {
+            comptime std.debug.assert(QNode == SleepQueue.QNode);
+
+            const wait_entry = WaitQueue.Entry.fromNode(node);
+            return @fieldParentPtr("wait_entry", wait_entry);
+        }
+    };
+
+    list: QList = .{},
+
+    pub fn push(self: *SleepQueue, new_entry: *Entry) void {
+        var time_ns: u64 = 0;
+        var prev: ?*QNode = null;
+        var node: ?*QNode = self.list.first;
+
+        while (node) |n| : ({ prev = n; node = n.next; }) {
+            const entry = Entry.fromNode(n);
+            const entry_time = time_ns + entry.delta_ns;
+
+            if (entry_time <= new_entry.delta_ns) {
+                if (n.next != null) {
+                    time_ns = entry_time;
+                    continue;
+                }
+
+                new_entry.delta_ns -= entry_time;
+                n.next = &new_entry.wait_entry.node;
+            } else if (entry_time > new_entry.delta_ns) {
+                new_entry.delta_ns -= time_ns;
+                entry.delta_ns -= new_entry.delta_ns;
+
+                const p = prev orelse break;
+                p.insertAfter(&new_entry.wait_entry.node);
+            }
+
+            return;
+        }
+
+        self.list.prepend(&new_entry.wait_entry.node);
+    }
+
+    /// Returns the list of entries to be woken up
+    pub fn process(self: *SleepQueue, elapsed_ns: usize) ?*Entry {
+        const head = self.list.first orelse return null;
+
+        var time_ns: u64 = 0;
+        var prev: ?*QNode = null;
+        var node: ?*QNode = head;
+        while (node) |n| : ({ prev = n; node = n.next; }) {
+            const entry = Entry.fromNode(n);
+            const entry_time = time_ns + entry.delta_ns;
+
+            if (entry_time > elapsed_ns) {
+                entry.delta_ns = entry_time - elapsed_ns;
+                self.list.first = n;
+
+                const p = prev orelse return null;
+                p.next = null;
+
+                return Entry.fromNode(head);
+            }
+
+            time_ns = entry_time;
+        }
+
+        self.list.first = null;
+        return Entry.fromNode(head);
+    }
+};
+
 pub const WaitQueue = struct {
     pub const QList = lib.atomic.SinglyLinkedList;
     pub const QNode = QList.Node;

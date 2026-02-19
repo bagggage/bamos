@@ -14,6 +14,7 @@ const sys = @import("../sys.zig");
 const Task = sched.Task;
 const vm = @import("../vm.zig");
 
+const SleepQueue = sched.SleepQueue;
 const WaitQueue = sched.WaitQueue;
 const Self = @This();
 
@@ -77,6 +78,10 @@ sleep_ctx: arch.Context = undefined,
 
 preemption: u16 = 1,
 flags: Flags = .{},
+
+sleep_queue: SleepQueue = .{},
+sleep_lock: lib.sync.Spinlock = .{},
+sleep_elapsed_ns: u64 = 0,
 
 pub fn preinit(self: *Self) void {
     self.active_queue = &self.task_queues[0];
@@ -167,14 +172,15 @@ pub fn tryPreempt(self: *Self, task: *Task) bool {
 
         self.active_queue.prepend(current);
         self.active_queue.prepend(task);
+        self.disablePreemption();
     } else {
         intr.disableForCpu();
         defer intr.enableForCpu();
 
         self.active_queue.prepend(task);
+        self.disablePreemption();
     }
 
-    self.disablePreemption();
     self.planRescheduling();
 
     // Because of immediate interrupts handlers we must check if CPU is within interrupt handler
@@ -254,39 +260,44 @@ pub fn wait(self: *Self) void {
         return;
     }
 
+    std.debug.assert(task.stats.sleep.raw != .awake);
     self.rescheduleAtomic();
 }
 
-pub fn timerEvent(self: *Self, elapsed: sched.Ticks) void {
+pub fn sleepFor(self: *Self, ns: u64) void {
+    std.debug.assert(self.isOnCurrentCpu());
+
+    // TODO: Implement high-percision sleep.
+    if (ns < sys.time.getNsPerTick()) return;
+
+    self.disablePreemption();
+    var entry: SleepQueue.Entry = .{
+        .delta_ns = ns,
+        .wait_entry = initWait(self)
+    };
+
+    {
+        if (self.sleep_lock.tryLockAtomic() == false) unreachable;
+        defer self.sleep_lock.unlockAtomic();
+
+        self.sleep_queue.push(&entry);
+    }
+
+    self.rescheduleAtomic();
+}
+
+pub fn timerEvent(self: *Self, elapsed_ns: u64) void {
     std.debug.assert(self.getCpuLocal().isInInterrupt());
     @setRuntimeSafety(false);
 
-    const task = self.current_task orelse return;
-    task.stats.cpu_time +|= elapsed;
+    self.processSleeping(elapsed_ns);
 
-    if (self.getCpuLocal().force_immediate_intrs) {
-        @branchHint(.unlikely);
-        return;
-    }
+    // When converting to ticks, roundup on a half of tick.
+    const ns_per_tick = sys.time.getNsPerTick();
+    const ticks = (elapsed_ns + (ns_per_tick / 2)) / sys.time.getNsPerTick();
+    if (ticks == 0) return;
 
-    if (!task.stats.lock.tryLockAtomic()) return;
-
-    task.stats.time_slice -|= elapsed;
-    if (task.stats.time_slice == 0) {
-        @branchHint(.unlikely);
-        // Don't release stats.lock, it's used to say that nobody can
-        // scheduled this task again, because it's already scheduled
-
-        defer self.planRescheduling();
-
-        self.task_lock.lockAtomic();
-        defer self.task_lock.unlockAtomic();
-
-        self.expired_queue.push(task);
-        return;
-    }
-
-    task.stats.lock.unlockAtomic();
+    self.processTicks(@truncate(ticks));
 }
 
 /// Scheduler main function. Switches to next task from queue,
@@ -365,12 +376,23 @@ pub noinline fn postSwitch(self: *Self, new_ctx: *arch.Context) callconv(.c) voi
 
 pub inline fn completeSwitch(self: *Self, new_task: ?*Task) void {
     const old_task = self.current_task;
-    if (new_task) |task| {
-        _ = task.stats.sleep.cmpxchgStrong(
-            .needs_wakeup, .awake,
-            .release, .monotonic
-        );
-    }
+    // Why do we need this???
+    //
+    // This code adds a bug: 
+    // 1. Task was `falling_into_sleep`;
+    // 2. Someone awake it (sleep state is set to `needs_wakeup`);
+    // 3. Timer event preempt this task (equeue it to resume later);
+    // 4. Later task is resumed, but this code drops `needs_wakeup` state!
+    // 5. As a result, when the task finally calls `reschedule`
+    //    the scheduler would be surprised that task is not locked,
+    //    but at the same time it was in `awake` state
+    //
+    //if (new_task) |task| {
+    //    _ = task.stats.sleep.cmpxchgStrong(
+    //        .needs_wakeup, .awake,
+    //        .release, .monotonic
+    //    );
+    //}
 
     // Disable interrupts to prevent race condition when setting
     // `current_task` to new value, as `timerEvent` and `tryPreempt`
@@ -411,7 +433,7 @@ fn fallIntoSleep(self: *Self) void {
     }
 }
 
-pub fn sleepTask() callconv(.c) noreturn {
+fn sleepTask() callconv(.c) noreturn {
     const self = sched.getCurrent();
 
     // After switch is done, flag `need_resched` was forcibly cleared,
@@ -437,4 +459,53 @@ inline fn isOnCurrentCpu(self: *Self) bool {
 inline fn updateTaskStatsAtomic(task: *Task) void {
     task.stats.updateBonus();
     task.stats.updateTimeSlice();
+}
+
+fn processSleeping(self: *Self, elapsed_ns: u64) void {
+    self.sleep_elapsed_ns += elapsed_ns;
+    if (self.sleep_lock.tryLockAtomic()) {
+        @branchHint(.likely);
+        defer self.sleep_lock.unlockAtomic();
+
+        const sleep_elapsed = self.sleep_elapsed_ns;
+        self.sleep_elapsed_ns = 0;
+
+        var entry = self.sleep_queue.process(sleep_elapsed);
+        while (entry) |e| {
+            const task = e.wait_entry.task;
+            if (task.tryWakeup()) self.enqueueTask(task);
+
+            entry = if (e.wait_entry.node.next) |n| SleepQueue.Entry.fromNode(n) else null;
+        }
+    }
+}
+
+fn processTicks(self: *Self, ticks: sched.Ticks) void {
+    const task = self.current_task orelse return;
+    task.stats.cpu_time +|= ticks;
+
+    // Don't handle task time slice in nested interrupt context.
+    if (self.getCpuLocal().force_immediate_intrs) {
+        @branchHint(.unlikely);
+        return;
+    }
+
+    if (!task.stats.lock.tryLockAtomic()) return;
+    task.stats.time_slice -|= ticks;
+
+    if (task.stats.time_slice == 0) {
+        @branchHint(.unlikely);
+        // Don't release stats.lock, it's used to say that nobody can
+        // scheduled this task again, because it's already scheduled
+
+        defer self.planRescheduling();
+
+        self.task_lock.lockAtomic();
+        defer self.task_lock.unlockAtomic();
+
+        self.expired_queue.push(task);
+        return;
+    }
+
+    task.stats.lock.unlockAtomic();
 }
