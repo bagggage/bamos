@@ -86,8 +86,8 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     const timestamp = makeTimestamp(b, optimize);
     defer b.allocator.free(timestamp);
 
-    const build_string = b.fmt("{s}-{t}: Zig {f} # {s}", .{
-        zon.version, optimize, builtin.zig_version, timestamp
+    const build_string = b.fmt("{t}: Zig {f} # {s}", .{
+        optimize, builtin.zig_version, timestamp
     });
     const kernel_ver = std.SemanticVersion.parse(zon.version) catch blk: {
         const parse_fail = b.addFail("Failed to parse version from build.zig.zon");
