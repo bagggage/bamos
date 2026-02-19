@@ -13,6 +13,7 @@ const sys = @import("../../../sys.zig");
 
 pub const self: LineDiscipline = .{
     .name = "tty",
+    .num = LineDiscipline.Builtin.tty.toInt(),
     .ops = .{
         .setup = &setup,
         .read = &read,
@@ -143,9 +144,6 @@ fn write(tty: *Teletype, buffer: []const u8) Teletype.Error!usize {
     const writen = if (tty.config.lflag.ICANON) blk: {
         break :blk try canonicalWrite(tty, buffer);
     } else blk: {
-        tty.out_lock.lock();
-        defer tty.out_lock.unlock();
-
         break :blk try tty.writeOutput(buffer);
     };
 
