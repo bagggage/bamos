@@ -255,11 +255,21 @@ pub const file = opaque {
             return error.BadOperation;
         }
 
+        pub fn poll(self: *File) Error!File.Poll {
+            return switch (self.dentry.inode.type) {
+                .directory,
+                .symbolic_link,
+                .regular_file => .{ .read_avail = true, .may_write = true },
+                else => error.BadOperation
+            };
+        }
+
         pub const ops: File.Operations = .{
             .read = &read,
             .write = &write,
             .ioctl = &ioctl,
             .mmapPrepare = &mmapPrepare,
+            .poll = &poll
         };
     };
 

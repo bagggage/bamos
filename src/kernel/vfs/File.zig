@@ -20,11 +20,48 @@ pub const Operations = struct {
     pub const WriteFn = *const fn(*File, usize, []const u8) Error!usize;
     pub const MmapPrepareFn = *const fn(*const File, *sys.AddressSpace.MapUnit) Error!void;
     pub const IoctlFn = *const fn(*File, c_uint, usize) Error!void;
+    pub const PollFn = *const fn(*File) Error!Poll;
 
     read: ReadFn = &default.read,
     write: WriteFn = &default.write,
     ioctl: IoctlFn = &default.ioctl,
     mmapPrepare: MmapPrepareFn = &default.mmapPrepare,
+    poll: PollFn = &default.poll,
+};
+
+pub const Poll = packed struct {
+    read_avail: bool = false,
+    read_prior: bool = false,
+    read_urgent: bool = false,
+    may_write: bool = false,
+    may_write_prior: bool = false,
+    hung_up: bool = false,
+    hung_up_read: bool = false,
+
+    pub fn fromLinux(in: i16) Poll {
+        const POLL = std.os.linux.POLL;
+        return .{
+            .read_avail = (in & POLL.IN) != 0,
+            .read_prior = (in & POLL.RDBAND) != 0,
+            .read_urgent = (in & POLL.PRI) != 0,
+            .may_write = (in & POLL.OUT) != 0,
+            .may_write_prior = (in & 0x200) != 0,
+        };
+    }
+
+    pub fn toLinux(self: Poll) i16 {
+        const POLL = std.os.linux.POLL;
+        var result: i16 = 0;
+        if (self.read_avail)      result |= POLL.IN | POLL.RDNORM;
+        if (self.read_prior)      result |= POLL.IN | POLL.RDBAND;
+        if (self.read_urgent)     result |= POLL.IN | POLL.PRI;
+        if (self.may_write)       result |= POLL.OUT | 0x100;
+        if (self.may_write_prior) result |= POLL.OUT | 0x200;
+        if (self.hung_up)         result |= POLL.HUP;
+        if (self.hung_up_read)    result |= POLL.HUP | 0x2000;
+
+        return result;
+    }
 };
 
 pub const alloc_config: vm.auto.Config = .{
@@ -103,4 +140,8 @@ pub inline fn mmapPrepare(self: *File, map_unit: *sys.AddressSpace.MapUnit) Erro
 
 pub inline fn ioctl(self: *File, cmd: c_uint, arg: usize) Error!void {
     return self.ops.ioctl(self, cmd, arg);
+}
+
+pub inline fn poll(self: *File) Error!Poll {
+    return self.ops.poll(self);
 }
