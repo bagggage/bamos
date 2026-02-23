@@ -1,6 +1,6 @@
 //! # Inode structure
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
@@ -72,6 +72,8 @@ pub fn getRole(self: *const Inode, uid: u32, gid: u32) vfs.Role {
 
 pub inline fn checkAccess(self: *const Inode, perm: vfs.Permissions, role: vfs.Role) bool {
     const perm_mask = perm.mask(role);
+
+    if (perm_mask == 0) return false;
     return (self.perm & perm_mask) == perm_mask;
 }
 
