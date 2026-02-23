@@ -173,13 +173,13 @@ fn findRoot(root_path: []const u8) !*vfs.Dentry {
 fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
     return switch (dentry.inode.type) {
         .directory => {
-            if (vfs.isMountPoint(dentry) == false) return error.BadDentry;
+            if (vfs.isFsRoot(dentry) == false) return error.BadSuperblock;
             return dentry;
         },
         .block_device => blk: {
             const blk_dev = devfs.BlockDev.fromDentry(dentry);
 
-            const mnt_dir = try vfs.getRootWeak().makeDirectory("rootfs");
+            const mnt_dir = try vfs.getRootWeak().makeDirectory("rootfs", .{});
             defer mnt_dir.deref();
 
             break :blk try if (config.get("rootfs")) |fs_name|
@@ -187,6 +187,6 @@ fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
             else vfs.tryMount(mnt_dir, blk_dev);
         },
         .symbolic_link => resolveRoot(try vfs.resolveSymLink(dentry)),
-        else => return error.BadDentry
+        else => return error.InvalidArgs
     };
 }

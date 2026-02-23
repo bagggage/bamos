@@ -52,6 +52,11 @@ pub const Region = struct {
 };
 
 pub const DevFile = struct {
+    pub const Access = struct {
+        perm: u16,
+        gid: u16,
+    };
+
     pub const Operations = struct {
         const OpenFn = *const fn (*DevFile, *vfs.File) vfs.Error!void;
         const CloseFn = *const fn (*DevFile, *vfs.File) void;
@@ -67,6 +72,8 @@ pub const DevFile = struct {
 
     name: dev.Name,
     num: DevNum,
+
+    access: Access,
 
     ops: *const Operations,
     node: Node = .{},
@@ -147,8 +154,9 @@ pub fn init() !void {
     errdefer vm.PageAllocator.free(phys_pool, 0);
 
     major_bitmap = .init(vm_pool[0..vm.page_size], false);
-
-    root = try tmpfs.createDirectory("/", undefined);
+    root = try tmpfs.createDirectory(
+        "/", undefined, .{ .perm = @intFromEnum(vfs.Permissions.rw) }
+    );
 }
 
 pub fn mount() vfs.Error!vfs.Context.Virt {
@@ -191,10 +199,12 @@ pub inline fn getRoot() *vfs.Dentry {
 }
 
 fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
-    const inode = try createInode(kind);
+    const inode = try createInode(
+        kind, .{ .gid = devf.access.gid, .perm = devf.access.perm }
+    );
     errdefer vfs.Inode.free(inode);
 
-    const dentry = try tmpfs.createDentry(devf.name.str(), inode, root.ctx);
+    const dentry = try tmpfs.createDentry(devf.name.str(), inode, root.getContext());
     dentry.ops = &fs.dentry_ops;
 
     inode.fs_data.setPtr(devf);
@@ -219,9 +229,8 @@ fn dentryClose(dentry: *const vfs.Dentry, file: *vfs.File) void {
     if (devf.ops.close) |close| close(devf, file);
 }
 
-fn createInode(kind: vfs.Inode.Type) Error!*vfs.Inode {
-    const inode = try tmpfs.createInode(kind);
-    inode.perm = vfs.Permissions.makeInt(.rw, .rw, .none);
+fn createInode(kind: vfs.Inode.Type, opts: vfs.CreateOptions) Error!*vfs.Inode {
+    const inode = try tmpfs.createInode(kind, opts);
     inode.index = inode_idx;
     inode_idx += 1;
 

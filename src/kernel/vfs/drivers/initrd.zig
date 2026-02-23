@@ -117,7 +117,10 @@ fn mount() vfs.Error!vfs.Context.Virt {
     // Already mounted
     if (initrd.len != 0) return error.Busy;
 
-    const dentry = try vfs.tmpfs.createDirectory("/", undefined);
+    const dentry = try vfs.tmpfs
+    .createDirectory(
+        "/", undefined, .{ .perm = @intFromEnum(vfs.Permissions.rw) }
+    );
     dentry.ops = &fs.dentry_ops;
 
     initrd = boot.getInitrd();
@@ -178,7 +181,7 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
             errdefer inode.free();
 
             setupInode(inode, &file, i, tar_iter.reader.seek);
-            try dentry.setup(entry_name, parent.ctx, inode, &fs.dentry_ops);
+            try dentry.setup(entry_name, parent.getContext(), inode, &fs.dentry_ops);
 
             return dentry;
         }
@@ -205,13 +208,13 @@ fn setupInode(inode: *vfs.Inode, file: *const TarFile, idx: u32, pos: usize) voi
     };
 }
 
-fn dentryCreateFile(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
-    try tmpfs.DentryOps.createFile(parent, child);
+fn dentryCreateFile(parent: *const vfs.Dentry, child: *vfs.Dentry, opts: vfs.CreateOptions) vfs.Error!void {
+    try tmpfs.DentryOps.createFile(parent, child, opts);
     child.ops = tmpfs.dentry_ops;
 }
 
-fn dentryMakeDirectory(parent: *const vfs.Dentry, child: *vfs.Dentry) vfs.Error!void {
-    try tmpfs.DentryOps.makeDirectory(parent, child);
+fn dentryMakeDirectory(parent: *const vfs.Dentry, child: *vfs.Dentry, opts: vfs.CreateOptions) vfs.Error!void {
+    try tmpfs.DentryOps.makeDirectory(parent, child, opts);
     child.ops = tmpfs.dentry_ops;
 }
 

@@ -160,6 +160,14 @@ pub const Block = struct {
         self.rw_sem.readUnlock();
     }
 
+    /// `start` and `end` is local offsets.
+    pub fn setDirtyRange(self: *Block, start: usize, end: usize) void {
+        const quant_shift = self.size.quantShift();
+        const start_quant = start >> quant_shift;
+        const end_quant = end >> quant_shift;
+        self.dirty_map.setRangeValue(.{ .start = start_quant, .end = end_quant }, true);
+    }
+
     pub inline fn writeBack(self: *Block) bool {
         return self.ctrl.writeBack(self);
     }
