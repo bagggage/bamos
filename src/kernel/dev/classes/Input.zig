@@ -379,6 +379,10 @@ pub fn setup(self: *Self, name: dev.Name, kind: Kind) Error!void {
         .dev_file = .{
             .name = try .print("event{}", .{idx}),
             .num = num,
+            .access = .{
+                .gid = 0,
+                .perm = vfs.Permissions.makeInt(.rw, .rw, .none) 
+            },
             .ops = &dev_ops,
         },
     };

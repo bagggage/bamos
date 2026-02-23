@@ -50,6 +50,10 @@ pub const Partition = struct {
         self.dev_file = .{
             .name = name,
             .num = num,
+            .access = .{
+                .gid = 0,
+                .perm = vfs.Permissions.makeInt(.rw, .rw, .none)
+            },
             .ops = ops,
         };
         try devfs.registerBlockDev(&self.dev_file);
