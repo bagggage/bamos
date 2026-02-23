@@ -5,12 +5,15 @@
 const std = @import("std");
 
 const Context = vfs.Context;
+const CreateOptions = vfs.CreateOptions;
 const Error = vfs.Error;
 const File = vfs.File;
+const FileSystem = vfs.FileSystem;
 const Inode = vfs.Inode;
 const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"vfs.Dentry");
 const lookup_cache = vfs.lookup_cache;
+const MountPoint = vfs.MountPoint;
 const Path = vfs.Path;
 const Superblock = vfs.Superblock;
 const vfs = @import("../vfs.zig");
@@ -25,8 +28,8 @@ pub const Operations = struct {
     const default = vfs.internals.dentry_ops.debug;
 
     pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
-    pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry) Error!void;
-    pub const CreateFileFn = *const fn(*const Dentry, *Dentry) Error!void;
+    pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry, CreateOptions) Error!void;
+    pub const CreateFileFn = *const fn(*const Dentry, *Dentry, CreateOptions) Error!void;
     pub const DeinitInodeFn = *const fn(*const Inode) void;
 
     pub const OpenFn = *const fn(*const Dentry, *File) Error!void;
@@ -98,6 +101,10 @@ pub const Name = struct {
     }
 };
 
+pub const Meta = packed struct {
+    fs: Context.Tag = .none,
+};
+
 name: Name,
 
 parent: *Dentry,
@@ -109,6 +116,7 @@ child: List = .{},
 node: Node = .{},
 
 cache_ent: lookup_cache.Entry = .{},
+meta: Meta = .{},
 
 ref_count: lib.atomic.RefCount(u32) = .{},
 lock: lib.sync.Spinlock = .{},
@@ -142,17 +150,33 @@ pub inline fn fromCache(entry: *lookup_cache.Entry) *Dentry {
     return @fieldParentPtr("cache_ent", entry);
 }
 
-pub inline fn getSuper(self: *Dentry) *Superblock {
+pub inline fn getMountPoint(self: *const Dentry) *MountPoint {
+    return switch (self.meta.fs) {
+        .virt  => self.getVirtualCtx().getMountPoint(),
+        .super => self.getSuper().mount_point,
+        .none  => @panic("bad dentry context!"),
+    };
+}
+
+pub inline fn getFileSystem(self: *const Dentry) *FileSystem {
+    return self.getMountPoint().fs;
+}
+
+pub inline fn getContext(self: *const Dentry) Context.Handle {
+    return .{ .ptr = self.ctx, .tag = self.meta.fs };
+}
+
+pub inline fn getSuper(self: *const Dentry) *Superblock {
     return self.ctx.super;
 }
 
-pub inline fn getVirtualCtx(self: *Dentry) *Context.Virt {
+pub inline fn getVirtualCtx(self: *const Dentry) *Context.Virt {
     return self.ctx.virt;
 }
 
 pub fn setup(
     self: *Dentry, name: []const u8,
-    ctx: Context.Ptr, inode: *Inode, ops: *Operations
+    ctx: Context.Handle, inode: *Inode, ops: *Operations
 ) !void {
     const dent_name: Name = try .init(name);
     inode.ref();
@@ -160,7 +184,8 @@ pub fn setup(
     self.* = .{
         .name = dent_name,
         .parent = self,
-        .ctx = ctx,
+        .ctx = ctx.ptr,
+        .meta = .{ .fs = ctx.tag },
         .inode = inode,
         .ops = ops
     };
@@ -207,22 +232,22 @@ pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
     return child;
 }
 
-pub fn makeDirectory(self: *Dentry, name: []const u8) Error!*Dentry {
+pub fn makeDirectory(self: *Dentry, name: []const u8, opts: CreateOptions) Error!*Dentry {
     const dir_dentry = try self.createLike(name);
     errdefer { dir_dentry.name.deinit(); dir_dentry.free(); }
 
-    try self.ops.makeDirectory(self, dir_dentry);
+    try self.ops.makeDirectory(self, dir_dentry, opts);
     self.addChild(dir_dentry);
     dir_dentry.ref();
 
     return dir_dentry;
 }
 
-pub fn createFile(self: *Dentry, name: []const u8) Error!*Dentry {
+pub fn createFile(self: *Dentry, name: []const u8, opts: CreateOptions) Error!*Dentry {
     const file_dentry = try self.createLike(name);
     errdefer { file_dentry.name.deinit(); file_dentry.free(); }
 
-    try self.ops.createFile(self, file_dentry);
+    try self.ops.createFile(self, file_dentry, opts);
     self.addChild(file_dentry);
     file_dentry.ref();
 
@@ -271,7 +296,11 @@ pub fn removeChild(self: *Dentry, child: *Dentry) void {
 }
 
 pub inline fn path(self: *const Dentry) Path {
-    return .{ .dentry = self };
+    return .{ .dentry = self, .root = vfs.getRootWeak() };
+}
+
+pub inline fn relativePath(self: *const Dentry, root: *const Dentry) Path {
+    return .{ .dentry = self, .root = root };
 }
 
 pub inline fn assignInode(self: *Dentry, inode: *Inode) void {
@@ -297,6 +326,7 @@ fn createLike(self: *const Dentry, name: []const u8) !*Dentry {
 
     dentry.name = try .init(name);
     dentry.ctx = self.ctx;
+    dentry.meta = self.meta;
     dentry.ops = self.ops;
 
     return dentry;

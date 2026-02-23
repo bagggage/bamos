@@ -63,12 +63,12 @@ pub const dentry_ops = opaque {
             return null;
         }
 
-        pub fn makeDirectory(dentry: *const Dentry, _: *Dentry) Error!void {
+        pub fn makeDirectory(dentry: *const Dentry, _: *Dentry, _: vfs.CreateOptions) Error!void {
             std.log.warn("{f}: 'makeDirectory' is not implemented", .{dentry.path()});
             return error.BadOperation;
         }
 
-        pub fn createFile(dentry: *const Dentry, _: *Dentry) Error!void {
+        pub fn createFile(dentry: *const Dentry, _: *Dentry, _: vfs.CreateOptions) Error!void {
             std.log.warn("{f}: 'createFile' is not implemented", .{dentry.path()});
             return error.BadOperation;
         }
@@ -182,6 +182,7 @@ pub const file = opaque {
 
         ops: File.Operations = .{
             .read = &read,
+            .write = &write,
             .mmapPrepare = &mmapPrepare,
         },
         readCacheBlock: ReadCacheBlockFn,
@@ -189,7 +190,7 @@ pub const file = opaque {
         pub fn read(self: *const File, offset: usize, buffer: []u8) Error!usize {
             const inode = self.dentry.inode;
 
-            if (inode.type != .regular_file) return error.BadInode;
+            if (inode.type != .regular_file) return error.NotRegularFile;
             if (offset >= inode.size) return 0;
 
             var len = @min(inode.size - offset, buffer.len);
@@ -212,8 +213,46 @@ pub const file = opaque {
             return tmp_offset;
         }
 
+        pub fn write(self: *File, offset: usize, buffer: []const u8) Error!usize {
+            const inode = self.dentry.inode;
+
+            if (inode.type != .regular_file) return error.NotRegularFile;
+            if (inode.cache_ctrl.write_back == null) return error.BadOperation;
+
+            var len = buffer.len;
+            var tmp_offset: usize = 0;
+            while (len > 0) {
+                const file_offset = tmp_offset + offset;
+                const block =
+                    if (file_offset < inode.size)
+                        try getCacheBlockOrRead(self, file_offset)
+                    else
+                        try createEmptyCacheBlock(self, file_offset);
+                defer block.deref();
+
+                const inner_offset = block.innerOffset(file_offset);
+                const inner_end = @min(inner_offset + len, block.size.toBytes());
+                const inner_len = inner_end - inner_offset;
+
+                block.writeDown();
+                defer block.writeUp();
+
+                @memcpy(block.asSlice()[inner_offset..inner_end], buffer[tmp_offset..tmp_offset + inner_len]);
+                block.setDirtyRange(inner_offset, inner_end);
+
+                tmp_offset +%= inner_len;
+                len -%= inner_len;
+            }
+
+            if (offset + tmp_offset > self.dentry.inode.size) {
+                // TODO: Update size properly
+                self.dentry.inode.size = offset + tmp_offset;
+            }
+            return tmp_offset;
+        }
+
         pub fn mmapPrepare(self: *const File, map_unit: *sys.AddressSpace.MapUnit) Error!void {
-            if (self.dentry.inode.type != .regular_file) return error.BadInode;
+            if (self.dentry.inode.type != .regular_file) return error.NotRegularFile;
             map_unit.ops = &mmap.ops;
         }
 
@@ -231,6 +270,16 @@ pub const file = opaque {
 
                 break :blk vm.cache.insertBlockOrFree(new_block) orelse new_block;
             };
+        }
+
+        fn createEmptyCacheBlock(self: *const File, offset: usize) vm.Error!*cache.Block {
+            const inode = self.dentry.inode;
+            const index = vm.cache.offsetToIdx(offset);
+
+            const block = try vm.cache.createBlock(&inode.cache_ctrl, index, .small);
+            @memset(block.asSlice(), 0);
+
+            return vm.cache.insertBlockOrFree(block) orelse block;
         }
 
         inline fn fromFile(self: *const File) *const Cached {
