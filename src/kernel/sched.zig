@@ -227,9 +227,10 @@ pub fn pauseUnlock(lock: *lib.sync.Spinlock) void {
 
     var entry = scheduler.initWait();
     scheduler.pause_queue.push(&entry);
+    lock.unlock();
 
-    lock.unlockAtomic();
-    scheduler.rescheduleAtomic();
+    scheduler.prepareToSleep();
+    scheduler.reschedule();
 }
 
 pub fn pauseUnlockIntr(lock: *lib.sync.Spinlock) void {
@@ -240,7 +241,9 @@ pub fn pauseUnlockIntr(lock: *lib.sync.Spinlock) void {
 
     var entry = scheduler.initWait();
 
+    scheduler.prepareToSleep();
     scheduler.disablePreemption();
+
     scheduler.pause_queue.push(&entry);
 
     lock.unlockRestoreIntr();
@@ -262,9 +265,10 @@ pub fn waitUnlock(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
 
     var entry = scheduler.initWait();
     queue.push(&entry);
-    lock.unlockAtomic();
+    lock.unlock();
 
-    scheduler.rescheduleAtomic();
+    scheduler.prepareToSleep();
+    scheduler.reschedule();
 }
 
 pub fn resumeTask(task: *Task) void {
@@ -323,6 +327,7 @@ pub inline fn getTimeGranuleMs() u32 {
 fn waitRaw(scheduler: *Scheduler, queue: *WaitQueue) void {
     var entry = scheduler.initWait();
 
+    scheduler.prepareToSleep();
     scheduler.disablePreemption();
     queue.push(&entry);
 

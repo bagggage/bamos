@@ -217,6 +217,7 @@ pub inline fn tryWakeup(self: *Self) bool {
             .release, .monotonic
     ) == null) return false;
 
+    std.debug.assert(self.stats.sleep.raw == .sleep);
     self.stats.sleep.store(.awake, .release);
     return true;
 }
