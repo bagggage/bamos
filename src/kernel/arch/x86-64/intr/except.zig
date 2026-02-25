@@ -144,8 +144,6 @@ pub fn handler(vec: comptime_int) type {
         }
 
         pub fn isr() callconv(.naked) noreturn {
-            arch.intr.disableForCpu();
-
             // Put error code on the stack.
             if (comptime !hasErrorCode()) asm volatile ("push $0");
 
@@ -160,8 +158,6 @@ pub fn handler(vec: comptime_int) type {
 }
 
 pub fn commonHandler(frame: *Frame, state: *regs.State) callconv(.c) void {
-    arch.intr.disableForCpu();
-
     traceException(frame, state);
     defer arch.halt();
 
@@ -191,6 +187,7 @@ pub fn pageFaultHandler(frame: *Frame, state: *regs.State) callconv(.c) void {
         return;
     }
 
+    arch.intr.disableForCpu();
     commonHandler(frame, state);
 }
 
