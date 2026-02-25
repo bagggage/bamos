@@ -20,6 +20,7 @@ const Self = @This();
 
 const Flags = packed struct {
     need_resched: bool = false,
+    want_sleep:   bool = false,
 };
 
 const TaskQueue = struct {
@@ -161,7 +162,7 @@ pub fn tryPreempt(self: *Self, task: *Task) bool {
     if (!self.isOnCurrentCpu()) return false;
 
     if (self.current_task) |current| {
-        if (!current.stats.lock.tryLockAtomic()) return false;
+        if (self.wantSleep() or !current.stats.lock.tryLockAtomic()) return false;
         if (current.stats.getPriority() <= task.stats.getPriority()) {
             current.stats.lock.unlockAtomic();
             return false;
@@ -197,8 +198,17 @@ pub inline fn planRescheduling(self: *Self) void {
     self.flags.need_resched = true;
 }
 
+pub inline fn prepareToSleep(self: *Self) void {
+    std.debug.assert(self.isPreemptive());
+    self.flags.want_sleep = true;
+}
+
 pub inline fn needRescheduling(self: *const Self) bool {
     return self.flags.need_resched;
+}
+
+pub inline fn wantSleep(self: *const Self) bool {
+    return self.flags.want_sleep;
 }
 
 pub inline fn isPreemptive(self: *const Self) bool {
@@ -238,6 +248,7 @@ pub inline fn getCpuLocal(self: *Self) *smp.LocalData {
 pub fn initWait(self: *Self) WaitQueue.Entry {
     const task = self.current_task.?;
 
+    if (task.stats.sleep.raw != .awake) log.warn("no awake before wait!: {t}", .{task.stats.sleep.raw});
     std.debug.assert(task.stats.sleep.raw == .awake);
     task.stats.sleep.raw = .falling_asleep;
 
@@ -250,18 +261,22 @@ pub fn initWait(self: *Self) WaitQueue.Entry {
 pub fn wait(self: *Self) void {
     const task = self.current_task.?;
 
+    self.prepareToSleep();
     self.disablePreemption();
+
     if (task.stats.sleep.cmpxchgStrong(
         .needs_wakeup, .awake,
         .release, .monotonic
     ) == null) {
         @branchHint(.unlikely);
+        self.flags.want_sleep = false;
         self.enablePreemption();
         return;
     }
 
     std.debug.assert(task.stats.sleep.raw != .awake);
     self.rescheduleAtomic();
+    if (task.stats.sleep.raw != .awake) log.warn("no awake after wait!: {t}", .{task.stats.sleep.raw});
 }
 
 pub fn sleepFor(self: *Self, ns: u64) void {
@@ -270,7 +285,9 @@ pub fn sleepFor(self: *Self, ns: u64) void {
     // TODO: Implement high-percision sleep.
     if (ns < sys.time.getNsPerTick()) return;
 
+    self.prepareToSleep();
     self.disablePreemption();
+
     var entry: SleepQueue.Entry = .{
         .delta_ns = ns,
         .wait_entry = initWait(self)
@@ -402,7 +419,7 @@ pub inline fn completeSwitch(self: *Self, new_task: ?*Task) void {
     intr.disableForCpu();
     defer intr.enableForCpu();
 
-    self.flags.need_resched = false;
+    self.flags = .{};
     self.current_task = new_task;
 
     if (old_task) |task| task.stats.lock.unlockAtomic();
@@ -490,7 +507,7 @@ fn processTicks(self: *Self, ticks: sched.Ticks) void {
         return;
     }
 
-    if (!task.stats.lock.tryLockAtomic()) return;
+    if (self.wantSleep() or !task.stats.lock.tryLockAtomic()) return;
     task.stats.time_slice -|= ticks;
 
     if (task.stats.time_slice == 0) {
