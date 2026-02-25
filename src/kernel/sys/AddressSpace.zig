@@ -322,6 +322,53 @@ pub fn unmap(self: *Self, map_unit: *MapUnit) void {
     map_unit.unmap(self.page_table);
 }
 
+pub fn unmapRange(self: *Self, base: usize, pages: u32) vm.Error!void {
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
+    const top = base + (pages * vm.page_size);
+    while (self.lookupMapUnit(base, top)) |map_unit| {
+        const curr_top = map_unit.top();
+        if (map_unit.base() >= base) {
+            if (curr_top <= top) {
+                if (map_unit == self.heap) {
+                    @branchHint(.unlikely);
+                    self.brk_offset = 0;
+                    self.removeMapping(map_unit);
+
+                    map_unit.page_capacity = 0;
+                    map_unit.unmap(self.page_table);
+                } else {
+                    self.deleteMapping(map_unit);
+                }
+            } else {
+                try map_unit.shrinkBottom(
+                    vm.bytesToPagesExact(top - map_unit.base()),
+                    self.page_table
+                );
+            }
+        } else if (curr_top <= top) {
+            if (map_unit == self.heap) {
+                @branchHint(.unlikely);
+                self.brk_offset = 0;
+            }
+            try map_unit.shrinkTop(
+                vm.bytesToPagesExact(curr_top - base),
+                self.page_table
+            );
+        } else {
+            const new_unit = try self.cutMapping(
+                map_unit, base - map_unit.base(),
+                pages
+            );
+            if (map_unit == self.heap) {
+                @branchHint(.unlikely);
+                self.heap = new_unit;
+            }
+        }
+    }
+}
+
 pub fn protectRange(self: *Self, base: usize, pages: u32, flags: MapUnit.Flags) vfs.Error!void {
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
@@ -576,29 +623,47 @@ inline fn compareMapRegions(
 
 fn divideMapping(self: *Self, map_unit: *MapUnit, div_unit: *MapUnit) !void {
     const new_base = div_unit.top();
-    const new_gap: u32 = @truncate((new_base - map_unit.base()) / vm.page_size);
-    const new_pg_size: u32 = @truncate((map_unit.top() - new_base) / vm.page_size);
-    const new_pg_off: u32 = new_gap + map_unit.page_offset;
+    const new_pg_gap = vm.bytesToPagesExact(new_base - map_unit.base());
+    const new_pg_size = vm.bytesToPagesExact(map_unit.top() - new_base);
+    const new_pg_off = new_pg_gap + map_unit.page_offset;
 
     const new_unit = vm.auto.alloc(MapUnit) orelse return error.NoMemory;
     errdefer vm.auto.free(MapUnit, new_unit);
 
-    const map_pg_size = (div_unit.base() - map_unit.base()) / vm.page_size;
-    try map_unit.unmapRegion(
-        @truncate(map_pg_size),
-        div_unit.page_capacity, self.page_table
-    );
+    const map_pg_size = vm.bytesToPagesExact(div_unit.base() - map_unit.base());
+    try map_unit.unmapRegion(map_pg_size, div_unit.page_capacity, self.page_table);
 
     new_unit.* = .init(
         map_unit.file, new_base, new_pg_off,
         new_pg_size, map_unit.flags
     );
 
-    const pg_off = map_unit.page_capacity - new_pg_size;
-    try map_unit.reinsertRegion(new_unit, pg_off, new_pg_size);
+    try map_unit.reinsertRegion(new_unit, new_pg_gap, new_pg_size);
+    map_unit.page_capacity = map_pg_size;
 
-    self.map_units.prepend(&new_unit.node);
-    _ = self.rb_tree.insert(&new_unit.rb_node);
+    self.includeMapping(new_unit);
+}
+
+fn cutMapping(self: *Self, map_unit: *MapUnit, offset: usize, pages: u32) !*MapUnit {
+    const new_base = map_unit.base() + offset + (pages * vm.page_size);
+    const new_top = map_unit.top();
+    const new_pages = vm.bytesToPagesExact(new_top - new_base);
+
+    const new_unit = try map_unit.fork();
+    errdefer new_unit.delete(self.page_table);
+
+    new_unit.region.base = new_base;
+    new_unit.page_capacity = new_pages;
+
+    const page_offset = vm.bytesToPagesExact(offset);
+    if (new_unit.file != null) new_unit.page_offset += page_offset;
+
+    try map_unit.unmapRegion(page_offset, pages, self.page_table);
+    try map_unit.reinsertRegion(new_unit, vm.bytesToPagesExact(new_base), new_pages);
+    map_unit.page_capacity = vm.bytesToPagesExact(offset);
+
+    self.includeMapping(new_unit);
+    return new_unit;
 }
 
 fn replaceMapping(self: *Self, old: *MapUnit, new: *MapUnit) void {
@@ -616,9 +681,7 @@ fn includeMapping(self: *Self, map_unit: *MapUnit) void {
 
 fn deleteMapping(self: *Self, map_unit: *MapUnit) void {
     self.removeMapping(map_unit);
-
-    map_unit.deinit(self.page_table);
-    vm.auto.free(MapUnit, map_unit);
+    map_unit.delete(self.page_table);
 }
 
 fn removeMapping(self: *Self, map_unit: *MapUnit) void {
