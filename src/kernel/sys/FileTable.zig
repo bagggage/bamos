@@ -17,7 +17,32 @@ const Self = @This();
 const min_capacity = 16;
 const min_bitmap_byte_len = 16;
 
-files: [*]?*vfs.File = undefined,
+pub const Handle = packed struct {
+    ptr: usize = 0,
+
+    pub inline fn get(self: Handle) ?*vfs.File {
+        @setRuntimeSafety(false);
+        return @ptrFromInt(self.pointer());
+    }
+
+    pub inline fn set(self: *Handle, ptr: ?*vfs.File) void {
+        self.ptr = @intFromPtr(ptr);
+    }
+
+    pub inline fn closeOnExec(self: Handle) bool {
+        return (self.ptr & 1) != 0; 
+    }
+
+    pub inline fn setCloseOnExec(self: *Handle, value: bool) void {
+        self.ptr = self.pointer() | @intFromBool(value);
+    }
+
+    fn pointer(self: Handle) usize {
+        return self.ptr & (~@as(usize, 1));
+    }
+};
+
+files: [*]Handle = undefined,
 bitmap: lib.BitmapUnbounded = undefined,
 lock: lib.sync.RwLock = .{},
 
@@ -50,8 +75,8 @@ pub fn deinit(self: *Self) void {
 
     var i: u32 = 0;
     while (num_files > 0) : (i += 1) {
-        if (self.files[i]) |f| {
-            self.files[i] = null;
+        if (self.files[i].get()) |f| {
+            self.files[i].set(null);
             f.deref();
 
             num_files -= 1;
@@ -83,16 +108,16 @@ pub fn clone(self: *Self) vfs.Error!Self {
     var num_files: u32 = 0;
     for (0..self.capacity) |i| {
         if (num_files >= self.num_files) {
-            @memset(array[i..self.capacity], null);
+            @memset(array[i..self.capacity], .{});
             break;
         }
 
-        const file = self.files[i] orelse {
-            array[i] = null;
+        const file = self.files[i].get() orelse {
+            array[i].set(null);
             continue;
         };
 
-        array[i] = file;
+        array[i].set(file);
         file.ref();
         num_files += 1;
     }
@@ -118,8 +143,8 @@ pub fn close(self: *Self, idx: u32) vfs.Error!void {
         self.lock.writeLock();
         defer self.lock.writeUnlock();
 
-        const file = self.files[idx] orelse return error.BadFileDescriptor;
-        self.files[idx] = null;
+        const file = self.files[idx].get() orelse return error.BadFileDescriptor;
+        self.files[idx].set(null);
 
         self.bitmap.clear(idx);
         self.num_files -= 1;
@@ -139,14 +164,16 @@ pub fn closeAll(self: *Self) void {
     for (0..self.capacity) |i| {
         if (num_files >= self.num_files) break;
 
-        const file = self.files[i] orelse continue;
-        self.files[i] = null;
+        const file = self.files[i].get() orelse continue;
+        self.files[i].set(null);
         file.deref();
 
         num_files += 1;
     }
 }
 
+/// Duplicates descriptor.
+/// Not increments reference counter of the new descriptor.
 pub inline fn duplicate(self: *Self, idx: u32) vfs.Error!Descriptor {
     const file = self.get(idx) orelse return error.BadFileDescriptor;
     defer file.deref();
@@ -154,6 +181,7 @@ pub inline fn duplicate(self: *Self, idx: u32) vfs.Error!Descriptor {
     return try self.newDescriptor(file);
 }
 
+/// Returns a file pointer and increments reference counter.
 pub fn get(self: *Self, idx: u32) ?*vfs.File {
     self.lock.readLock();
     defer self.lock.readUnlock();
@@ -163,12 +191,39 @@ pub fn get(self: *Self, idx: u32) ?*vfs.File {
         return null;
     }
 
-    const file = self.files[idx] orelse return null;
+    const file = self.files[idx].get() orelse return null;
     return if (file.get()) file else null;
 }
 
+/// Returns a pointer to the descriptor handle if not null.
+/// Not increments reference counter of the file.
+pub fn getHandle(self: *Self, idx: u32) ?*Handle {
+    self.lock.readLock();
+    defer self.lock.readUnlock();
+
+    if (idx >= self.capacity) {
+        @branchHint(.unlikely);
+        return null;
+    }
+
+    const handle = &self.files[idx];
+    if (handle.get() == null) return null;
+
+    return handle;
+}
+
+pub fn setCloseOnExec(self: *Self, idx: u32, value: bool) bool {
+    self.lock.writeLock();
+    defer self.lock.writeUnlock();
+
+    if (self.files[idx].ptr == 0) return false;
+    self.files[idx].setCloseOnExec(value);
+
+    return true;
+}
+
 pub fn setMaxFiles(self: *Self, value: u32) vfs.Error!void {
-    const max_size = value * @sizeOf(?*vfs.File);
+    const max_size = @as(usize, value) * @sizeOf(Handle);
     if (max_size > vm.PageAllocator.max_alloc_pages * vm.page_size) return error.MaxSize;
 
     self.lock.writeLock();
@@ -187,11 +242,13 @@ pub fn newDescriptor(self: *Self, file: *vfs.File) vfs.Error!Descriptor {
         return error.MaxSize;
     }
 
-    try self.addOne();
+    try self.ensureCapacity(self.num_files + 1);
 
     const idx = self.bitmap.find(self.capacity, false) orelse unreachable;
+    std.debug.assert(idx < self.capacity);
+
     self.bitmap.set(idx);
-    self.files[idx] = file;
+    self.files[idx].set(file);
     self.num_files += 1;
 
     file.ref();
@@ -207,39 +264,49 @@ pub fn newDescriptorAt(self: *Self, idx: u32, file: *vfs.File, rebase: bool) vfs
         return error.MaxSize;
     }
 
-    try self.addOne();
+    try self.ensureCapacity(idx + 1);
 
     const fd_idx = if (self.bitmap.get(idx) != 0) blk: {
-        if (!rebase) return error.Busy;
+        if (!rebase) { // Replace
+            const old_file = self.files[idx].get().?;
+            defer old_file.deref();
+
+            file.ref();
+            self.files[idx].set(file);
+
+            return .{ .idx = @truncate(idx), .file = file };
+        }
         for (idx + 1..self.capacity) |i| {
             if (self.bitmap.get(i) == 0) break :blk i;
         }
         return error.MaxSize;
     } else idx;
 
+    std.debug.assert(fd_idx < self.capacity);
+
     self.bitmap.set(fd_idx);
-    self.files[fd_idx] = file;
+    self.files[fd_idx].set(file);
     self.num_files += 1;
     file.ref();
 
     return .{ .idx = @truncate(fd_idx), .file = file };
 }
 
-fn addOne(self: *Self) !void {
+fn ensureCapacity(self: *Self, value: u32) !void {
+    const new_capacity = std.math.ceilPowerOfTwo(u32, value) catch return error.NoMemory;
     if (self.capacity == 0) {
-        const bitmap_size = comptime bitmapSize(min_capacity);
+        const capacity = @max(new_capacity, min_capacity);
+        const bitmap_size = bitmapSize(capacity);
         const bitmap = vm.gpa.allocMany(u8, bitmap_size) orelse return error.NoMemory;
         errdefer vm.gpa.free(bitmap.ptr);
 
-        self.files = (vm.gpa.allocMany(?*vfs.File, min_capacity) orelse return error.NoMemory).ptr;
-        @memset(self.files[0..min_capacity], null);
+        self.files = try allocArray(capacity);
+        @memset(self.files[0..capacity], .{});
 
         self.bitmap = .init(bitmap[0..bitmap_size], false);
-        self.capacity = min_capacity;
-    } else if (self.num_files >= self.capacity) {
+        self.capacity = capacity;
+    } else if (new_capacity > self.capacity) {
         const bitmap_size = bitmapSize(self.capacity);
-        const new_capacity = self.capacity * 2;
-
         if (new_capacity > bitmap_size * lib.byte_size) {
             const new_bitmap_size = bitmapSize(new_capacity);
             const bitmap = vm.gpa.allocMany(u8, new_bitmap_size) orelse return error.NoMemory;
@@ -253,7 +320,7 @@ fn addOne(self: *Self) !void {
 
         const array = try allocArray(new_capacity);
         @memcpy(array[0..self.capacity], self.files[0..self.capacity]);
-        @memset(array[self.capacity..new_capacity], null);
+        @memset(array[self.capacity..new_capacity], .{});
 
         self.freeArray();
         self.files = array;
@@ -261,15 +328,15 @@ fn addOne(self: *Self) !void {
     }
 }
 
-fn allocArray(capacity: usize) ![*]?*vfs.File {
+fn allocArray(capacity: usize) ![*]Handle {
     if (capacity >= vm.page_size) {
-        const size = capacity * @sizeOf(?*vfs.File);
+        const size = capacity * @sizeOf(Handle);
         const phys = vm.PageAllocator.alloc(vm.bytesToRank(size)) orelse return error.NoMemory;
 
         return @ptrFromInt(vm.getVirtLma(phys));
     }
 
-    const slice = vm.gpa.allocMany(?*vfs.File, capacity) orelse return error.NoMemory;
+    const slice = vm.gpa.allocMany(Handle, capacity) orelse return error.NoMemory;
     return slice.ptr;
 }
 
