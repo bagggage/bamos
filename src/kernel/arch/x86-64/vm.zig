@@ -287,6 +287,8 @@ pub const PageTable = struct {
     }
 
     pub fn unmap(self: *PageTable, virt: usize, pages: u32) void {
+        defer invalidateTlb(virt, pages);
+
         var pt_stack: [4]?[*]Entry = .{null} ** 4;
 
         var pte_idx = getPxeIdx(3, virt);
@@ -534,6 +536,14 @@ fn earlyMapLma() void {
     for (pt3.entries[0..len]) |*entry| {
         entry.* = template_pte;
         template_pte.base += gb_pages;
+    }
+}
+
+fn invalidateTlb(virt: usize, pages: u32) void {
+    var addr = virt;
+    for (0..pages) |_| {
+        asm volatile ("invlpg (%[page])":: [page] "r" (addr) : .{ .memory = true });
+        addr += vm.page_size;
     }
 }
 
