@@ -296,6 +296,14 @@ pub const Permissions = enum(u16) {
         return @intFromEnum(perm) & @intFromEnum(role);
     }
 
+    pub inline fn add(perm: Permissions, rhs: Permissions) Permissions {
+        return @enumFromInt(@intFromEnum(perm) | @intFromEnum(rhs));
+    }
+
+    pub inline fn remove(perm: Permissions, rhs: Permissions) Permissions {
+        return @enumFromInt(@intFromEnum(perm) & ~@intFromEnum(rhs));
+    }
+
     pub inline fn checkAccess(perm: Permissions, access: Permissions) bool {
         return (@intFromEnum(access) & @intFromEnum(perm)) == @intFromEnum(access);
     }
