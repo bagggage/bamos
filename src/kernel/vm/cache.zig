@@ -29,7 +29,7 @@ pub const Block = struct {
         }
 
         pub inline fn toPages(self: Size) u32 {
-            return @as(u32, 1) << self.toRank();
+            return @as(u32, 1) << @truncate(self.toRank());
         }
 
         pub inline fn toBytes(self: Size) u32 {
