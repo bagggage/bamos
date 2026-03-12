@@ -174,7 +174,7 @@ fn loadInterpreter(bin: *exe.Binary, interp: *vfs.File) exe.Error!usize {
             elf.PT_LOAD => {
                 max_alignment = @max(max_alignment, phdr.p_align);
                 interp_bounds[0] = @min(interp_bounds[0], phdr.p_vaddr);
-                interp_bounds[1] = @min(interp_bounds[1], phdr.p_vaddr + phdr.p_memsz);
+                interp_bounds[1] = @max(interp_bounds[1], phdr.p_vaddr + phdr.p_memsz);
             },
             else => {}
         };

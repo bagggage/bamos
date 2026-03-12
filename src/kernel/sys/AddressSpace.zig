@@ -172,7 +172,7 @@ pub fn heapGrow(self: *Self, bytes: usize) vm.Error!usize {
         heap.page_capacity += pages;
     }
 
-    self.brk_offset = @truncate(vm.page_size - (new_brk & (vm.page_size - 1)));
+    self.brk_offset = @truncate((vm.page_size - (new_brk & (vm.page_size - 1))) & (vm.page_size - 1));
     return new_brk;
 }
 
@@ -204,7 +204,7 @@ pub fn heapShrink(self: *Self, bytes: usize) vm.Error!usize {
         try heap.shrinkTop(pages, self.page_table);
     }
 
-    self.brk_offset = @truncate(vm.page_size - (new_brk & (vm.page_size - 1)));
+    self.brk_offset = @truncate((vm.page_size - (new_brk & (vm.page_size - 1))) & (vm.page_size - 1));
     return new_brk;
 }
 
@@ -388,7 +388,7 @@ pub fn protectRange(self: *Self, base: usize, pages: u32, flags: MapUnit.Flags) 
     } else blk: {
         var base_unit = map_unit;
         while (base < base_unit.base()) {
-            const prev = MapUnit.fromRbNode(map_unit.rb_node.prev() orelse return error.NoMemory);
+            const prev = MapUnit.fromRbNode(base_unit.rb_node.prev() orelse return error.NoMemory);
             if (prev.top() != base_unit.base()) return error.NoMemory; // gap!
 
             try validateProtection(prev, flags);
@@ -656,10 +656,10 @@ fn cutMapping(self: *Self, map_unit: *MapUnit, offset: usize, pages: u32) !*MapU
     new_unit.page_capacity = new_pages;
 
     const page_offset = vm.bytesToPagesExact(offset);
-    if (new_unit.file != null) new_unit.page_offset += page_offset;
+    if (new_unit.file != null) new_unit.page_offset += page_offset + pages;
 
     try map_unit.unmapRegion(page_offset, pages, self.page_table);
-    try map_unit.reinsertRegion(new_unit, vm.bytesToPagesExact(new_base), new_pages);
+    try map_unit.reinsertRegion(new_unit, page_offset + pages, new_pages);
     map_unit.page_capacity = vm.bytesToPagesExact(offset);
 
     self.includeMapping(new_unit);

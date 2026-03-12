@@ -334,7 +334,7 @@ fn statImpl(dentry: *vfs.Dentry, stats: *linux.Stat) isize {
         .rdev = 0,
         .size = @intCast(inode.size),
         .blksize = vm.page_size,
-        .blocks = @intCast(inode.size + (512 - 1) / 512),
+        .blocks = @intCast((inode.size + 512 - 1) / 512),
         // FIXME: Check if this code is correct
         .atim = .{ .sec = inode.access_time, .nsec = 0 },
         .mtim =  .{ .sec = inode.modify_time, .nsec = 0 },
