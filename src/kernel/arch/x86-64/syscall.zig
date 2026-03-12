@@ -15,6 +15,26 @@ const sys = @import("../../sys.zig");
 const vm = @import("../../vm.zig");
 
 pub const Context = extern struct {
+    /// Used with clone/fork
+    const Extra = extern struct {
+        callee: regs.CalleeRegs,
+        ret_ptr: usize,
+
+        inline fn save() void {
+            regs.saveCallerRegs();
+            regs.stackAlloc(1);
+        }
+
+        inline fn restore() void {
+            regs.restoreCallerRegs();
+            regs.stackFree(1);
+        }
+
+        inline fn free() void {
+            regs.stackFree((@sizeOf(regs.CalleeRegs) / @sizeOf(usize)) + 1);
+        }
+    };
+
     fxsave: [512]u8 align(@alignOf(usize)),
     rdi: usize,
     rsi: usize,
@@ -59,6 +79,10 @@ pub const Context = extern struct {
             \\ pop %r10
             \\ pop %r11
         );
+    }
+
+    inline fn toExtra(self: *Context) *Extra {
+        return @ptrFromInt(@intFromPtr(self) - @sizeOf(Extra));
     }
 };
 
@@ -107,6 +131,44 @@ pub fn startThread(_: sys.call.Abi, task: *sched.Task, run_ctx: sys.exe.RunConte
     ctx_regs.callee.r12 = run_ctx.entry_ptr;
     ctx_regs.callee.r13 = run_ctx.stack_ptr;
     task.context.setInstrPtr(@intFromPtr(&linuxRunProcess));
+}
+
+pub fn cloneThread(_: sys.call.Abi, _: *sched.Task, dest: *sched.Task, ctx: *Context) void {
+    const stack_top = lib.misc.alignDown(usize, dest.getKernelStackTop(), 16);
+    const dest_ctx: *Context = @ptrFromInt(stack_top - @sizeOf(Context));
+    const dest_ext = dest_ctx.toExtra();
+
+    dest_ext.* = ctx.toExtra().*;
+    dest_ctx.* = ctx.*;
+
+    dest.context = .initUnaligned(@intFromPtr(dest_ext), @intFromPtr(&linuxCloneReturn));
+}
+
+pub fn contextCall(
+    comptime call: anytype,
+    comptime name: []const u8
+) *const fn () isize {
+    const symbol_name = std.fmt.comptimePrint("syscall.contextCall_{s}", .{name});
+    @export(&call, .{ .name = symbol_name });
+
+    const wrapper = opaque {
+        fn entry() callconv(.naked) void {
+            asm volatile (
+                \\ mov %rdi, %r9
+                \\ lea 0x8(%rsp), %rdi
+            );
+
+            Context.Extra.save();
+            asm volatile (std.fmt.comptimePrint(
+                "call {s}", .{symbol_name}
+            ));
+
+            Context.Extra.free();
+            asm volatile ("retq");
+        }
+    };
+
+    return @ptrCast(&wrapper.entry);
 }
 
 pub fn linuxArchPrCtl(op: c_int, addr: ?*usize) !void {
@@ -217,6 +279,15 @@ export fn linuxRunProcess() noreturn {
     unreachable;
 }
 
+fn linuxCloneReturn() callconv(.naked) noreturn {
+    Context.Extra.restore();
+
+    asm volatile (
+        \\ xor %rax, %rax
+        \\ jmp linuxSyscallReturn
+    );
+}
+
 fn linuxSetupAbi(task: *sched.Task) void {
     const abi_data = task.spec.user.abi_data.asPtr(sys.call.linux.AbiData).?;
 
@@ -238,6 +309,8 @@ fn linuxHandler() callconv(.naked) noreturn {
     Context.save();
 
     defer {
+        asm volatile("linuxSyscallReturn:");
+
         Context.restore();
 
         regs.restoreUserStack();

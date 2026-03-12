@@ -32,8 +32,22 @@ pub fn startThread(abi: Abi, task: *sched.Task, run_ctx: sys.exe.RunContext) !vo
     arch.syscall.startThread(abi, task, run_ctx);
 }
 
+pub fn cloneThread(abi: Abi, src: *sched.Task, dest: *sched.Task, ctx: *arch.syscall.Context) !void {
+    switch (abi) {
+        .linux_sysv => {
+            const data = vm.auto.alloc(linux.AbiData) orelse return error.NoMemory;
+            const src_data = src.spec.user.abi_data.asPtr(linux.AbiData).?;
+
+            data.* = .{ .arch_specific = src_data.arch_specific };
+            dest.spec.user.abi_data.setPtr(data);
+        },
+    }
+
+    arch.syscall.cloneThread(abi, src, dest, ctx);
+}
+
 pub fn badCallHandler(proc: *sys.Process, id: usize, name: ?[]const u8, args: anytype) void {
     log.debug("invalid syscall: {s}:{}({any}), process: {}:{f}", .{
-        name orelse "unknown", id, args, proc.pid, proc.exe_file.?.dentry.path()
+        name orelse "unknown", id, args, proc.info.pid, proc.exe_file.?.dentry.path()
     });
 }

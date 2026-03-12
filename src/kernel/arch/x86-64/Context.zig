@@ -39,6 +39,18 @@ pub fn init(stack_ptr: usize, ip: usize) Self {
     return .{ .stack_ptr = .{ .ptr = @ptrFromInt(ptr) } };
 }
 
+pub fn initUnaligned(stack_ptr: usize, ip: usize) Self {
+    const ptr = stack_ptr - @sizeOf(CtxRegs);
+    const ctx_regs: *CtxRegs = @ptrFromInt(ptr);
+
+    ctx_regs.* = .{
+        .callee = .{ .rbp = ptr + @offsetOf(regs.CalleeRegs, "rbp") },
+        .ret_ptr = ip
+    };
+
+    return .{ .stack_ptr = .{ .ptr = @ptrFromInt(ptr) } };
+}
+
 pub inline fn setInstrPtr(self: *Self, value: usize) void {
     self.stack_ptr.asCtxRegs().ret_ptr = value;
 }
