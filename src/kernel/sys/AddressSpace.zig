@@ -1,6 +1,6 @@
 //! # Process Address Space
 
-// Copyright (C) 2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -86,13 +86,52 @@ pub fn cloneAndCopy(self: *Self) vm.Error!*Self {
         }
     }
 
-    if (self.heap != null and self.heap.?.page_capacity == 0) {
+    if (new.heap == null and self.heap != null) {
         @branchHint(.unlikely);
         const new_heap = try self.heap.?.fork();
         new.heap = new_heap;
     }
 
     return new;
+}
+
+pub fn compare(self: *const Self, other: *const Self) bool {
+    var lhs_node = self.rb_tree.first();
+    var rhs_node = other.rb_tree.first();
+
+    while (lhs_node) |l| : ({ lhs_node = l.next(); rhs_node = rhs_node.?.next(); }) {
+        const r = rhs_node orelse return false;
+        const l_unit = MapUnit.fromRbNode(l);
+        const r_unit = MapUnit.fromRbNode(r);
+
+        if (
+            l_unit.file != r_unit.file or
+            l_unit.base() != r_unit.base() or
+            l_unit.flags != r_unit.flags or
+            l_unit.page_capacity != r_unit.page_capacity or
+            l_unit.page_offset != r_unit.page_offset
+        ) return false;
+
+        for (0..l_unit.page_capacity) |i| {
+            const l_page = l_unit.region.getPage(@truncate(i));
+            const r_page = r_unit.region.getPage(@truncate(i));
+
+            if (l_page) |l_p| {
+                const r_p = r_page orelse return false;
+                if (l_p.dim != r_p.dim) return false;
+                if (!std.mem.eql(u8, l_p.asSlice(), r_p.asSlice())) {
+                    std.log.warn("vm.page content missmatch! 0x{x}: {x}, 0x{x}: {x}", .{
+                        l_unit.base() + l_p.getOffset(), l_p.base,
+                        r_unit.base() + r_p.getOffset(), r_p.base
+                    });
+
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
 }
 
 pub fn deinit(self: *Self) void {
@@ -172,7 +211,8 @@ pub fn heapGrow(self: *Self, bytes: usize) vm.Error!usize {
         heap.page_capacity += pages;
     }
 
-    self.brk_offset = @truncate(vm.page_size - (new_brk & (vm.page_size - 1)));
+    const brk_trunc: u16 = @truncate(new_brk & (vm.page_size - 1));
+    self.brk_offset = (vm.page_size - brk_trunc) & (vm.page_size - 1);
     return new_brk;
 }
 
@@ -204,7 +244,8 @@ pub fn heapShrink(self: *Self, bytes: usize) vm.Error!usize {
         try heap.shrinkTop(pages, self.page_table);
     }
 
-    self.brk_offset = @truncate(vm.page_size - (new_brk & (vm.page_size - 1)));
+    const brk_trunc: u16 = @truncate(new_brk & (vm.page_size - 1));
+    self.brk_offset = (vm.page_size - brk_trunc) & (vm.page_size - 1);
     return new_brk;
 }
 
@@ -388,7 +429,7 @@ pub fn protectRange(self: *Self, base: usize, pages: u32, flags: MapUnit.Flags) 
     } else blk: {
         var base_unit = map_unit;
         while (base < base_unit.base()) {
-            const prev = MapUnit.fromRbNode(map_unit.rb_node.prev() orelse return error.NoMemory);
+            const prev = MapUnit.fromRbNode(base_unit.rb_node.prev() orelse return error.NoMemory);
             if (prev.top() != base_unit.base()) return error.NoMemory; // gap!
 
             try validateProtection(prev, flags);
@@ -423,8 +464,11 @@ pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) vfs.Error!vo
         if (self.lookupMapUnit(base, top)) |map_unit| break :blk map_unit;
 
         // Lookup grow down unit
-        const map_unit = self.lookupMapUnit(top, top + vm.page_size) orelse return error.NoEnt;
-        break :blk if (map_unit.flags.grow_down) map_unit else return error.NoEnt;
+        const max_top = @min(vm.max_userspace_addr + 1, top + @as(usize, self.stack_pages) * vm.page_size);
+        const map_unit = self.lookupMapUnit(top, max_top) orelse return error.NoEnt;
+        const target_size = vm.bytesToPagesExact(map_unit.base() - address) + map_unit.page_capacity;
+
+        break :blk if (map_unit.flags.grow_down and target_size <= self.stack_pages) map_unit else return error.NoEnt;
     };
 
     self.map_lock.writeLock();
@@ -489,31 +533,38 @@ fn protectUnit(self: *Self, map_unit: *MapUnit, base: usize, top: usize, flags: 
             middle_unit.region.base = base;
             middle_unit.page_capacity = middle_pages;
 
+            // FIXME: Divide mapping should also reinsert pages into `middle_unit`,
+            //        but currently it just unmaps the middle area, this is buggy!!!
             try self.divideMapping(map_unit, middle_unit);
+
             self.includeMapping(middle_unit);
+            try middle_unit.map(self.page_table);
         } else {
             const top_unit = try map_unit.fork();
-            const top_pages = vm.bytesToPagesExact(map_unit.top() - base);
             errdefer top_unit.delete(self.page_table);
 
-            if (top_unit.file != null) top_unit.page_offset += base_pages;
             top_unit.flags = flags;
-            top_unit.region.base = base;
-            top_unit.page_capacity = top_pages;
+            top_unit.moveBaseUp(base_pages);
 
-            try map_unit.shrinkTop(top_pages, self.page_table);
+            try map_unit.reinsertRegion(top_unit, base_pages, top_unit.page_capacity);
+            map_unit.page_capacity -= top_unit.page_capacity;
+
             self.includeMapping(top_unit);
+            try top_unit.map(self.page_table);
         }
     } else if (top < map_unit.top()) {
         const base_unit = try map_unit.fork();
         const base_pages = vm.bytesToPagesExact(top - map_unit.base());
         errdefer base_unit.delete(self.page_table);
 
-        try map_unit.shrinkBottom(base_pages, self.page_table);
-
         base_unit.flags = flags;
         base_unit.page_capacity = base_pages;
+
+        try map_unit.reinsertRegion(base_unit, 0, base_pages);
+        map_unit.moveBaseUp(base_pages);
+
         self.includeMapping(base_unit);
+        try base_unit.map(self.page_table);
     } else {
         map_unit.flags = flags;
         try map_unit.map(self.page_table);
@@ -656,10 +707,10 @@ fn cutMapping(self: *Self, map_unit: *MapUnit, offset: usize, pages: u32) !*MapU
     new_unit.page_capacity = new_pages;
 
     const page_offset = vm.bytesToPagesExact(offset);
-    if (new_unit.file != null) new_unit.page_offset += page_offset;
+    if (new_unit.file != null) new_unit.page_offset += page_offset + pages;
 
     try map_unit.unmapRegion(page_offset, pages, self.page_table);
-    try map_unit.reinsertRegion(new_unit, vm.bytesToPagesExact(new_base), new_pages);
+    try map_unit.reinsertRegion(new_unit, page_offset + pages, new_pages);
     map_unit.page_capacity = vm.bytesToPagesExact(offset);
 
     self.includeMapping(new_unit);
