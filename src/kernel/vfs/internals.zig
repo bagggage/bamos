@@ -140,8 +140,10 @@ pub const file = opaque {
                     page.base = @truncate(phys / vm.page_size);
 
                     if (map_unit.region.getPage(page.dim.idx)) |_| {
-                        defer block.deref();
-                        return try map_unit.remapPage(pt, page, map_unit.flags.map);
+                        const new_page = try map_unit.remapPage(pt, page, map_unit.flags.map);
+                        // if page is mapped, then block should be dereferenced
+                        block.deref();
+                        return new_page;
                     } else {
                         return try map_unit.attachAndMapPage(pt, page, map_unit.flags.map);
                     }
@@ -158,16 +160,25 @@ pub const file = opaque {
                 const inode = map_unit.file.?.dentry.inode;
                 const mapped_page_offset = page.getOffset();
                 const virt = map_unit.base() + mapped_page_offset;
-                const page_attr = pt.accessPageAttributes(virt);
+                const file_offset = map_unit.page_offset * vm.page_size + mapped_page_offset;
+
+                const block = vm.cache.getOrNull(
+                    &inode.cache_ctrl, vm.cache.offsetToIdx(file_offset)
+                ) orelse {
+                    vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
+                    return;
+                };
+                defer block.deref();
 
                 // Check if page is backed by cache block
-                if (map_unit.flags.shared or !page_attr.writeable) {
-                    const file_offset = map_unit.page_offset * vm.page_size + mapped_page_offset;
-                    const block = vm.cache.getNoRef(&inode.cache_ctrl, vm.cache.offsetToIdx(file_offset))
-                        catch @panic("Trying to unmap cache page of non-existing cache block!");
+                const page_top = page.base + page.pagesNum();
+                if (page.base >= block.phys_base and page_top <= block.phys_base + block.size.toPages()) {
                     defer block.deref();
 
+                    const page_attr = pt.accessPageAttributes(virt);
                     if (page_attr.dirty) {
+                        std.debug.assert(map_unit.flags.shared);
+
                         const quant = block.offsetToQuant(file_offset);
                         block.dirty_map.set(quant);
                     }
