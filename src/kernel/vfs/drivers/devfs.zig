@@ -132,6 +132,7 @@ var fs: vfs.FileSystem = .init(
     }},
     .{
         .lookup = tmpfs.DentryOps.lookup,
+        .iterate = tmpfs.DentryOps.iterate,
         .createFile = tmpfs.DentryOps.createFile,
         .makeDirectory = tmpfs.DentryOps.makeDirectory,
 
@@ -147,8 +148,6 @@ var major_lock: lib.sync.Spinlock = .{};
 var inode_idx: u32 = init_inode_idx;
 
 pub fn init() !void {
-    if (vfs.registerFs(&fs) == false) return error.RegisterFailed;
-
     const phys_pool = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
     const vm_pool: [*]u8 = @ptrFromInt(vm.getVirtLma(phys_pool));
     errdefer vm.PageAllocator.free(phys_pool, 0);
@@ -157,6 +156,8 @@ pub fn init() !void {
     root = try tmpfs.createDirectory(
         "/", undefined, .{ .perm = @intFromEnum(vfs.Permissions.rw) }
     );
+
+    if (vfs.registerFs(&fs) == false) return error.RegisterFailed;
 }
 
 pub fn mount() vfs.Error!vfs.Context.Virt {

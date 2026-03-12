@@ -28,6 +28,7 @@ pub const Operations = struct {
     const default = vfs.internals.dentry_ops.debug;
 
     pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
+    pub const IterateFn = *const fn (*const Dentry, *Iterator) Error!void;
     pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry, CreateOptions) Error!void;
     pub const CreateFileFn = *const fn(*const Dentry, *Dentry, CreateOptions) Error!void;
     pub const DeinitInodeFn = *const fn(*const Inode) void;
@@ -36,6 +37,7 @@ pub const Operations = struct {
     pub const CloseFn = *const fn(*const Dentry, *File) void;
 
     lookup: LookupFn = &default.lookup,
+    iterate: IterateFn = &default.iterate,
     makeDirectory: MakeDirectoryFn = &default.makeDirectory,
     createFile: CreateFileFn = &default.createFile,
     deinitInode: DeinitInodeFn = &default.deinitInode,
@@ -103,6 +105,21 @@ pub const Name = struct {
 
 pub const Meta = packed struct {
     fs: Context.Tag = .none,
+};
+
+/// Dentries iterator, used as an interface between the kernel
+/// and file-system drivers to implement directory reading.
+pub const Iterator = struct {
+    pub const FillFn = *const fn(
+        *Iterator, name: []const u8, inode: usize, @"type": Inode.Type
+    ) bool;
+
+    callback: FillFn,
+    pos: usize = 0,
+
+    pub fn fillNext(self: *Iterator, name: []const u8, inode: usize, @"type": Inode.Type) bool {
+        return self.callback(self, name, inode, @"type");
+    }
 };
 
 name: Name,
@@ -230,6 +247,11 @@ pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
     }
 
     return child;
+}
+
+pub inline fn iterate(self: *const Dentry, iter: *Iterator) Error!void {
+    if (self.inode.type != .directory) return error.NotDirectory;
+    return self.ops.iterate(self, iter);
 }
 
 pub fn makeDirectory(self: *Dentry, name: []const u8, opts: CreateOptions) Error!*Dentry {

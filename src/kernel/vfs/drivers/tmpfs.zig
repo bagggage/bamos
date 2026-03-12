@@ -47,6 +47,7 @@ const File = struct {
 
 pub const DentryOps = opaque {
     pub const lookup = dentryLookup;
+    pub const iterate = dentryIterate;
     pub const makeDirectory = dentryMakeDirectory;
     pub const createFile = dentryCreateFile;
 };
@@ -65,6 +66,7 @@ var fs = vfs.FileSystem.init(
     .{
         .open = dentryOpen,
         .lookup = dentryLookup,
+        .iterate = dentryIterate,
         .makeDirectory = dentryMakeDirectory,
         .createFile = dentryCreateFile,
         .deinitInode = deinitInode,
@@ -94,13 +96,34 @@ fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
 
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     var node = parent.child.first;
-
     while (node) |n| : (node = n.next) {
         const dentry = vfs.Dentry.fromNode(n);
         if (std.mem.eql(u8, dentry.name.str(), name)) return dentry;
     }
 
     return null;
+}
+
+fn dentryIterate(dentry: *const vfs.Dentry, iter: *vfs.Dentry.Iterator) vfs.Error!void {
+    var node = dentry.child.first;
+    for (0..iter.pos) |_| {
+        if (node) |n| {
+            @branchHint(.likely);
+            node = n.next;
+        }
+
+        return;
+    }
+
+    while (node) |n| : ({ node = n.next; iter.pos += 1; }) {
+        const child = vfs.Dentry.fromNode(n);
+        if (!iter.fillNext(
+            child.name.str(), child.inode.index, child.inode.type
+        )) {
+            @branchHint(.unlikely);
+            return;
+        }
+    }
 }
 
 fn dentryMakeDirectory(_: *const vfs.Dentry, child: *vfs.Dentry, opts: vfs.CreateOptions) vfs.Error!void {

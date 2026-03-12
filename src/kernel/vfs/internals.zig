@@ -31,6 +31,10 @@ pub const dentry_ops = opaque {
             return null;
         }
 
+        pub fn iterate(_: *const Dentry, _: *Dentry.Iterator) Error!void {
+            return;
+        }
+
         pub fn makeDirectory(_: *const Dentry, _: *Dentry) Error!void {
             return error.BadOperation;
         }
@@ -61,6 +65,11 @@ pub const dentry_ops = opaque {
         pub fn lookup(dentry: *const Dentry, _: []const u8) ?*Dentry {
             std.log.warn("{f}: 'lookup' is not implemented", .{dentry.path()});
             return null;
+        }
+
+        pub fn iterate(dentry: *const Dentry, _: *Dentry.Iterator) Error!void {
+            std.log.warn("{f}: 'iterate' is not implemented", .{dentry.path()});
+            return;
         }
 
         pub fn makeDirectory(dentry: *const Dentry, _: *Dentry, _: vfs.CreateOptions) Error!void {

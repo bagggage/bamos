@@ -159,7 +159,20 @@ const Inode = extern struct {
         regular_file = 0x8,
         symlink = 0xA,
         socket = 0xB,
-        _
+        _,
+
+        fn toVfsType(self: Type) vfs.Inode.Type {
+            return switch (self) {
+                .fifo => .fifo,
+                .char_dev => .char_device,
+                .directory => .directory,
+                .block_dev => .block_device,
+                .regular_file => .regular_file,
+                .socket => .socket,
+                .symlink => .symbolic_link,
+                _ => .unknown
+            };
+        }
     };
 
     type_perm: packed struct {
@@ -409,16 +422,7 @@ const Inode = extern struct {
 
         inode.* = .{
             .index = idx,
-            .type = switch (self.type_perm.type) {
-                .fifo => .fifo,
-                .char_dev => .char_device,
-                .directory => .directory,
-                .block_dev => .block_device,
-                .regular_file => .regular_file,
-                .socket => .socket,
-                .symlink => .symbolic_link,
-                _ => .directory
-            },
+            .type = self.type_perm.type.toVfsType(),
             .perm = @as(u16, @bitCast(self.type_perm)) & 0x0FFF,
             .size = @as(usize, self.size_hi) << 32 | self.size_lo,
 
@@ -447,7 +451,7 @@ const Dentry = extern struct {
         block_i: u16 = 0,
         blocks_num: u16,
 
-        inner_offset: u16 = undefined,
+        inner_offset: u16 = 0,
 
         pub fn next(self: *Iterator, super: *const vfs.Superblock) !?*const Dentry {
             if (self.cursor.isBlank()) return try self.readNext(super);
@@ -455,6 +459,7 @@ const Dentry = extern struct {
             self.inner_offset += self.dent.size;
             if (self.inner_offset >= super.block_size) {
                 self.block_i += 1;
+                self.inner_offset = 0;
                 return try self.readNext(super);
             }
 
@@ -467,11 +472,17 @@ const Dentry = extern struct {
             self.cursor.close(.read);
         }
 
+        fn seek(self: *Iterator, super: *const vfs.Superblock, offset: usize) void {
+            std.debug.assert(self.cursor.isBlank());
+
+            self.inner_offset = super.offsetModBlock(offset);
+            self.block_i = @truncate(super.offsetToBlock(offset));
+        }
+
         fn readNext(self: *Iterator, super: *const vfs.Superblock) !?*const Dentry {
-            self.inner_offset = 0;
             if (self.block_i < self.blocks_num) {
                 const block_idx = self.inode.direct_ptrs[self.block_i];
-                const offset = super.part_offset + super.blockToOffset(block_idx);
+                const offset = super.part_offset + super.blockToOffset(block_idx) + self.inner_offset;
 
                 try self.cursor.ensureCache(.read, offset);
                 self.dent = self.cursor.asObject(Dentry);
@@ -506,6 +517,7 @@ var fs = vfs.FileSystem.init(
     }},
     .{
         .lookup = dentryLookup,
+        .iterate = dentryIterate,
 
         .open = dentryOpen,
         .close = dentryClose
@@ -594,7 +606,7 @@ fn readDirectory(super: *const vfs.Superblock, inode: *vfs.Inode, cursor: *cache
     const blocks_num = inode.size >> super.block_shift;
     const ext_inode = try readInode(super, inode.index, cursor);
 
-    return Dentry.Iterator{
+    return .{
         .inode = ext_inode,
         .cursor = .blank(super.drive),
         .blocks_num = @truncate(blocks_num),
@@ -634,6 +646,29 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     };
 
     return child_dentry;
+}
+
+fn dentryIterate(dentry: *const vfs.Dentry, iter: *vfs.Dentry.Iterator) vfs.Error!void {
+    const super = dentry.ctx.super;
+
+    var cache_cursor = super.drive.blankCursor();
+    defer cache_cursor.close(.read);
+
+    var dent_it = readDirectory(super, dentry.inode, &cache_cursor) catch return error.IoFailed;
+    defer dent_it.deinit();
+
+    dent_it.seek(super, iter.pos);
+    while (dent_it.next(super) catch return error.IoFailed) |dent| {
+        iter.pos = super.blockToOffset(dent_it.block_i) + dent_it.inner_offset;
+
+        const @"type": Inode.Type = @enumFromInt(dent.type);
+        if (!iter.fillNext(dent.name(), dent.inode, @"type".toVfsType())) {
+            @branchHint(.unlikely);
+            return;
+        }
+    }
+
+    iter.pos = super.blockToOffset(dent_it.block_i) + dent_it.inner_offset;
 }
 
 fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
