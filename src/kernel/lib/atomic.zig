@@ -68,7 +68,7 @@ pub fn RefCount(comptime UintType: type) type {
         }
 
         pub inline fn inc(self: *Self) void {
-            _ = self.value.fetchAdd(1, .monotonic);
+            _ = self.value.fetchAdd(1, .release);
         }
 
         pub inline fn dec(self: *Self) void {
