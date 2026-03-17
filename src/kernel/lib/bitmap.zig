@@ -30,6 +30,10 @@ pub const BitmapUnbounded = struct {
         self.bytes[bit_idx >> lib.byte_shift] ^= bitmask(bit_idx);
     }
 
+    pub inline fn clearAll(self: BitmapUnbounded, bit_len: usize) void {
+        @memset(self.bytes[0..bitsToBytes(bit_len)], 0);
+    }
+
     pub fn find(self: BitmapUnbounded, bit_len: usize, comptime is_setted: bool) ?usize {
         @setRuntimeSafety(false);
 
