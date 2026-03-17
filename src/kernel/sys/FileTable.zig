@@ -159,6 +159,7 @@ pub fn closeAll(self: *Self) void {
     self.lock.writeLock();
     defer self.lock.writeUnlock();
     defer self.num_files = 0;
+    defer self.bitmap.clearAll(self.capacity);
 
     var num_files = 0;
     for (0..self.capacity) |i| {
@@ -169,6 +170,28 @@ pub fn closeAll(self: *Self) void {
         file.deref();
 
         num_files += 1;
+    }
+}
+
+pub fn closeOnExecute(self: *Self) void {
+    self.lock.writeLock();
+    defer self.lock.writeUnlock();
+
+    var num_files: u32 = 0;
+    for (0..self.capacity) |i| {
+        if (num_files >= self.num_files) break;
+
+        const handle = self.files[i];
+        const file = handle.get() orelse continue;
+        defer num_files += 1;
+
+        if (!handle.closeOnExec()) continue;
+
+        self.files[i].set(null);
+        self.bitmap.clear(i);
+        self.num_files -= 1;
+
+        file.deref();
     }
 }
 
