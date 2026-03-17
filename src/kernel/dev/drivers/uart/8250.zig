@@ -29,6 +29,25 @@ const IntrEnReg = packed struct {
     reserved: u2 = 0,
 };
 
+const LineControlReg = packed struct  {
+    bits: enum(u2) {
+        @"5" = 0,
+        @"6" = 1,
+        @"7" = 2,
+        @"8" = 3
+    } = .@"8",
+    stop_bit: bool = false,
+    parity: enum(u3) {
+        none  = 0,
+        odd   = 1,
+        even  = 3,
+        mark  = 5,
+        space = 7
+    } = .none,
+    break_enable: bool = false,
+    div_latch_access: bool = false,
+};
+
 const LineStatusReg = packed struct {
     data_ready: bool = false,
     overrun_error: bool = false,
@@ -38,6 +57,25 @@ const LineStatusReg = packed struct {
     empty_thr: bool = false,
     empty_dhr: bool = false,
     fifo_error: bool = false,
+};
+
+const baud_table: [16][2]u8 = .{
+    .{ 0x09, 0x00 }, // 50
+    .{ 0x06, 0x00 }, // 75
+    .{ 0x04, 0x17 }, // 110
+    .{ 0x03, 0x5c }, // 134
+    .{ 0x03, 0x00 }, // 150
+    .{ 0x02, 0x40 }, // 200
+    .{ 0x01, 0x80 }, // 300
+    .{ 0x00, 0xc0 }, // 600
+    .{ 0x00, 0x60 }, // 1200
+    .{ 0x00, 0x30 }, // 2400
+    .{ 0x00, 0x18 }, // 4800
+    .{ 0x00, 0x0c }, // 9600
+    .{ 0x00, 0x06 }, // 19200
+    .{ 0x00, 0x03 }, // 38400
+    .{ 0x00, 0x02 }, // 57600
+    .{ 0x00, 0x01 }  // 115200
 };
 
 const reg = dev.regs.reg;
@@ -101,7 +139,11 @@ const Port = struct {
         const tty = try dev.obj.new(Teletype);
         errdefer dev.obj.free(Teletype, tty);
 
-        try tty.setup("ttyS", &dev_region, &tty_ops, self);
+        try tty.setup(
+            "ttyS", &dev_region,
+            .{ .gid = 0, .perm = vfs.Permissions.makeInt(.rw, .rw, .none) },
+            &tty_ops, self
+        );
 
         self.device.driver_data.setPtr(tty);
         self.immediate_intr.ctx = tty;
@@ -199,7 +241,8 @@ var ports = [_]Port{ .{} } ** hw_ports.len;
 const tty_ops: Teletype.Operations = .{
     .flush = ttyFlush,
     .enable = ttyEnable,
-    .disable = ttyDisable
+    .disable = ttyDisable,
+    .config = ttyConfig,
 };
 
 var dev_region: devfs.Region = .{
@@ -274,4 +317,17 @@ fn ttyDisable(tty: *Teletype) void {
     port.disableIrq();
 
     tty.in_buffer.deinit();
+}
+
+fn ttyConfig(tty: *Teletype, old: *const Teletype.termios) Teletype.Error!void {
+    if (tty.config.cflag == old.cflag) return;
+
+    const port = Port.fromTeletype(tty);
+    const line_ctrl: LineControlReg = .{
+        .bits = @enumFromInt(@intFromEnum(tty.config.cflag.CSIZE)),
+        .parity = if (tty.config.cflag.PARODD) .odd else if (tty.config.cflag.PARENB) .even else .none,
+        .stop_bit = tty.config.cflag.CSTOPB,
+    };
+
+    port.regs.set(.line_ctrl, line_ctrl);
 }
