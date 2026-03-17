@@ -10,6 +10,7 @@ const Input = dev.classes.Input;
 const lib = @import("../lib.zig");
 const log = std.log.scoped(.VirtualTerminal);
 const logger = @import("../logger.zig");
+const sched = @import("../sched.zig");
 const sys = @import("../sys.zig");
 const Teletype = dev.classes.Teletype;
 const uart = @import("../dev/drivers/uart/8250.zig");
@@ -25,10 +26,12 @@ var tty_ops: Teletype.Operations = .{
     .enable = &ttyEnable,
     .disable = &ttyDisable,
     .flush = &ttyNullFlush,
+    .control = &ttyControl,
 };
 
 var dev_region: devfs.Region = .{ .major = 4 };
 
+var cursor_task: *sched.Task = undefined;
 var kbd_handler: Input.Event.Handler = .{ .callback = &keyboardHandler };
 var kbd_immediate: dev.intr.SoftHandler = .{ .func = &keyboardImmediate };
 
@@ -65,6 +68,11 @@ kbd_events: [16]Input.Event = undefined,
 kbd_pos: u8 = 0,
 
 pub fn init() !void {
+    cursor_task = try sched.Task.create(
+        .{ .kernel = .{ .name = "vt.cursor" } },
+        @intFromPtr(&cursorTask)
+    );
+
     for (&vts, 0..) |*vt, i| {
         try vt.setup(i);
     }
@@ -88,7 +96,11 @@ pub fn setup(self: *Self, idx: usize) !void {
         .tty = undefined,
     };
 
-    try self.tty.setup("tty", &dev_region, &tty_ops, null);
+    try self.tty.setup(
+        "tty", &dev_region,
+        .{ .gid = 0, .perm = vfs.Permissions.makeInt(.rw, .none, .none) },
+        &tty_ops, null
+    );
 }
 
 pub fn enable(self: *Self) !void {
@@ -98,11 +110,13 @@ pub fn enable(self: *Self) !void {
 
     if (video.terminal.isInitialized()) {
         video.terminal.setColor(.lgray);
+        video.terminal.setCursor(0, 0);
         video.terminal.clear();
 
         logger.switchToUserspace();
 
         tty_ops.flush = &ttyVideoFlush;
+        sched.enqueue(cursor_task);
     } else {
         log.warn("video output is not enabled", .{});
         return error.Uninitialized;
@@ -119,21 +133,53 @@ pub fn disable(self: *Self) void {
 }
 
 fn ttyEnable(tty: *Teletype) Teletype.Error!void {
+    tty.out_buffer.reset();
     tty.in_buffer.reset();
     tty.in_seek = 0;
 
     try tty.setLineDiscipline(&Teletype.LineDiscipline.tty_disc);
+
     try tty.in_buffer.ensureCapacity(1);
+    errdefer tty.in_buffer.deinit();
+
+    try tty.out_buffer.ensureCapacity(1);
 }
 
 fn ttyDisable(tty: *Teletype) void {
     tty.in_buffer.deinit();
+    tty.out_buffer.deinit();
 }
 
 fn ttyNullFlush(_: *Teletype, _: []const u8) Teletype.Error!void {}
 
 fn ttyVideoFlush(_: *Teletype, buffer: []const u8) Teletype.Error!void {
     video.terminal.write(buffer);
+}
+
+fn ttyControl(_: *Teletype, cmd: u32, arg: lib.AnyData) vfs.Error!void {
+    if (!video.terminal.isInitialized()) return error.BadOperation;
+
+    switch (cmd) {
+        Teletype.T.IOCGWINSZ => {
+            const win_size = arg.asPtr(Teletype.WinSize).?;
+            const size = video.terminal.getSize();
+
+            win_size.rows = size[0];
+            win_size.cols = size[1];
+        },
+        Teletype.T.IOCSWINSZ => {
+            const win_size = arg.asPtr(Teletype.WinSize).?;
+            try video.terminal.setSize(.{ win_size.rows, win_size.cols });
+        },
+        else => return error.BadOperation
+    }
+}
+
+fn cursorTask() noreturn {
+    while (true) {
+        sched.getCurrent().sleepFor(std.time.ns_per_ms * 350);
+        if (active != null) video.terminal.blinkCursor();
+    }
 }
 
 fn keyboardHandler(ctx: lib.AnyData, device: *Input, event: Input.Event) bool {
@@ -229,10 +275,10 @@ fn scancodeToAscii(self: *Self, code: Input.Scancode) u8 {
     const cc = std.ascii.control_code;
 
     const base_table = comptime blk: {
-        const len = Code.space.toInt() + 1;
+        const len = Code.delete.toInt() + 1;
         var table: [len]u8 = .{ 0 } ** len;
 
-        table[Code.esc.toInt()]         = 0;
+        table[Code.esc.toInt()]         = cc.esc;
         table[Code.@"0".toInt()]        = '0';
         table[Code.@"1".toInt()]        = '1';
         table[Code.@"2".toInt()]        = '2';
@@ -246,7 +292,7 @@ fn scancodeToAscii(self: *Self, code: Input.Scancode) u8 {
         table[Code.minus.toInt()]       = '-';
         table[Code.equal.toInt()]       = '=';
         table[Code.backspace.toInt()]   = cc.del;
-        table[Code.tab.toInt()]         = 0;
+        table[Code.tab.toInt()]         = cc.ht;
         table[Code.Q.toInt()]           = 'q';
         table[Code.W.toInt()]           = 'w';
         table[Code.E.toInt()]           = 'e';
@@ -285,6 +331,17 @@ fn scancodeToAscii(self: *Self, code: Input.Scancode) u8 {
         table[Code.slash.toInt()]       = '/';
         table[Code.space.toInt()]       = ' ';
 
+        table[Code.home.toInt()]        = 0xff;
+        table[Code.up.toInt()]          = 0xff;
+        table[Code.page_up.toInt()]     = 0xff;
+        table[Code.left.toInt()]        = 0xff;
+        table[Code.right.toInt()]       = 0xff;
+        table[Code.end.toInt()]         = 0xff;
+        table[Code.down.toInt()]        = 0xff;
+        table[Code.page_down.toInt()]   = 0xff;
+        table[Code.insert.toInt()]      = 0xff;
+        table[Code.delete.toInt()]      = 0xff;
+
         break :blk table;
     };
 
@@ -299,9 +356,9 @@ fn scancodeToAscii(self: *Self, code: Input.Scancode) u8 {
             '1', '2', '3', '0', '.'
         };
         const numpad_alt_table: [numpad_len]u8 = comptime .{
-            '7', '8', '9', '-',
-            '4', '5', '6', '+',
-            '1', '2', '3', '0', cc.del
+            0xff, 0xff, 0xff, '-',
+            0xff, 0xff, 0xff, '+',
+            0xff, 0xff, 0xff, 0xff, 0xff
         };
 
         const table = if (self.kbd_state.numlock) &numpad_table else &numpad_alt_table;
@@ -340,6 +397,33 @@ fn scancodeToAscii(self: *Self, code: Input.Scancode) u8 {
     };
 }
 
+fn scancodeToEscape(code: Input.Scancode) []const u8 {
+    return switch (code) {
+        .kp_8,
+        .up        => "\x1b[A",
+        .kp_4,
+        .left      => "\x1b[D",
+        .kp_6,
+        .right     => "\x1b[C",
+        .kp_2,
+        .down      => "\x1b[B",
+        .kp_7,
+        .home      => "\x1b[1~",
+        .kp_0,
+        .insert    => "\x1b[2~",
+        .kp_dot,
+        .delete    => "\x1b[3~",
+        .kp_1,
+        .end       => "\x1b[4~",
+        .kp_9,
+        .page_up   => "\x1b[5~",
+        .kp_3,
+        .page_down => "\x1b[6~",
+
+        else => &.{},
+    };
+}
+
 fn keyboardImmediate(ctx: ?*anyopaque) void {
     const self: *Self = @alignCast(@ptrCast(ctx.?));
     defer self.kbd_pos = 0;
@@ -351,7 +435,13 @@ fn keyboardImmediate(ctx: ?*anyopaque) void {
         const ascii = self.scancodeToAscii(event.code);
         if (ascii == 0) continue;
 
-        if (self.kbd_state.isControl()) {
+        if (ascii == 0xff) {
+            if (i > 0) self.tty.insertInput(buffer[0..i]) catch {};
+            i = 0;
+
+            self.tty.insertInput(scancodeToEscape(event.code)) catch {};
+            continue;
+        } else if (self.kbd_state.isControl()) {
             if (ascii < 0x40) continue;
             buffer[i] = std.ascii.toUpper(ascii) - 0x40;
         } else {
