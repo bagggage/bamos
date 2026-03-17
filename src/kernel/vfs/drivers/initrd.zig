@@ -88,6 +88,7 @@ var fs = vfs.FileSystem.init(
     .{
         .open = dentryOpen,
         .lookup = dentryLookup,
+        .iterate = dentryIterate,
 
         .createFile = dentryCreateFile,
         .makeDirectory = dentryMakeDirectory,
@@ -150,6 +151,35 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     };
 }
 
+fn dentryIterate(dentry: *const vfs.Dentry, iter: *vfs.Dentry.Iterator) vfs.Error!void {
+    const pos_mask = std.math.maxInt(usize) >> (@bitSizeOf(usize) / 2);
+    const offset = @intFromPtr(dentry.inode.fs_data.ptr);
+
+    var reader = getStream();
+    reader.seek = offset + (iter.pos & pos_mask);
+
+    var tar_iter = tar.Iterator.init(&reader, .{
+        .file_name_buffer = &file_name,
+        .link_name_buffer = &link_name
+    });
+
+    var i = dentry.inode.index + 1 + (iter.pos >> (@bitSizeOf(usize) / 2));
+    while (tar_iter.next() catch return) |entry| : (i += 1) {
+        const @"type": vfs.Inode.Type = switch (entry.kind) {
+            .file => .regular_file,
+            .directory => .directory,
+            .sym_link => .symbolic_link
+        };
+
+        if (!iter.fillNext(entry.name, i, @"type")) {
+            @branchHint(.unlikely);
+            break;
+        }
+
+        iter.pos = ((i + 1) << (@bitSizeOf(usize) / 2)) | (reader.seek - offset);
+    }
+}
+
 fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8) !?*vfs.Dentry {
     // Skip parent file itself
     const is_parent_root = parent == parent.ctx.virt.root;
@@ -161,7 +191,7 @@ fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8
     const parent_name_str = parent.name.str();
     if (tmpfs.DentryOps.lookup(parent, name)) |child| return child;
 
-    var i: u32 = 0;
+    var i: u32 = parent.inode.index + 1;
     while (try tar_iter.next()) |file| : (i += 1) {
         var name_iter = std.mem.splitBackwardsScalar(u8, file.name, '/');
         const entry_name = name_iter.first();
