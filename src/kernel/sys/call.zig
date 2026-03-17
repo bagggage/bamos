@@ -32,6 +32,10 @@ pub fn startThread(abi: Abi, task: *sched.Task, run_ctx: sys.exe.RunContext) !vo
     arch.syscall.startThread(abi, task, run_ctx);
 }
 
+pub inline fn jumpThread(abi: Abi, run_ctx: sys.exe.RunContext) noreturn {
+    arch.syscall.jumpThread(abi, sched.getCurrentTask(), run_ctx);
+}
+
 pub fn cloneThread(abi: Abi, src: *sched.Task, dest: *sched.Task, ctx: *arch.syscall.Context) !void {
     switch (abi) {
         .linux_sysv => {
@@ -48,6 +52,6 @@ pub fn cloneThread(abi: Abi, src: *sched.Task, dest: *sched.Task, ctx: *arch.sys
 
 pub fn badCallHandler(proc: *sys.Process, id: usize, name: ?[]const u8, args: anytype) void {
     log.debug("invalid syscall: {s}:{}({any}), process: {}:{f}", .{
-        name orelse "unknown", id, args, proc.info.pid, proc.exe_file.?.dentry.path()
+        name orelse "unknown", id, args, proc.id.value, proc.exe_file.?.dentry.path()
     });
 }

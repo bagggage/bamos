@@ -133,6 +133,17 @@ pub fn startThread(_: sys.call.Abi, task: *sched.Task, run_ctx: sys.exe.RunConte
     task.context.setInstrPtr(@intFromPtr(&linuxRunProcess));
 }
 
+pub inline fn jumpThread(_: sys.call.Abi, _: *sched.Task, run_ctx: sys.exe.RunContext) noreturn {
+    asm volatile (
+        "jmp linuxRunProcess"
+        :
+        : [entry_ptr] "{r12}" (run_ctx.entry_ptr),
+          [stack_ptr] "{r13}" (run_ctx.stack_ptr)
+    );
+
+    unreachable;
+}
+
 pub fn cloneThread(_: sys.call.Abi, _: *sched.Task, dest: *sched.Task, ctx: *Context) void {
     const stack_top = lib.misc.alignDown(usize, dest.getKernelStackTop(), 16);
     const dest_ctx: *Context = @ptrFromInt(stack_top - @sizeOf(Context));
