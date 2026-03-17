@@ -358,3 +358,27 @@ pub fn parseArgsBuffered(args: [:0]u8, buffer: [][*:0]const u8) vm.Error![]const
 
     return array.items;
 }
+
+pub fn copyArgs(args: []const [*:0]const u8) vm.Error![][*:0]const u8 {
+    if (args.len == 0) return &.{};
+
+    const ptrs = vm.gpa.allocMany([*:0]const u8, args.len) orelse return error.NoMemory;
+    for (args, 0..) |arg, i| {
+        errdefer freeArgs(ptrs[0..i]);
+
+        const src = std.mem.span(arg);
+        const dest = vm.gpa.allocMany(u8, src.len + 1) orelse return error.NoMemory;
+
+        @memcpy(dest, src.ptr[0..src.len + 1]);
+        ptrs[i] = @ptrCast(dest.ptr);
+    }
+
+    return ptrs;
+}
+
+pub fn freeArgs(args: [][*:0]const u8) void {
+    if (args.len == 0) return;
+
+    for (args) |arg| vm.gpa.free(@constCast(@ptrCast(arg)));
+    vm.gpa.free(@ptrCast(args.ptr));
+}
