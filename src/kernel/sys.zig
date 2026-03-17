@@ -11,6 +11,7 @@ const lib = @import("lib.zig");
 const log = std.log.scoped(.sys);
 const logger = @import("logger.zig");
 const sched = @import("sched.zig");
+const Teletype = @import("dev.zig").classes.Teletype;
 const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
 
@@ -39,6 +40,7 @@ const InitSource = struct {
 };
 
 pub fn init() !void {
+    try Teletype.dev_tty.init();
     try VirtualTerminal.init();
     try Console.init();
 
@@ -83,6 +85,9 @@ fn startInit() !void {
         const console_fd = try init_proc.files.open(console, .rw);
         _ = try init_proc.files.duplicate(console_fd.idx); // stdout
         _ = try init_proc.files.duplicate(console_fd.idx); // stderr
+
+        const tty = Teletype.fromFile(console_fd.file);
+        try init_proc.attachControlTerminal(tty);
 
         log.info("start process: {f} ", .{init_proc});
         log.debug("{f}", .{init_proc.addr_space});
