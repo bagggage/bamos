@@ -21,6 +21,7 @@ const Self = @This();
 const Flags = packed struct {
     need_resched: bool = false,
     want_sleep:   bool = false,
+    terminate:    bool = false,
 };
 
 const TaskQueue = struct {
@@ -369,6 +370,17 @@ pub noinline fn postSwitch(self: *Self, new_ctx: *arch.Context) callconv(.c) voi
     if (self.current_task) |task| blk: {
         if (!task.stats.lock.tryLockAtomic()) {
             @branchHint(.likely);
+
+            if (self.flags.terminate) {
+                @branchHint(.cold);
+
+                self.flags = .{};
+                self.current_task = null;
+
+                task.delete();
+                break :blk;
+            }
+
             updateTaskStatsAtomic(task);
             break :blk;
         }

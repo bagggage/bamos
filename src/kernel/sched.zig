@@ -194,6 +194,21 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     if (cpu_idx == smp.getIdx()) scheduler.start();
 }
 
+pub fn rebornAsKernelTask(task: *Task, name: []const u8) void {
+    std.debug.assert(task.spec == .user);
+
+    const scheduler = getCurrent();
+    if (scheduler.current_task == task) {
+        scheduler.disablePreemption();
+        defer scheduler.enablePreemption();
+
+        task.spec = .{ .kernel = .{ .name = name } };
+        vm.setPageTable(vm.getRootPt());
+    } else {
+        task.spec = .{ .kernel = .{ .name = name } };
+    }
+}
+
 pub inline fn waitStartup() noreturn {
     getCurrent().start();
 }
@@ -210,6 +225,20 @@ pub inline fn yield() void {
     std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
 
     scheduler.yield();
+}
+
+pub fn terminate() noreturn {
+    const scheduler = getCurrent();
+    const task = scheduler.current_task.?;
+    std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
+
+    if (task.spec == .user) @panic("User task is trying to terminate! Stop user thread before terminiation.");
+    if (!task.stats.lock.tryLock()) unreachable;
+
+    scheduler.flags.terminate = true;
+    scheduler.rescheduleAtomic();
+
+    unreachable;
 }
 
 pub inline fn pause() void {

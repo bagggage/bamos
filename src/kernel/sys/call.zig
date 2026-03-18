@@ -50,6 +50,15 @@ pub fn cloneThread(abi: Abi, src: *sched.Task, dest: *sched.Task, ctx: *arch.sys
     arch.syscall.cloneThread(abi, src, dest, ctx);
 }
 
+pub fn stopThread(abi: Abi, task: *sched.Task) void {
+    const abi_data = task.spec.user.abi_data;
+    sched.rebornAsKernelTask(task, "zombie");
+
+    switch (abi) {
+        .linux_sysv => vm.auto.free(linux.AbiData, abi_data.asPtr(linux.AbiData).?)
+    }
+}
+
 pub fn badCallHandler(proc: *sys.Process, id: usize, name: ?[]const u8, args: anytype) void {
     log.debug("invalid syscall: {s}:{}({any}), process: {}:{f}", .{
         name orelse "unknown", id, args, proc.id.value, proc.exe_file.?.dentry.path()
