@@ -8,7 +8,7 @@ const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
-const RbTree = lib.rb.Tree(compareMapUnits);
+const RbTree = lib.rb.Tree(compareMapUnits, keyCompareMapUnits);
 const RbNode = lib.rb.Node;
 
 const Self = @This();
@@ -134,7 +134,15 @@ pub fn compare(self: *const Self, other: *const Self) bool {
     return true;
 }
 
-pub fn deinit(self: *Self) void {
+pub inline fn deinit(self: *Self) void {
+    self.clear();
+    self.page_table.free();
+}
+
+pub fn clear(self: *Self) void {
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
     if (self.heap) |h| {
         if (h.page_capacity == 0) vm.auto.free(MapUnit, h);
     }
@@ -145,7 +153,7 @@ pub fn deinit(self: *Self) void {
     }
 
     self.rb_tree.root = null;
-    self.page_table.free();
+    self.heap = null;
 }
 
 pub inline fn delete(self: *Self) void {
@@ -631,22 +639,8 @@ fn allocRegion(self: *Self, pages: u32) vm.Error!usize {
 }
 
 fn lookupMapUnit(self: *Self, base: usize, top: usize) ?*MapUnit {
-    var rb_node = self.rb_tree.root;
-    while (rb_node) |n| {
-        const map_unit = MapUnit.fromRbNode(n);
-        const order = compareMapRegions(
-            base, top,
-            map_unit.base(), map_unit.top()
-        );
-
-        switch (order) {
-            .lt => rb_node = n.left,
-            .gt => rb_node = n.right,
-            .eq => return map_unit
-        }
-    }
-
-    return null;
+    const rb_node = self.rb_tree.lookup(.{ base, top }) orelse return null;
+    return MapUnit.fromRbNode(rb_node);
 }
 
 fn compareMapUnits(left: *RbNode, right: *RbNode, _: ?*RbNode) std.math.Order {
@@ -656,6 +650,14 @@ fn compareMapUnits(left: *RbNode, right: *RbNode, _: ?*RbNode) std.math.Order {
     return compareMapRegions(
         lhs_mapping.base(), lhs_mapping.top(),
         rhs_mapping.base(), rhs_mapping.top()
+    );
+}
+
+fn keyCompareMapUnits(left: *RbNode, right: anytype) std.math.Order {
+    const lhs_mapping = MapUnit.fromRbNode(left);
+    return compareMapRegions(
+        lhs_mapping.base(), lhs_mapping.top(),
+        right[0], right[1]
     );
 }
 
