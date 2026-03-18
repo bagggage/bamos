@@ -648,8 +648,9 @@ pub fn deinit(self: *Self) void {
     self.root_dir.deref();
     self.work_dir.deref();
     self.files.deinit();
-    self.detachExecutable();
-    self.detachInterpreter();
+
+    if (self.exe_file != null) self.detachExecutable();
+    if (self.interp_file != null) self.detachInterpreter();
     self.addr_space.deref();
 }
 
@@ -670,7 +671,11 @@ pub inline fn fromNode(node: *Node) *Self {
 }
 
 pub fn format(self: *const Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-    try writer.print("{f}:{}", .{self.exe_file.?.dentry.path(), self.id.value});
+    if (self.exe_file) |exe| {
+        try writer.print("{f}:{}", .{exe.dentry.path(), self.id.value});
+    } else {
+        try writer.print("null:{}", .{self.id.value});
+    }
 }
 
 pub inline fn getMainTask(self: *Self) ?*sched.Task {
@@ -855,10 +860,12 @@ pub fn terminateThreads(self: *Self) ?*sched.Task {
 pub fn terminate(self: *Self, status: u8) void {
     std.debug.assert(getCurrent() == self);
 
-    _ = self.terminateThreads();
-    self.detachAllChilds();
+    const task = self.terminateThreads();
+    if (task) |t| sys.call.stopThread(self.abi, t);
 
+    self.detachAllChilds();
     self.id.processExit(status);
+
     if (self.parent != self) self.parent.notifyEvent();
 }
 
@@ -907,12 +914,10 @@ pub fn waitEvent(self: *Self) void {
 }
 
 pub fn notifyEvent(self: *Self) void {
-    const parent = self.parent;
+    self.id.lock.lock();
+    defer self.id.lock.unlock();
 
-    parent.id.lock.lock();
-    defer parent.id.lock.unlock();
-
-    sched.awakeAll(&parent.id.wait_queue);
+    sched.awakeAll(&self.id.wait_queue);
 }
 
 pub inline fn isZombie(self: *Self) bool {
