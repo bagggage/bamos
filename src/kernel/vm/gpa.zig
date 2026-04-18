@@ -16,15 +16,15 @@
 //! such as 1-20 objects of small size (less than 256 bytes or so), this allocator can be very useful.
 //! It can also be effective for automatically tracking larger allocations, such as for buffers larger than 1 KB.
 //! But, if you are using 1-3 buffers that you can handle manually, then it is better to use the page allocator.
-//! 
+//!
 //! ## Implementation details:
-//! 
+//!
 //! Gpa is build on top of the pool of `vm.ObjectAllocator`s and `vm.PageAllocator`.
 //! 
 //! There are two strategy:
 //! - For small objects/memory blocks (with the size less or equal `max_small_size`).
 //! - For larger memory regions (anything larger than `max_small_size`).
-//! 
+//!
 //! Small allocations is managed by the pool of `vm.ObjectAllocator`s, where each allocator is determined
 //! for the specific object size. The number of allocators is defined in `oma_pool_len`. The object sizes
 //! specified for allocators in the pool are guaranteed to be power of two. This also means that
@@ -42,14 +42,14 @@ const std = @import("std");
 const lib = @import("../lib.zig");
 const vm = @import("../vm.zig");
 
-/// The maximum size for small memory allocations, defined as half of the 
+/// The maximum size for small memory allocations, defined as half of the
 /// virtual memory page size.
 const max_small_size = vm.page_size / 2;
 /// The minimum size for any allocation.
 const min_size = 16;
 
-/// The number of object allocators in the small object allocator pool, 
-const oma_pool_len = std.math.log2(max_small_size) - std.math.log2(min_size);
+/// The number of object allocators in the small object allocator pool,
+const oma_pool_len = std.math.log2(max_small_size) - std.math.log2(min_size) + 1;
 /// The minimum number of objects that the object allocators can hold.
 const oma_min_capacity = 16;
 
@@ -135,7 +135,7 @@ pub inline fn allocMany(comptime T: type, n: usize) ?[]T {
 }
 
 /// Allocates a block of memory of the specified `size`.
-/// 
+///
 /// - `size`: The size of memory to allocate. Must be great than zero.
 /// Maximum size of the memory block is limited by `vm.PageAllocator.max_alloc_pages`.
 /// - Returns: A pointer to the allocated memory block,
@@ -146,7 +146,7 @@ pub fn alloc(size: usize) callconv(.c) ?*anyopaque {
 }
 
 /// Frees a previously allocated block of memory pointed to by `mem`.
-/// 
+///
 /// - `mem`: A pointer to the memory block to free, or `null` (which is ignored).
 pub fn free(mem: ?*anyopaque) callconv(.c) void {
     if (mem == null) return;
@@ -158,7 +158,7 @@ pub fn free(mem: ?*anyopaque) callconv(.c) void {
     if ((phys % vm.page_size) == 0) {
         const base: u32 = @truncate(phys / vm.page_size);
 
-        if (huge_alloc_tree.remove(HugeFrame{.base = base})) |node| {
+        if (huge_alloc_tree.remove(HugeFrame{ .base = base })) |node| {
             vm.PageAllocator.free(phys, node.data.rank);
             huge_oma.free(node);
 
@@ -179,9 +179,9 @@ pub fn free(mem: ?*anyopaque) callconv(.c) void {
     unreachable;
 }
 
-/// Allocates a small block of memory of the specified `size` using the appropriate object 
+/// Allocates a small block of memory of the specified `size` using the appropriate object
 /// allocator from the `oma_pool`.
-/// 
+///
 /// - `size`: The size of the small memory block to allocate.
 /// - Returns: A pointer to the allocated memory block, or `null` if the allocation fails.
 fn allocSmall(size: u32) ?*anyopaque {
@@ -192,10 +192,10 @@ fn allocSmall(size: u32) ?*anyopaque {
 }
 
 /// Allocates a large block of memory of the specified `size`.
-/// 
+///
 /// This involves allocating memory pages and managing the allocation
 /// within the `huge_alloc_tree`.
-/// 
+///
 /// - `size`: The size of the large memory block to allocate.
 /// - Returns: A pointer to the allocated memory block, or `null` if the allocation fails.
 fn allocHuge(size: u32) ?*anyopaque {
@@ -210,21 +210,18 @@ fn allocHuge(size: u32) ?*anyopaque {
         vm.PageAllocator.free(phys, rank);
         return null;
     };
-    node.* = HugeNode.init(.{
-        .base = @truncate(phys / vm.page_size),
-        .rank = rank
-    });
+    node.* = HugeNode.init(.{ .base = @truncate(phys / vm.page_size), .rank = rank });
 
     huge_alloc_tree.insert(node);
 
     return @as(*anyopaque, @ptrFromInt(vm.getVirtLma(phys)));
 }
 
-/// Initializes the pool of small object allocators (`oma_pool`) based on the size range 
+/// Initializes the pool of small object allocators (`oma_pool`) based on the size range
 /// from `min_size` to `max_small_size`.
-/// 
+///
 /// This function is called only once in compile time.
-/// 
+///
 /// - Returns: A fixed-size array of initialized `vm.ObjectAllocator` instances.
 fn initOmaPool() [oma_pool_len]vm.ObjectAllocator {
     var result: [oma_pool_len]vm.ObjectAllocator = undefined;
@@ -232,7 +229,7 @@ fn initOmaPool() [oma_pool_len]vm.ObjectAllocator {
     const min_rank = std.math.log2(min_size);
     const max_rank = std.math.log2(max_small_size);
 
-    inline for (min_rank..max_rank) |rank| {
+    inline for (min_rank..max_rank + 1) |rank| {
         const size = @as(u32, 1) << @truncate(rank);
         const i = rank - min_rank;
 
