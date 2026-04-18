@@ -214,6 +214,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     const drives = b.option([]const []const u8, "qemu-drives", "QEMU additional NVMe drives (paths to images)") orelse &.{};
     const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse false;
     const no_uefi = b.option(bool, "qemu-noefi", "Legacy BIOS firmware") orelse false;
+    const usb_devs = b.option(bool, "qemu-usb", "Enable USB device support (default: false)") orelse false;
 
     const qemu_name = switch (arch) {
         .x86,
@@ -263,6 +264,12 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
             "-device", b.fmt("nvme,serial=QEMU-DRIVE-{},drive=drv{}", .{i, i})
         });
     }
+
+    if (usb_devs) qemu_run.addArgs(&.{
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-kbd,bus=xhci.0,id=kbd",
+        "-device", "usb-mouse,bus=xhci.0,id=mice"
+    });
 
     // Enable KVM on linux
     if (enable_kvm and builtin.os.tag == .linux and !enable_trace) {
