@@ -10,7 +10,7 @@ const lib = @import("../lib.zig");
 const log = std.log.scoped(.@"dev.io");
 const vm = @import("../vm.zig");
 
-pub const Error = error { Timeout };
+pub const Error = error{Timeout};
 
 pub const inb = arch.io.inb;
 pub const inw = arch.io.inw;
@@ -20,9 +20,11 @@ pub const outw = arch.io.outw;
 pub const outl = arch.io.outl;
 
 pub fn Mechanism(
-    comptime AddressT: type, comptime DataT: type,
-    comptime readFn: anytype, comptime writeFn: anytype,
-    comptime initFn: ?fn(AddressT, AddressT) anyerror!AddressT
+    comptime AddressT: type,
+    comptime DataT: type,
+    comptime readFn: anytype,
+    comptime writeFn: anytype,
+    comptime initFn: ?fn (AddressT, AddressT) anyerror!AddressT
 ) type {
     comptime {
         const data_info = @typeInfo(DataT);
@@ -38,14 +40,13 @@ pub fn Mechanism(
         const read_info = @typeInfo(@TypeOf(readFn));
         const write_info = @typeInfo(@TypeOf(writeFn));
 
-        if (
-            read_info != .@"fn" or write_info != .@"fn" or
+        if (read_info != .@"fn" or write_info != .@"fn" or
             write_info.@"fn".return_type != void or
             read_info.@"fn".return_type != DataT or
             read_info.@"fn".params.len != 1 or write_info.@"fn".params.len != 2 or
             write_info.@"fn".params[0].type != AddressT or write_info.@"fn".params[1].type != DataT or
-            read_info.@"fn".params[0].type != AddressT
-        ) {
+            read_info.@"fn".params[0].type != AddressT)
+        {
             @compileError("Read/Write must be a functions: `fn read(AddrType) DataType` and `fn write(AddrType, DataType) void`");
         }
     }
@@ -63,7 +64,7 @@ pub fn Mechanism(
         pub inline fn write(address: Address, data: Data) void {
             return writeFn(address, data);
         }
- 
+
         pub inline fn readNonUniform(comptime IntType: type, base: Address, comptime bit_offset: u16) IntType {
             @setRuntimeSafety(false);
 
@@ -72,13 +73,13 @@ pub fn Mechanism(
             comptime {
                 const data_info = @typeInfo(NonUniformDataType);
                 if (data_info != .int and data_info != .comptime_int)
-                    @compileError("Invalid non-uniform data type: "++@typeName(IntType)++", must be an integer");
+                    @compileError("Invalid non-uniform data type: " ++ @typeName(IntType) ++ ", must be an integer");
             }
 
             const bit_size = comptime @bitSizeOf(NonUniformDataType);
             const data_size = comptime @sizeOf(Data);
             const data_bit_size = comptime @bitSizeOf(Data);
-            
+
             const begin = comptime (bit_offset / data_bit_size);
             const end = comptime ((bit_offset + bit_size - 1) / data_bit_size);
 
@@ -98,8 +99,7 @@ pub fn Mechanism(
                 if (comptime i == 0) {
                     readed = cast(NonUniformDataType, temp_readed >> offset);
                     bit_shift = comptime (if (bit_size < data_bit_size) data_bit_size - bit_size else bit_size - data_bit_size) + offset;
-                }
-                else {
+                } else {
                     readed |= cast(NonUniformDataType, temp_readed) << @truncate(bit_shift);
                     bit_shift += data_bit_size;
                 }
@@ -116,13 +116,13 @@ pub fn Mechanism(
             comptime {
                 const data_info = @typeInfo(NonUniformDataType);
                 if (data_info != .int and data_info != .comptime_int)
-                    @compileError("Invalid non-uniform data type: "++@typeName(NonUniformDataType)++", must be an integer");
+                    @compileError("Invalid non-uniform data type: " ++ @typeName(NonUniformDataType) ++ ", must be an integer");
             }
 
             const bit_size = comptime @bitSizeOf(NonUniformDataType);
             const data_size = comptime @sizeOf(Data);
             const data_bit_size = comptime @bitSizeOf(Data);
-            
+
             const begin = comptime (bit_offset / data_bit_size);
             const end = comptime ((bit_offset + bit_size - 1) / data_bit_size);
 
@@ -138,11 +138,10 @@ pub fn Mechanism(
 
                     write(begin_base + (comptime idx * data_size), cast(Data, data >> bit_shift));
                 }
-            }
-            else {
+            } else {
                 var to_write = data;
 
-                inline for(0..len) |i| {
+                inline for (0..len) |i| {
                     const idx: comptime_int = i;
                     const byte_offset = comptime idx * data_size;
 
@@ -150,23 +149,23 @@ pub fn Mechanism(
                         const bitmask = comptime (@as(Data, 1) << offset) -% 1;
 
                         const readed = if (comptime len == 1) blk: {
-
-                            const end_bitmask = comptime cast(Data, (@as(usize, 0) -% 1) << (offset + bit_size));
+                            const end_bitmask = if (comptime offset + bit_size >= data_bit_size)
+                                @as(Data, 0)
+                            else
+                                cast(Data, (@as(Data, std.math.maxInt(Data)) << (offset + bit_size)));
                             break :blk read(begin_base) & (comptime bitmask | end_bitmask);
                         } else read(begin_base) & bitmask;
 
                         write(begin_base, readed | (cast(Data, to_write) << offset));
 
                         to_write >>= @truncate(data_bit_size - offset);
-                    }
-                    else if (comptime i == len - 1) {
+                    } else if (comptime i == len - 1) {
                         const tail_bits = comptime (bit_size + offset) % data_size;
                         const end_bitmask = comptime cast(Data, (@as(usize, 0) -% 1) << tail_bits);
 
                         const readed = read(begin_base) & end_bitmask;
                         write(begin_base + byte_offset, readed | cast(Data, data));
-                    }
-                    else {
+                    } else {
                         write(begin_base + byte_offset, cast(Data, data));
                     }
                 }
@@ -175,7 +174,9 @@ pub fn Mechanism(
 
         inline fn cast(comptime T: type, val: anytype) T {
             return if (@bitSizeOf(T) < @bitSizeOf(@TypeOf(val)))
-                @truncate(val) else val;
+                @truncate(val)
+            else
+                val;
         }
     };
 }
@@ -185,68 +186,50 @@ pub fn BusDataType(comptime bus_width: BusWidth) type {
         .byte => u8,
         .word => u16,
         .dword => u32,
-        .qword => u64
+        .qword => u64,
     };
 }
 
 pub fn IoPortsMechanism(comptime name: [:0]const u8, comptime bus_width: BusWidth) type {
-    return Mechanism(
-        u16, BusDataType(bus_width),
-        switch (bus_width) {
-            .byte => arch.io.inb,
-            .word => arch.io.inw,
-            .dword => arch.io.inl,
-            .qword => @compileError("64-bit bus width unsupported with I/O ports")
-        },
-        switch (bus_width) {
-            .byte => arch.io.outb,
-            .word => arch.io.outw,
-            .dword => arch.io.outl,
-            .qword => unreachable
-        },
-        struct {
-            fn init(base: u16, size: u16) !u16 {
-                return @truncate(request(name, base, size, .io_ports) orelse return error.IoBusy);
-            }
-        }.init
-    );
+    return Mechanism(u16, BusDataType(bus_width), switch (bus_width) {
+        .byte => arch.io.inb,
+        .word => arch.io.inw,
+        .dword => arch.io.inl,
+        .qword => @compileError("64-bit bus width unsupported with I/O ports"),
+    }, switch (bus_width) {
+        .byte => arch.io.outb,
+        .word => arch.io.outw,
+        .dword => arch.io.outl,
+        .qword => unreachable,
+    }, struct {
+        fn init(base: u16, size: u16) !u16 {
+            return @truncate(request(name, base, size, .io_ports) orelse return error.IoBusy);
+        }
+    }.init);
 }
 
 pub fn MmioMechanism(comptime name: [:0]const u8, comptime bus_width: BusWidth) type {
-    return Mechanism(
-        usize, BusDataType(bus_width),
-        switch (bus_width) {
-            .byte => readb,
-            .word => readw,
-            .dword => readl,
-            .qword => readq
-        },
-        switch (bus_width) {
-            .byte => writeb,
-            .word => writew,
-            .dword => writel,
-            .qword => writeq
-        },
-        struct {
-            fn init(base: usize, size: usize) !usize {
-                _ = request(name, base, size, .mmio) orelse return error.MmioBusy;
-                return vm.getVirtLma(base);
-            }
-        }.init
-    );
+    return Mechanism(usize, BusDataType(bus_width), switch (bus_width) {
+        .byte => readb,
+        .word => readw,
+        .dword => readl,
+        .qword => readq,
+    }, switch (bus_width) {
+        .byte => writeb,
+        .word => writew,
+        .dword => writel,
+        .qword => writeq,
+    }, struct {
+        fn init(base: usize, size: usize) !usize {
+            _ = request(name, base, size, .mmio) orelse return error.MmioBusy;
+            return vm.getVirtLma(base);
+        }
+    }.init);
 }
 
-pub const BusWidth = enum(u2) {
-    byte,
-    word,
-    dword,
-    qword
-};
+pub const BusWidth = enum(u2) { byte, word, dword, qword };
 
-pub const Type = enum(u1) {
-    mmio,
-    io_ports
-};
+pub const Type = enum(u1) { mmio, io_ports };
 
 const Region = struct {
     const List = std.SinglyLinkedList;
@@ -263,7 +246,7 @@ const Region = struct {
     node: Node = .{},
 
     pub fn format(self: *const Region, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{s}: 0x{x}-0x{x}", .{self.name, self.base, self.end - 1});
+        try writer.print("{s}: 0x{x}-0x{x}", .{ self.name, self.base, self.end - 1 });
     }
 
     pub inline fn fromNode(node: *Node) *Region {
@@ -279,20 +262,20 @@ var mmio_list: Region.List = .{};
 inline fn getIoList(io_type: Type) *Region.List {
     return switch (io_type) {
         .io_ports => &ports_list,
-        .mmio => &mmio_list
+        .mmio => &mmio_list,
     };
 }
 
-fn writeMmioFn(comptime Address: type, comptime Data: type)
-    fn (address: Address, data: Data) callconv(.@"inline") void
-{
+fn writeMmioFn(
+    comptime Address: type, comptime Data: type
+) fn (address: Address, data: Data) callconv(.@"inline") void {
     return struct {
         pub inline fn write(address: Address, data: Data) void {
             @setRuntimeSafety(false);
             const ptr = switch (@typeInfo(Address)) {
                 .comptime_int, .int => @as(*volatile Data, @ptrFromInt(address)),
                 .pointer => @as(*volatile Data, @ptrCast(address)),
-                else => @compileError("Invalid address type")
+                else => @compileError("Invalid address type"),
             };
             if (comptime builtin.cpu.arch.endian() != .little) {
                 ptr.* = std.mem.nativeToLittle(Data, data);
@@ -303,16 +286,16 @@ fn writeMmioFn(comptime Address: type, comptime Data: type)
     }.write;
 }
 
-fn readMmioFn(comptime Address: type, comptime Data: type)
-    fn (address: Address) callconv(.@"inline") Data
-{
+fn readMmioFn(
+    comptime Address: type, comptime Data: type
+) fn (address: Address) callconv(.@"inline") Data {
     return struct {
         pub inline fn read(address: Address) Data {
             @setRuntimeSafety(false);
             const ptr = switch (@typeInfo(Address)) {
                 .comptime_int, .int => @as(*const volatile Data, @ptrFromInt(address)),
                 .pointer => @as(*const volatile Data, @ptrCast(address)),
-                else => @compileError("Invalid address type")
+                else => @compileError("Invalid address type"),
             };
             return std.mem.littleToNative(Data, ptr.*);
         }
@@ -347,7 +330,8 @@ pub fn delay(iters: u32) void {
 
 pub fn waitFor(
     comptime check: fn (lib.AnyData) callconv(.@"inline") bool,
-    ctx: lib.AnyData, timeout: u32
+    ctx: lib.AnyData,
+    timeout: u32
 ) Error!void {
     @setRuntimeSafety(false);
 
@@ -383,7 +367,7 @@ pub fn request(name: [:0]const u8, base: usize, size: usize, io_type: Type) ?usi
         list.prepend(&new_region.node);
     }
 
-    log.debug("{s: <8}: {s: <12} 0x{x}-0x{x}", .{@tagName(io_type), name, base, base + size - 1});
+    log.debug("{s: <8}: {s: <12} 0x{x}-0x{x}", .{ @tagName(io_type), name, base, base + size - 1 });
     return base;
 }
 
@@ -399,7 +383,7 @@ pub fn release(base: usize, io_type: Type) void {
         if (region.base == base) {
             list.remove(n);
             vm.auto.free(Region, region);
-            
+
             return;
         }
     }
