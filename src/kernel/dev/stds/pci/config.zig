@@ -342,6 +342,20 @@ pub const SubclassCode = extern union {
         inf_to_pci_host_bridge = 0xa,
 
         other = 0x80
+    },
+    serial_bus_controller: enum(u8) {
+        firewire = 0x0,
+        access_bus = 0x1,
+        sas = 0x2,
+        usb = 0x3,
+        fibre_channel = 0x4,
+        smbus = 0x5,
+        infiniband = 0x6,
+        ipmi_interface = 0x7,
+        sata_controller = 0x8,
+        usb3_controller = 0x9,
+
+        other = 0x80
     }
 };
 
