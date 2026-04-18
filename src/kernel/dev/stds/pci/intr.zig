@@ -26,7 +26,7 @@ const Msi = struct {
     is_64: bool,
 
     pub fn init(cfg: config.ConfigSpace, cap_offset: u16) Msi {
-        const msi_x32 = cfg.internal.referenceAsOffset(config.Capability.Msi.x32, cap_offset);
+        const msi_x32 = cfg.internal.referenceAt(config.Capability.Msi.x32, cap_offset);
         const ctrl = msi_x32.get(MessageControl, .msg_ctrl);
 
         return .{
@@ -114,7 +114,7 @@ const MsiX = struct {
     msis: []u8,
 
     pub fn init(cfg: config.ConfigSpace, cap_offset: u16) MsiX {
-        const ref = cfg.internal.referenceAsOffset(config.Capability.MsiX, cap_offset);
+        const ref = cfg.internal.referenceAt(config.Capability.MsiX, cap_offset);
         const vec_offset = ref.read(.table_offset);
         const pba_offset = ref.read(.pba_offset);
 

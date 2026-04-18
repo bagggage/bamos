@@ -130,6 +130,11 @@ pub const WaitQueue = struct {
             };
         }
 
+        inline fn updateSleepTime(self: *Entry) void {
+            const sleep_time = sys.time.getFastTimestamp() - self.timestamp;
+            self.task.stats.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
+        }
+
         inline fn fromNode(node: *QNode) *Entry {
             return @fieldParentPtr("node", node);
         }
@@ -225,6 +230,11 @@ pub inline fn yield() void {
     std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
 
     scheduler.yield();
+}
+
+pub inline fn sleepFor(ns: u64) void {
+    const scheduler = getCurrent();
+    scheduler.sleepFor(ns);
 }
 
 pub fn terminate() noreturn {
@@ -324,13 +334,23 @@ pub fn resumeTask(task: *Task) void {
 pub fn awake(queue: *WaitQueue) ?*Task {
     std.debug.assert(dev.intr.isEnabledForCpu());
 
-    const scheduler = getCurrent();
     const entry = queue.pop() orelse return null;
+    const scheduler = getCurrent();
 
-    const sleep_time = sys.time.getFastTimestamp() - entry.timestamp;
-    entry.task.stats.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
-
+    entry.updateSleepTime();
     scheduler.enqueueTask(entry.task);
+}
+
+pub fn awakeEntry(entry: *WaitQueue.Entry) bool {
+    std.debug.assert(dev.intr.isEnabledForCpu());
+
+    if (!entry.task.tryWakeup()) return false;
+    entry.updateSleepTime();
+
+    const scheduler = getCurrent();
+    scheduler.enqueueTask(entry.task);
+
+    return true;
 }
 
 /// Awake all tasks in wait queue.
