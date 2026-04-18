@@ -42,7 +42,7 @@ pub const AnyData = struct {
         self.ptr = @ptrFromInt(int);
     }
 
-    pub inline fn as(self: *AnyData, comptime T: type) T {
+    pub inline fn as(self: AnyData, comptime T: type) T {
         @setRuntimeSafety(false);
 
         const Int = anytypeToInt(T);
