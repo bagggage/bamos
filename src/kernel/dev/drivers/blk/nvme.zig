@@ -4,7 +4,7 @@
 //! 
 //! - Specification: NVM Express Base Specification, Revision 2.1
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -218,11 +218,12 @@ const Namespace = struct {
 
     pub fn handleIo(self: *Drive, request: *const Drive.io.Request) bool {
         const ns = &@as(*NamespaceDrive, @ptrCast(self)).derived;
-        const pages = request.lba_num / (vm.page_size / self.lba_size);
+        const pages = vm.bytesToPages(self.lbaToOffset(request.lba_num));
         const prp1 = vm.getPhysLma(request.lma_buf);
         const prp2: usize = switch (pages) {
-            0 => 0,
-            1 => prp1 + vm.page_size,
+            0 => unreachable,
+            1 => 0,
+            2 => prp1 + vm.page_size,
             else => blk: {
                 // PRP List - the worst case
                 // Dirty and slow....
@@ -262,9 +263,8 @@ const Namespace = struct {
     }
 
     pub fn completeIo(self: *NamespaceDrive, cqe: *const CompletionEntry, sqe: *const SubmissionEntry) void {
-        if (sqe.prp2 != 0 and sqe.prp2 != (sqe.prp1 + vm.page_size)) {
-            vm.PageAllocator.free(sqe.prp2, 0);
-        }
+        const pages = vm.bytesToPages(self.base.lbaToOffset((sqe.cmd_dword12 & 0xffff) + 1));
+        if (pages > 2) vm.PageAllocator.free(sqe.prp2, 0);
 
         self.base.completeIo(cqe.cmd_id, if (cqe.status == 0) .success else .failed);
     }
@@ -879,7 +879,7 @@ const Controller = struct {
         const pci_dev = pci.Device.from(device);
         const controller = pci_dev.data.asPtr(Controller) orelse return false;
 
-        dev.intr.scheduleSoft(&controller.soft_intrs[smp.getIdx()]);
+        dev.intr.scheduleImmediate(&controller.soft_intrs[smp.getIdx()]);
 
         return true;
     }
