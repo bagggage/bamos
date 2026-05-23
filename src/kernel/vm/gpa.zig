@@ -176,7 +176,7 @@ pub fn free(mem: ?*anyopaque) callconv(.c) void {
 
     // The memory region is not managed by the allocator
     // or address is damaged.
-    unreachable;
+    @panic("double free or address is damaged");
 }
 
 /// Allocates a small block of memory of the specified `size` using the appropriate object
