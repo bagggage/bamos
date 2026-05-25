@@ -34,10 +34,10 @@ const Ioapic = struct {
     version: u8,
     max_redirs: u8,
 
-    madt_ent: *Madt.Ioapic,
+    madt_ent: *align(1) Madt.Ioapic,
     internal_regs: InternalRegs,
 
-    pub fn init(madt_ent: *Madt.Ioapic) !Ioapic {
+    pub fn init(madt_ent: *align(1) Madt.Ioapic) !Ioapic {
         var result: Ioapic = .{
             .id = madt_ent.id,
 
@@ -147,10 +147,10 @@ var irq_overrides: [max_overrides]u8 = blk: {
 pub fn init() !void {
     const madt = apic.getMadt();
 
-    var entry: ?*Madt.Entry = null;
+    var entry: ?*align(1) Madt.Entry = null;
 
     while (madt.findByType(entry, .ioapic)) |ent| : (entry = ent) {
-        const ioapic_ent: *align(2) Madt.Ioapic = @ptrCast(@alignCast(ent));
+        const ioapic_ent: *align(1) Madt.Ioapic = @ptrCast(@alignCast(ent));
         const ioapic = Ioapic.init(ioapic_ent) catch |err| {
             log.err("Failed to initialize IOAPIC-{}: {}", .{ ioapic_ent.id, err });
             continue;

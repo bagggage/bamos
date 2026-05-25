@@ -98,15 +98,20 @@ export fn switchToNaked() callconv(.naked) void {
     const from: *Self = asm volatile("" : [arg1] "={rdi}" (-> *Self));
     const to: *Self = asm volatile("" : [arg2] "={rsi}" (-> *Self));
 
-    comptime @export(&sched.Scheduler.postSwitch, .{ .name = "sched.Scheduler.postSwitch" });
-
     from.switchToHalf(to);
+    {
+        comptime @export(&sched.Scheduler.postSwitch, .{ .name = "sched.Scheduler.postSwitch" });
 
-    const scheduler = sched.getCurrent();
-    asm volatile ("call sched.Scheduler.postSwitch"
-        :: [arg1] "{rdi}" (scheduler), [arg2] "{rsi}" (to)
-        : regs.call_clobers
-    );
+        regs.alignStackUnsafe();
+        defer regs.restoreStackUnsafe();
+
+        const scheduler = sched.getCurrent();
+        asm volatile (
+            \\ call sched.Scheduler.postSwitch
+            :: [arg1] "{rdi}" (scheduler), [arg2] "{rsi}" (to)
+            : regs.call_clobers
+        );
+    }
 
     to.restore();
     asm volatile ("retq");

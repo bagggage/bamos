@@ -73,8 +73,11 @@ pub const Bitmap = struct {
     pub inline fn init(bytes: []u8, bit_len: usize, comptime is_setted: bool) Bitmap {
         std.debug.assert(bytes.len >= bitsToBytes(bit_len));
         defer {
-            const mask = @as(u8, 0xFF) << @truncate(bit_len % lib.byte_size);
-            bytes[bytes.len - 1] = if (comptime is_setted) ~mask else mask;
+            const rest_bits = bit_len % lib.byte_size;
+            if (rest_bits != 0) {
+                const mask = @as(u8, 0xFF) << @truncate(rest_bits);
+                bytes[bytes.len - 1] = if (comptime is_setted) ~mask else mask;
+            }
         }
 
         return .{
