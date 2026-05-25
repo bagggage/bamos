@@ -5,6 +5,7 @@ const dev = @import("../../dev.zig");
 const io = @import("../io.zig");
 const lib = @import("../../lib.zig");
 const smp = @import("../../smp.zig");
+const uacpi = @import("acpi/uacpi.zig");
 const vm = @import("../../vm.zig");
 
 pub const timer = @import("../drivers/timer/acpi_timer.zig");
@@ -220,6 +221,9 @@ pub fn init() !void {
 
     fadt = @alignCast(@ptrCast(fadt_hdr));
 }
+
+pub const initInterpreter = uacpi.init;
+pub const shutdown = uacpi.shutdown;
 
 /// Used by `dev.init` after preinitialization.
 /// Cannot be called in `acpi.init` because

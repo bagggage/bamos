@@ -127,8 +127,9 @@ var buses_lock: lib.sync.Spinlock = .init(.unlocked);
 /// @noexport
 const AutoInit = struct {
     const modules = .{
-        @import("dev/drivers/input/at-keyboard.zig"),
         @import("dev/drivers/uart/8250.zig"),
+        @import("dev/drivers/input/at-keyboard.zig"),
+        @import("dev/drivers/video/linear-fb.zig"),
         pci,
         usb,
         @import("dev/drivers/blk/nvme.zig")
@@ -165,6 +166,7 @@ pub fn preinit() !void {
 
 pub fn init() !void {
     intr.enableForCpu();
+    try acpi.initInterpreter();
 
     inline for (AutoInit.modules) |Module| {
         if (Module.init()) {

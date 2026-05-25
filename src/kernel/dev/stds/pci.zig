@@ -131,6 +131,33 @@ pub fn init() !void {
     try enumerate();
 }
 
+pub fn findDevice(seg: u16, b: u8, d: u8, f: u8) ?*Device {
+    const address = config.getBase(seg, b, d, f);
+
+    bus.dev_lock.lock();
+    defer bus.dev_lock.unlock();
+
+    var node = bus.matched_devs.first;
+    while (node) |n| : (node = n.next) {
+        const device = dev.Device.fromNode(n);
+        const pci_dev = Device.from(device);
+
+        const addr = pci_dev.config.internal.dyn_base;
+        if (addr == address) return pci_dev;
+    }
+
+    node = bus.unmatched_devs.first;
+    while (node) |n| : (node = n.next) {
+        const device = dev.Device.fromNode(n);
+        const pci_dev = Device.from(device);
+
+        const addr = pci_dev.config.internal.dyn_base;
+        if (addr == address) return pci_dev;
+    }
+
+    return null;
+}
+
 fn match(driver: *const dev.Driver, device: *const dev.Device) bool {
     const pci_dev = device.driver_data.asPtr(Device) orelse unreachable;
     const pci_driver = Driver.from(driver);
