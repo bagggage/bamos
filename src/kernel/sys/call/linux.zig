@@ -951,7 +951,6 @@ fn statImpl(dentry: *vfs.Dentry, stats: *linux.Stat) isize {
         stats.rdev = (@as(linux.dev_t, dev_file.num.major) << 8) | dev_file.num.minor;
     }
 
-    log.debug("stat: {s}, 0o{o}, {} bytes", .{dentry.name.str(), stats.mode, stats.size});
     return 0;
 }
 
