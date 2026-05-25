@@ -16,6 +16,7 @@ const lookup_cache = vfs.lookup_cache;
 const MountPoint = vfs.MountPoint;
 const Path = vfs.Path;
 const Superblock = vfs.Superblock;
+const sys = @import("../sys.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
@@ -108,6 +109,7 @@ pub const Name = struct {
 
 pub const Meta = packed struct {
     fs: Context.Tag = .none,
+    dangling: bool = false,
 };
 
 /// Dentries iterator, used as an interface between the kernel
@@ -176,10 +178,11 @@ pub inline fn fromCache(entry: *lookup_cache.Entry) *Dentry {
     return @fieldParentPtr("cache_ent", entry);
 }
 
-pub inline fn getMountPoint(self: *const Dentry) *MountPoint {
+pub fn getMountPoint(self: *const Dentry) *MountPoint {
     return switch (self.meta.fs) {
         .virt  => self.getVirtualCtx().getMountPoint(),
         .super => self.getSuper().mount_point,
+        .root  => self.ctx.root.getMountPoint(),
         .none  => @panic("bad dentry context!"),
     };
 }
@@ -312,10 +315,13 @@ pub fn onClose(self: *Dentry, file: *File) void {
 }
 
 pub fn addChild(self: *Dentry, child: *Dentry) void {
-    self.ref();
+    self.lock.lock();
+    defer self.lock.unlock();
 
     child.parent = self;
     self.child.prepend(&child.node);
+
+    self.ref();
 }
 
 pub fn removeChild(self: *Dentry, child: *Dentry) void {
@@ -323,6 +329,37 @@ pub fn removeChild(self: *Dentry, child: *Dentry) void {
     self.child.remove(&child.node);
 
     if (self.ref_count.put()) self.moveToLru();
+}
+
+/// Remove inode associated with the dentry.
+/// Number of hardlinks should be 0.
+pub fn remove(self: *Dentry) Error!void {
+    // FIXME: Implement.
+
+    self.lock.lock();
+    defer self.lock.unlock();
+
+    return error.BadOperation;
+}
+
+pub fn unlink(self: *Dentry) Error!void {
+    // FIXME: Implement.
+
+    self.inode.lock.lock();
+    defer self.inode.lock.unlock();
+
+    return error.BadOperation;
+}
+
+pub fn touch(self: *Dentry, access: sys.time.Time, modify: ?sys.time.Time) Error!void {
+    // TODO: Implement correct time update and add fs driver logic.
+    const inode = self.inode;
+
+    inode.lock.lock();
+    defer inode.lock.unlock();
+
+    inode.access_time = access.posix();
+    if (modify) |m| inode.modify_time = m.posix();
 }
 
 pub inline fn path(self: *const Dentry) Path {

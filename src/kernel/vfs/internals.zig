@@ -185,9 +185,12 @@ pub const file = opaque {
                     const page_attr = pt.accessPageAttributes(virt);
                     if (page_attr.dirty) {
                         std.debug.assert(map_unit.flags.shared);
+                        const inner_offset = block.innerOffset(file_offset);
 
-                        const quant = block.offsetToQuant(file_offset);
-                        block.dirty_map.set(quant);
+                        block.writeDown();
+                        defer block.writeUp();
+
+                        block.setDirtyAt(inner_offset);
                     }
                 } else {
                     // Copy-on-write - allocated page
@@ -256,14 +259,17 @@ pub const file = opaque {
                 defer block.writeUp();
 
                 @memcpy(block.asSlice()[inner_offset..inner_end], buffer[tmp_offset..tmp_offset + inner_len]);
+                log.info("set dirty: {}-{}", .{inner_offset, inner_end});
                 block.setDirtyRange(inner_offset, inner_end);
 
                 tmp_offset +%= inner_len;
                 len -%= inner_len;
             }
 
+            self.dentry.inode.lock.lock();
+            defer self.dentry.inode.lock.unlock();
+
             if (offset + tmp_offset > self.dentry.inode.size) {
-                // TODO: Update size properly
                 self.dentry.inode.size = offset + tmp_offset;
             }
             return tmp_offset;

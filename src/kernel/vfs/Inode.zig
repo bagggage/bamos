@@ -2,6 +2,8 @@
 
 // Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
+const std = @import("std");
+
 const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
@@ -29,16 +31,16 @@ type: Type,
 perm: u16 = vfs.Permissions.makeInt(.rw, .r, .r),
 size: u64 = 0, // In bytes
 
-access_time: u32 = 0,
-modify_time: u32 = 0,
-create_time: u32 = 0,
+access_time: u64 = 0,
+modify_time: u64 = 0,
+create_time: u64 = 0,
 
 gid: u16 = 0,
 uid: u16 = 0,
 
 links_num: u16 = 1,
 
-ref_count: lib.atomic.RefCount(u32) = .init(0),
+ref_count: lib.atomic.RefCount(u16) = .init(0),
 lock: lib.sync.Spinlock = .{},
 
 fs_data: lib.AnyData = .{},
