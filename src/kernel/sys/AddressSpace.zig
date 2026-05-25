@@ -185,6 +185,8 @@ pub fn heapInit(self: *Self, base: usize) vfs.Error!void {
 pub fn heapGrow(self: *Self, bytes: usize) vm.Error!usize {
     std.debug.assert(bytes > 0);
 
+    defer self.validate();
+
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
@@ -227,6 +229,8 @@ pub fn heapGrow(self: *Self, bytes: usize) vm.Error!usize {
 pub fn heapShrink(self: *Self, bytes: usize) vm.Error!usize {
     std.debug.assert(bytes > 0);
 
+    defer self.validate();
+
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
@@ -266,6 +270,8 @@ pub fn getHeapBreak(self: *Self) usize {
 }
 
 pub fn map(self: *Self, map_unit: *MapUnit) vfs.Error!void {
+    defer self.validate();
+
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
@@ -277,6 +283,8 @@ pub fn map(self: *Self, map_unit: *MapUnit) vfs.Error!void {
 }
 
 pub fn mapAnyAddress(self: *Self, map_unit: *MapUnit) vfs.Error!void {
+    defer self.validate();
+
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
@@ -311,6 +319,8 @@ pub fn mapOrRebase(self: *Self, map_unit: *MapUnit) vfs.Error!void {
 }
 
 pub fn mapReplace(self: *Self, map_unit: *MapUnit) vfs.Error!void {
+    defer self.validate();
+
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
@@ -372,6 +382,8 @@ pub fn unmap(self: *Self, map_unit: *MapUnit) void {
 }
 
 pub fn unmapRange(self: *Self, base: usize, pages: u32) vm.Error!void {
+    defer self.validate();
+
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
@@ -419,6 +431,8 @@ pub fn unmapRange(self: *Self, base: usize, pages: u32) vm.Error!void {
 }
 
 pub fn protectRange(self: *Self, base: usize, pages: u32, flags: MapUnit.Flags) vfs.Error!void {
+    defer self.validate();
+
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
@@ -740,4 +754,13 @@ fn deleteMapping(self: *Self, map_unit: *MapUnit) void {
 fn removeMapping(self: *Self, map_unit: *MapUnit) void {
     self.rb_tree.remove(&map_unit.rb_node);
     self.map_units.remove(&map_unit.node);
+}
+
+fn validate(self: *Self) void {
+    if (comptime !lib.is_debug) return;
+
+    _ = self.rb_tree.validate() catch |err| {
+        std.log.err("rb invalid: {}", .{err});
+        std.log.info("{f}", .{self});
+    };
 }
