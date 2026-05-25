@@ -92,10 +92,11 @@ pub const table: [table_len]SyscallFn = blk: {
     //result[@intFromEnum(linux.SYS.rt_sigaction)]    = @ptrCast(&sigAction);
     //result[@intFromEnum(linux.SYS.rt_sigprocmask)]  = @ptrCast(&sigProcMask);
     result[@intFromEnum(linux.SYS.rt_sigsuspend)]   = @ptrCast(&sigSuspend);
-    result[@intFromEnum(linux.SYS.setpgid)]         = @ptrCast(&setProcGroup);
     result[@intFromEnum(linux.SYS.select)]          = @ptrCast(&select);
     result[@intFromEnum(linux.SYS.set_robust_list)] = @ptrCast(&setRobustList);
     result[@intFromEnum(linux.SYS.set_tid_address)] = @ptrCast(&setTidAddress);
+    result[@intFromEnum(linux.SYS.sethostname)]     = @ptrCast(&setHostName);
+    result[@intFromEnum(linux.SYS.setpgid)]         = @ptrCast(&setProcGroup);
     result[@intFromEnum(linux.SYS.stat)]            = @ptrCast(&stat);
     //result[@intFromEnum(linux.SYS.tkill)]           = @ptrCast(&tkill);
     //result[@intFromEnum(linux.SYS.tgkill)]          = @ptrCast(&tgkill);
@@ -1913,6 +1914,21 @@ fn setTidAddress(addr: usize) usize {
     return sys.Process.getCurrent().id.value;
 }
 
+fn setHostName(name: [*:0]const u8, len: usize) isize {
+    trace.info("sethostname(0x{x}, {})", .{@intFromPtr(name), len});
+
+    if (len == 0 or len > linux.HOST_NAME_MAX) return errorFromE(.INVAL);
+    validateMemoryArgs(@intFromPtr(name), len) catch return errorFromE(.FAULT);
+
+    sys.limits.host_lock.lock();
+    defer sys.limits.host_lock.unlock();
+
+    sys.limits.host_name.items.len = len;
+    @memcpy(sys.limits.host_name.items[0..len], name[0..len]);
+
+    return 0;
+}
+
 fn sigAction(sig: u32, action: ?*const linux.k_sigaction, old_action: ?*linux.k_sigaction) isize {
     trace.info("rt_sigaction({}, 0x{x}, 0x{x})", .{sig, @intFromPtr(action), @intFromPtr(old_action)});
     validateMemoryArgs(@intFromPtr(action), @sizeOf(linux.k_sigaction)) catch return errorFromE(.FAULT);
@@ -1989,6 +2005,12 @@ fn uname(buf: *linux.utsname) isize {
     @memcpy(buf.version[0..version.len], version);
     @memcpy(buf.release[0..release.len], release);
     @memcpy(buf.machine[0..machine.len], machine);
+
+    sys.limits.host_lock.lock();
+    defer sys.limits.host_lock.unlock();
+
+    const nodename = sys.limits.host_name.items;
+    @memcpy(buf.nodename[0..nodename.len], nodename);
 
     return 0;
 }
