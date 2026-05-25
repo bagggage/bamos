@@ -47,6 +47,14 @@ pub const Cursor = struct {
         self.getBlock().setDirtyRange(inner_offset, inner_offset + size);
     }
 
+    pub fn setDirtyAt(self: *Cursor, pos: usize) void {
+        const block = self.getBlock();
+        const inner_offset = self.innerOffset() + pos;
+        std.debug.assert(inner_offset <= block.size.toBytes());
+
+        block.setDirtyAt(inner_offset);
+    }
+
     pub fn fetchCache(self: *Cursor, comptime op: ?Drive.io.Operation, offset: usize) Drive.Error!void {
         const idx = vm.cache.offsetToIdx(offset);
         if (self.getBlock().index != idx) {
@@ -75,6 +83,16 @@ pub const Cursor = struct {
         }
 
         self.offset = offset;
+    }
+
+    pub inline fn ensureAsSlice(self: *Cursor, comptime op: ?Drive.io.Operation, offset: usize) Drive.Error![]u8 {
+        try self.ensureCache(op, offset);
+        return self.asSlice();
+    }
+
+    pub inline fn ensureAs(self: *Cursor, comptime T: type, comptime op: ?Drive.io.Operation, offset: usize) Drive.Error!*T {
+        try self.ensureCache(op, offset);
+        return self.asObject(T);
     }
 
     pub fn next(self: *Cursor, comptime op: ?Drive.io.Operation) Drive.Error!void {

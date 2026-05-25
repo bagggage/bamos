@@ -120,14 +120,20 @@ const SubmissionQueue = struct {
     tail: u16 = 0,
 
     pub fn init(buffer: []SubmissionEntry) SubmissionQueue {
+        std.debug.assert(std.math.isPowerOfTwo(buffer.len));
         return .{
             .ptr = buffer.ptr,
             .size = @truncate(buffer.len),
         };
     }
 
+    pub inline fn prevTail(self: *SubmissionQueue) *SubmissionEntry {
+        const idx = (self.tail -% 1) & (self.size -% 1);
+        return &self.ptr[idx];
+    }
+
     pub inline fn nextTail(self: *SubmissionQueue) *SubmissionEntry {
-        defer self.tail = (self.tail + 1) % self.size;
+        defer self.tail = (self.tail + 1) & (self.size -% 1);
         return &self.ptr[self.tail];
     }
 };
@@ -229,8 +235,7 @@ const Namespace = struct {
                 // Dirty and slow....
                 // FIXME!
 
-                const phys = vm.PageAllocator.alloc(0) orelse return false;
-                const list: [*]u64 = @ptrFromInt(vm.getVirtLma(phys));
+                const list = vm.gpa.allocMany(u64, pages - 1) orelse return false;
                 var offset: u32 = vm.page_size;
 
                 for (0..pages - 1) |i| {
@@ -238,7 +243,7 @@ const Namespace = struct {
                     offset += vm.page_size;
                 }
 
-                break :blk phys;
+                break :blk vm.getPhysLma(list.ptr);
             }
         };
 
@@ -264,7 +269,7 @@ const Namespace = struct {
 
     pub fn completeIo(self: *NamespaceDrive, cqe: *const CompletionEntry, sqe: *const SubmissionEntry) void {
         const pages = vm.bytesToPages(self.base.lbaToOffset((sqe.cmd_dword12 & 0xffff) + 1));
-        if (pages > 2) vm.PageAllocator.free(sqe.prp2, 0);
+        if (pages > 2) vm.gpa.free(@ptrFromInt(vm.getVirtLma(sqe.prp2)));
 
         self.base.completeIo(cqe.cmd_id, if (cqe.status == 0) .success else .failed);
     }
@@ -829,6 +834,7 @@ const Controller = struct {
         const cpu_idx = smp.getIdx();
         const queue = &self.io_submission[cpu_idx];
 
+        // FIXME: Check if queue is not full!
         const cmd = queue.nextTail();
         cmd.* = SubmissionEntry.init(
             .{ .io = command }, id,
