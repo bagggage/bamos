@@ -170,6 +170,34 @@ pub const Block = struct {
         self.dirty_map.setRangeValue(.{ .start = start_quant, .end = end_quant }, true);
     }
 
+    /// `start` and `end` is local offsets.
+    pub fn writeBackRange(self: *Block, start: usize, end: usize) bool {
+        std.debug.assert(self.rw_sem.writing);
+
+        const write_back = self.ctrl.write_back orelse return true;
+
+        const quant_shift = self.size.quantShift();
+        const start_quant: u32 = @truncate(start >> quant_shift);
+        const end_quant: u32 = @truncate((end + self.size.quantSize() - 1) >> quant_shift);
+
+        const _start = start_quant << quant_shift;
+        const _end = end_quant << quant_shift;
+
+        self.dirty_map.setRangeValue(.{ .start = start_quant, .end = end_quant }, false);
+        self.lock_map.setRangeValue(.{ .start = start_quant, .end = end_quant }, true);
+
+        self.rw_sem.writeUnlock();
+        defer { // Clear lock map, take write lock back
+            self.rw_sem.lock.lock();
+            defer self.rw_sem.lock.unlock();
+
+            self.lock_map.setRangeValue(.{ .start = start_quant, .end = end_quant }, false);
+            self.rw_sem.writing = true;
+        }
+
+        return write_back(self, &.{ .{ .base = _start, .top = _end } }, quant_shift);
+    }
+
     pub inline fn writeBack(self: *Block) bool {
         return self.ctrl.writeBack(self);
     }
@@ -372,9 +400,6 @@ pub const Control = struct {
 
     pub fn writeBack(self: *Control, block: *Block) bool {
         if (self.write_back == null) return true;
-
-        if (block.dirty_map.mask == 0) return true;
-        if (block.lock_map.mask != 0) return false;
 
         {
             block.rw_sem.writeLock();

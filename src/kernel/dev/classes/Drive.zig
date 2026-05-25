@@ -413,18 +413,22 @@ fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, 
     var statuses: [vm.cache.Block.max_quants]io.Status = .{ io.Status.none } ** vm.cache.Block.max_quants;
     const num = blk: {
         for (quants, 0..) |q, i| {
+            //log.info("drop: 0x{x} - 0x{x} ({}-{})", .{offset + q.base, offset + q.top, q.base, q.top});
+
             const lba_offset = self.offsetToLba(offset + q.base);
             self.ioAsync(
-                .read, lba_offset, buffer[q.base..q.top],
+                .write, lba_offset, buffer[q.base..q.top],
                 .{ .func = &syncCallback, .data = .fromPtr(&statuses[i]) }
             ) catch break :blk i;
         }
         break :blk quants.len;
     };
 
+    log.info("sended: {}", .{num});
+
     var successed = true;
-    for (&statuses, 0..num) |*s, i| {
-        const status: *volatile io.Status = s;
+    for (0..num) |i| {
+        const status: *volatile io.Status = &statuses[i];
         while (status.* == .none) sched.yield();
         if (status.* == .failed) { successed = false; continue; }
 
@@ -434,6 +438,7 @@ fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, 
         for (q_base_idx..q_top_idx) |q_idx| block.dirty_map.unset(q_idx);
     }
 
+    log.info("successed: {}", .{successed});
     return num == quants.len and successed;
 }
 
