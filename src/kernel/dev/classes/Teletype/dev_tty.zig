@@ -44,4 +44,6 @@ fn devOpen(_: *devfs.DevFile, file: *vfs.File) vfs.Error!void {
 
     file.data.setPtr(tty);
     file.ops = &tty.dev_file.ops.fops;
+
+    if (tty.dev_file.ops.open) |open| try open(&tty.dev_file, file);
 }
