@@ -52,7 +52,7 @@ pub const Arena = struct {
     /// 
     /// - `obj_size`: The size of the object to allocate.
     /// - Returns: The address of the allocated object.
-    pub fn alloc(self: *Arena, obj_size: u16, capacity: u16) ?usize {
+    pub fn alloc(self: *Arena, obj_size: u16, capacity: u32) ?usize {
         var curr_num = self.alloc_num.raw;
         if (curr_num >= capacity or curr_num == 0) return null;
 
@@ -116,7 +116,7 @@ const Self = @This();
 arenas: Arena.List = .{},
 /// Rank (log2 of the number of pages) of the arenas.
 arena_rank: u8,
-arena_capacity: u16,
+arena_capacity: u32,
 
 obj_size: u16,
 
@@ -130,14 +130,14 @@ var arenas_lock: lib.sync.Spinlock = .init(.unlocked);
 /// - Returns: An error if the memory could not be allocated.
 pub fn initOmaSystem() vm.Error!void {
     const pool_size = default_capacity * @sizeOf(Arena);
-    const pool_pages = std.math.divCeil(comptime_int, pool_size, vm.page_size) catch unreachable;
+    const pool_pages = vm.bytesToPages(pool_size);
 
     comptime std.debug.assert(std.math.isPowerOfTwo(pool_pages));
 
-    const mem_pool = boot.alloc(pool_pages) orelse return vm.Error.NoMemory;
-    const virt_pool = vm.getVirtLma(mem_pool);
+    const phys = boot.alloc(pool_pages) orelse return vm.Error.NoMemory;
+    const virt = vm.getVirtLma(phys);
 
-    arenas_alloc = vm.BucketAllocator.initRaw(Arena, virt_pool, pool_pages);
+    arenas_alloc = vm.BucketAllocator.initRaw(Arena, virt, pool_pages);
 }
 
 /// Initializes an allocator for a specific object type.
@@ -168,12 +168,12 @@ pub fn initCapacity(obj_size: comptime_int, capacity: comptime_int) Self {
 pub fn initSized(obj_size: u16, pages: u16) Self {
     std.debug.assert(obj_size >= @sizeOf(FreeList.Node));
 
-    const rank = std.math.log2_int_ceil(u16, pages);
-    const real_pages = @as(u32, 1) << rank;
+    const rank = vm.pagesToRankExact(pages);
+    const real_pages = vm.rankToPages(rank);
     const real_capacity: u32 = (real_pages * vm.page_size) / obj_size;
 
     std.debug.assert(real_capacity > 1);
-    return .{ .arena_capacity = @truncate(real_capacity), .arena_rank = rank, .obj_size = obj_size };
+    return .{ .arena_capacity = real_capacity, .arena_rank = rank, .obj_size = obj_size };
 }
 
 /// Initializes an allocator with a specified object size and physical memory pool.
@@ -218,8 +218,8 @@ pub inline fn free(self: *Self, obj_ptr: anytype) void {
     comptime {
         const type_info = @typeInfo(@TypeOf(obj_ptr));
         switch (type_info) {
-            .pointer => |ptr| if (ptr.size != .one) @compileError("Argument type must be a pointer to one object"),
-            else => @compileError("Argument type must be a pointer to one object"),
+            .pointer => |ptr| if (ptr.size == .slice) @compileError("Argument type cannot be a slice"),
+            else => @compileError("Argument type must be a pointer"),
         }
     }
 

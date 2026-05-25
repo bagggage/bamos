@@ -116,25 +116,19 @@ pub inline fn init(comptime T: type) Self {
 }
 
 /// Allocates a new bucket and adds it to the allocator's list of buckets.
-/// field_ptr: *T
-/// - Returns: A pointer to the new bucket, or `null` if allocation fails.
 pub fn newBucket(self: *Self) ?*Bucket {
     const pool_size = (self.obj_size * self.bucket_capacity) + @sizeOf(Bucket) +
         (std.math.divCeil(u32, self.bucket_capacity, lib.byte_size) catch unreachable);
 
-    const pool_pages: u32 = @truncate(std.math.divCeil(usize, pool_size, vm.page_size) catch unreachable);
-    const pool_addr = vm.PageAllocator.alloc(std.math.log2_int(u32, pool_pages)) orelse return null;
+    const phys = vm.PageAllocator.alloc(vm.bytesToRank(pool_size)) orelse return null;
+    const bucket = self.makeBucket(vm.getVirtLma(phys));
 
-    const bucket = self.makeBucket(pool_addr);
     self.buckets.prepend(&bucket.node);
-
     return bucket;
 }
 
 /// Initialize a new bucket from a given pool address.
-/// 
 /// - `pool_addr`: The virtual address of the memory pool.
-/// - Returns: A pointer to the new bucket.
 fn makeBucket(self: *Self, pool_addr: usize) *Bucket {
     const bitmap_size = std.math.divCeil(u32, self.bucket_capacity, lib.byte_size) catch unreachable;
     const bitmap_addr = pool_addr + (self.bucket_capacity * self.obj_size);
@@ -147,9 +141,6 @@ fn makeBucket(self: *Self, pool_addr: usize) *Bucket {
 }
 
 /// Allocates an object.
-/// 
-/// - `T`: The type of the pointer to be returned.
-/// - Returns: A pointer to the allocated object, or `null` if allocation fails.
 pub fn alloc(self: *Self, comptime T: type) ?*T {
     const bucket = blk: {
         var node = self.buckets.first;
@@ -177,7 +168,6 @@ pub fn alloc(self: *Self, comptime T: type) ?*T {
 }
 
 /// Frees an object and returns it to the allocator.
-/// 
 /// - `obj_ptr`: A pointer to the object to be freed.
 pub fn free(self: *Self, obj_ptr: anytype) void {
     const obj_addr = @intFromPtr(obj_ptr);
