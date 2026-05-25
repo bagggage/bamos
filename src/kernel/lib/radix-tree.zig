@@ -4,7 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const atomic = std.atomic;
-const utils = if (!builtin.is_test) @import("../utils.zig") else void;
+const lib = if (!builtin.is_test) @import("../lib.zig") else void;
 const vm = if (!builtin.is_test) @import("../vm.zig") else void;
 
 pub const Handle = struct {
@@ -59,8 +59,8 @@ pub fn TableNode(width: comptime_int) type {
             return table;
         }
 
-        pub inline fn delete(self: *Self) void {
-            vm.auto.delete(Self, self);
+        pub inline fn free(self: *Self) void {
+            vm.auto.free(Self, self);
         }
 
         pub inline fn hasEntries(self: *const Self) bool {
@@ -137,8 +137,8 @@ pub fn RadixTree(comptime K: type, comptime V: type, comptime Hasher: type, widt
     }
 
     const H: type = Hasher.Result;
-    const hashKey: fn (key: K) H = Hasher.hash;
-    const keyByValue: fn (val: *V) K = Hasher.keyByValue;
+    const hashKey: fn (key: K) callconv(.@"inline") H = Hasher.hash;
+    const keyByValue: fn (val: *V) callconv(.@"inline") K = Hasher.keyByValue;
 
     const bit_shift: comptime_int = comptime std.math.log2(width);
     const bit_mask: comptime_int = comptime width - 1;
@@ -166,7 +166,7 @@ pub fn RadixTree(comptime K: type, comptime V: type, comptime Hasher: type, widt
 
             while (level < max_level) {
                 if (level == max_level - 1 or idx >= width) {
-                    table.delete();
+                    table.free();
 
                     if (level == 0) break;
 
@@ -195,7 +195,7 @@ pub fn RadixTree(comptime K: type, comptime V: type, comptime Hasher: type, widt
             }
         }
 
-        pub fn insert(self: *Self, key: K, value: *V) !void {
+        pub fn insert(self: *Self, key: K, value: *V) !?*V {
             const handle: Handle = .init(value, true);
             const hash = hashKey(key);
 
@@ -210,27 +210,22 @@ pub fn RadixTree(comptime K: type, comptime V: type, comptime Hasher: type, widt
                 table.addEntry(idx, handle);
                 self.root = table;
 
-                return;
+                return null;
             }
 
             var table = self.root.?;
-
             for (0..max_level) |level| {
                 const idx = temp & bit_mask;
                 const curr_handle = table.entries[idx];
 
                 if (curr_handle.isNull()) {
                     table.addEntry(idx, handle);
-                    return;
+                    return null;
                 } else if (curr_handle.isLeaf()) {
                     const curr_val = curr_handle.ptr(V);
                     const curr_key = keyByValue(curr_val);
 
-                    // Replace value
-                    if (curr_key == key) {
-                        table.entries[idx] = handle;
-                        return;
-                    }
+                    if (curr_key == key) return curr_val;
 
                     // Create new level
                     const new_table = try Table.new();
@@ -304,7 +299,7 @@ pub fn RadixTree(comptime K: type, comptime V: type, comptime Hasher: type, widt
                             parent_table.removeEntry(idx);
                         }
 
-                        table.delete();
+                        table.free();
                         table = parent_table;
                     }
 
@@ -312,7 +307,7 @@ pub fn RadixTree(comptime K: type, comptime V: type, comptime Hasher: type, widt
                     if (table.hasEntries()) break;
 
                     self.root = null;
-                    table.delete();
+                    table.free();
 
                     break;
                 }

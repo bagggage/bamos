@@ -88,6 +88,7 @@ pub const NumberAlloc = num_alloc.NumberAlloc;
 pub const NumberAllocCeil = num_alloc.NumberAllocCeil;
 pub const NumberAllocFloor = num_alloc.NumberAllocFloor;
 pub const NumberAllocRanged = num_alloc.NumberAllocRanged;
+pub const RadixTree = @import("lib/radix-tree.zig").RadixTree;
 pub const rb = @import("lib/rb-tree.zig");
 pub const rcu = @import("lib/rcu.zig");
 pub const RingBuffer = @import("lib/ring-buffer.zig").RingBuffer;

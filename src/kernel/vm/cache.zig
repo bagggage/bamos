@@ -86,6 +86,7 @@ pub const Block = struct {
     lock_map: BitSet = .initEmpty(),
 
     size: Size = .{ .shift = Size.small_shift },
+    lock: lib.sync.Spinlock = .{},
 
     inline fn fromNode(node: *Node) *Block {
         return @fieldParentPtr("node", node);
@@ -122,6 +123,8 @@ pub const Block = struct {
     pub inline fn free(self: *Block) void {
         const base = @as(usize, self.phys_base) * vm.page_size;
         vm.PageAllocator.free(base, self.size.toRank());
+
+        block_oma.free(self);
     }
 
     pub inline fn ref(self: *Block) void {
@@ -129,11 +132,10 @@ pub const Block = struct {
     }
 
     pub fn deref(self: *Block) void {
-        const refs = self.ref_count.value.fetchSub(1, .release) - 1;
-        if (refs > 1) { @branchHint(.likely); return; }
+        self.lock.lock();
+        defer self.lock.unlock();
 
-        std.debug.assert(refs == 1);
-        lru_list.prepend(&self.lru_node);
+        if (self.ref_count.put()) lru_list.prepend(&self.lru_node);
     }
 
     pub fn writeDown(self: *Block) void {
@@ -271,10 +273,102 @@ const Table = struct {
     }
 };
 
+const TreeHasher = opaque {
+    pub const Result = u32;
+
+    pub inline fn hash(key: u32) u32 { return key; }
+
+    pub inline fn keyByValue(val: *Block) u32 {
+        return val.index;
+    }
+};
+
 pub const Control = struct {
     pub const WriteBackFn = *const fn (block: *Block, quants: []const Block.Quant, quant_shift: u5) bool;
 
+    const RadixTree = lib.RadixTree(u32, Block, TreeHasher, 8);
+
+    tree: RadixTree = .{},
+    rcu: lib.rcu.GenerationBlock = .{},
     write_back: ?WriteBackFn,
+
+    pub fn deinit(self: *Control) void {
+
+        const RadixTable = @TypeOf(self.tree.root.?.*);
+        const Helper = opaque {
+            pub fn deinitTable(table: *RadixTable) void {
+                if (table.count.raw > 0) for (table.entries[0..]) |ent| {
+                    if (ent.isNull()) continue;
+                    if (ent.isTable()) {
+                        deinitTable(ent.ptr(RadixTable));
+                    } else {
+                        const block = ent.ptr(Block);
+
+                        if (block.ref_count.count() == 0) lru_list.remove(&block.lru_node);
+                        block.free();
+                    }
+                };
+
+                table.free();
+            }
+        };
+
+        if (self.tree.root) |table| Helper.deinitTable(table);
+    }
+
+    pub fn getOrNull(self: *Control, index: u32) ?*Block {
+        const block, const users = blk: {
+            const gen = self.rcu.readLock();
+            defer self.rcu.readUnlock(gen);
+
+            const block = self.tree.lookup(index) orelse return null;
+            break :blk .{block, block.ref_count.value.fetchAdd(1, .release)};
+        };
+
+        if (users == 0) {
+            block.lock.lock();
+            defer block.lock.unlock();
+
+            lru_list.remove(&block.lru_node);
+        }
+
+        return block;
+    }
+
+    pub fn getNoRef(self: *Control, index: u32) error{NoEnt}!*Block {
+        const gen = self.rcu.readLock();
+        defer self.rcu.readUnlock(gen);
+
+        const block = self.tree.lookup(index) orelse return error.NoEnt;
+        return block;
+    }
+
+    pub fn insert(self: *Control, block: *Block) !?*Block {
+        self.rcu.writeLock();
+        defer self.rcu.writeUnlock();
+
+        return try self.tree.insert(block.index, block) orelse {
+            self.rcu.updateSync();
+            return null;
+        };
+    }
+
+    pub fn insertOrFree(self: *Control, block: *Block) !?*Block {
+        const other = try self.insert(block) orelse return null;
+
+        block.free();
+        return other;
+    }
+
+    pub fn remove(self: *Control, block: *Block) void {
+        self.rcu.writeLock();
+        defer self.rcu.writeUnlock();
+
+        const removed = self.tree.remove(block.index);
+        std.debug.assert(block == removed);
+
+        self.rcu.updateSync();
+    }
 
     pub fn writeBack(self: *Control, block: *Block) bool {
         if (self.write_back == null) return true;
@@ -419,50 +513,53 @@ pub fn createBlock(ctrl: *Control, index: usize, size: Block.Size) !*Block {
     return block;
 }
 
-pub fn insertBlockOrFree(block: *Block) ?*Block {
-    const other = block_table.putOrGet(block) orelse return null;
-
-    block.free();
-    return other;
-}
-
-pub fn getOrNull(ctrl: *Control, index: usize) ?*Block {
-    return block_table.getOrNull(ctrl, index);
-}
-
-pub fn getNoRef(ctrl: *Control, index: usize) error{NoEnt}!*Block {
-    const block = block_table.getOrNull(ctrl, index) orelse return error.NoEnt;
-    block.ref_count.dec();
-
-    return block;
-}
+//pub fn insertBlockOrFree(block: *Block) ?*Block {
+//    const other = block_table.putOrGet(block) orelse return null;
+//
+//    block.free();
+//    return other;
+//}
+//
+//pub fn getOrNull(ctrl: *Control, index: usize) ?*Block {
+//    return block_table.getOrNull(ctrl, index);
+//}
+//
+//pub fn getNoRef(ctrl: *Control, index: usize) error{NoEnt}!*Block {
+//    const block = block_table.getOrNull(ctrl, index) orelse return error.NoEnt;
+//    block.ref_count.dec();
+//
+//    return block;
+//}
 
 pub fn cleanup(pages: u32) bool {
-    var freed: u32 = 0;
-    while (freed < pages) {
-        const block = blk: {
-            const gen = lru_list.ctrl.readLock();
-            defer lru_list.ctrl.readUnlock(gen);
+    _ = pages;
+    return false;
 
-            const node = lru_list.last.load(.acquire) orelse return false;
-            const block = Block.fromLruNode(node);
-
-            break :blk if (block.lruGet()) block else continue;
-        };
-
-        lru_list.remove(&block.lru_node);
-        if (block.writeBack()) {
-            if (!block.lruTake()) continue;
-
-            freed +%= block.size.toPages();
-            removeBlock(block);
-        }
-    }
-
-    return freed >= pages;
+    //    var freed: u32 = 0;
+    //    while (freed < pages) {
+    //        const block = blk: {
+    //            const gen = lru_list.ctrl.readLock();
+    //            defer lru_list.ctrl.readUnlock(gen);
+    //
+    //            const node = lru_list.last.load(.acquire) orelse return false;
+    //            const block = Block.fromLruNode(node);
+    //
+    //            break :blk if (block.lruGet()) block else continue;
+    //        };
+    //
+    //        lru_list.remove(&block.lru_node);
+    //        if (block.writeBack()) {
+    //            if (!block.lruTake()) continue;
+    //
+    //            freed +%= block.size.toPages();
+    //            removeBlock(block);
+    //        }
+    //    }
+    //
+    //    return freed >= pages;
 }
 
-inline fn removeBlock(block: *Block) void {
-    block_table.remove(block);
-    block.free();
-}
+//inline fn removeBlock(block: *Block) void {
+//    block_table.remove(block);
+//    block.free();
+//}
