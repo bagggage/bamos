@@ -2,8 +2,8 @@ ENTRY(_start)
 
 mmio        = 0xfffffffff8000000;
 fb          = 0xfffffffffc000000;
-bootboot    = 0xffffffffffe00000;
-environment = 0xffffffffffe01000;
+bootboot    = 0xffffffffff000000; /* default 0xffffffffffe00000 */
+environment = 0xffffffffff001000; /* default 0xffffffffffe01000 */
 initstack   = 0x400;
 
 PHDRS
@@ -13,7 +13,7 @@ PHDRS
 
 SECTIONS
 {
-    . = 0xffffffffffe02000;
+    . = 0xffffffffff002000; /* default 0xffffffffffe02000 */
 
     kernel_elf_start = .;
 
