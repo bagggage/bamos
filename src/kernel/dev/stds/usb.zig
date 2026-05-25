@@ -13,133 +13,68 @@ const log = std.log.scoped(.usb);
 const vm = @import("../../vm.zig");
 const xhci = @import("../drivers/usb/xhci.zig");
 
+pub const Error = vm.Error || error {
+    IoFailed,
+};
+
 /// USB Device identification structure for driver matching.
 pub const Id = struct {
     pub const any = 0xffff;
 
     vendor_id: u16 = any,
     product_id: u16 = any,
-    device_class: ?DeviceClass = null,
-    device_subclass: ?u8 = null,
-    device_protocol: ?u8 = null,
-    interface_class: ?InterfaceClass = null,
-    interface_subclass: ?u8 = null,
-    interface_protocol: ?u8 = null,
+
+    mask: packed struct (u8) {
+        class: bool = false,
+        subclass: bool = false,
+        protocol: bool = false,
+        if_class: bool = false,
+        if_subclass: bool = false,
+        if_protocol: bool = false,
+        if_number: bool = false,
+        _reserved: bool = false,
+    },
+
+    class: Class = 0,
+    subclass: u8 = 0,
+    protocol: u8 = 0,
+
+    if_class: Class = 0,
+    if_subclass: u8 = 0,
+    if_protocol: u8 = 0,
+    if_number: u8 = 0,
 };
 
 /// USB Device Class codes (bDeviceClass)
-pub const DeviceClass = enum(u8) {
+pub const Class = enum(u8) {
     /// Device class is determined by interface descriptors
-    @"interface" = 0x00,
-    /// Audio device class
+    interface = 0x00,
     audio = 0x01,
-    /// Communications device class (CDC)
     communications = 0x02,
-    /// Human Interface Device class (HID)
     hid = 0x03,
-    /// Physical device class
     physical = 0x05,
-    /// Image device class
     image = 0x06,
-    /// Printer device class
     printer = 0x07,
-    /// Mass Storage device class
     mass_storage = 0x08,
-    /// Hub device class
     hub = 0x09,
-    /// CDC-Data device class
     cdc_data = 0x0a,
-    /// Smart Card device class
     smart_card = 0x0b,
-    /// Content Security device class
     content_security = 0x0d,
-    /// Video device class
     video = 0x0e,
-    /// Personal Healthcare device class
     personal_healthcare = 0x0f,
     /// Audio/Video device class
     av = 0x10,
-    /// Billboard device class
     billboard = 0x11,
-    /// USB Type-C Bridge device class
     type_c_bridge = 0x12,
-    /// Bulk Display device class
     bulk_display = 0x13,
-    /// USB3 Vision device class
     usb3_vision = 0x14,
-    /// Industrial device class
     industrial = 0x16,
-    /// Authentication device class
     authentication = 0x1c,
-    /// Diagnostic device class
     diagnostic = 0xdc,
-    /// Wireless controller device class
     wireless_controller = 0xe0,
-    /// Miscellaneous device class
     miscellaneous = 0xef,
-    /// Application-specific device class
     application_specific = 0xfe,
-    /// Vendor-specific device class
     vendor_specific = 0xff,
-    
-    _,
-};
-
-/// USB Interface Class codes (bInterfaceClass)
-pub const InterfaceClass = enum(u8) {
-    /// Interface class is determined by class-specific descriptors
-    @"interface" = 0x00,
-    /// Audio device interface
-    audio = 0x01,
-    /// Communications device interface (CDC)
-    communications = 0x02,
-    /// HID interface
-    hid = 0x03,
-    /// Physical device interface
-    physical = 0x05,
-    /// Image device interface
-    image = 0x06,
-    /// Printer device interface
-    printer = 0x07,
-    /// Mass Storage interface
-    mass_storage = 0x08,
-    /// Hub device interface
-    hub = 0x09,
-    /// CDC-Data interface
-    cdc_data = 0x0a,
-    /// Smart Card interface
-    smart_card = 0x0b,
-    /// Content Security interface
-    content_security = 0x0d,
-    /// Video device interface
-    video = 0x0e,
-    /// Personal Healthcare interface
-    personal_healthcare = 0x0f,
-    /// Audio/Video interface
-    av = 0x10,
-    /// Billboard interface
-    billboard = 0x11,
-    /// USB Type-C Bridge interface
-    type_c_bridge = 0x12,
-    /// Bulk Display interface
-    bulk_display = 0x13,
-    /// USB3 Vision interface
-    usb3_vision = 0x14,
-    /// Industrial device interface
-    industrial = 0x16,
-    /// Authentication device interface
-    authentication = 0x1c,
-    /// Diagnostic device interface
-    diagnostic = 0xdc,
-    /// Wireless controller interface
-    wireless_controller = 0xe0,
-    /// Miscellaneous device interface
-    miscellaneous = 0xef,
-    /// Application-specific interface
-    application_specific = 0xfe,
-    /// Vendor-specific interface
-    vendor_specific = 0xff,
-    
     _,
 };
 
@@ -168,24 +103,38 @@ pub const Direction = enum(u1) {
     in = 1,
 };
 
-/// USB device address information
 pub const AddressInfo = struct {
-    /// USB address assigned by host controller (1-127)
-    address: u7,
-    /// Port number on the parent hub (1-15)
-    port: u4,
-    /// Slot/segment identifier for xHCI
+    address: u8,
+    port: u8,
     slot_id: u8,
-    /// Parent device (null for root hub devices)
-    parent: ?*Device = null,
-    /// Hub address this device is connected through (0 for root)
-    hub_address: u7 = 0,
-    /// Hub port this device is connected to
-    hub_port: u4 = 0,
+    hub_address: u8 = 0,
+    hub_port: u8 = 0,
+};
+
+pub const BCD = packed struct(u8) {
+    pub const Version = extern struct {
+        minor: BCD = .{},
+        major: BCD = .{},
+
+        pub fn format(self: Version, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+            try self.major.format(writer);
+            try writer.writeByte('.');
+            try self.minor.format(writer);
+        }
+    };
+
+    lo: u4 = 0,
+    hi: u4 = 0,
+
+    pub inline fn format(self: BCD, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (self.hi > 0) try writer.writeByte(@as(u8, '0') +% self.hi);
+        try writer.writeByte(@as(u8, '0') +% self.lo);
+    }
 };
 
 pub const Descriptor = opaque {
     pub const Type = enum(u8) {
+        none = 0,
         device = 1,
         config = 2,
         string = 3,
@@ -197,186 +146,144 @@ pub const Descriptor = opaque {
         interface_association = 11,
         bos = 15,
         device_capability = 16,
-        superspeed_usb_endpoint_companion = 48
+        hid = 33,
+        superspeed_usb_endpoint_companion = 48,
+        _
     };
 
     pub const Header = extern struct {
         length: u8,
         @"type": Type,
     };
-};
 
-// ============================================================================
-// USB Device Configuration Descriptor
-// ============================================================================
+    pub const Device = extern struct {
+        /// Content of descriptor without header
+        pub const Payload = extern struct {
+            usb_version: BCD.Version,
 
-/// USB Device descriptor (minimal representation)
-pub const DeviceDescriptor = extern struct {
-    header: Descriptor.Header,
-    /// USB specification version (BCD)
-    usb_version: u16,
-    /// Device class code
-    device_class: u8,
-    /// Device subclass code
-    device_subclass: u8,
-    /// Device protocol code
-    device_protocol: u8,
-    /// Maximum packet size for endpoint 0
-    max_packet_size: u8,
-    /// Vendor ID
-    vendor_id: u16,
-    /// Product ID
-    product_id: u16,
-    /// Device release number (BCD)
-    device_version: u16,
-    /// Index of manufacturer string
-    manufacturer_str: u8,
-    /// Index of product string
-    product_str: u8,
-    /// Index of serial number string
-    serial_str: u8,
-    /// Number of possible configurations
-    num_configurations: u8,
-};
+            device_class: Class,
+            device_subclass: u8,
+            device_protocol: u8,
+            max_packet_size: u8,
 
-/// USB Configuration descriptor (minimal representation)
-pub const ConfigurationDescriptor = extern struct {
-    header: Descriptor.Header,
-    /// Total length of this configuration (including all descriptors)
-    total_length: u16,
-    /// Number of interfaces in this configuration
-    num_interfaces: u8,
-    /// Configuration value (1-255)
-    configuration_value: u8,
-    /// Configuration string index
-    configuration_str: u8,
-    /// Configuration attributes
-    attributes: u8,
-    /// Maximum power consumption (in 2mA units)
-    max_power: u8,
-};
+            vendor_id: u16,
+            product_id: u16,
+            device_version: BCD.Version,
 
-/// USB Interface descriptor (minimal representation)
-pub const InterfaceDescriptor = extern struct {
-    header: Descriptor.Header,
-    /// Interface number (0-based)
-    interface_number: u8,
-    /// Alternate setting number
-    alternate_setting: u8,
-    /// Number of endpoints in this interface
-    num_endpoints: u8,
-    /// Interface class
-    interface_class: u8,
-    /// Interface subclass
-    interface_subclass: u8,
-    /// Interface protocol
-    interface_protocol: u8,
-    /// Interface string index
-    interface_str: u8,
-};
+            manufacturer_str: u8,
+            product_str: u8,
+            serial_str: u8,
 
-/// USB Endpoint descriptor
-pub const EndpointDescriptor = extern struct {
-    header: Descriptor.Header,
-    /// Endpoint address (direction + number)
-    address: u8,
-    /// Endpoint attributes (transfer type)
-    attributes: u8,
-    /// Maximum packet size
-    max_packet_size: u16,
-    /// Polling interval (in frames or microframes)
-    interval: u8,
+            num_configurations: u8,
+        };
 
-    /// Get the transfer type from attributes
-    pub fn transferType(self: *const EndpointDescriptor) TransferType {
-        return @enumFromInt(@as(u2, @truncate(self.attributes)));
-    }
+        header: Header,
+        usb_version: BCD.Version,
 
-    /// Check if this is an IN endpoint
-    pub fn isIn(self: *const EndpointDescriptor) bool {
-        return (self.address & 0x80) != 0;
-    }
+        device_class: Class,
+        device_subclass: u8,
+        device_protocol: u8,
+        max_packet_size: u8,
 
-    /// Get the endpoint number (0-15)
-    pub fn number(self: *const EndpointDescriptor) u4 {
-        return @truncate(self.address & 0x0f);
-    }
-};
+        vendor_id: u16,
+        product_id: u16,
+        device_version: BCD.Version,
 
-/// Active USB configuration state
-pub const ActiveConfig = struct {
-    /// Configuration descriptor
-    config: ConfigurationDescriptor,
-    /// Interface descriptors
-    interfaces: []InterfaceDescriptor,
-    /// Endpoint descriptors
-    endpoints: []EndpointDescriptor,
-};
+        manufacturer_str: u8,
+        product_str: u8,
+        serial_str: u8,
 
-// ============================================================================
-// USB Device State
-// ============================================================================
+        num_configurations: u8,
 
-/// USB device state
-pub const DeviceState = enum {
-    /// Device is not attached
-    detached,
-    /// Device is attached but not addressed
-    attached,
-    /// Device is powered but not reset
-    powered,
-    /// Device has been reset
-    default,
-    /// Device has received address
-    address,
-    /// Device is configured
-    configured,
-    /// Device has been suspended
-    suspended,
-};
-
-pub const DeviceRequest = extern struct {
-    pub const Type = packed struct(u8) {
-        recipient: enum(u5) {
-            device = 0,
-            interface = 1,
-            endpoint = 2,
-            other = 3,
-            _
-        },
-        @"type": enum(u2) {
-            standard = 0,
-            class = 1,
-            vendor = 2,
-            reserved = 3
-        },
-        dir: enum(u1) {
-            host_to_dev = 0,
-            dev_to_host = 1
+        pub inline fn asPayload(self: *const Descriptor.Device) *const Payload {
+            return @ptrCast(&self.usb_version);
         }
     };
 
-    pub const Code = enum(u8) {
-        get_status = 0,
-        clear_feature = 1,
-        set_feature = 3,
-        set_address = 5,
-        get_descriptor = 6,
-        set_descriptor = 7,
-        get_config = 8,
-        set_config = 9,
-        get_interface = 10,
-        set_interface = 11,
-        synch_frame = 12,
-        set_sel = 48,
-        set_isoch_delay = 49, 
+    pub const Configuration = extern struct {
+        pub const Payload = extern struct {
+            num_interfaces: u8 = 0,
+            configuration_value: u8 = 0,
+            configuration_str: u8 = 0,
+            attributes: u8 = 0,
+            max_power: u8 = 0,
+        };
+
+        header: Descriptor.Header,
+        /// Total length of this configuration (including all descriptors)
+        total_length: u16,
+        num_interfaces: u8,
+        configuration_value: u8,
+        configuration_str: u8,
+        attributes: u8,
+        /// Maximum power consumption (in 2mA units)
+        max_power: u8,
     };
 
-    @"type": Type,
-    code: Code,
-    value: u16,
-    index: u16,
-    length: u16,
+    pub const Interface = extern struct {
+        /// Content of descriptor without header
+        pub const Payload = extern struct {
+            interface_number: u8,
+            alternate_setting: u8,
+            num_endpoints: u8,
+
+            interface_class: Class,
+            interface_subclass: u8,
+            interface_protocol: u8,
+            interface_str: u8,
+        };
+
+        header: Descriptor.Header,
+        interface_number: u8,
+        alternate_setting: u8,
+        num_endpoints: u8,
+
+        interface_class: Class,
+        interface_subclass: u8,
+        interface_protocol: u8,
+        interface_str: u8,
+    };
+
+    pub const Endpoint = extern struct {
+        header: Descriptor.Header,
+        address: u8,
+        attributes: u8,
+        max_packet_size: u16,
+        interval: u8,
+    
+        /// Get the transfer type from attributes
+        pub inline fn transferType(self: *const Endpoint) TransferType {
+            return @enumFromInt(@as(u2, @truncate(self.attributes)));
+        }
+    
+        /// Check if this is an IN endpoint
+        pub inline fn isIn(self: *const Endpoint) bool {
+            return (self.address & 0x80) != 0;
+        }
+
+        pub inline fn number(self: *const Endpoint) u4 {
+            return @truncate(self.address & 0x0f);
+        }
+    };
+
+    pub const String = extern struct {
+        header: Header,
+        value: u8,
+
+        pub inline fn asSlice(self: *const String) []const u8 {
+            return @as([*]const u8, @ptrCast(&self.value))[0..self.len()];
+        }
+
+        pub inline fn len(self: *const String) u8 {
+            return self.header.length - @sizeOf(Header);
+        }
+    };
+};
+
+pub const ActiveConfig = struct {
+    config: Descriptor.Configuration,
+    interfaces: []Descriptor.Interface,
+    endpoints: []Descriptor.Endpoint,
 };
 
 pub const Completion = struct {
@@ -399,120 +306,171 @@ pub const Completion = struct {
     }
 };
 
-// ============================================================================
-// USB Device Structure
-// ============================================================================
-
 /// USB Device structure representing a connected USB device
 pub const Device = struct {
-    device: *dev.Device,
+    pub const State = enum(u8) {
+        detached = 0,
+        attached = 1,
+        powered = 2,
+        default = 3,
+        address = 4,
+        configured = 5,
+        suspended = 6,
+    };
 
-    /// Device identification
-    id: Id,
-    
-    /// USB device descriptor
-    descriptor: DeviceDescriptor,
-    
-    /// Address information
-    addr_info: AddressInfo,
-    
-    /// Device operating speed
-    speed: Speed,
-    
-    /// Current device state
-    state: DeviceState,
-    
-    /// Active configuration (null if not configured)
-    active_config: ?ActiveConfig,
-    
-    /// Number of configurations available
-    configurations: []ConfigurationDescriptor,
-    
-    /// Device-specific data for drivers
+    pub const Request = extern struct {
+        pub const Type = packed struct(u8) {
+            recipient: enum(u5) {
+                device = 0,
+                interface = 1,
+                endpoint = 2,
+                other = 3,
+                _
+            },
+            @"type": enum(u2) {
+                standard = 0,
+                class = 1,
+                vendor = 2,
+                reserved = 3
+            },
+            dir: enum(u1) {
+                host_to_dev = 0,
+                dev_to_host = 1
+            }
+        };
+
+        pub const Code = enum(u8) {
+            get_status = 0,
+            clear_feature = 1,
+            set_feature = 3,
+            set_address = 5,
+            get_descriptor = 6,
+            set_descriptor = 7,
+            get_config = 8,
+            set_config = 9,
+            get_interface = 10,
+            set_interface = 11,
+            synch_frame = 12,
+            set_sel = 48,
+            set_isoch_delay = 49, 
+        };
+
+        pub const Value = extern union {
+            raw: u16,
+            desc: extern struct {
+                index: u8 = 0,
+                @"type": Descriptor.Type,
+            },
+        };
+
+        @"type": Type,
+        code: Code,
+        value: Value,
+        index: u16,
+        length: u16,
+    };
+
+    pub const Operations = struct {
+        pub const GetDescriptorFn = *const fn (*Device, Descriptor.Type, u8, []u8) Error!void;
+
+        get_descriptor: GetDescriptorFn,
+    };
+
+    pub const alloc_config: vm.auto.Config = .{
+        .allocator = .oma,
+        .capacity = 32
+    };
+
+    device: dev.Device,
+    address: AddressInfo,
+
+    desc: Descriptor.Device.Payload,
+    config: Descriptor.Configuration.Payload = .{},
+    interfaces: [*]Descriptor.Interface = undefined,
+
+    host: lib.AnyData,
     data: lib.AnyData = .{},
 
-    /// Initializes a new USB device
-    pub fn init(
-        descriptor: DeviceDescriptor,
-        addr_info: AddressInfo,
-        speed: Speed
-    ) Device {
-        return .{
-            .device = undefined,
-            .id = .{
-                .vendor_id = descriptor.vendor_id,
-                .product_id = descriptor.product_id,
-                .device_class = @enumFromInt(descriptor.device_class),
-                .device_subclass = if (descriptor.device_subclass != 0) descriptor.device_subclass else null,
-                .device_protocol = if (descriptor.device_protocol != 0) descriptor.device_protocol else null,
-            },
-            .descriptor = descriptor,
-            .addr_info = addr_info,
-            .speed = speed,
-            .state = .attached,
-            .active_config = null,
-            .configurations = &.{},
+    ops: *const Operations,
+
+    pub fn setup(
+        self: *Device,
+        host: lib.AnyData,
+        desc: Descriptor.Device.Payload,
+        address: AddressInfo,
+        ops: *const Operations,
+    ) void {
+        self.* = .{
+            .device = .init(printName(&address), self),
+            .desc = desc,
+            .address = address,
+            .host = host,
+            .ops = ops,
         };
     }
 
     pub inline fn deinit(self: *Device) void {
-        // Free dynamically allocated configurations if any
-        if (self.configurations.len > 0) {
-            // Configuration memory should be freed by the caller
-            // This is a placeholder for cleanup logic
+        if (self.config.num_interfaces > 0) vm.gpa.free(self.interfaces);
+        self.config.num_interfaces = 0;
+    }
+
+    pub fn identify(self: *Device) Error!void {
+        var config: Descriptor.Configuration = undefined;
+        const phys = vm.translateVirtToPhys(@intFromPtr(&config)).?;
+        const virt: *Descriptor.Configuration = @ptrFromInt(vm.getVirtLma(phys));
+
+        log.debug("get descriptor", .{});
+        try self.getDescriptor(.config, 0, std.mem.asBytes(virt));
+
+        log.debug("config:\n{any}\n", .{config});
+        const buffer = vm.gpa.allocMany(u8, config.total_length) orelse return error.NoMemory;
+        defer vm.gpa.free(buffer.ptr);
+
+        try self.getDescriptor(.config, 0, buffer);
+
+        var temp = buffer;
+        while (true) {
+            const header: *Descriptor.Header = @alignCast(@ptrCast(temp.ptr));
+            //if (header.@"type" == .interface) break;
+            log.debug("{*}", .{header});
+            log.debug("{x:0>2}: len: {}", .{@intFromEnum(header.@"type"), header.length});
+
+            temp = temp[header.length..];
+            if (temp.len == 0) break;//return error.NoMemory;
         }
+
+        //const interface: *Descriptor.Interface = @alignCast(@ptrCast(temp.ptr));
+        //log.debug("interface:\n{any}\n", .{interface});
     }
 
-    /// Get the device's vendor ID
-    pub inline fn vendorId(self: *const Device) u16 {
-        return self.descriptor.vendor_id;
+    pub inline fn getDescriptor(
+        self: *Device,
+        @"type": Descriptor.Type,
+        index: u8,
+        buffer: []u8,
+    ) Error!void {
+        return self.ops.get_descriptor(self, @"type", index, buffer);
     }
 
-    /// Get the device's product ID
-    pub inline fn productId(self: *const Device) u16 {
-        return self.descriptor.product_id;
-    }
-
-    /// Get the device's device class
-    pub inline fn deviceClass(self: *const Device) u8 {
-        return self.descriptor.device_class;
-    }
-
-    /// Get the device's interface class (from active interface if configured)
-    pub inline fn interfaceClass(self: *const Device) ?u8 {
-        if (self.active_config) |cfg| {
-            if (cfg.interfaces.len > 0) {
-                return cfg.interfaces[0].interface_class;
-            }
-        }
-        return null;
-    }
-
-    /// Convert from generic device to USB device
-    pub inline fn from(device: *const dev.Device) *Device {
+    pub inline fn from(device: *dev.Device) *Device {
         std.debug.assert(device.bus == &bus);
-        return device.driver_data.asPtr(Device) orelse unreachable;
+        return @fieldParentPtr("device", device);
     }
 
-    /// Get the full path string for device naming
-    pub fn getPath(self: *const Device) dev.Name {
-        if (self.addr_info.hub_address == 0) {
+    fn printName(address: *const AddressInfo) dev.Name {
+        if (address.hub_address == 0) {
             return dev.Name.print(
                 "usb-{}.{}",
-                .{ self.addr_info.slot_id, self.addr_info.port }
+                .{ address.slot_id, address.port },
             ) catch unreachable;
         } else {
             return dev.Name.print(
                 "usb-{}.{}.{}",
-                .{ self.addr_info.slot_id, self.addr_info.hub_port, self.addr_info.port }
+                .{ address.slot_id, address.hub_port, address.port },
             ) catch unreachable;
         }
     }
 };
-
-// ============================================================================
-// USB Driver Structure
-// ============================================================================
 
 /// USB Driver structure for device-specific drivers
 pub const Driver = struct {
@@ -537,457 +495,60 @@ pub const Driver = struct {
     }
 };
 
-// ============================================================================
-// USB Bus Management
-// ============================================================================
+var bus = dev.Bus.init(
+    "usb",
+    .{
+        .match = match,
+        .remove = remove,
+    },
+);
 
-var bus = dev.Bus.init("usb", .{
-    .match = match,
-    .remove = remove,
-});
-
-var dev_oma = vm.ObjectAllocator.init(Device);
-
-/// Initialize the USB bus subsystem
 pub fn init() !void {
     dev.registerBus(&bus);
 
     try xhci.init();
 }
 
+pub fn addDevice(
+    host: lib.AnyData,
+    desc: Descriptor.Device,
+    address: AddressInfo,
+    ops: *const Device.Operations,
+) Error!*Device {
+    const usb_dev = vm.auto.alloc(Device) orelse return error.NoMemory;
+    errdefer vm.auto.free(Device, usb_dev);
+
+    log.debug("setup {*}", .{usb_dev});
+    usb_dev.setup(host, desc.asPayload().*, address, ops);
+
+    try usb_dev.identify();
+
+    bus.addDevice(&usb_dev.device, null);
+    return usb_dev;
+}
+
 fn match(driver: *const dev.Driver, device: *const dev.Device) bool {
-    const usb_dev = Device.from(device);
-    const usb_driver = Driver.from(driver);
-    const match_id = usb_driver.match_id;
-
-    // Match by vendor/product ID
-    if (match_id.vendor_id != Id.any and match_id.vendor_id != usb_dev.id.vendor_id) {
-        return false;
-    }
-
-    if (match_id.product_id != Id.any and match_id.product_id != usb_dev.id.product_id) {
-        return false;
-    }
-
-    // Match by device class
-    if (match_id.device_class) |mc| {
-        const dev_class = usb_dev.id.device_class orelse return false;
-        if (@as(u8, @intFromEnum(mc)) != @as(u8, @intFromEnum(dev_class))) {
-            return false;
-        }
-    }
-
-    // Match by device subclass
-    if (match_id.device_subclass) |ms| {
-        if (usb_dev.id.device_subclass == null or ms != usb_dev.id.device_subclass.?) {
-            return false;
-        }
-    }
-
-    // Match by device protocol
-    if (match_id.device_protocol) |mp| {
-        if (usb_dev.descriptor.device_protocol != mp) {
-            return false;
-        }
-    }
-
-    // Match by interface class
-    if (match_id.interface_class) |ic| {
-        const dev_ic = usb_dev.interfaceClass() orelse return false;
-        if (@as(u8, @intFromEnum(ic)) != dev_ic) {
-            return false;
-        }
-    }
-
-    // Match by interface subclass
-    if (match_id.interface_subclass) |is| {
-        const dev_is = if (usb_dev.active_config) |cfg| 
-            if (cfg.interfaces.len > 0) cfg.interfaces[0].interface_subclass else null 
-        else null;
-        if (dev_is == null or is != dev_is.?) {
-            return false;
-        }
-    }
-
-    // Match by interface protocol
-    if (match_id.interface_protocol) |ip| {
-        const dev_ip = if (usb_dev.active_config) |cfg| 
-            if (cfg.interfaces.len > 0) cfg.interfaces[0].interface_protocol else null 
-        else null;
-        if (dev_ip == null or ip != dev_ip.?) {
-            return false;
-        }
-    }
+    //const usb_dev = Device.from(@constCast(device));
+    //const usb_driver = Driver.from(driver);
+    _ = driver; _ = device;
 
     return true;
 }
 
 fn remove(device: *dev.Device) void {
-    const usb_dev = Device.from(device);
-
-    usb_dev.deinit();
-    dev_oma.free(usb_dev);
+    _ = device;
 }
 
 /// Register a new USB device on the bus
 /// 
 /// This function is called by host controller drivers (like XHCI)
 /// to register newly enumerated devices.
-pub fn addDevice(
-    descriptor: DeviceDescriptor,
-    addr_info: AddressInfo,
-    speed: Speed,
-    _: ?*dev.Device
-) !*Device {
-    const usb_dev = dev_oma.alloc(Device) orelse return error.NoMemory;
-    usb_dev.* = Device.init(descriptor, addr_info, speed);
+//pub fn addDevice(
+//    descriptor: Descriptor.Device,
+//    addr_info: AddressInfo,
+//) !*Device {
+//}
 
-    errdefer dev_oma.free(usb_dev);
-
-    const device = dev.Device.new(usb_dev.getPath(), usb_dev) orelse {
-        dev_oma.free(usb_dev);
-        return error.NoMemory;
-    };
-
-    usb_dev.device = device;
-    bus.addDevice(device, null);
-
-    log.debug("USB device registered: VID:PID {x:0>4}:{x:0>4}, addr={}, port={}", .{
-        descriptor.vendor_id,
-        descriptor.product_id,
-        addr_info.address,
-        addr_info.port,
-    });
-
-    return usb_dev;
-}
-
-/// Remove a USB device from the bus
-pub fn removeDevice(usb_dev: *Device) void {
-    bus.removeDevice(usb_dev.device);
-}
-
-/// Get the USB bus instance
 pub inline fn getBus() *dev.Bus {
     return &bus;
-}
-
-/// Parse a raw device descriptor from buffer
-pub fn parseDeviceDescriptor(buf: []const u8) ?DeviceDescriptor {
-    if (buf.len < 18) return null;
-    if (buf[0] != 18) return null;   // bLength must be 18
-    if (buf[1] != 0x01) return null; // bDescriptorType must be DEVICE (1)
-
-    return .{
-        .usb_version = std.mem.readInt(u16, buf[2..4], .little),
-        .device_class = buf[4],
-        .device_subclass = buf[5],
-        .device_protocol = buf[6],
-        .max_packet_size = buf[7],
-        .vendor_id = std.mem.readInt(u16, buf[8..10], .little),
-        .product_id = std.mem.readInt(u16, buf[10..12], .little),
-        .device_version = std.mem.readInt(u16, buf[12..14], .little),
-        .manufacturer_str = buf[14],
-        .product_str = buf[15],
-        .serial_str = buf[16],
-        .num_configurations = buf[17],
-    };
-}
-
-/// Parse a raw configuration descriptor from buffer
-pub fn parseConfigurationDescriptor(buf: []const u8) ?ConfigurationDescriptor {
-    if (buf.len < 9) return null;
-    if (buf[0] != 9) return null; // bLength must be 9
-    if (buf[1] != 0x02) return null; // bDescriptorType must be CONFIGURATION (2)
-
-    return .{
-        .total_length = std.mem.readInt(u16, buf[2..4], .little),
-        .num_interfaces = buf[4],
-        .configuration_value = buf[5],
-        .configuration_str = buf[6],
-        .attributes = buf[7],
-        .max_power = buf[8],
-    };
-}
-
-/// Parse a raw interface descriptor from buffer
-pub fn parseInterfaceDescriptor(buf: []const u8) ?InterfaceDescriptor {
-    if (buf.len < 9) return null;
-    if (buf[0] != 9) return null; // bLength must be 9
-    if (buf[1] != 0x04) return null; // bDescriptorType must be INTERFACE (4)
-
-    return .{
-        .interface_number = buf[2],
-        .alternate_setting = buf[3],
-        .num_endpoints = buf[4],
-        .interface_class = buf[5],
-        .interface_subclass = buf[6],
-        .interface_protocol = buf[7],
-        .interface_str = buf[8],
-    };
-}
-
-/// Parse a raw endpoint descriptor from buffer
-pub fn parseEndpointDescriptor(buf: []const u8) ?EndpointDescriptor {
-    if (buf.len < 7) return null;
-    if (buf[0] != 7) return null; // bLength must be 7
-    if (buf[1] != 0x05) return null; // bDescriptorType must be ENDPOINT (5)
-
-    return .{
-        .address = buf[2],
-        .attributes = buf[3],
-        .max_packet_size = std.mem.readInt(u16, buf[4..6], .little),
-        .interval = buf[6],
-    };
-}
-
-/// Known USB vendor names for debugging
-pub const VendorNames: std.StaticStringMap([]const u8) = .initComptime(.{
-    .{ 0x0403, "FTDI" },
-    .{ 0x046d, "Logitech" },
-    .{ 0x04b3, "IBM" },
-    .{ 0x04f2, "Chicony" },
-    .{ 0x058f, "Alcor Micro" },
-    .{ 0x05ac, "Apple" },
-    .{ 0x0644, "Toshiba" },
-    .{ 0x0781, "SanDisk" },
-    .{ 0x093a, "Pixart" },
-    .{ 0x0b05, "ASUS" },
-    .{ 0x0c45, "Microdia" },
-    .{ 0x0d8c, "C-Media" },
-    .{ 0x1050, "Yubico" },
-    .{ 0x13d3, "IMC Networks" },
-    .{ 0x1532, "Razer" },
-    .{ 0x1532, "Razer" },
-    .{ 0x1b3f, "Generalplus" },
-    .{ 0x1d6b, "Linux Foundation" },
-    .{ 0x1e4e, "Cube" },
-    .{ 0x1f28, "KYE" },
-    .{ 0x2001, "D-Link" },
-    .{ 0x2040, "Hauppauge" },
-    .{ 0x20775, "RedMango" },
-    .{ 0x2149, "ACON" },
-    .{ 0x2232, "GenePix" },
-    .{ 0x2304, "Pinnacle" },
-    .{ 0x250f, "SHARKOON" },
-    .{ 0x2516, "Super Talent" },
-    .{ 0x28de, "Valve" },
-    .{ 0x2b73, "Freebots" },
-    .{ 0x2e24, "Semitek" },
-    .{ 0x30fa, "ADS" },
-    .{ 0x314b, "iOne" },
-    .{ 0x3285, "Natscape" },
-    .{ 0x32e9, "Wondermedia" },
-    .{ 0x3540, "TopSeed" },
-    .{ 0x3573, "KYO" },
-    .{ 0x35e5, "ShanWan" },
-    .{ 0x38f8, "SHARKOON" },
-    .{ 0x3f98, "Elecom" },
-    .{ 0x4098, "Coby" },
-    .{ 0x413c, "Dell" },
-    .{ 0x42a9, "Acer" },
-    .{ 0x4348, "Winbond" },
-    .{ 0x45e, "Microsoft" },
-    .{ 0x46d, "Logitech" },
-    .{ 0x4855, "HongKong" },
-    .{ 0x4857, "HongKong" },
-    .{ 0x48d0, "Consistent" },
-    .{ 0x49f1, "LeapFrog" },
-    .{ 0x4a4f, "Gembird" },
-    .{ 0x4b4f, "Kye" },
-    .{ 0x4c2d, "Medion" },
-    .{ 0x4e53, "NEXCELL" },
-    .{ 0x534c, "Sunplus" },
-    .{ 0x534d, "MacroSilicon" },
-    .{ 0x54c, "Sony" },
-    .{ 0x5558, "Hue" },
-    .{ 0x5610, "Huawei" },
-    .{ 0x5654, "INEt" },
-    .{ 0x56d, "Mediacom" },
-    .{ 0x5775, "Gene" },
-    .{ 0x5830, "Hampoo" },
-    .{ 0x5931, "Apple" },
-    .{ 0x5a63, "Bossa" },
-    .{ 0x5ac8, "Apple" },
-    .{ 0x5af9, "Atmel" },
-    .{ 0x5c6d, "AzureWave" },
-    .{ 0x5e04, "Saxa" },
-    .{ 0x6000, "Macronix" },
-    .{ 0x601a, "Intel" },
-    .{ 0x6019, "Dexatek" },
-    .{ 0x6039, "SunplusIT" },
-    .{ 0x603f, "Sunplus Innovation" },
-    .{ 0x6112, "Twinhan" },
-    .{ 0x6171, "ATech" },
-    .{ 0x6189, "WaveRider" },
-    .{ 0x619f, "C3aur" },
-    .{ 0x620e, "Pixart" },
-    .{ 0x6240, "Rocktek" },
-    .{ 0x64b7, "ArcSoft" },
-    .{ 0x6557, "VTrust" },
-    .{ 0x6570, "Populex" },
-    .{ 0x6577, "Myron" },
-    .{ 0x6578, "GenesysLogic" },
-    .{ 0x6666, "Prototype" },
-    .{ 0x6688, "Ironx" },
-    .{ 0x6666, "Prolific" },
-    .{ 0x6718, "VTech" },
-    .{ 0x67b, "Sigma" },
-    .{ 0x6a17, "Xiaomi" },
-    .{ 0x6e47, "Sierra" },
-    .{ 0x6f24, "Gearhead" },
-    .{ 0x704b, "BAS" },
-    .{ 0x7088, "Plugable" },
-    .{ 0x73b8, "JMicron" },
-    .{ 0x73ba, "Hitachi" },
-    .{ 0x7401, "Chips and Media" },
-    .{ 0x7458, "Pioneer" },
-    .{ 0x7464, "National" },
-    .{ 0x7511, "Intel" },
-    .{ 0x7654, "Y Media" },
-    .{ 0x7666, "Hunger" },
-    .{ 0x7811, "SanDisk" },
-    .{ 0x7939, "AVerMedia" },
-    .{ 0x7952, "Genius" },
-    .{ 0x7b36, "KYE" },
-    .{ 0x7d25, "Gembird" },
-    .{ 0x8086, "Intel" },
-    .{ 0x8087, "Intel" },
-    .{ 0x8091, "StreamUnlimited" },
-    .{ 0x80a6, "Lextream" },
-    .{ 0x80d5, "Aluratek" },
-    .{ 0x80ee, "VirtualBox" },
-    .{ 0x81b3, "Innomedia" },
-    .{ 0x8201, "AirTies" },
-    .{ 0x83a, "Packard Bell" },
-    .{ 0x8564, "Transcend" },
-    .{ 0x8579, "Arkmicro" },
-    .{ 0x8613, "ITE" },
-    .{ 0x8644, "USB" },
-    .{ 0x8686, "Realtek" },
-    .{ 0x8710, "Cavium" },
-    .{ 0x8733, "Conexant" },
-    .{ 0x8761, "Texas Instruments" },
-    .{ 0x8777, "Alcor" },
-    .{ 0x8888, "Mats" },
-    .{ 0x8891, "GlobalMedia" },
-    .{ 0x8bb, "CML" },
-    .{ 0x8c3d, "Min input" },
-    .{ 0x8d1d, "Xiaomi" },
-    .{ 0x8e0e, "Hugolog" },
-    .{ 0x8ff, "Sunplus" },
-    .{ 0x90c8, "Longcheer" },
-    .{ 0x9115, "StreamUnlimited" },
-    .{ 0x93a4, "NCI" },
-    .{ 0x9500, "CYpress" },
-    .{ 0x9710, "Comoss" },
-    .{ 0x9710, "MosChip" },
-    .{ 0x99ea, "Chicony" },
-    .{ 0x9a05, "Delock" },
-    .{ 0x9c4e, "JESS" },
-    .{ 0xa11f, "VTech" },
-    .{ 0xa1d2, "Greatland" },
-    .{ 0xa4a4, "A4Tech" },
-    .{ 0xa535, "Seenda" },
-    .{ 0xa600, "SE" },
-    .{ 0xa699, "USB" },
-    .{ 0xa727, "ASIX" },
-    .{ 0xa72a, "GenesysLogic" },
-    .{ 0xa788, "PCyes" },
-    .{ 0xa7bb, "Sangha" },
-    .{ 0xac40, "QEMU" },
-    .{ 0xac71, "Deepoon" },
-    .{ 0xace1, "Astro" },
-    .{ 0xad15, "Alorium" },
-    .{ 0xad7d, "Alcorlink" },
-    .{ 0xae31, "INVENTEC" },
-    .{ 0xb05, "ASUS" },
-    .{ 0xb082, "Logitech" },
-    .{ 0xb1b3, "Daval" },
-    .{ 0xb512, "Samsung" },
-    .{ 0xb58d, "TeVii" },
-    .{ 0xb68e, "Tenx" },
-    .{ 0xb71b, "NVIDIA" },
-    .{ 0xb813, "Elecom" },
-    .{ 0xbb4, "Belkin" },
-    .{ 0xbda, "Realtek" },
-    .{ 0xbe00, "Marvell" },
-    .{ 0xbe43, "Qualcomm" },
-    .{ 0xc003, "NVidia" },
-    .{ 0xc00b, "DMI" },
-    .{ 0xc046, "Creative" },
-    .{ 0xc07d, "Logitech" },
-    .{ 0xc0a0, "Corsair" },
-    .{ 0xc18d, "Fosmon" },
-    .{ 0xc1a0, "VSON" },
-    .{ 0xc261, "Kingsis" },
-    .{ 0xc312, "DeLuxe" },
-    .{ 0xc45e, "Micro-Star" },
-    .{ 0xc6a, "Sunplus" },
-    .{ 0xcb26, "Juniper" },
-    .{ 0xcbd2, "QEMU" },
-    .{ 0xcd2c, "Huawei" },
-    .{ 0xcdab, "Loon" },
-    .{ 0xcf00, "Mstar" },
-    .{ 0xd023, "Panasonic" },
-    .{ 0xd047, "Logitech" },
-    .{ 0xd157, "Mats" },
-    .{ 0xd15d, "Alectronic" },
-    .{ 0xd1e1, "Alcorlink" },
-    .{ 0xd2a5, "Alcor" },
-    .{ 0xd2d4, "Parallax" },
-    .{ 0xd4d4, "N/A" },
-    .{ 0xd405, "Delock" },
-    .{ 0xd4b4, "LeapFrog" },
-    .{ 0xd526, "Logitech" },
-    .{ 0xd6a2, "Sirius" },
-    .{ 0xd80b, "Logitech" },
-    .{ 0xd8c0, "Logitech" },
-    .{ 0xdc29, "Viante" },
-    .{ 0xdc4e, "Elecom" },
-    .{ 0xdd04, "Asus" },
-    .{ 0xdddd, "QEMU" },
-    .{ 0xdeda, "Sirius" },
-    .{ 0xe056, "Sirius" },
-    .{ 0xe0d3, "ShanWan" },
-    .{ 0xe0e5, "Riotmicro" },
-    .{ 0xe0f9, "Holtek" },
-    .{ 0xe0fe, "Tenx" },
-    .{ 0xe105, "zte" },
-    .{ 0xe1ca, "Logitech" },
-    .{ 0xe3a2, "Mats" },
-    .{ 0xe369, "Genius" },
-    .{ 0xe3f9, "CanoSon" },
-    .{ 0xe46a, "HRC" },
-    .{ 0xe536, "iPro" },
-    .{ 0xe5b7, "Vizio" },
-    .{ 0xe8a8, "JESS" },
-    .{ 0xea61, "VIA" },
-    .{ 0xec21, "Granite" },
-    .{ 0xee6e, "Sirius" },
-    .{ 0xf11, "Datalogic" },
-    .{ 0xf182, "Elecom" },
-    .{ 0xf18a, "TopSeed" },
-    .{ 0xf1d0, "Spreadtrum" },
-    .{ 0xf1e0, "Foxconn" },
-    .{ 0xf1ec, "Genius" },
-    .{ 0xf2b8, "Aukey" },
-    .{ 0xf3c,  "Qualcomm" },
-    .{ 0xf3c0, "Raspberry Pi" },
-    .{ 0xf4a5, "Fosmon" },
-    .{ 0xf55e, "Raspberry Pi" },
-    .{ 0xf77f, "Qualcomm" },
-    .{ 0xfb4,  "Alcor" },
-    .{ 0xfcd2, "ActionStar" },
-    .{ 0xfd00, "Linux Foundation" },
-    .{ 0xfd45, "Hills" },
-    .{ 0xfde8, "Parallax" },
-    .{ 0xfe8,  "HuiJia" },
-    .{ 0xfef9, "Raspberry Pi" },
-    .{ 0xff78, "INFRAN" },
-    .{ 0xff87, "Cherry" },
-});
-
-pub fn getVendorName(vendor_id: u16) ?[]const u8 {
-    return VendorNames.get(vendor_id);
 }
