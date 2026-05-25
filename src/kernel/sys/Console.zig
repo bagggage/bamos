@@ -85,10 +85,8 @@ fn fileWrite(file: *vfs.File, offset: usize, buffer: []const u8) vfs.Error!usize
         return tty.dev_file.ops.fops.write(file, offset, buffer);
     }
 
-    logger.capture();
-    defer logger.release();
-
-    return logger.log_writer.write(buffer) catch return error.IoFailed;
+    logger.flushBuffer(buffer);
+    return buffer.len;
 }
 
 fn fileRead(file: *const vfs.File, offset: usize, buffer: []u8) vfs.Error!usize {
