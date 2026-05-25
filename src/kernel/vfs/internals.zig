@@ -131,7 +131,7 @@ pub const file = opaque {
 
                 const copy_on_write = (cause == .write and !map_unit.flags.shared and map_unit.flags.map.write);
                 if (copy_on_write) {
-                    log.debug("copy on write happened: {f}", .{map_unit.file.?.dentry.path()});
+                    log.debug("copy on write happened: {f}: 0x{x}", .{map_unit.file.?.dentry.path(), map_unit.base() + offset});
                     const phys = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
                     const virt = vm.getVirtLma(phys);
                     errdefer vm.PageAllocator.free(phys, 0);

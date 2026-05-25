@@ -44,20 +44,23 @@ pub fn TableNode(width: comptime_int) type {
         const vec_len = (std.simd.suggestVectorLength(Handle) orelse 0) / @bitSizeOf(Handle);
         const alignment = if (vec_len > 0) (vec_len * @sizeOf(usize)) else @alignOf(usize);
 
-        var oma: vm.SafeOma(Self) = .init(8);
+        pub const alloc_config: vm.auto.Config = .{
+            .allocator = .oma,
+            .capacity = 8
+        };
 
         entries: [width]Handle = .{Handle.nul} ** width,
         count: atomic.Value(usize) align(alignment) = .init(0),
         //lock: utils.RwLock = .{},
 
         pub fn new() !*Self {
-            const table = oma.alloc() orelse return error.NoMemory;
+            const table = vm.auto.alloc(Self) orelse return error.NoMemory;
             table.* = .{};
             return table;
         }
 
         pub inline fn delete(self: *Self) void {
-            oma.free(self);
+            vm.auto.delete(Self, self);
         }
 
         pub inline fn hasEntries(self: *const Self) bool {

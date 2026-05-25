@@ -98,9 +98,6 @@ const tty_config: std.io.tty.Config = .escape_codes;
 
 /// Spinlock to ensure that logging is thread-safe.
 var lock: lib.sync.Spinlock = .init(.unlocked);
-var lock_owner: u16 = undefined;
-var double_lock = false;
-
 var log_buffer: [arch.vm.page_size]u8 = undefined;
 
 pub fn switchFromEarly() void {
@@ -111,29 +108,18 @@ pub fn switchToUserspace() void {
     KernelWriter.vtable.drain = &KernelWriter.drainSerial;
 }
 
-// FIXME
-pub fn capture() void {
-    const cpu_idx = smp.getIdx();
-
-    if (lock.isLocked() and lock_owner == cpu_idx) {
-        double_lock = true;
-        return;
-    }
-
-    if (!smp.getLocalData().isInInterrupt()) {
+pub inline fn capture() void {
+    if (!smp.isEarlyBoot() and !smp.getLocalData().isInInterrupt()) {
+        @branchHint(.likely);
         lock.lock();
-        lock_owner = cpu_idx;
     }
 }
 
-// FIXME
-pub fn release() void {
-    if (double_lock) {
-        double_lock = false;
-        return;
+pub inline fn release() void {
+    if (!smp.isEarlyBoot() and !smp.getLocalData().isInInterrupt()) {
+        @branchHint(.likely);
+        lock.unlock();
     }
-
-    if (!smp.getLocalData().isInInterrupt()) lock.unlock();
 }
 
 pub inline fn flush() !void {
@@ -147,19 +133,8 @@ pub fn defaultLog(
     comptime format: []const u8,
     args: anytype
 ) void {
-    const local = smp.getLocalData();
-    if (lock.isLocked() and local.idx == lock_owner) {
-        @branchHint(.cold);
-
-        tty_config.setColor(&log_writer, .bright_red) catch {};
-        log_writer.print("<LOGGER DEADLOCK>" ++ new_line, .{}) catch {};
-        return;
-    }
-
-    // FIXME
-    lock.lock();
-    lock_owner = local.idx;
-    defer lock.unlock();
+    capture();
+    defer release();
 
     logFmtPrint(
         level,
