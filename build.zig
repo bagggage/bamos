@@ -41,12 +41,11 @@ pub fn build(b: *std.Build) void {
 
 fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallArtifact {
     const name = b.option([]const u8, "exe-name", "Name of the kernel executable");
+    const enable_avx = b.option(bool, "kernel-avx", "Build kernel with AVX instructions (default: false)") orelse false;
     const optimize = b.standardOptimizeOption(.{});
 
     var cpu_feat: std.Target.Cpu.Feature.Set = .empty;
-    if (arch == .x86_64) {
-        cpu_feat.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
-    }
+    if (enable_avx and arch == .x86_64) cpu_feat.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
 
     const target = b.resolveTargetQuery(.{
         .os_tag = .freestanding,
@@ -83,17 +82,19 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     const zon = @import("build.zig.zon");
     const kernel_opts = b.addOptions();
 
-    const timestamp = makeTimestamp(b, optimize);
-    defer b.allocator.free(timestamp);
-
-    const build_string = b.fmt("{t}: Zig {f} # {s}", .{
-        optimize, builtin.zig_version, timestamp
-    });
     const kernel_ver = std.SemanticVersion.parse(zon.version) catch blk: {
         const parse_fail = b.addFail("Failed to parse version from build.zig.zon");
         kernel_obj.step.dependOn(&parse_fail.step);
         break :blk std.SemanticVersion{.major = 0, .minor = 0, .patch = 0};
     };
+
+    const is_release = kernel_ver.build == null and (optimize != .Debug and optimize != .ReleaseSafe);
+    const timestamp = makeTimestamp(b, is_release);
+    defer b.allocator.free(timestamp);
+
+    const build_string = b.fmt("{t}: Zig {f} # {s}", .{
+        optimize, builtin.zig_version, timestamp
+    });
 
     kernel_opts.addOption([]const u8, "os_name", "BamOS");
     kernel_opts.addOption(std.SemanticVersion, "version", kernel_ver);
@@ -235,7 +236,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
         qemu_run.addFileArg(b.path("third-party/uefi/OVMF-efi.fd"));
     }
 
-    if (enable_gdb) qemu_run.addArg("-s");
+    if (enable_gdb) qemu_run.addArgs(&.{"-s", "-S"});
     if (enable_trace) qemu_run.addArgs(&.{"-d", "int"});
 
     if (enable_serial and !no_gui) {
@@ -260,7 +261,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     // Add additional drives as NVMe devices
     for (drives, 0..) |drive, i| {
         qemu_run.addArgs(&.{
-            "-drive", b.fmt("file={s},if=none,id=drv{}", .{drive, i}),
+            "-drive", b.fmt("file={s},format=raw,if=none,id=drv{}", .{drive, i}),
             "-device", b.fmt("nvme,serial=QEMU-DRIVE-{},drive=drv{}", .{i, i})
         });
     }
@@ -311,7 +312,7 @@ fn makeTools(b: *std.Build) void {
     });
 }
 
-fn makeTimestamp(b: *std.Build, optimize: std.builtin.OptimizeMode) []const u8 {
+fn makeTimestamp(b: *std.Build, is_release: bool) []const u8 {
     const timestamp: std.time.epoch.EpochSeconds = .{ .secs = @intCast(std.time.timestamp()) };
     const day_secs = timestamp.getDaySeconds();
     const day_year = timestamp.getEpochDay().calculateYearDay();
@@ -323,10 +324,7 @@ fn makeTimestamp(b: *std.Build, optimize: std.builtin.OptimizeMode) []const u8 {
     );
     defer b.allocator.free(time_string);
 
-    const timestamp_postfix = switch (optimize) {
-        .Debug, .ReleaseSafe => "--:--:--",
-        else => time_string
-    };
+    const timestamp_postfix = if (is_release) time_string else "--:--:--";
 
     return b.fmt(
         "{} {t} {:0>4} {s}",

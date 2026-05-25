@@ -153,7 +153,8 @@ pub fn init() void {
     gdt.appendAssumeCapacity(kernel_ss);
     gdt.appendAssumeCapacity(user_ss);
     gdt.appendAssumeCapacity(user_cs);
-    gdt.appendSliceAssumeCapacity(src_gdt[gdt.items.len..]);
+
+    if (src_gdt_len > gdt.items.len) gdt.appendSliceAssumeCapacity(src_gdt[gdt.items.len..]);
 
     tss_base_idx = gdt.items.len;
 

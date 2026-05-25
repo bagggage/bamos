@@ -10,6 +10,7 @@ const std = @import("std");
 const boot = @import("../../boot.zig");
 const gdt = @import("gdt.zig");
 const lapic = @import("intr/lapic.zig");
+const lib = @import("../../lib.zig");
 const smp = @import("../../smp.zig");
 
 const Cpu = struct {
@@ -79,8 +80,8 @@ pub inline fn startImpl() void {
 /// Ensure that only one CPU is performing the initialization at a time.
 /// If the CPU is the initial one, it will proceed to initialization.
 /// If not, it waits until the initialization lock is available.
-pub fn preinit() void {
-    initCpu();
+pub inline fn preinit() void {
+    initBootStack();
     collectCpuInfo();
 
     vm.preinit();
@@ -207,6 +208,33 @@ pub inline fn setupStack(stack: usize, ret: *const fn () noreturn) noreturn {
     );
 }
 
+inline fn initBootStack() void {
+    var stack = boot.allocStack();
+
+    const rsp = regs.getStack();
+    const top = lib.misc.alignUp(usize, rsp, boot.getInitStackSize());
+    const size = top -% rsp;
+    stack -= size;
+
+    for (0..size / @sizeOf(usize)) |i| {
+        const dst: [*]usize = @ptrFromInt(stack);
+        const src: [*]usize = @ptrFromInt(rsp);
+
+        dst[i] = src[i];
+    }
+
+    var rbp = asm volatile ("mov %rbp, %[res]" : [res] "=r" (-> usize));
+    rbp = stack +% (rbp -% rsp);
+
+    asm volatile (
+        \\ mov %[stack], %rsp
+        \\ mov %[rbp], %rbp
+        :
+        : [stack] "r" (stack), [rbp] "r" (rbp)
+        : .{ .memory = true }
+    );
+}
+
 fn collectCpuInfo() void {
     cpu.vendor = getCpuVendor();
 
@@ -240,11 +268,11 @@ fn getCpuModelName(out: []u8) void {
         const result = cpuid(0x8000_0002 + @as(u32, @truncate(i)), undefined, undefined, undefined);
 
         const offset = i * 4 * 4;
-        const buffer: []u8 = out[offset..];
+        const buffer: *[4]u32 = @alignCast(@ptrCast(out[offset..].ptr));
 
-        @memcpy(buffer[0..4], std.mem.asBytes(&result.a));
-        @memcpy(buffer[4..8], std.mem.asBytes(&result.b));
-        @memcpy(buffer[8..12], std.mem.asBytes(&result.c));
-        @memcpy(buffer[12..16], std.mem.asBytes(&result.d));
+        buffer[0] = result.a;
+        buffer[1] = result.b;
+        buffer[2] = result.c;
+        buffer[3] = result.d;
     }
 }

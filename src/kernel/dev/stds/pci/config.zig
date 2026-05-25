@@ -12,7 +12,7 @@ const log = std.log.scoped(.@"pci.config");
 const vm = @import("../../../vm.zig");
 
 var cfg_io: IoType = undefined;
-var mcfg: ?*const Mcfg = null;
+var mcfg: ?*align(1) const Mcfg = null;
 
 var max_seg: usize = 1;
 
@@ -115,8 +115,8 @@ const Mcfg = extern struct {
         std.debug.assert(@sizeOf(Mcfg) == 44);
     }
 
-    pub inline fn entries(self: *const Mcfg) []const Entry {
-        const ptr: [*]const Entry = @ptrFromInt(@intFromPtr(self) + @sizeOf(Mcfg));
+    pub inline fn entries(self: *align(1) const Mcfg) []align(1) const Entry {
+        const ptr: [*]align(1) const Entry = @ptrFromInt(@intFromPtr(self) + @sizeOf(Mcfg));
         const len = (self.header.length - @sizeOf(acpi.SdtHeader)) / @sizeOf(Entry);
 
         return ptr[0..len];
@@ -679,7 +679,7 @@ pub inline fn getMaxSeg() usize {
     return max_seg;
 }
 
-fn initMmio(mcfg_hdr: *const acpi.SdtHeader) !void {
+fn initMmio(mcfg_hdr: *align(1) const acpi.SdtHeader) !void {
     mcfg = @ptrCast(mcfg_hdr);
 
     const entries = mcfg.?.entries();

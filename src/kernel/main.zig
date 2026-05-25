@@ -31,9 +31,13 @@ pub const std_options = std.Options {
         .ReleaseFast => .info
     },
     .log_scope_levels = &.{
-        //.{ .level = .warn, .scope = .@"sys.call.trace" },
+        .{
+            .level = if (lib.is_debug) .debug else .warn,
+            .scope = .@"sys.call.trace"
+        },
         .{ .level = .info, .scope = .pci },
         .{ .level = .info, .scope = .@"intr.except" },
+        //.{ .level = .warn, .scope = .@"sys.MapUnit" },
     }
 };
 
@@ -47,19 +51,10 @@ pub const std_options = std.Options {
 pub export fn main() noreturn {
     defer @panic("reached end of the main");
 
-    smp.preinit();
+    if (!smp.bootCpu()) startNonBootCpu();
+
     arch.preinit();
-
-    init(smp);
-
-    smp.initCpu(&main2);
-}
-
-/// `main` second half.
-/// 
-/// Main function is divided into two, because of stack switch.
-fn main2() noreturn {
-    defer @panic("reached end of the main2");
+    smp.init();
 
     log.info("{s} {s}", .{opts.os_name, opts.build});
     {
@@ -115,6 +110,13 @@ fn kernelStartupTask() noreturn {
     unreachable;
 }
 
+inline fn startNonBootCpu() void {
+    sys.time.initPerCpu();
+
+    log.warn("CPU {} initialized", .{smp.getIdx()});
+    sched.getCurrent().start();
+}
+
 fn debugTask() noreturn {
     const Static = opaque { var cntr: std.atomic.Value(u32) = .init(0); };
     const sec = Static.cntr.fetchAdd(1, .release) + 1;
@@ -129,13 +131,6 @@ fn debugTask() noreturn {
         sched.getCurrent().sleepFor(std.time.ns_per_s * sec);
     }
 
-    unreachable;
-}
-
-/// Specific task to wait until kernel initialization is done
-/// and run userspace after.
-fn awaitTask() noreturn {
-    sched.pause();
     unreachable;
 }
 

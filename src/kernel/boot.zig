@@ -21,6 +21,18 @@ const vm = @import("vm.zig");
 
 const Framebuffer = @import("video/Framebuffer.zig");
 
+const BootProtocol = enum(u8) {
+    minimal = c.PROTOCOL_MINIMAL,
+    static = c.PROTOCOL_STATIC,
+    dynamic = c.PROTOCOL_DYNAMIC,
+    bigendian = c.PROTOCOL_BIGENDIAN,
+    _
+};
+
+/// Size of the initial stack in memory pages.
+const boot_stack_pages = if (builtin.mode == .Debug) 8 else 2;
+const boot_stack: [boot_stack_pages * vm.page_size]u8 align(vm.page_size) = undefined;
+
 // Kernel linking symbols.
 // Defined at `config/linker.ld`
 extern "C" var bootboot: c.BOOTBOOT;
@@ -115,6 +127,25 @@ fn makeColorFmt(bb_fmt: u8) Framebuffer.ColorFormat {
         c.FB_RGBA => .RGBA,
         else => unreachable,
     };
+}
+
+pub inline fn init() !void {
+    if (std.mem.bytesAsValue(u32, &bootboot.magic).* != 0x54_4f_4f_42) {
+        @branchHint(.cold);
+
+        log.err("Bad BOOTBOOT magic: {s}", .{&bootboot.magic});
+        return error.Uninitialized;
+    }
+
+    if (bootboot.protocol < c.PROTOCOL_STATIC) {
+        @branchHint(.cold);
+
+        const protocol: BootProtocol = @enumFromInt(bootboot.protocol);
+        const name = std.enums.tagName(BootProtocol, protocol) orelse "unknown";
+
+        log.err("Bad BOOTBOOT protocol: {} ({s})", .{bootboot.protocol, name});
+        return error.Uninitialized;
+    }
 }
 
 /// Populates the framebuffer structure with information provided by the bootloader.
@@ -216,6 +247,10 @@ pub inline fn getEnvironment() [*:0]const u8 {
     return @ptrCast(&environment);
 }
 
+pub inline fn getInitStackSize() usize {
+    return @intFromPtr(&initstack);
+}
+
 fn ArchDataType() type {
     return switch (builtin.cpu.arch) {
         .aarch64 => @TypeOf(&bootboot.arch.aarch64),
@@ -256,12 +291,19 @@ pub fn alloc(pages: u32) ?usize {
     return null;
 }
 
+/// Allocates initial stack aligned to page size, used to boot kernel.
+/// Returns top address of the stack.
+pub inline fn allocStack() usize {
+    return @intFromPtr(&boot_stack) + (boot_stack_pages * vm.page_size);
+}
+
 /// Converts the memory map pointers to DMA-capable virtual addresses.
 pub inline fn switchToLma() void {
     mem_map.entries = vm.getVirtLma(mem_map.entries);
 }
 
 var _debug_offset: u32 = 0;
+var _debug_color: u32 = 0x00FFFFFF;
 
 /// A simple debug function that fills the framebuffer with a white line.
 pub fn debug() void {
@@ -271,7 +313,8 @@ pub fn debug() void {
     const end = _debug_offset;
     _debug_offset += bootboot.fb_scanline;
 
-    @memset(dest[start..end], 0xFFFFFFFF);
+    @memset(dest[start..end], _debug_color);
+    _debug_color = (_debug_color >> 8) | (_debug_color << 24);
 }
 
 /// Calculates the size of the memory map by determining the number of entries.
@@ -313,21 +356,32 @@ fn initMemMap() void {
     var j: u32 = 0;
     var i: u32 = 0;
 
+    // Some firmware may return entries not aligned to page size
+    const min_align = comptime @min(vm.page_size, 1024);
     while (i < mem_map.len) : (i += 1) {
         const boot_ent = &boot_ents[i];
         const ent = &mem_map.entries[j];
 
-        if (c.MMapEnt_Size(boot_ent) == 0) continue;
+        const size = c.MMapEnt_Size(boot_ent);
+        const ptr = c.MMapEnt_Ptr(boot_ent);
 
-        if (((c.MMapEnt_Size(boot_ent) % vm.page_size) > 0) or
-            ((c.MMapEnt_Ptr(boot_ent) % vm.page_size) > 0))
-        {
+        // Don't trust firmware, check entries
+        if ((ptr % min_align) != 0 or (size % 0x400) != 0) {
             invalid_ents += 1;
             continue;
         }
 
-        const base = c.MMapEnt_Ptr(boot_ent) / vm.page_size;
-        var pages = c.MMapEnt_Size(boot_ent) / vm.page_size;
+        var base = vm.bytesToPagesExact(ptr);
+        var pages = vm.bytesToPagesExact(size);
+
+        if (pages == 0) continue;
+        if (!std.mem.isAligned(ptr, vm.page_size)) {
+            base = vm.bytesToPagesExact(lib.misc.alignUp(usize, ptr, vm.page_size));
+            pages = vm.bytesToPagesExact(size -| (@as(usize, base) * vm.page_size - ptr));
+
+            if (pages == 0) continue;
+        }
+
         if (base + pages >= vm.max_phys_pages) {
             @branchHint(.cold);
             if (base >= vm.max_phys_pages) {
@@ -341,8 +395,8 @@ fn initMemMap() void {
             pages = vm.max_phys_pages - base;
         }
 
-        ent.base = @truncate(base);
-        ent.pages = @truncate(pages);
+        ent.base = base;
+        ent.pages = pages;
         ent.type = switch (c.MMapEnt_Type(boot_ent)) {
             c.MMAP_ACPI, c.MMAP_MMIO => .dev,
             c.MMAP_USED => .used,
