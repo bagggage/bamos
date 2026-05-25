@@ -75,19 +75,17 @@ pub fn init() vm.Error!void {
     const mem_pool = boot.alloc(bitmap_pages) orelse return vm.Error.NoMemory;
     const virt_pool = vm.getVirtLma(mem_pool);
 
-    log.warn("mem pool size: {} bytes ~ {} KiB", .{bitmap_size, @as(usize, bitmap_pages) * (vm.page_size / lib.kb_size)});
+    log.info("mem pool size: {} bytes ({} KiB)", .{bitmap_size, @as(usize, bitmap_pages) * (vm.page_size / lib.kb_size)});
     initAreas(virt_pool, bitmap_size, max_pages);
 
     allocated_pages += bitmap_pages;
     allocated_pages += @intCast((@intFromPtr(vm.kernel_end) - @intFromPtr(vm.kernel_start)) / vm.page_size);
     total_pages += allocated_pages;
 
-    {
-        const total_kb = total_pages * vm.page_size / lib.kb_size;
-        log.warn("total mem: {} KiB ({} MiB)", .{ total_kb, total_kb / lib.kb_size });
-    }
-
     is_initialized = true;
+
+    const total_size = total_pages * vm.page_size;
+    log.info("total memory: {} KiB ({} MiB)", .{total_size / lib.kb_size, total_size / lib.mb_size});
 }
 
 /// Allocates a linear block of physical memory of the specified rank (size).
