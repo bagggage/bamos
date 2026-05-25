@@ -261,7 +261,7 @@ pub const Id = struct {
     pub fn deref(self: *Id) void {
         if (!self.users.put()) return;
 
-        log.warn("delete id: {}", .{self.value});
+        log.debug("delete id: {}", .{self.value});
         std.debug.assert(
             self.process == null and
             self.g_node.next == null and
