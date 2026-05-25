@@ -200,6 +200,34 @@ pub const Scancode = enum(u16) {
         const int = self.toInt();
         return (int >= Scancode.kp_7.toInt() and int <= Scancode.kp_dot.toInt());
     }
+
+    /// Converts scancode value to legacy PS/2 set 1 code.
+    pub fn toLegacy(self: Scancode) u16 {
+        const code = @intFromEnum(self);
+        if (code < @intFromEnum(Scancode.kp_enter)) return @truncate(code);
+
+        return switch (self) {
+            .right_ctrl => 0xe01d,
+            .right_alt  => 0xe038,
+            .insert => 0xe052,
+            .home => 0xe047,
+            .page_up => 0xe049,
+            .delete => 0xe053,
+            .end => 0xe04f,
+            .page_down => 0xe051,
+            .up => 0xe048,
+            .left => 0xe04b,
+            .right => 0xe04d,
+            .down => 0xe050,
+            .kp_slash => 0xe035,
+            .kp_enter => 0xe01c,
+            .mute => 0xe020,
+            .volume_up => 0xe030,
+            .volume_down => 0xe02e,
+            .power => 0xe05e,
+            else => 0x0
+        };
+    }
 };
 
 pub const Action = enum(u8) {

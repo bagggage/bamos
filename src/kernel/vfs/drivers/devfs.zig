@@ -147,6 +147,12 @@ var major_lock: lib.sync.Spinlock = .{};
 
 var inode_idx: u32 = init_inode_idx;
 
+const AutoInit = .{
+    @import("../../dev/drivers/misc/null.zig"),
+    @import("../../dev/drivers/misc/zero.zig"),
+    @import("../../dev/drivers/misc/full.zig"),
+};
+
 pub fn init() !void {
     const phys_pool = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
     const vm_pool: [*]u8 = @ptrFromInt(vm.getVirtLma(phys_pool));
@@ -154,10 +160,18 @@ pub fn init() !void {
 
     major_bitmap = .init(vm_pool[0..vm.page_size], false);
     root = try tmpfs.createDirectory(
-        "/", undefined, .{ .perm = @intFromEnum(vfs.Permissions.rw) }
+        "/",
+        .{ .tag = .none, .ptr = undefined },
+        .{ .perm = @intFromEnum(vfs.Permissions.rw) },
     );
 
     if (vfs.registerFs(&fs) == false) return error.RegisterFailed;
+
+    inline for (AutoInit) |Driver| {
+        Driver.init() catch |err| log.err("failed to init '{s}': {t}", .{
+            @typeName(Driver), err
+        });
+    }
 }
 
 pub fn mount() vfs.Error!vfs.Context.Virt {
@@ -195,6 +209,10 @@ pub inline fn getDevData(dentry: *const vfs.Dentry) lib.AnyData {
     return dentry.inode.fs_data.asPtr(DevFile).?.data;
 }
 
+pub inline fn getFs() *vfs.FileSystem {
+    return &fs;
+}
+
 pub inline fn getRoot() *vfs.Dentry {
     return root;
 }
@@ -205,7 +223,9 @@ fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
     );
     errdefer vfs.Inode.free(inode);
 
-    const dentry = try tmpfs.createDentry(devf.name.str(), inode, root.getContext());
+    const dentry = try tmpfs.createDentry(devf.name.str(), inode, .{
+        .tag = .root, .ptr = .{ .root = root }
+    });
     dentry.ops = &fs.dentry_ops;
 
     inode.fs_data.setPtr(devf);
