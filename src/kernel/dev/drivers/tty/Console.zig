@@ -4,12 +4,12 @@
 
 const std = @import("std");
 
-const dev = @import("../dev.zig");
+const dev = @import("../../../dev.zig");
 const devfs = vfs.devfs;
 const log = std.log.scoped(.Console);
-const logger = @import("../logger.zig");
+const logger = @import("../../../logger.zig");
 const Teletype = dev.classes.Teletype;
-const vfs = @import("../vfs.zig");
+const vfs = @import("../../../vfs.zig");
 const VirtualTerminal = @import("VirtualTerminal.zig");
 
 const Self = @This();

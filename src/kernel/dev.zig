@@ -20,6 +20,11 @@ pub const intr = @import("dev/intr.zig");
 pub const pci = @import("dev/stds/pci.zig");
 pub const usb = @import("dev/stds/usb.zig");
 
+// TTY Special device drivers
+pub const Console = @import("dev/drivers/tty/Console.zig");
+pub const tty = @import("dev/drivers/tty/tty.zig");
+pub const VirtualTerminal = @import("dev/drivers/tty/VirtualTerminal.zig");
+
 pub const Name = extern struct {
     pub const Error = error {
         NoMemory,
@@ -124,7 +129,6 @@ pub const nameHash = std.hash.Fnv1a_32.hash;
 var buses: Bus.List = .{};
 var buses_lock: lib.sync.Spinlock = .init(.unlocked);
 
-/// @noexport
 const AutoInit = struct {
     const modules = .{
         @import("dev/drivers/uart/8250.zig"),
@@ -132,7 +136,10 @@ const AutoInit = struct {
         @import("dev/drivers/video/linear-fb.zig"),
         pci,
         usb,
-        @import("dev/drivers/blk/nvme.zig")
+        @import("dev/drivers/blk/nvme.zig"),
+        tty,
+        VirtualTerminal,
+        Console,
     };
 };
 
