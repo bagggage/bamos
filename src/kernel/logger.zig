@@ -232,7 +232,7 @@ pub fn panicLog(msg: []const u8) void {
 pub fn flushBuffer(str: []const u8) void {
     serial.write(str);
 
-    if (!sys.VirtualTerminal.isEnabled() and
+    if (!dev.VirtualTerminal.isEnabled() and
         video.terminal.isInitialized()
     ) video.terminal.write(str);
 }

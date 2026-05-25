@@ -5,7 +5,7 @@
 const std = @import("std");
 
 const devfs = @import("../../../vfs.zig").devfs;
-const log = std.log.scoped(.@"dev/tty");
+const log = std.log.scoped(.@"/dev/tty");
 const lib = @import("../../../lib.zig");
 const sched = @import("../../../sched.zig");
 const sys = @import("../../../sys.zig");

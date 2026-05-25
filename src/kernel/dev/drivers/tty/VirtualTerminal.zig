@@ -4,19 +4,19 @@
 
 const std = @import("std");
 
-const dev = @import("../dev.zig");
+const dev = @import("../../../dev.zig");
 const devfs = vfs.devfs;
 const Input = dev.classes.Input;
-const lib = @import("../lib.zig");
+const lib = @import("../../../lib.zig");
 const log = std.log.scoped(.VirtualTerminal);
-const logger = @import("../logger.zig");
-const sched = @import("../sched.zig");
-const sys = @import("../sys.zig");
+const logger = @import("../../../logger.zig");
+const sched = @import("../../../sched.zig");
+const sys = @import("../../../sys.zig");
 const Teletype = dev.classes.Teletype;
-const uart = @import("../dev/drivers/uart/8250.zig");
-const vfs = @import("../vfs.zig");
-const video = @import("../video.zig");
-const vm = @import("../vm.zig");
+const uart = @import("../../../dev/drivers/uart/8250.zig");
+const vfs = @import("../../../vfs.zig");
+const video = @import("../../../video.zig");
+const vm = @import("../../../vm.zig");
 
 const Self = @This();
 

@@ -25,7 +25,6 @@ pub const WinSize = extern struct {
     cols: u16
 };
 
-pub const dev_tty = @import("Teletype/dev_tty.zig");
 pub const LineDiscipline = @import("Teletype/LineDiscipline.zig");
 
 pub const Error = vm.Error || error {
