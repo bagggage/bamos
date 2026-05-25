@@ -35,6 +35,7 @@ pub const std_options = std.Options {
             .level = if (lib.is_debug) .debug else .warn,
             .scope = .@"sys.call.trace"
         },
+        .{ .level = .info, .scope = .@"sys.call" },
         .{ .level = .info, .scope = .pci },
         .{ .level = .info, .scope = .@"intr.except" },
         .{ .level = .info, .scope = .uacpi },
@@ -58,20 +59,20 @@ pub export fn main() noreturn {
     smp.init();
 
     log.info("{s} {s}", .{opts.os_name, opts.build});
-    {
-        const cpu = arch.getCpuInfo();
-        log.info("CPUs detected: {}, vendor: {s}, model: {s}", .{
-            smp.getNum(),
-            @tagName(cpu.vendor),
-            cpu.getName(),
-        });
-    }
+
+    const cpu = arch.getCpuInfo();
+    log.info("CPU: {} cores, vendor: {s}, model: {s}", .{
+        smp.getNum(),
+        @tagName(cpu.vendor),
+        cpu.getName(),
+    });
 
     init(vm);
-    log.warn("Used memory: {} KiB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / lib.kb_size});
+    init(logger);
+
+    log.info("used memory: {} KiB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / lib.kb_size});
 
     init(config);
-
     preinit(dev);
 
     init(sys.time);
@@ -87,20 +88,9 @@ pub export fn main() noreturn {
 /// This task is only for boot cpu.
 fn kernelStartupTask() noreturn {
     init(video.terminal);
-    logger.switchFromEarly();
-
     smp.initAll();
 
-    //const debug_task = sched.Task.create(
-    //    .{ .kernel = .{ .name = "debug_task" } },
-    //    @intFromPtr(&debugTask)
-    //) catch unreachable;
-    //sched.enqueue(debug_task);
-    //const other_task =  sched.Task.create(
-    //    .{ .kernel = .{ .name = "other_task" } },
-    //    @intFromPtr(&debugTask)
-    //) catch unreachable;
-    //sched.enqueue(other_task);
+    logger.initWorker() catch @panic("failed to start logger worker");
 
     init(vfs);
     init(dev);
@@ -116,25 +106,8 @@ fn kernelStartupTask() noreturn {
 inline fn startNonBootCpu() void {
     sys.time.initPerCpu();
 
-    log.warn("CPU {} initialized", .{smp.getIdx()});
+    log.info("CPU {} initialized", .{smp.getIdx()});
     sched.getCurrent().start();
-}
-
-fn debugTask() noreturn {
-    const Static = opaque { var cntr: std.atomic.Value(u32) = .init(0); };
-    const sec = Static.cntr.fetchAdd(1, .release) + 1;
-    const task = sched.getCurrentTask();
-    while (true) {
-        log.info("{s}: {} - {}", .{
-            task.spec.kernel.name,
-            task.stats.time_slice,
-            @as(u32, 32) - task.stats.getPriority(),
-        });
-
-        sched.getCurrent().sleepFor(std.time.ns_per_s * sec);
-    }
-
-    unreachable;
 }
 
 fn preinit(comptime Module: type) void {

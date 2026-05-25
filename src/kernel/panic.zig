@@ -70,6 +70,10 @@ const tty_config: std.Io.tty.Config = .escape_codes;
 const panic_color: std.Io.tty.Color = .bright_red;
 const trace_color: std.Io.tty.Color = .bright_yellow;
 
+var text_buffer: [vm.page_size]u8 = undefined;
+var text_writer: std.Io.Writer = .fixed(&text_buffer);
+var lock: lib.sync.Spinlock = .{};
+
 /// External function to retrieve the debug symbols from the kernel.
 /// This function is generating by `debug-maker`, it makes possible to
 /// include generated debug information as `@embedFile` into the kernel executable.
@@ -81,17 +85,16 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     @branchHint(.cold);
     defer lib.sync.halt();
 
-    logger.capture();
-    defer logger.release();
-    defer logger.flush() catch {};
+    lock.lockAtomic();
+    defer lock.unlockAtomic();
 
-    {
-        tty_config.setColor(&logger.log_writer, panic_color) catch return;
-        logger.log_writer.print("[KERNEL PANIC]: {s}\n\r", .{msg}) catch return;
+    tty_config.setColor(&text_writer, panic_color) catch {};
+    text_writer.print("[KERNEL PANIC]: {s}\n\r", .{msg}) catch {};
 
-        var it: std.debug.StackIterator = .init(@returnAddress(), @frameAddress());
-        if (it.next() != null) trace(&it, &logger.log_writer);
-    }
+    var it: std.debug.StackIterator = .init(@returnAddress(), @frameAddress());
+    if (it.next() != null) trace(&it, &text_writer);
+
+    flush();
 }
 
 /// Handles exception by printing message.
@@ -103,16 +106,17 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
 /// - `fmt`: additional message format string.
 /// - `args`: argumenets used within formating.
 pub fn exception(ip: usize, sp: usize, fp: usize, comptime fmt: []const u8, args: anytype) void {
-    logger.capture();
-    defer logger.release();
-    defer logger.flush() catch {};
+    lock.lockAtomic();
+    defer lock.unlockAtomic();
 
-    tty_config.setColor(&logger.log_writer, panic_color) catch return;
-    logger.log_writer.print("<<EXCEPTION>> CPU: {}" ++ logger.new_line, .{smp.getIdx()}) catch return;
+    defer flush();
 
-    tty_config.setColor(&logger.log_writer, trace_color) catch return;
-    logger.log_writer.print(fmt ++ logger.new_line, args) catch return;
-    logger.log_writer.print(
+    tty_config.setColor(&text_writer, panic_color) catch return;
+    text_writer.print("<<EXCEPTION>> CPU: {} ", .{smp.getIdx()}) catch return;
+
+    tty_config.setColor(&text_writer, trace_color) catch return;
+    text_writer.print(fmt ++ logger.new_line, args) catch return;
+    text_writer.print(
         logger.new_line ++
         \\code: {f}
         \\stack: {f}
@@ -121,9 +125,9 @@ pub fn exception(ip: usize, sp: usize, fp: usize, comptime fmt: []const u8, args
     ) catch return;
 
     var stack_it = std.debug.StackIterator.init(null, fp);
-    trace(&stack_it, &logger.log_writer);
+    trace(&stack_it, &text_writer);
 
-    tty_config.setColor(&logger.log_writer, .reset) catch return;
+    tty_config.setColor(&text_writer, .reset) catch return;
 }
 
 /// Traces the stack frames and prints the corresponding function names with offsets.
@@ -152,6 +156,13 @@ pub fn trace(it: *std.debug.StackIterator, writer: *std.io.Writer) void {
             .{ i, ret_addr, sym_name, addr_offset }
         ) catch return;
     }
+}
+
+fn flush() void {
+    const buffered = text_writer.buffered();
+    logger.panicLog(buffered);
+
+    text_writer.end = 0;
 }
 
 /// Resolves a memory address to a symbol using the kernel's debugging information.
