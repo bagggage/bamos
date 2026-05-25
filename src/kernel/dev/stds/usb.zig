@@ -11,7 +11,7 @@ const dev = @import("../../dev.zig");
 const lib = @import("../../lib.zig");
 const log = std.log.scoped(.usb);
 const vm = @import("../../vm.zig");
-const xhci = @import("../drivers/usb/xhci_user.zig");
+const xhci = @import("../drivers/usb/xhci.zig");
 
 /// USB Device identification structure for driver matching.
 pub const Id = struct {
