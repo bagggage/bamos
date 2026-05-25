@@ -91,8 +91,11 @@ pub fn preinit(self: *Self) void {
 }
 
 pub fn start(self: *Self) noreturn {
-    std.debug.assert(self.current_task == null and self.isOnCurrentCpu());
-    std.debug.assert(intr.isEnabledForCpu() and self.preemption == 1);
+    lib.debug.assert(
+        (self.current_task == null and self.isOnCurrentCpu()) and
+        (intr.isEnabledForCpu() and self.preemption == 1),
+        @src(),
+    );
 
     const stack = Task.createKernelStack() catch |err| {
         log.err("Failed to create sleep context: {t}", .{err});
@@ -112,9 +115,11 @@ pub fn start(self: *Self) noreturn {
 /// Can be called from both atomic and kernel context.
 /// You have make sure that task is not already scheduled.
 pub fn enqueueTask(self: *Self, task: *Task) void {
-    std.debug.assert(intr.isEnabledForCpu());
-    std.debug.assert(task.stats.sleep.raw == .awake);
-    std.debug.assert(!task.stats.lock.isLocked());
+    lib.debug.assert(
+        intr.isEnabledForCpu() and task.stats.sleep.raw == .awake and
+        !task.stats.lock.isLocked(),
+        @src(),
+    );
 
     task.stats.updateBonus();
     task.stats.updateTimeSlice();
@@ -128,7 +133,7 @@ pub fn enqueueTask(self: *Self, task: *Task) void {
 }
 
 pub fn dequeueTask(self: *Self,  task: *Task) void {
-    std.debug.assert(task.stats.sleep.raw != .sleep);
+    lib.debug.assert(task.stats.sleep.raw != .sleep, @src());
 
     self.task_lock.lockIntr();
     defer self.task_lock.unlockIntr();
@@ -139,12 +144,11 @@ pub fn dequeueTask(self: *Self,  task: *Task) void {
 /// Yield current task time.
 pub fn yield(self: *Self) void {
     const task = self.current_task.?;
-    std.debug.assert(task.stats.sleep.raw == .awake);
+    lib.debug.assert(task.stats.sleep.raw == .awake, @src());
 
-    if (!task.stats.lock.tryLockAtomic() and lib.is_debug) {
-        @branchHint(.cold);
-        return;
-    }
+    const locked = task.stats.lock.tryLockAtomic();
+    lib.debug.assert(locked, @src());
+
     task.stats.yieldTime();
 
     {
@@ -200,7 +204,7 @@ pub inline fn planRescheduling(self: *Self) void {
 }
 
 pub inline fn prepareToSleep(self: *Self) void {
-    std.debug.assert(self.isPreemptive());
+    lib.debug.assert(self.isPreemptive(), @src());
     self.flags.want_sleep = true;
 }
 
@@ -249,11 +253,7 @@ pub inline fn getCpuLocal(self: *Self) *smp.LocalData {
 pub fn initWait(self: *Self) WaitQueue.Entry {
     const task = self.current_task.?;
 
-    if (task.stats.sleep.raw != .awake and lib.is_debug) {
-        @branchHint(.cold);
-        log.err("no awake before wait!: {t}", .{task.stats.sleep.raw});
-    }
-    std.debug.assert(task.stats.sleep.raw == .awake);
+    lib.debug.assert(task.stats.sleep.raw == .awake, @src());
     task.stats.sleep.raw = .falling_asleep;
 
     return WaitQueue.Entry.init(
@@ -293,7 +293,7 @@ pub fn wait(self: *Self) void {
 }
 
 pub fn sleepFor(self: *Self, ns: u64) void {
-    std.debug.assert(self.isOnCurrentCpu());
+    lib.debug.assert(self.isOnCurrentCpu(), @src());
 
     // TODO: Implement high-percision sleep.
     if (ns < sys.time.getNsPerTick()) return;
@@ -303,7 +303,7 @@ pub fn sleepFor(self: *Self, ns: u64) void {
 
     var entry: SleepQueue.Entry = .{
         .delta_ns = ns,
-        .wait_entry = initWait(self)
+        .wait_entry = initWait(self),
     };
 
     {
@@ -317,14 +317,14 @@ pub fn sleepFor(self: *Self, ns: u64) void {
 }
 
 pub fn timerEvent(self: *Self, elapsed_ns: u64) void {
-    std.debug.assert(self.getCpuLocal().isInInterrupt());
+    lib.debug.assert(self.getCpuLocal().isInInterrupt(), @src());
     @setRuntimeSafety(false);
 
     self.processSleeping(elapsed_ns);
 
     // When converting to ticks, roundup on a half of tick.
     const ns_per_tick = sys.time.getNsPerTick();
-    const ticks = (elapsed_ns + (ns_per_tick / 2)) / sys.time.getNsPerTick();
+    const ticks = (elapsed_ns + (ns_per_tick / 2)) / ns_per_tick;
     if (ticks == 0) return;
 
     self.processTicks(@truncate(ticks));
@@ -335,14 +335,14 @@ pub fn timerEvent(self: *Self, elapsed_ns: u64) void {
 /// 
 /// **Call this function only in kernel context!**
 pub inline fn reschedule(self: *Self) void {
-    std.debug.assert(self.isPreemptive());
+    lib.debug.assert(self.isPreemptive(), @src());
     self.disablePreemption();
     self.rescheduleAtomic();
 }
 
 pub fn rescheduleAtomic(self: *Self) void {
-    std.debug.assert(intr.isEnabledForCpu());
-    std.debug.assert(self.preemption == 1 and self.getCpuLocal().nested_intr < 2);
+    lib.debug.assert(intr.isEnabledForCpu(), @src());
+    lib.debug.assert(self.preemption == 1 and self.getCpuLocal().nested_intr < 2, @src());
 
     const next_task = self.nextTask() orelse blk: {
         self.schedule();
@@ -353,7 +353,7 @@ pub fn rescheduleAtomic(self: *Self) void {
         };
         if (next_task == self.current_task) {
             @branchHint(.unlikely);
-            std.debug.assert(next_task.stats.lock.isLocked());
+            lib.debug.assert(next_task.stats.lock.isLocked(), @src());
 
             updateTaskStatsAtomic(next_task);
             self.completeSwitch(next_task);
