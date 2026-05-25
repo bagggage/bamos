@@ -47,7 +47,7 @@ pub fn init() !void {
 
         const ttys = dev.obj.getObjects(Teletype) orelse return;
         defer dev.obj.putObjects(ttys);
-        
+
         var node = ttys.first;
         while (node) |n| : (node = n.next) {
             const tty = dev.obj.fromNode(Teletype, n);
