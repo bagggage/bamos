@@ -131,7 +131,7 @@ fn getOrReadSwapBlock(block: *vm.cache.Block, index: usize) Drive.Error!*vm.cach
 }
 
 fn getOrReadBlock(drive: *Drive, index: usize) Drive.Error!*vm.cache.Block {
-    return vm.cache.getOrNull(&drive.cache_ctrl, index) orelse {
+    return drive.cache_ctrl.getOrNull(@truncate(index)) orelse {
         const offset = vm.cache.idxToOffset(index);
         const new_block = try vm.cache.createBlock(&drive.cache_ctrl, index, .small);
         errdefer new_block.free();
@@ -139,6 +139,6 @@ fn getOrReadBlock(drive: *Drive, index: usize) Drive.Error!*vm.cache.Block {
         const lba_offset = drive.offsetToLba(offset);
         try drive.ioSync(.read, lba_offset, new_block.asSlice());
 
-        return vm.cache.insertBlockOrFree(new_block) orelse return new_block;
+        return try drive.cache_ctrl.insertOrFree(new_block) orelse return new_block;
     };
 }

@@ -26,7 +26,7 @@ pub const std_options = std.Options {
     .logFn = logger.defaultLog,
     .log_level = switch (builtin.mode) {
         .Debug,
-        .ReleaseSafe => .debug,
+        .ReleaseSafe => .info,
         .ReleaseSmall,
         .ReleaseFast => .info
     },

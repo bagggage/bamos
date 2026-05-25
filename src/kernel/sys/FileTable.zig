@@ -135,6 +135,8 @@ pub fn clone(self: *Self) vfs.Error!Self {
 
 pub fn open(self: *Self, dentry: *vfs.Dentry, perm: vfs.Permissions) vfs.Error!Descriptor {
     const file = try dentry.open(perm);
+    errdefer file.deref();
+
     return try self.newDescriptor(file);
 }
 
@@ -199,7 +201,7 @@ pub fn closeOnExecute(self: *Self) void {
 /// Not increments reference counter of the new descriptor.
 pub inline fn duplicate(self: *Self, idx: u32) vfs.Error!Descriptor {
     const file = self.get(idx) orelse return error.BadFileDescriptor;
-    defer file.deref();
+    errdefer file.deref();
 
     return try self.newDescriptor(file);
 }
@@ -274,7 +276,6 @@ pub fn newDescriptor(self: *Self, file: *vfs.File) vfs.Error!Descriptor {
     self.files[idx].set(file);
     self.num_files += 1;
 
-    file.ref();
     return .{ .idx = @truncate(idx), .file = file };
 }
 

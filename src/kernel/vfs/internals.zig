@@ -171,9 +171,7 @@ pub const file = opaque {
                 const virt = map_unit.base() + mapped_page_offset;
                 const file_offset = map_unit.page_offset * vm.page_size + mapped_page_offset;
 
-                const block = vm.cache.getOrNull(
-                    &inode.cache_ctrl, vm.cache.offsetToIdx(file_offset)
-                ) orelse {
+                const block = inode.cache_ctrl.getOrNull(@truncate(vm.cache.offsetToIdx(file_offset))) orelse {
                     vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
                     return;
                 };
@@ -280,15 +278,17 @@ pub const file = opaque {
             const inode = self.dentry.inode;
             const index = vm.cache.offsetToIdx(offset);
 
-            return vm.cache.getOrNull(&inode.cache_ctrl, index) orelse blk: {
+            return inode.cache_ctrl.getOrNull(@truncate(index)) orelse blk: {
                 const new_block = try vm.cache.createBlock(&inode.cache_ctrl, index, .small);
+                errdefer new_block.free();
+
                 const cached_ops = Cached.fromFile(self);
                 try cached_ops.readCacheBlock(self.dentry, new_block);
 
                 const rest_size = self.dentry.inode.size - new_block.getOffset();
                 if (rest_size < new_block.size.toBytes()) @memset(new_block.asSlice()[rest_size..], 0);
 
-                break :blk vm.cache.insertBlockOrFree(new_block) orelse new_block;
+                break :blk try inode.cache_ctrl.insertOrFree(new_block) orelse new_block;
             };
         }
 
@@ -297,9 +297,11 @@ pub const file = opaque {
             const index = vm.cache.offsetToIdx(offset);
 
             const block = try vm.cache.createBlock(&inode.cache_ctrl, index, .small);
+            errdefer block.free();
+
             @memset(block.asSlice(), 0);
 
-            return vm.cache.insertBlockOrFree(block) orelse block;
+            return try inode.cache_ctrl.insertOrFree(block) orelse block;
         }
 
         inline fn fromFile(self: *const File) *const Cached {

@@ -217,7 +217,7 @@ pub fn deinit(self: *Dentry) void {
 
     if (self.inode.deref()) {
         self.ops.deinitInode(self.inode);
-        self.inode.free();
+        self.inode.delete();
     }
 
     self.name.deinit();
@@ -289,6 +289,8 @@ pub fn open(self: *Dentry, perm: vfs.Permissions) Error!*File {
     };
 
     try self.ops.open(self, file);
+
+    file.ref();
     return file;
 }
 

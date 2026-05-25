@@ -55,6 +55,11 @@ pub inline fn free(self: *Inode) void {
     vm.auto.free(Inode, self);
 }
 
+pub inline fn delete(self: *Inode) void {
+    self.cache_ctrl.deinit();
+    self.free();
+}
+
 pub inline fn ref(self: *Inode) void {
     self.ref_count.inc();
 }
