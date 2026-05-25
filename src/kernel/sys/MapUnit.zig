@@ -231,6 +231,16 @@ pub fn moveBaseDown(self: *Self, pages: u32) void {
     }
 }
 
+pub fn attachPage(self: *Self, page: vm.Page) !*vm.Page {
+    const new_page = vm.auto.alloc(vm.Page) orelse return error.NoMemory;
+    errdefer vm.auto.free(vm.Page, new_page);
+
+    new_page.* = page;
+    self.region.attachPage(new_page);
+
+    return new_page;
+}
+
 pub fn attachAndMapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !*vm.Page {
     const new_page = vm.auto.alloc(vm.Page) orelse return error.NoMemory;
     errdefer vm.auto.free(vm.Page, new_page);

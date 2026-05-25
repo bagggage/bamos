@@ -9,9 +9,16 @@ const File = @This();
 const Dentry = vfs.Dentry;
 const Error = vfs.Error;
 const lib = @import("../lib.zig");
+const Pipe = vfs.Pipe;
 const sys = @import("../sys.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
+
+pub const Type = enum(u8) {
+    file   = 0,
+    pipe   = 1,
+    socket = 2
+};
 
 pub const Operations = struct {
     const default = vfs.internals.file.default;
@@ -75,7 +82,9 @@ data: lib.AnyData = .{},
 
 ref_count: lib.atomic.RefCount(u32) = .init(0),
 perm: vfs.Permissions = .none,
-// TODO: Make `offset` atomic access
+type: Type = .file,
+
+// TODO: Make `offset` atomic/thread-safe access
 offset: usize = 0,
 
 pub inline fn get(self: *File) bool {
@@ -90,8 +99,15 @@ pub inline fn ref(self: *File) void {
     self.ref_count.inc();
 }
 
-pub inline fn deref(self: *File) void {
-    if (self.ref_count.put()) self.dentry.onClose(self);
+pub fn deref(self: *File) void {
+    if (self.ref_count.put()) switch (self.type) {
+        .file => self.dentry.onClose(self),
+        .pipe => {
+            const pipe = self.data.asPtr(Pipe).?;
+            if (self.perm == .w) pipe.deref(.writer) else pipe.deref(.reader);
+        },
+        .socket => std.log.err("vfs.File: close not implemented for socket object", .{}),
+    };
 }
 
 pub inline fn validateAccess(self: *const File, access: vfs.Permissions) Error!void {
