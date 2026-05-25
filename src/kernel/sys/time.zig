@@ -369,7 +369,7 @@ fn timerImmediateHandler(ctx: ?*anyopaque) void {
         _ = sys_up_ticks.fetchAdd(1, .monotonic);
         break :blk keeper.update();
     } else blk: {
-        const curr_count = local.sys_timer_delta;
+        const curr_count = sys_timer.getCounter();
         defer local.sys_timer_delta = curr_count;
         break :blk keeper.deltaNsAbs(curr_count, local.sys_timer_delta);
     };
