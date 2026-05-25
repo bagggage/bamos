@@ -79,6 +79,7 @@ pub const AutoHashTable = hash_table.AutoHashTable;
 pub const BinaryTree = @import("lib/binary-tree.zig").BinaryTree;
 pub const Bitmap = bitmap.Bitmap;
 pub const BitmapUnbounded = bitmap.BitmapUnbounded;
+pub const debug = @import("lib/debug.zig");
 pub const hash_table = @import("lib/hash-table.zig");
 pub const HashTable = hash_table.HashTable;
 pub const Heap = @import("lib/Heap.zig");
