@@ -76,7 +76,11 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         .use_llvm = true
     });
 
+    const uacpi,
+    const uacpi_obj = makeUacpi(b, target, optimize);
+
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
+    kernel_obj.addIncludePath(uacpi.path("include"));
     kernel_obj.addIncludePath(b.path("third-party/boot"));
 
     const zon = @import("build.zig.zon");
@@ -88,7 +92,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         break :blk std.SemanticVersion{.major = 0, .minor = 0, .patch = 0};
     };
 
-    const is_release = kernel_ver.build == null and (optimize != .Debug and optimize != .ReleaseSafe);
+    const is_release = kernel_ver.pre == null and (optimize != .Debug and optimize != .ReleaseSafe);
     const timestamp = makeTimestamp(b, is_release);
     defer b.allocator.free(timestamp);
 
@@ -136,12 +140,61 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         .use_llvm = true
     });
     kernel_exe.addObject(kernel_obj);
+    kernel_exe.addObject(uacpi_obj);
     kernel_exe.addObject(dbg_obj);
     kernel_exe.setLinkerScript(b.path("config/kernel.ld"));
 
     const kernel_install = b.addInstallArtifact(kernel_exe, .{});
 
     return kernel_install;
+}
+
+fn makeUacpi(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode)
+    struct { *std.Build.Dependency, *std.Build.Step.Compile }
+{
+    const uacpi = b.dependency("uacpi", .{});
+    const uacpi_module = b.addModule("uacpi", .{
+        .link_libc = false,
+        .sanitize_c = .trap,
+        .target = target,
+        .optimize = optimize,
+        .code_model = .kernel,
+    });
+
+    uacpi_module.addIncludePath(uacpi.path("include"));
+    uacpi_module.addCSourceFiles(.{
+        .language = .c,
+        .root = uacpi.path("./"),
+        .files = &.{
+            "source/tables.c",
+            "source/types.c",
+            "source/uacpi.c",
+            "source/utilities.c",
+            "source/interpreter.c",
+            "source/opcodes.c",
+            "source/namespace.c",
+            "source/stdlib.c",
+            "source/shareable.c",
+            "source/opregion.c",
+            "source/default_handlers.c",
+            "source/io.c",
+            "source/notify.c",
+            "source/sleep.c",
+            "source/registers.c",
+            "source/resources.c",
+            "source/event.c",
+            "source/mutex.c",
+            "source/osi.c",
+        },
+    });
+
+    const uacpi_obj = b.addObject(.{
+        .name = "uacpi",
+        .root_module = uacpi_module,
+        .use_llvm = true,
+    });
+
+    return .{ uacpi, uacpi_obj };
 }
 
 fn makeDocs(b: *std.Build, kernel: *std.Build.Step.InstallArtifact) *std.Build.Step {
@@ -208,7 +261,8 @@ fn makeImage(b: *std.Build, step: *std.Build.Step, kernel: *std.Build.Step.Insta
 fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.InstallFile) *std.Build.Step.Run {
     const enable_gdb = b.option(bool, "qemu-gdb", "Enable GDB server (default: false)") orelse false;
     const enable_serial = b.option(bool, "qemu-serial", "Serial output to stdout (default: true)") orelse true;
-    const enable_trace = b.option(bool, "qemu-trace", "Enable interrupts tracing (default: false)") orelse false;
+    const enable_trace = b.option(bool, "qemu-trace-irq", "Enable interrupts tracing (default: false)") orelse false;
+    const tracing = b.option([]const u8, "qemu-trace", "Set `-trace` option value (default: none)");
     const enable_kvm = b.option(bool, "qemu-kvm", "Enable KVM acceleration") orelse true;
     const cpu_num = b.option(u5, "qemu-cpus", "QEMU machine cpus number (default: 4)") orelse qemu_cores_default;
     const ram_size = b.option([]const u8, "qemu-ram", "QEMU machine RAM size (default: "++qemu_ram_default++")") orelse qemu_ram_default;
@@ -236,8 +290,9 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
         qemu_run.addFileArg(b.path("third-party/uefi/OVMF-efi.fd"));
     }
 
-    if (enable_gdb) qemu_run.addArgs(&.{"-s", "-S"});
+    if (enable_gdb) qemu_run.addArgs(&.{"-s"});
     if (enable_trace) qemu_run.addArgs(&.{"-d", "int"});
+    if (tracing) |trace| qemu_run.addArgs(&.{"-trace", trace});
 
     if (enable_serial and !no_gui) {
         qemu_run.addArgs(&.{

@@ -1,5 +1,6 @@
 *.img
 .zig-cache
+.vscode
 zig-out
 build
 dist
