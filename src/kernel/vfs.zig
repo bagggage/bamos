@@ -38,6 +38,7 @@ pub const Error = vm.Error || parts.Error || error {
     NoAccess,
     NoEnt,
     NoFs,
+    NoSpace,
     NoTTY,
     NotDirectory,
     NotRegularFile,
