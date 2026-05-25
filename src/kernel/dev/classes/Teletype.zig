@@ -10,7 +10,6 @@ const log = std.log.scoped(.Teletype);
 const sched = @import("../../sched.zig");
 const lib = @import("../../lib.zig");
 const linux = std.os.linux;
-const Session = sys.Process.Control.Session;
 const sys = @import("../../sys.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
@@ -537,6 +536,8 @@ fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
         //T.CSETA => {},
         //T.CSETAW => {},
         //T.CSETAF => {},
+        //T.CGETS2,
+        0x802C542A,
         T.CGETS => {
             tty.conf_lock.lock();
             defer tty.conf_lock.unlock();
@@ -551,12 +552,13 @@ fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
             tos.lflag = tty.config.lflag;
             tos.line = tty.config.line;
 
-            @memcpy(tos.cc[0..19], tty.config.cc[0..19]);
+            @memcpy(tos.cc[0..16], tty.config.cc[0..16]);
         },
+        //T.CSETS2,
+        0x402C542B,
+        0x402C542D,
         T.CSETS => {
             const tos: *termios = if (arg != 0) @ptrFromInt(arg) else return error.SegFault;
-
-            log.debug("set config: {any}, {any}, {any}, {any}, line:{}", .{tos.cflag, tos.iflag, tos.oflag, tos.lflag, tos.line});
 
             tty.conf_lock.lock();
             defer tty.conf_lock.unlock();
@@ -684,21 +686,22 @@ fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
             const ptr: *u32 = if (arg != 0) @ptrFromInt(arg) else return error.SegFault;
             ptr.* = tty.sid.?.value;
         },
-        T.IOCSERCONFIG,
-        T.IOCSERGETLSR,
-        T.IOCSERGETMULTI,
-        T.IOCSERGSTRUCT,
-        T.IOCSERGWILD,
-        T.IOCSERSETMULTI,
-        T.IOCSERSWILD,
-        T.IOCSSERIAL,
-        T.IOCGSERIAL,
-        T.IOCGWINSZ,
-        T.IOCSWINSZ => {
+
+        //T.IOCSERCONFIG,
+        //T.IOCSERGETLSR,
+        //T.IOCSERGETMULTI,
+        //T.IOCSERGSTRUCT,
+        //T.IOCSERGWILD,
+        //T.IOCSERSETMULTI,
+        //T.IOCSERSWILD,
+        //T.IOCSSERIAL,
+        //T.IOCGSERIAL,
+        //T.IOCGWINSZ,
+        //T.IOCSWINSZ,
+        else => {
             if (tty.ops.control == null) return error.BadOperation;
             return tty.ops.control.?(tty, cmd, .from(arg));
         },
-        else => return error.BadOperation
     }
 }
 
