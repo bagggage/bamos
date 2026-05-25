@@ -191,7 +191,7 @@ var tty_ops: Teletype.Operations = .{
 var dev_region: devfs.Region = .{ .major = 4 };
 
 var cursor_init: bool = false;
-var cursor_enable: bool = true;
+var cursor_enable: bool = false;
 var cursor_task: *sched.Task = undefined;
 var kbd_handler: Input.Event.Handler = .{ .callback = &keyboardHandler };
 var kbd_immediate: dev.intr.SoftHandler = .{ .func = &keyboardImmediate };
@@ -240,6 +240,10 @@ pub fn init() !void {
     }
 }
 
+pub inline fn isEnabled() bool {
+    return active != null;
+}
+
 pub fn select(idx: u8) !*Teletype {
     const vt = &vts[idx];
     if (vt == active) return &vt.tty;
@@ -247,8 +251,6 @@ pub fn select(idx: u8) !*Teletype {
     if (active) |t| t.disable();
 
     try vt.enable();
-    active = vt;
-
     return &vt.tty;
 }
 
@@ -271,12 +273,12 @@ pub fn enable(self: *Self) !void {
     try sys.input.registerHandler(.keyboard, &kbd_handler);
 
     if (video.terminal.isInitialized()) {
+        tty_ops.flush = &ttyVideoFlush;
+        active = self;
+
+        video.terminal.clear();
         video.terminal.setColor(.lgray);
         video.terminal.setCursor(0, 0);
-        video.terminal.clear();
-
-        logger.switchToUserspace();
-        tty_ops.flush = &ttyVideoFlush;
 
         cursor_enable = true;
         if (cursor_init) return;
