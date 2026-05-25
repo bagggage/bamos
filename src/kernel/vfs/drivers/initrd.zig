@@ -87,8 +87,10 @@ var fs = vfs.FileSystem.init(
     }},
     .{
         .open = dentryOpen,
-        .lookup = dentryLookup,
-        .iterate = dentryIterate,
+        .close = vfs.internals.dentry_ops.default.close,
+        .lookup = tmpfs.DentryOps.lookup,
+        .iterate = tmpfs.DentryOps.iterate,
+        .deinitInode = vfs.internals.dentry_ops.default.deinitInode,
 
         .createFile = dentryCreateFile,
         .makeDirectory = dentryMakeDirectory,
@@ -96,9 +98,6 @@ var fs = vfs.FileSystem.init(
 );
 
 var initrd: []const u8 = &.{};
-
-var file_name: [max_name]u8 = .{ 0 } ** max_name;
-var link_name: [max_name]u8 = .{ 0 } ** max_name;
 
 pub const fs_name = "initramfs";
 
@@ -118,124 +117,77 @@ fn mount() vfs.Error!vfs.Context.Virt {
     // Already mounted
     if (initrd.len != 0) return error.Busy;
 
-    const dentry = try vfs.tmpfs
-    .createDirectory(
+    const dentry = try vfs.tmpfs.createDirectory(
         "/", undefined, .{ .perm = @intFromEnum(vfs.Permissions.rw) }
     );
     dentry.ops = &fs.dentry_ops;
+    errdefer dentry.deref();
 
     initrd = boot.getInitrd();
+    try populate(dentry);
 
-    log.debug("initrd size: 0x{x}", .{initrd.len});
+    log.info("initrd size: 0x{x}", .{initrd.len});
     return .{ .root = dentry };
 }
 
-fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
-    file.ops = &file_ops.ops;
-}
-
-fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
-    const offset = @intFromPtr(parent.inode.fs_data.ptr);
+fn populate(root: *vfs.Dentry) vfs.Error!void {
+    var file_name: [max_name]u8 = .{ 0 } ** max_name;
+    var link_name: [max_name]u8 = .{ 0 } ** max_name;
 
     var reader = getStream();
-    reader.seek = offset;
-
     var tar_iter = tar.Iterator.init(&reader, .{
         .file_name_buffer = &file_name,
         .link_name_buffer = &link_name
     });
 
-    return tarLookup(&tar_iter, parent, name) catch |err| {
-        log.err("while parsing tar: {s}", .{@errorName(err)});
-        return null;
-    };
-}
+    const ctx: vfs.Context.Handle = .{ .ptr = .{ .root = root }, .tag = .root };
 
-fn dentryIterate(dentry: *const vfs.Dentry, iter: *vfs.Dentry.Iterator) vfs.Error!void {
-    const pos_mask = std.math.maxInt(usize) >> (@bitSizeOf(usize) / 2);
-    const offset = @intFromPtr(dentry.inode.fs_data.ptr);
+    var i: u32 = 0;
+    while (tar_iter.next() catch |err| blk: {
+        if (err == error.TarHeader) break :blk null;
+        return;
+    }) |entry| : (i += 1) {
+        var name_iter = std.mem.splitBackwardsScalar(u8, entry.name, '/');
+        const entry_name = name_iter.first();
 
-    var reader = getStream();
-    reader.seek = offset + (iter.pos & pos_mask);
-
-    var tar_iter = tar.Iterator.init(&reader, .{
-        .file_name_buffer = &file_name,
-        .link_name_buffer = &link_name
-    });
-
-    var i = dentry.inode.index + 1 + (iter.pos >> (@bitSizeOf(usize) / 2));
-    while (tar_iter.next() catch return) |entry| : (i += 1) {
-        const @"type": vfs.Inode.Type = switch (entry.kind) {
-            .file => .regular_file,
-            .directory => .directory,
-            .sym_link => .symbolic_link
+        const parent = rootLookup(root, name_iter.rest()) orelse {
+            log.warn("skip entry: '{s}'", .{entry.name});
+            continue;
+        };
+        const dentry = switch (entry.kind) {
+            .directory => try tmpfs.createDirectory(entry_name, ctx, .{ .uid = 0, .gid = 0, .perm = @intCast(entry.mode) }),
+            .file => try tmpfs.createRegularFile(entry_name, ctx, .{ .uid = 0, .gid = 0, .perm = @intCast(entry.mode) }),
+            else => continue,
         };
 
-        if (!iter.fillNext(entry.name, i, @"type")) {
-            @branchHint(.unlikely);
-            break;
-        }
+        dentry.ops = &fs.dentry_ops;
+        dentry.inode.index = i;
+        dentry.inode.size = entry.size;
+        dentry.inode.fs_data = .from(tar_iter.reader.seek);
 
-        iter.pos = ((i + 1) << (@bitSizeOf(usize) / 2)) | (reader.seek - offset);
+        parent.addChild(dentry);
     }
 }
 
-fn tarLookup(tar_iter: *TarIterator, parent: *const vfs.Dentry, name: []const u8) !?*vfs.Dentry {
-    // Skip parent file itself
-    const is_parent_root = parent == parent.ctx.virt.root;
+fn rootLookup(root: *vfs.Dentry, path: []const u8) ?*vfs.Dentry {
+    var iter = std.mem.splitScalar(u8, path, '/');
+    var parent = root;
+    while (iter.next()) |name| {
+        if (name.len == 0) break;
 
-    if (!is_parent_root) {
-        if (try tar_iter.next() == null) return null;
+        const child = tmpfs.DentryOps.lookup(parent, name);
+        parent = child orelse return null;
     }
 
-    const parent_name_str = parent.name.str();
-    if (tmpfs.DentryOps.lookup(parent, name)) |child| return child;
-
-    var i: u32 = parent.inode.index + 1;
-    while (try tar_iter.next()) |file| : (i += 1) {
-        var name_iter = std.mem.splitBackwardsScalar(u8, file.name, '/');
-        const entry_name = name_iter.first();
-        const parent_name: []const u8 = name_iter.next() orelse &.{};
-
-        if (
-            !is_parent_root and
-            !std.mem.eql(u8, parent_name_str, parent_name)
-        ) break;
-
-        if (std.mem.eql(u8, entry_name, name)) {
-            // Init new dentry
-            const dentry = vfs.Dentry.new() orelse return error.NoMemory;
-            errdefer dentry.free();
-
-            const inode = vfs.Inode.new() orelse return error.NoMemory;
-            errdefer inode.free();
-
-            setupInode(inode, &file, i, tar_iter.reader.seek);
-            try dentry.setup(entry_name, parent.getContext(), inode, &fs.dentry_ops);
-
-            return dentry;
-        }
-    }
-
-    return null;
+    return parent;
 }
 
-fn setupInode(inode: *vfs.Inode, file: *const TarFile, idx: u32, pos: usize) void {
-    inode.* = .{
-        .index = idx,
-
-        .type = switch (file.kind) {
-            .directory => .directory,
-            .file => .regular_file,
-            .sym_link => .symbolic_link
-        },
-        .perm = @intCast(file.mode),
-        .size = file.size,
-        .cache_ctrl = .{ .write_back = &vfs.internals.cache.noWriteBack },
-
-        // Data pointer
-        .fs_data = .from(pos),
-    };
+fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
+    if (file.dentry.ops == &fs.dentry_ops) {
+        file.ops = &file_ops.ops;
+    } else {
+        file.ops = &tmpfs.file_ops.ops;
+    }
 }
 
 fn dentryCreateFile(parent: *const vfs.Dentry, child: *vfs.Dentry, opts: vfs.CreateOptions) vfs.Error!void {
