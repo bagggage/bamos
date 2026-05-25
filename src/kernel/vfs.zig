@@ -25,11 +25,13 @@ pub const Drive = dev.classes.Drive;
 pub const File = @import("vfs/File.zig");
 pub const Inode = @import("vfs/Inode.zig");
 pub const Partition = parts.Partition;
+pub const Pipe = @import("vfs/Pipe.zig");
 pub const Superblock = @import("vfs/Superblock.zig");
 
 pub const Error = vm.Error || parts.Error || error {
     BadFileDescriptor,
     BadOperation,
+    BadPipe,
     BadSuperblock,
     Busy,
     Exists,
@@ -48,10 +50,11 @@ pub const Error = vm.Error || parts.Error || error {
 /// 
 /// Contains unique FS data per each moutn point.
 pub const Context = union(enum) {
-    pub const Tag = enum(u8) {
+    pub const Tag = enum(u2) {
         none  = 0,
         super = 1,
         virt  = 2,
+        root  = 3,
     };
 
     pub const Handle = struct {
@@ -62,6 +65,7 @@ pub const Context = union(enum) {
     pub const Ptr = union {
         super: *Superblock,
         virt: *Context.Virt,
+        root: *Dentry,
     };
 
     /// Represents virtual filesystem context.
@@ -463,7 +467,11 @@ pub fn getFs(name: []const u8) ?*FileSystem {
     return null;
 }
 
-pub fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
+pub inline fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
+    return lookupRaw(root, dir, path, true);
+}
+
+pub fn lookupRaw(root: ?*Dentry, dir: ?*Dentry, path: []const u8, follow_links: bool) Error!*Dentry {
     if (path.len == 0) return error.InvalidArgs;
     log.debug("lookup for: \"{s}\"", .{path});
 
@@ -479,7 +487,7 @@ pub fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
     );
 
     while (it.next()) |element| {
-        const dentry = ent.?;
+        var dentry = ent.?;
         errdefer dentry.deref();
 
         if (element.len == 0) continue;
@@ -494,7 +502,14 @@ pub fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
                 continue;
             }
         }
-    
+
+        if (follow_links and dentry.inode.type == .symbolic_link) {
+            const sym_link = dentry;
+
+            dentry = try resolveSymLink(sym_link);
+            sym_link.deref();
+        }
+
         if (dentry.inode.type != .directory) return error.NotDirectory;
 
         ent = dentry.lookup(element);

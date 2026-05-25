@@ -27,9 +27,23 @@ const TaskNode = TaskList.Node;
 pub const AddressSpace = @import("AddressSpace.zig");
 pub const FileTable = @import("FileTable.zig");
 
-pub const Flags = packed struct {
+pub const Flags = packed struct(u8) {
     clone: bool = false,
     terminate: bool = false,
+    deinitialized: bool = false,
+
+    unused: u5 = 0,
+
+    inline fn atomicSet(self: *Flags, mask: Flags) Flags {
+        const old = @atomicRmw(u8, @as(*u8, @ptrCast(self)), .Or, @bitCast(mask), .release);
+        return @bitCast(old);
+    }
+
+    inline fn atomicClear(self: *Flags, inv_mask: Flags) Flags {
+        const mask = ~@as(u8, @bitCast(inv_mask));
+        const old = @atomicRmw(u8, @as(*u8, @ptrCast(self)), .And, mask, .release);
+        return @bitCast(old);
+    }
 };
 
 pub const Signal = enum(u8) {
@@ -505,8 +519,6 @@ gid: u16 = 0,
 
 abi: sys.call.Abi = .linux_sysv,
 flags: Flags = .{},
-/// Exit status.
-status: u8 = 0,
 
 root_dir: *vfs.Dentry,
 work_dir: *vfs.Dentry,
@@ -654,9 +666,14 @@ pub fn deinit(self: *Self) void {
     self.addr_space.deref();
 }
 
-pub inline fn delete(self: *Self) void {
+pub fn delete(self: *Self) void {
     self.deinit();
-    vm.auto.free(Self, self);
+
+    const flags = self.flags.atomicSet(.{ .deinitialized = true });
+    if (flags.terminate == false) {
+        @memset(std.mem.asBytes(self), 0);
+        vm.auto.free(Self, self);
+    }
 }
 
 pub inline fn findById(id: u32) ?*Self {
@@ -841,7 +858,6 @@ pub fn terminateThreads(self: *Self) ?*sched.Task {
 
         // TODO: Handle this case.
         if (self.flags.terminate) @panic("remote termination is not implemented");
-
         self.flags.terminate = true;
     }
 
@@ -903,7 +919,8 @@ pub fn waitChildExit(self: *Self, nowait: bool) ?*Id {
     }};
 
     const id = proc.id;
-    vm.auto.free(Self, proc);
+    const flags = proc.flags.atomicClear(.{ .terminate = true });
+    if (flags.deinitialized) vm.auto.free(Self, proc);
 
     return id;
 }

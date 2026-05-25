@@ -42,6 +42,11 @@ pub const Handle = packed struct {
     }
 };
 
+pub const Descriptor = struct {
+    idx: u32,
+    file: *vfs.File,
+};
+
 files: [*]Handle = undefined,
 bitmap: lib.BitmapUnbounded = undefined,
 lock: lib.sync.RwLock = .{},
@@ -49,11 +54,6 @@ lock: lib.sync.RwLock = .{},
 capacity: u32 = 0,
 max_files: u32 = 0,
 num_files: u32 = 0,
-
-const Descriptor = struct {
-    idx: u32,
-    file: *vfs.File,
-};
 
 pub fn init(max_files: u32) vm.Error!Self {
     const max_size = max_files * @sizeOf(?*vfs.File);
@@ -277,6 +277,27 @@ pub fn newDescriptor(self: *Self, file: *vfs.File) vfs.Error!Descriptor {
     self.num_files += 1;
 
     return .{ .idx = @truncate(idx), .file = file };
+}
+
+pub fn newDescriptors(self: *Self, buffer: []Descriptor) vfs.Error!void {
+    self.lock.writeLock();
+    defer self.lock.writeUnlock();
+
+    if (buffer.len + self.num_files > self.max_files) {
+        @branchHint(.unlikely);
+        return error.MaxSize;
+    }
+
+    const num: u32 = @truncate(buffer.len);
+    try self.ensureCapacity(self.num_files + num);
+
+    for (buffer) |*desc| {
+        desc.idx = @truncate(self.bitmap.find(self.capacity, false) orelse unreachable);
+        self.bitmap.set(desc.idx);
+        self.files[desc.idx].set(desc.file);
+    }
+
+    self.num_files +%= num;
 }
 
 pub fn newDescriptorAt(self: *Self, idx: u32, file: *vfs.File, rebase: bool) vfs.Error!Descriptor {
