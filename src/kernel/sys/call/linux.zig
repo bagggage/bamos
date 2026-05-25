@@ -237,6 +237,7 @@ fn errorFromZig(e: sys.exe.Error) isize {
         error.NoAccess          => errorFromE(.ACCES),
         error.NoEnt             => errorFromE(.NOENT),
         error.NoMemory          => errorFromE(.NOMEM),
+        error.NoSpace           => errorFromE(.NOSPC),
         error.NoTTY             => errorFromE(.NOTTY),
         error.NotDirectory      => errorFromE(.NOTDIR),
         error.NotRegularFile    => errorFromE(.ISDIR),

@@ -21,6 +21,9 @@ const vm = @import("../vm.zig");
 
 const Dentry = @This();
 
+const LruList = std.DoublyLinkedList;
+const LruNode = LruList.Node;
+
 pub const List = std.SinglyLinkedList;
 pub const Node = List.Node;
 
@@ -122,6 +125,11 @@ pub const Iterator = struct {
     }
 };
 
+pub const alloc_config: vm.auto.Config = .{
+    .allocator = .oma,
+    .capacity = 1024
+};
+
 name: Name,
 
 parent: *Dentry,
@@ -130,18 +138,19 @@ inode: *Inode,
 ops: *const Operations = &Operations.default.ops,
 
 child: List = .{},
+
 node: Node = .{},
+lru_node: LruNode = .{},
 
 cache_ent: lookup_cache.Entry = .{},
 meta: Meta = .{},
+in_lru: std.atomic.Value(bool) = .init(false),
 
 ref_count: lib.atomic.RefCount(u32) = .{},
 lock: lib.sync.Spinlock = .{},
 
-pub const alloc_config: vm.auto.Config = .{
-    .allocator = .oma,
-    .capacity = 1024
-};
+var lru_list: LruList = .{};
+var lru_lock: lib.sync.Spinlock = .{};
 
 pub inline fn new() ?*Dentry {
     const dentry = vm.auto.alloc(Dentry) orelse return null;
@@ -311,12 +320,9 @@ pub fn addChild(self: *Dentry, child: *Dentry) void {
 
 pub fn removeChild(self: *Dentry, child: *Dentry) void {
     child.parent = child;
+    self.child.remove(&child.node);
 
-    if (self.ref_count.put()) {
-        self.delete();
-    } else {
-        self.child.remove(&child.node);
-    }
+    if (self.ref_count.put()) self.moveToLru();
 }
 
 pub inline fn path(self: *const Dentry) Path {
@@ -340,8 +346,31 @@ pub inline fn ref(self: *Dentry) void {
     self.ref_count.inc();
 }
 
+pub fn tryRef(self: *Dentry) bool {
+    const users = self.ref_count.value.fetchAdd(1, .release);
+    if (users != 0) return true;
+
+    while (!self.in_lru.load(.acquire)) std.atomic.spinLoopHint();
+
+    lru_lock.lock();
+    defer lru_lock.unlock();
+
+    lru_list.remove(&self.lru_node);
+    self.in_lru.store(false, .release);
+
+    return true;
+}
+
 pub inline fn deref(self: *Dentry) void {
-    if (self.ref_count.put()) self.delete();
+    if (self.ref_count.put()) self.moveToLru();
+}
+
+fn moveToLru(self: *Dentry) void {
+    lru_lock.lock();
+    defer lru_lock.unlock();
+
+    lru_list.prepend(&self.lru_node);
+    self.in_lru.store(true, .release);
 }
 
 fn createLike(self: *const Dentry, name: []const u8) !*Dentry {
