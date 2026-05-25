@@ -131,7 +131,7 @@ pub const WaitQueue = struct {
         }
 
         inline fn updateSleepTime(self: *Entry) void {
-            const sleep_time = sys.time.getFastTimestamp() - self.timestamp;
+            const sleep_time = sys.time.getFastTimestamp() -| self.timestamp;
             self.task.stats.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
         }
 
@@ -310,6 +310,30 @@ pub fn waitUnlock(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
     scheduler.reschedule();
 }
 
+pub fn waitUnlockIntr(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
+    const scheduler = getCurrent();
+    std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
+
+    var entry = scheduler.initWait();
+    queue.push(&entry);
+    lock.unlockRestoreIntr();
+
+    scheduler.prepareToSleep();
+    scheduler.reschedule();
+}
+
+pub fn waitEnableIntr(queue: *WaitQueue) void {
+    const scheduler = getCurrent();
+    std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
+
+    var entry = scheduler.initWait();
+    queue.push(&entry);
+    dev.intr.enableForCpu();
+
+    scheduler.prepareToSleep();
+    scheduler.reschedule();
+}
+
 pub fn resumeTask(task: *Task) void {
     std.debug.assert(dev.intr.isEnabledForCpu());
 
@@ -339,6 +363,8 @@ pub fn awake(queue: *WaitQueue) ?*Task {
 
     entry.updateSleepTime();
     scheduler.enqueueTask(entry.task);
+
+    return entry.task;
 }
 
 pub fn awakeEntry(entry: *WaitQueue.Entry) bool {
@@ -362,7 +388,7 @@ pub fn awakeAll(queue: *WaitQueue) void {
     const ns_per_tick = sys.time.getNsPerTick();
 
     while (queue.pop()) |entry| {
-        const sleep_time = (timestamp - entry.timestamp) / ns_per_tick;
+        const sleep_time = (timestamp -| entry.timestamp) / ns_per_tick;
         entry.task.stats.sleep_time +|= @truncate(sleep_time);
 
         scheduler.enqueueTask(entry.task);

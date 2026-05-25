@@ -381,6 +381,42 @@ pub inline fn restoreScratchRegs() void {
     );
 }
 
+pub inline fn saveFpuRegsOpt() void {
+    asm volatile (
+        \\ mov $0xff, %eax
+        \\ mov $0xff, %edx
+        \\ sub $4096, %rsp
+        \\ xsaveopt64 (%rsp)
+    );
+}
+
+pub inline fn saveFpuRegsOptUnaligned() void {
+    asm volatile (
+        \\ mov $0xff, %eax
+        \\ mov $0xff, %edx
+        \\ sub $4104, %rsp
+        \\ xsaveopt64 (%rsp)
+    );
+}
+
+pub inline fn restoreFpuRegsOpt() void {
+    asm volatile (
+        \\ mov $0xff, %eax
+        \\ mov $0xff, %edx
+        \\ xrstor64 (%rsp)
+        \\ add $4096, %rsp
+    );
+}
+
+pub inline fn restoreFpuRegsOptUnaligned() void {
+    asm volatile (
+        \\ mov $0xff, %eax
+        \\ mov $0xff, %edx
+        \\ xrstor64 (%rsp)
+        \\ add $4104, %rsp
+    );
+}
+
 pub inline fn saveFpuRegs() void {
     asm volatile (
         \\ sub $512, %rsp

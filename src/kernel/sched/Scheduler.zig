@@ -143,7 +143,6 @@ pub fn yield(self: *Self) void {
 
     if (!task.stats.lock.tryLockAtomic() and lib.is_debug) {
         @branchHint(.cold);
-        log.err("something is wrong... p: {}, r: {}, i: {}", .{self.preemption, self.flags.need_resched, self.getCpuLocal().nested_intr});
         return;
     }
     task.stats.yieldTime();
@@ -250,7 +249,7 @@ pub inline fn getCpuLocal(self: *Self) *smp.LocalData {
 pub fn initWait(self: *Self) WaitQueue.Entry {
     const task = self.current_task.?;
 
-    if ( task.stats.sleep.raw != .awake and lib.is_debug) {
+    if (task.stats.sleep.raw != .awake and lib.is_debug) {
         @branchHint(.cold);
         log.err("no awake before wait!: {t}", .{task.stats.sleep.raw});
     }
@@ -279,7 +278,12 @@ pub fn wait(self: *Self) void {
         return;
     }
 
-    std.debug.assert(task.stats.sleep.raw != .awake);
+    if (task.stats.sleep.raw == .awake) {
+        @branchHint(.cold);
+        log.err("task is not ready to wait!", .{});
+        return;
+    }
+
     self.rescheduleAtomic();
 
     if (task.stats.sleep.raw != .awake and lib.is_debug) {
