@@ -362,6 +362,8 @@ pub fn awake(queue: *WaitQueue) ?*Task {
     const scheduler = getCurrent();
 
     entry.updateSleepTime();
+
+    entry.task.stats.lock.wait(.unlocked);
     scheduler.enqueueTask(entry.task);
 
     return entry.task;
@@ -374,6 +376,8 @@ pub fn awakeEntry(entry: *WaitQueue.Entry) bool {
     entry.updateSleepTime();
 
     const scheduler = getCurrent();
+
+    entry.task.stats.lock.wait(.unlocked);
     scheduler.enqueueTask(entry.task);
 
     return true;
@@ -391,6 +395,7 @@ pub fn awakeAll(queue: *WaitQueue) void {
         const sleep_time = (timestamp -| entry.timestamp) / ns_per_tick;
         entry.task.stats.sleep_time +|= @truncate(sleep_time);
 
+        entry.task.stats.lock.wait(.unlocked);
         scheduler.enqueueTask(entry.task);
     }
 }
