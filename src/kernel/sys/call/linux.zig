@@ -32,8 +32,11 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.access)]          = @ptrCast(&access);
     result[@intFromEnum(linux.SYS.brk)]             = @ptrCast(&brk);
     result[@intFromEnum(linux.SYS.clock_gettime)]   = @ptrCast(&clockGetTime);
+    result[@intFromEnum(linux.SYS.clock_nanosleep)] = @ptrCast(&clockNanoSleep);
     result[@intFromEnum(linux.SYS.clone)]           = @ptrCast(arch.syscall.contextCall(clone, "clone"));
     result[@intFromEnum(linux.SYS.close)]           = @ptrCast(&close);
+    result[@intFromEnum(linux.SYS.chdir)]           = @ptrCast(&chdir);
+    result[@intFromEnum(linux.SYS.creat)]           = @ptrCast(&creat);
     result[@intFromEnum(linux.SYS.dup)]             = @ptrCast(&dup);
     result[@intFromEnum(linux.SYS.dup2)]            = @ptrCast(&dup2);
     result[@intFromEnum(linux.SYS.dup3)]            = @ptrCast(&dup3);
@@ -43,9 +46,11 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.faccessat)]       = @ptrCast(&faccessAt);
     result[@intFromEnum(linux.SYS.faccessat2)]      = @ptrCast(&faccessAt2);
     result[@intFromEnum(linux.SYS.fcntl)]           = @ptrCast(&fcntl);
+    result[@intFromEnum(linux.SYS.fchdir)]          = @ptrCast(&fchdir);
     result[@intFromEnum(linux.SYS.fork)]            = @ptrCast(arch.syscall.contextCall(fork, "fork"));
     result[@intFromEnum(linux.SYS.fstat)]           = @ptrCast(&fstat);
     result[@intFromEnum(linux.SYS.fstatat64)]       = @ptrCast(&fstatAt);
+    result[@intFromEnum(linux.SYS.futex)]           = @ptrCast(&futex);
     result[@intFromEnum(linux.SYS.get_robust_list)] = @ptrCast(&getRobustList);
     result[@intFromEnum(linux.SYS.getcwd)]          = @ptrCast(&getCwd);
     result[@intFromEnum(linux.SYS.getdents64)]      = @ptrCast(&getDentries);
@@ -58,23 +63,32 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.getppid)]         = @ptrCast(&getParentPid);
     result[@intFromEnum(linux.SYS.getrandom)]       = @ptrCast(&getRandom);
     result[@intFromEnum(linux.SYS.gettid)]          = @ptrCast(&getTid);
+    result[@intFromEnum(linux.SYS.gettimeofday)]    = @ptrCast(&getTimeOfDay);
     result[@intFromEnum(linux.SYS.getuid)]          = @ptrCast(&getUid);
     result[@intFromEnum(linux.SYS.ioctl)]           = @ptrCast(&ioctl);
+    result[@intFromEnum(linux.SYS.lseek)]           = @ptrCast(&seek);
+    result[@intFromEnum(linux.SYS.lstat)]           = @ptrCast(&lstat);
+    result[@intFromEnum(linux.SYS.mkdir)]           = @ptrCast(&mkdir);
+    result[@intFromEnum(linux.SYS.mkdirat)]         = @ptrCast(&mkdirAt);
     result[@intFromEnum(linux.SYS.mmap)]            = @ptrCast(&mmap);
     result[@intFromEnum(linux.SYS.mprotect)]        = @ptrCast(&mprotect);
+    result[@intFromEnum(linux.SYS.mremap)]          = @ptrCast(&mremap);
     result[@intFromEnum(linux.SYS.munmap)]          = @ptrCast(&munmap);
+    result[@intFromEnum(linux.SYS.nanosleep)]       = @ptrCast(&nanoSleep);
     result[@intFromEnum(linux.SYS.open)]            = @ptrCast(&open);
     result[@intFromEnum(linux.SYS.openat)]          = @ptrCast(&openAt);
-    result[@intFromEnum(linux.SYS.poll)]            = @ptrCast(&poll);
-    result[@intFromEnum(linux.SYS.pread64)]         = @ptrCast(&pread);
-    result[@intFromEnum(linux.SYS.preadv)]          = @ptrCast(&preadv);
-    result[@intFromEnum(linux.SYS.prlimit64)]       = @ptrCast(&prlimit64);
-    result[@intFromEnum(linux.SYS.pselect6)]        = @ptrCast(&pselect);
-    result[@intFromEnum(linux.SYS.pwrite64)]        = @ptrCast(&pwrite);
     result[@intFromEnum(linux.SYS.pwritev)]         = @ptrCast(&pwritev);
+    result[@intFromEnum(linux.SYS.pwrite64)]        = @ptrCast(&pwrite);
+    result[@intFromEnum(linux.SYS.pselect6)]        = @ptrCast(&pselect);
+    result[@intFromEnum(linux.SYS.prlimit64)]       = @ptrCast(&prlimit64);
+    result[@intFromEnum(linux.SYS.preadv)]          = @ptrCast(&preadv);
+    result[@intFromEnum(linux.SYS.pread64)]         = @ptrCast(&pread);
+    result[@intFromEnum(linux.SYS.poll)]            = @ptrCast(&poll);
+    result[@intFromEnum(linux.SYS.pipe)]            = @ptrCast(&pipe);
     result[@intFromEnum(linux.SYS.read)]            = @ptrCast(&read);
     result[@intFromEnum(linux.SYS.readv)]           = @ptrCast(&readv);
     result[@intFromEnum(linux.SYS.rseq)]            = @ptrCast(&rseq);
+    result[@intFromEnum(linux.SYS.rmdir)]           = @ptrCast(&rmdir);
     //result[@intFromEnum(linux.SYS.rt_sigaction)]    = @ptrCast(&sigAction);
     //result[@intFromEnum(linux.SYS.rt_sigprocmask)]  = @ptrCast(&sigProcMask);
     result[@intFromEnum(linux.SYS.rt_sigsuspend)]   = @ptrCast(&sigSuspend);
@@ -87,6 +101,10 @@ pub const table: [table_len]SyscallFn = blk: {
     //result[@intFromEnum(linux.SYS.tgkill)]          = @ptrCast(&tgkill);
     result[@intFromEnum(linux.SYS.time)]            = @ptrCast(&time);
     result[@intFromEnum(linux.SYS.uname)]           = @ptrCast(&uname);
+    result[@intFromEnum(linux.SYS.utime)]           = @ptrCast(&utime);
+    result[@intFromEnum(linux.SYS.utimes)]          = @ptrCast(&utimes);
+    result[@intFromEnum(linux.SYS.utimensat)]       = @ptrCast(&utimeNsAt);
+    //result[@intFromEnum(linux.SYS.unlink)]          = @ptrCast(&unlink);
     result[@intFromEnum(linux.SYS.wait4)]           = @ptrCast(&waitPid);
     //result[@intFromEnum(linux.SYS.waitid)]          = @ptrCast(&waitId);
     result[@intFromEnum(linux.SYS.write)]           = @ptrCast(&write);
@@ -211,6 +229,12 @@ const DirectoryIterator = struct {
     }
 };
 
+/// Source: https://elixir.bootlin.com/linux/v7.0.6/source/include/uapi/linux/utime.h#L7
+const UtimeBuffer = extern struct {
+    acc_time: c_long,
+    mod_time: c_long,
+};
+
 inline fn errorFromE(comptime e: linux.E) isize {
     trace.info("return error: {t}", .{e});
     const code: isize = comptime @intFromEnum(e);
@@ -226,6 +250,7 @@ fn errorFromZig(e: sys.exe.Error) isize {
         error.BadLbaSize,
         error.BadName           => errorFromE(.INVAL),
         error.BadOperation      => errorFromE(.OPNOTSUPP),
+        error.BadPipe           => errorFromE(.PIPE),
         error.BadSuperblock     => errorFromE(.INVAL),
         error.Busy              => errorFromE(.BUSY),
         error.DevMajorLimit     => errorFromE(.BUSY),
@@ -399,6 +424,63 @@ fn clockGetTime(clock: linux.clockid_t, time_ptr: ?*linux.timespec) isize {
     return 0;
 }
 
+fn clockNanoSleep(
+    clock: linux.clockid_t,
+    flags: linux.TIMER,
+    request: *const linux.timespec,
+    remain: ?*linux.timespec,
+) isize {
+    trace.info("clock_nanosleep({}, 0x{x}, 0x{x}, 0x{x})", .{
+        @intFromEnum(clock), @as(u32, @bitCast(flags)), @intFromPtr(request), @intFromPtr(remain)
+    });
+
+    validateMemoryArgs(@intFromPtr(request), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
+    if (remain != null) validateMemoryArgs(@intFromPtr(remain), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
+
+    if (
+        request.sec < 0 or
+        request.nsec < 0 or
+        request.nsec >= std.time.ns_per_s
+    ) return errorFromE(.INVAL);
+
+    const ns_to_wait = (@as(u64, @intCast(request.sec)) * std.time.ns_per_s) + @as(u64, @intCast(request.nsec));
+    const start_time_ns = if (flags.ABSTIME) switch (clock) {
+            .REALTIME => sys.time.getTime(),
+            .BOOTTIME,
+            .MONOTONIC => sys.time.getUpTime(),
+            else => return errorFromE(.INVAL),
+    }.toNs() else 0;
+
+    if (start_time_ns >= ns_to_wait) return 0;
+
+    const wait_time_ns = ns_to_wait -% start_time_ns;
+    sched.sleepFor(wait_time_ns);
+
+    if (remain) |r| {
+        r.sec = 0;
+        r.nsec = 0;
+    }
+
+    return 0;
+}
+
+fn nanoSleep(request: *const linux.timespec, remain: ?*linux.timespec) isize {
+    trace.info("nanosleep(0x{x}, 0x{x})", .{@intFromPtr(request), @intFromPtr(remain)});
+
+    validateMemoryArgs(@intFromPtr(request), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
+    if (remain != null) validateMemoryArgs(@intFromPtr(remain), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
+
+    const wait_time_ns = (@as(u64, @intCast(request.sec)) * std.time.ns_per_s) + @as(u64, @intCast(request.nsec));
+    sched.sleepFor(wait_time_ns);
+
+    if (remain) |r| {
+        r.sec = 0;
+        r.nsec = 0;
+    }
+
+    return 0;
+}
+
 fn clone(
     ctx: *arch.syscall.Context, sp: usize, parent_tid: *u32,
     child_tid: *u32, tls: usize, flags: usize
@@ -469,13 +551,69 @@ fn fork(ctx: *arch.syscall.Context) callconv(.c) isize {
 }
 
 fn close(fd: linux.fd_t) isize {
-    trace.info("close({})", .{fd});
+    const proc = sys.Process.getCurrent();
+
+    trace.info("close({}): {f}", .{fd, proc});
     if (fd < 0) return errorFromE(.BADF);
 
-    const proc = sys.Process.getCurrent();
     proc.files.close(@intCast(fd)) catch |err| return errorFromZig(err);
 
     return 0;
+}
+
+fn chdir(path: [*c]const u8) isize {
+    trace.info("chdir(0x{x})", .{path});
+    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+
+    const proc = sys.Process.getCurrent();
+    const path_slice = std.mem.span(path);
+
+    const dentry = vfs.lookup(
+        proc.root_dir,
+        proc.work_dir,
+        path_slice
+    ) catch |err| return errorFromZig(err);
+    defer dentry.deref();
+
+    return chdirImpl(proc, dentry);
+}
+
+fn fchdir(fd: linux.fd_t) isize {
+    trace.info("fchdir({})", .{fd});
+    if (fd < 0) return errorFromE(.BADF);
+
+    const proc = sys.Process.getCurrent();
+    const file = proc.files.get(@intCast(fd)) orelse return errorFromE(.BADF);
+    defer file.deref();
+
+    return chdirImpl(proc, file.dentry);
+}
+
+fn chdirImpl(proc: *sys.Process, dentry: *vfs.Dentry) isize {
+    const inode = dentry.inode;
+    if (inode.type != .directory) return errorFromE(.NOTDIR);
+
+    const role = inode.getRole(proc.uid, proc.gid);
+    if (!inode.checkAccess(.r, role)) return errorFromE(.ACCES);
+
+    proc.ctrl.lock.lock();
+    defer proc.ctrl.lock.unlock();
+
+    const old_dir = proc.work_dir;
+    dentry.ref();
+    defer old_dir.deref();
+
+    proc.work_dir = dentry;
+    return 0;
+}
+
+fn creat(path: [*:0]const u8, mode: linux.mode_t) isize {
+    trace.info("creat(0x{x}, 0o{o})", .{@intFromPtr(path), mode});
+
+    const proc = sys.Process.getCurrent();
+    const flags: linux.O = .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true };
+
+    return openImpl(proc, proc.work_dir, path, flags, mode);
 }
 
 fn dup(fd: linux.fd_t) isize {
@@ -565,7 +703,7 @@ fn execve(path: [*c]const u8, args: ?[*:null][*c]const u8, envs: ?[*:null][*c]co
         log.warn("execve failed: {t}, kill: {f}", .{ret_error, proc});
 
         proc.terminate(1);
-        proc.deinit();
+        proc.delete();
 
         sched.terminate();
     }
@@ -582,7 +720,7 @@ fn exit(status: i32) void {
     const short_status: u8 = @truncate(@as(u32, @intCast(status)));
 
     proc.terminate(short_status);
-    proc.deinit();
+    proc.delete();
 
     sched.terminate();
 }
@@ -595,7 +733,7 @@ fn exitGroup(status: i32) void {
     const short_status: u8 = @truncate(@as(u32, @intCast(status)));
 
     proc.terminate(short_status);
-    proc.deinit();
+    proc.delete();
 
     sched.terminate();
 }
@@ -683,6 +821,19 @@ fn fcntlSetFileFlags(proc: *sys.Process, handle: *sys.Process.FileTable.Handle, 
     return 0;
 }
 
+fn fdAtGet(proc: *sys.Process, fd: linux.fd_t) ?*vfs.Dentry {
+    if (fd == linux.AT.FDCWD) {
+        proc.work_dir.ref();
+        return proc.work_dir;
+    } else if (fd < 0) return null;
+
+    const file = proc.files.get(@intCast(fd)) orelse return null;
+    defer file.deref();
+
+    file.dentry.ref();
+    return file.dentry;
+}
+
 fn stat(path: [*c]const u8, stats: *linux.Stat) isize {
     trace.info("stat(0x{x}, 0x{x})", .{@intFromPtr(path), @intFromPtr(stats)});
 
@@ -697,17 +848,18 @@ fn stat(path: [*c]const u8, stats: *linux.Stat) isize {
     return statImpl(dentry, stats);
 }
 
-fn fdAtGet(proc: *sys.Process, fd: linux.fd_t) ?*vfs.Dentry {
-    if (fd == linux.AT.FDCWD) {
-        proc.work_dir.ref();
-        return proc.work_dir;
-    } else if (fd < 0) return null;
+fn lstat(path: [*c]const u8, stats: *linux.Stat) isize {
+    trace.info("lstat(0x{x}, 0x{x})", .{@intFromPtr(path), @intFromPtr(stats)});
 
-    const file = proc.files.get(@intCast(fd)) orelse return null;
-    defer file.deref();
+    validateMemoryArgs(@intFromPtr(path), linux.PATH_MAX) catch return errorFromE(.FAULT);
 
-    file.dentry.ref();
-    return file.dentry;
+    const proc = sys.Process.getCurrent();
+    const dentry = vfs.lookupRaw(
+        proc.root_dir, proc.work_dir, std.mem.span(path), false
+    ) catch |err| return errorFromZig(err);
+    defer dentry.deref();
+
+    return statImpl(dentry, stats);
 }
 
 fn fstat(fd: linux.fd_t, stats: *linux.Stat) isize {
@@ -752,33 +904,61 @@ fn statImpl(dentry: *vfs.Dentry, stats: *linux.Stat) isize {
         .symbolic_link  => linux.S.IFLNK,
     };
 
-    const block_size = switch (dentry.meta.fs) {
-        .super => dentry.getSuper().block_size,
-        else => vm.page_size
+    const block_size,
+    const dev_num = switch (dentry.meta.fs) {
+        .super => blk: {
+            const super = dentry.getSuper();
+            const dev_num = super.part.dev_file.num;
+            break :blk .{ super.block_size, @as(linux.dev_t, dev_num.major) << 20 | dev_num.minor };
+        },
+        else => .{ 512, 0 },
     };
 
     stats.* = .{
-        // TODO: Implement access to device number from file struct
-        .dev = 0,
+        .dev = dev_num,
         .ino = inode.index,
         .mode = inode_type | inode.perm,
         .nlink = inode.links_num,
         .uid = inode.uid,
         .gid = inode.gid,
-        // TODO: What is this?
         .rdev = 0,
         .size = @intCast(inode.size),
         .blksize = block_size,
-        .blocks = @intCast((inode.size + (block_size - 1)) / block_size),
+        .blocks = @intCast((inode.size + 511) / 512),
         // FIXME: Check if this code is correct
-        .atim = .{ .sec = inode.access_time, .nsec = 0 },
-        .mtim =  .{ .sec = inode.modify_time, .nsec = 0 },
-        .ctim =  .{ .sec = inode.create_time, .nsec = 0 },
+        .atim = .{
+            .sec =  @as(u32, @truncate(inode.access_time)),
+            .nsec = @as(u32, @truncate(inode.access_time >> @bitSizeOf(u32))),
+        },
+        .mtim =  .{
+            .sec = @as(u32, @truncate(inode.modify_time)),
+            .nsec = @as(u32, @truncate(inode.modify_time >> @bitSizeOf(u32))),
+        },
+        .ctim =  .{
+            .sec = @as(u32, @truncate(inode.create_time)),
+            .nsec = @as(u32, @truncate(inode.create_time >> @bitSizeOf(u32))),
+        },
         .__pad0 = undefined,
         .__unused = undefined,
     };
 
+    if (
+        (dentry.inode.type == .block_device or
+        dentry.inode.type == .char_device) and
+        dentry.getFileSystem() == vfs.devfs.getFs()
+    ) {
+        const dev_file = vfs.devfs.DevFile.fromDentry(dentry);
+        stats.rdev = (@as(linux.dev_t, dev_file.num.major) << 8) | dev_file.num.minor;
+    }
+
     log.debug("stat: {s}, 0o{o}, {} bytes", .{dentry.name.str(), stats.mode, stats.size});
+    return 0;
+}
+
+fn futex(addr: *const anyopaque, op: linux.FUTEX_OP) isize {
+    trace.info("futex(0x{x}, {any})", .{@intFromPtr(addr), op});
+    validateMemoryArgs(@intFromPtr(addr), @sizeOf(u32)) catch return errorFromE(.FAULT);
+
     return 0;
 }
 
@@ -941,6 +1121,101 @@ fn ioctl(fd: linux.fd_t, cmd: u32, arg: usize) isize {
     return 0;
 }
 
+fn seek(fd: linux.fd_t, offset: isize, whence: u8) isize {
+    trace.info("lseek({}, 0x{x}, {})", .{fd, offset, whence});
+    if (fd < 0) return errorFromE(.BADF);
+
+    const proc = sys.Process.getCurrent();
+    const file = proc.files.get(@intCast(fd)) orelse return errorFromE(.BADF);
+    defer file.deref();
+
+    switch (file.dentry.inode.type) {
+        .fifo,
+        .socket,
+        .unknown => return errorFromE(.SPIPE),
+        else => {}
+    }
+
+    // TODO: Thread-safety
+    const base = switch (whence & 0x3) {
+        linux.SEEK.SET => 0,
+        linux.SEEK.CUR => file.offset,
+        linux.SEEK.END => file.dentry.inode.size,
+        else => return errorFromE(.INVAL)
+    };
+
+    const new_offset = @as(isize, @intCast(base)) +% offset;
+    if (
+        (offset < 0 and (new_offset < 0 or new_offset > base)) or
+        (offset >= 0 and (new_offset < base)) or
+        (new_offset > file.dentry.inode.size)
+    ) return errorFromE(.INVAL);
+
+    file.offset = @intCast(new_offset);
+    return 0;
+}
+
+fn mkdir(path: [*:0]const u8, mode: linux.mode_t) isize {
+    trace.info("mkdir(0x{x}, 0o{o})", .{@intFromPtr(path), mode});
+
+    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+
+    const proc = sys.Process.getCurrent();
+    return mkdirImpl(proc, proc.work_dir, path, mode);
+}
+
+fn mkdirAt(fd: linux.fd_t, path: [*:0]const u8, mode: linux.mode_t) isize {
+    trace.info("mkdirat({}, 0x{x}, 0o{o})", .{fd, @intFromPtr(path), mode});
+    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+
+    const proc = sys.Process.getCurrent();
+    const at_dir = fdAtGet(proc, fd) orelse return errorFromE(.BADF);
+    defer at_dir.deref();
+
+    return mkdirImpl(proc, at_dir, path, mode);
+}
+
+fn mkdirImpl(proc: *sys.Process, at_dir: *vfs.Dentry, path: [*:0]const u8, mode: linux.mode_t) isize {
+    const slice: []const u8 = std.mem.span(path);
+
+    var iter = std.mem.splitBackwardsScalar(u8, slice, '/');
+    var item = iter.first();
+    if (item.len == 0) item = iter.next() orelse return errorFromE(.NOENT);
+
+    const rest = iter.rest();
+    const parent = if (rest.len > 0) blk: {
+        break :blk vfs.lookup(
+            proc.root_dir, at_dir, rest
+        ) catch |err| return errorFromZig(err);
+    } else blk: {
+        at_dir.ref();
+        break :blk at_dir;
+    };
+    defer parent.deref();
+
+    if (parent.inode.type != .directory) return errorFromE(.NOTDIR);
+
+    const role = parent.inode.getRole(proc.uid, proc.gid);
+    if (parent.inode.checkAccess(.w, role) == false) return errorFromE(.ACCES);
+
+    if (item.len == 0 or
+        (item[0] == '.' and (item.len == 1 or (item.len == 2 and item[1] == '.')))
+    ) return errorFromE(.EXIST);
+
+    if (parent.lookup(item)) |child| {
+        child.deref();
+        return errorFromE(.EXIST);
+    }
+
+    log.debug("create dir: '{s}'", .{item});
+    const new_dir = parent.makeDirectory(item, .{
+        .uid = proc.uid, .gid = proc.gid, .perm = @truncate(mode)
+    }) catch |err| return errorFromZig(err);
+
+    new_dir.deref();
+    return 0;
+}
+
 fn mmap(virt: usize, len: usize, prot: c_int, flags: linux.MAP, fd: linux.fd_t, offset: linux.off_t) usize {
     trace.info("mmap(0x{x}, 0x{x}, {}, {any}, {}, {});", .{virt, len, prot, flags, fd, offset});
 
@@ -1023,6 +1298,17 @@ fn mprotect(virt: usize, len: usize, prot: c_int) isize {
     proc.addr_space.protectRange(virt, pages, mmap_flags) catch |err| return errorFromZig(err);
 
     return 0;
+}
+
+fn mremap(addr: usize, len: usize, new_len: usize, flags: linux.MREMAP, new_addr: usize) isize {
+    trace.warn("mremap(0x{x}, 0x{x}, 0x{x}, {any}, 0x{x})", .{
+        addr, len, new_len, flags, new_addr,
+    });
+
+    const proc = sys.Process.getCurrent();
+    log.debug("remap: {f}", .{proc.addr_space});
+
+    return errorFromE(.NOSYS);
 }
 
 fn munmap(virt: usize, len: usize) isize {
@@ -1175,6 +1461,28 @@ fn poll(fds: [*c]linux.pollfd, len: usize, timeout: i32) isize {
 
         sched.yield();
     }
+
+    return 0;
+}
+
+fn pipe(fds: *[2]linux.fd_t) isize {
+    trace.info("pipe(0x{x})", .{@intFromPtr(fds)});
+    validateMemoryArgs(@intFromPtr(fds), @sizeOf([2]linux.fd_t)) catch return errorFromE(.FAULT);
+
+    const proc = sys.Process.getCurrent();
+    const endpoints = vfs.Pipe.create(vm.page_size * 4) catch return errorFromE(.NOMEM);
+
+    var descriptors: [2]sys.FileTable.Descriptor = .{
+        .{ .idx = undefined, .file = endpoints[0] }, // read-end
+        .{ .idx = undefined, .file = endpoints[1] }, // write-end
+    };
+
+    proc.files.newDescriptors(&descriptors) catch |err| {
+        endpoints[0].deref();
+        endpoints[1].deref();
+        return errorFromZig(err);
+    };
+    fds.* = .{ @intCast(descriptors[0].idx), @intCast(descriptors[1].idx) };
 
     return 0;
 }
@@ -1392,6 +1700,28 @@ fn rseq(ptr: ?*RestartableSequence, size: u32, flags: RestartableSequence.CallFl
 
     set_ptr.cpu_id = smp.getIdx();
     set_ptr.cpu_id_start = set_ptr.cpu_id;
+
+    return 0;
+}
+
+fn rmdir(path: [*:0]const u8) isize {
+    trace.info("rmdir(0x{x})", .{@intFromPtr(path)});
+    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+
+    const proc = sys.Process.getCurrent();
+    const slice = std.mem.span(path);
+
+    const dentry = vfs.lookup(
+        proc.root_dir, proc.work_dir, slice
+    ) catch |err| return errorFromZig(err);
+    defer dentry.deref();
+
+    if (dentry.inode.type != .directory) return errorFromE(.NOTDIR);
+
+    const role = dentry.inode.getRole(proc.uid, proc.gid);
+    if (!dentry.inode.checkAccess(.wx, role)) return errorFromE(.ACCES);
+
+    dentry.remove() catch |err| return errorFromZig(err);
 
     return 0;
 }
@@ -1617,16 +1947,32 @@ fn tgkill(tgid: u32, tid: u32, sig: u32) isize {
     return errorFromE(.NOSYS);
 }
 
-fn time(tloc: ?*linux.time_t) isize {
-    trace.info("time(0x{x})", .{@intFromPtr(tloc)});
+fn time(time_out: ?*linux.time_t) isize {
+    trace.info("time(0x{x})", .{@intFromPtr(time_out)});
 
     const epoch = sys.time.getEpoch();
-    if (tloc) |ptr| {
-        validateMemoryPtr(@intFromPtr(tloc)) catch return errorFromE(.FAULT);
+    if (time_out) |ptr| {
+        validateMemoryPtr(@intFromPtr(time_out)) catch return errorFromE(.FAULT);
         ptr.* = @intCast(epoch);
     }
 
     return @intCast(epoch);
+}
+
+fn getTimeOfDay(value: *linux.timeval, zone: ?*linux.timezone) isize {
+    trace.info("gettimeofday(0x{x}, 0x{x})", .{ @intFromPtr(value), @intFromPtr(zone) });
+
+    validateMemoryArgs(@intFromPtr(value), @sizeOf(linux.timeval)) catch return errorFromE(.FAULT);
+    if (zone != null) validateMemoryArgs(@intFromPtr(zone), @sizeOf(linux.timezone)) catch return errorFromE(.FAULT);
+
+    const curr_time = sys.time.getTime();
+    value.sec  = @intCast(@as(u32, @truncate(curr_time.sec)));
+    value.usec = @intCast(curr_time.ns / std.time.ns_per_us);
+
+    // TODO: Implement timezone.
+    if (zone) |z| z.* = .{ .dsttime = 0, .minuteswest = 0 };
+
+    return 0;
 }
 
 fn uname(buf: *linux.utsname) isize {
@@ -1645,6 +1991,90 @@ fn uname(buf: *linux.utsname) isize {
     @memcpy(buf.release[0..release.len], release);
     @memcpy(buf.machine[0..machine.len], machine);
 
+    return 0;
+}
+
+fn utime(path: [*:0]const u8, times: ?*const UtimeBuffer) isize {
+    trace.info("utime(0x{x}, 0x{x})", .{@intFromPtr(path), @intFromPtr(times)});
+
+    const proc = sys.Process.getCurrent();
+    if (times) |t| {
+        validateMemoryArgs(@intFromPtr(times), @sizeOf(UtimeBuffer)) catch return errorFromE(.FAULT);
+        if (t.acc_time < 0 or t.mod_time < 0) return errorFromE(.INVAL);
+
+        const sys_times: [2]sys.time.Time = .{
+            .{ .sec = @intCast(t.acc_time) },
+            .{ .sec = @intCast(t.mod_time) },
+        };
+        return utimeImpl(proc, proc.work_dir, path, &sys_times);
+    } 
+
+    return utimeImpl(proc, proc.work_dir, path, null);
+}
+
+fn utimes(path: [*:0]const u8, times: ?*const [2]linux.timeval) isize {
+    trace.info("utimes(0x{x}, 0x{x})", .{@intFromPtr(path), @intFromPtr(times)});
+
+    const proc = sys.Process.getCurrent();
+    if (times) |t| {
+        validateMemoryArgs(@intFromPtr(times), @sizeOf([2]linux.timeval)) catch return errorFromE(.FAULT);
+        if (t[0].sec < 0 or t[0].usec < 0 or t[1].sec < 0 or t[1].usec < 0) return errorFromE(.INVAL);
+
+        const sys_times: [2]sys.time.Time = .{
+            .{ .sec = @intCast(t[0].sec), .ns = @as(u32, @intCast(t[0].usec)) * std.time.ns_per_us },
+            .{ .sec = @intCast(t[1].sec), .ns = @as(u32, @intCast(t[1].usec)) * std.time.ns_per_us },
+        };
+        return utimeImpl(proc, proc.work_dir, path, &sys_times);
+    } 
+
+    return utimeImpl(proc, proc.work_dir, path, null);
+}
+
+fn utimeNsAt(fd: linux.fd_t, path: [*:0]const u8, times: ?*const [2]linux.timespec, flags: u32) isize {
+    trace.info("utimensat({}, 0x{}, 0x{}, 0x{x})", .{
+        fd, @intFromPtr(path), @intFromPtr(times), flags
+    });
+
+    const proc = sys.Process.getCurrent();
+    const dir = fdAtGet(proc, fd) orelse return errorFromE(.BADF);
+    defer dir.deref();
+
+    if (times) |t| {
+        validateMemoryArgs(@intFromPtr(times), @sizeOf([2]linux.timeval)) catch return errorFromE(.FAULT);
+        if (t[0].sec < 0 or t[0].nsec < 0 or t[1].sec < 0 or t[1].nsec < 0) return errorFromE(.INVAL);
+
+        const sys_times: [2]sys.time.Time = .{
+            .{ .sec = @intCast(t[0].sec), .ns = @intCast(t[0].nsec) },
+            .{ .sec = @intCast(t[1].sec), .ns = @intCast(t[1].nsec) },
+        };
+        return utimeImpl(proc, dir, path, &sys_times);
+    }
+
+    return utimeImpl(proc, dir, path, null);
+}
+
+fn utimeImpl(proc: *sys.Process, dir: *vfs.Dentry, path: [*:0]const u8, times: ?*const [2]sys.time.Time) isize {
+    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    // TODO: Implement support for UTIME_NOW, UTIME_OMIT
+
+    const slice = std.mem.span(path);
+    const dentry = vfs.lookup(
+        proc.root_dir, dir, slice
+    ) catch |err| return errorFromZig(err);
+    defer dentry.deref();
+
+    const role = dentry.inode.getRole(proc.uid, proc.gid);
+    if (!dentry.inode.checkAccess(.w, role) and proc.uid != dentry.inode.uid) return errorFromE(.ACCES);
+
+    const acc_time,
+    const mod_time = if (times) |t| .{
+        t[0], t[1]
+    } else blk: {
+        const curr_time = sys.time.getTime();
+        break :blk .{ curr_time, curr_time };
+    };
+
+    dentry.touch(acc_time, mod_time) catch |err| return errorFromZig(err);
     return 0;
 }
 
