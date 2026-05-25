@@ -18,6 +18,7 @@ pub const regs = @import("dev/regs.zig");
 pub const io = @import("dev/io.zig");
 pub const intr = @import("dev/intr.zig");
 pub const pci = @import("dev/stds/pci.zig");
+pub const usb = @import("dev/stds/usb.zig");
 
 pub const Name = extern struct {
     pub const Error = error {
@@ -129,6 +130,7 @@ const AutoInit = struct {
         @import("dev/drivers/input/at-keyboard.zig"),
         @import("dev/drivers/uart/8250.zig"),
         pci,
+        usb,
         @import("dev/drivers/blk/nvme.zig")
     };
 };
