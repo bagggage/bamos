@@ -40,6 +40,7 @@
 const std = @import("std");
 
 const lib = @import("../lib.zig");
+const opts = @import("opts");
 const vm = @import("../vm.zig");
 
 /// The maximum size for small memory allocations, defined as half of the
@@ -241,3 +242,21 @@ fn initOmaPool() [oma_pool_len]vm.ObjectAllocator {
 
     return result;
 }
+
+const TestHugeFrame = HugeFrame;
+const TestHugeNode = HugeNode;
+const test_max_small_size = max_small_size;
+const test_min_size = min_size;
+const test_oma_pool_ref = &oma_pool;
+const test_huge_oma_ref = &huge_oma;
+const test_huge_alloc_tree_ref = &huge_alloc_tree;
+
+pub const @"test" = if (opts.is_testing) opaque {
+    pub const HugeFrame = TestHugeFrame;
+    pub const HugeNode = TestHugeNode;
+    pub const max_small_size = test_max_small_size;
+    pub const min_size = test_min_size;
+    pub const oma_pool = test_oma_pool_ref;
+    pub const huge_oma = test_huge_oma_ref;
+    pub const huge_alloc_tree = test_huge_alloc_tree_ref;
+} else void;

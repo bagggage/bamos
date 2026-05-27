@@ -10,6 +10,7 @@ const std = @import("std");
 const boot = @import("../boot.zig");
 const lib = @import("../lib.zig");
 const log = std.log.scoped(.PageAllocator);
+const opts = @import("opts");
 const vm = @import("../vm.zig");
 
 const List = std.SinglyLinkedList;
@@ -305,3 +306,12 @@ inline fn getPageBit(base: u32, rank: u8) u8 {
 inline fn togglePageBit(base: u32, rank: u8) void {
     free_areas[rank].bitmap.toggle(base >> @truncate(1 +% rank));
 }
+
+const Self = @This();
+
+pub const @"test" = if (opts.is_testing) opaque {
+    pub const FreeArea = Self.FreeArea;
+    pub const free_areas = &Self.free_areas;
+    pub const getPageBit = Self.getPageBit;
+    pub const getPageNodePhys = Self.getPageNodePhys;
+} else void;

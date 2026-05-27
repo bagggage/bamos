@@ -16,6 +16,7 @@ const std = @import("std");
 
 const boot = @import("../boot.zig");
 const lib = @import("../lib.zig");
+const opts = @import("opts");
 const vm = @import("../vm.zig");
 
 const FreeList = lib.atomic.SinglyLinkedList;
@@ -320,3 +321,6 @@ inline fn freeArena(self: *Self, arena: *Arena) void {
     arenas_alloc.free(arena);
 }
 
+pub const @"test" = if (opts.is_testing) opaque {
+    pub const getArenaSize = Self.getArenaSize;
+} else void;

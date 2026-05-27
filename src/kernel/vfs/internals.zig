@@ -259,7 +259,6 @@ pub const file = opaque {
                 defer block.writeUp();
 
                 @memcpy(block.asSlice()[inner_offset..inner_end], buffer[tmp_offset..tmp_offset + inner_len]);
-                log.info("set dirty: {}-{}", .{inner_offset, inner_end});
                 block.setDirtyRange(inner_offset, inner_end);
 
                 tmp_offset +%= inner_len;

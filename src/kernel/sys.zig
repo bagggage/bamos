@@ -10,6 +10,7 @@ const devfs = vfs.devfs;
 const lib = @import("lib.zig");
 const log = std.log.scoped(.sys);
 const logger = @import("logger.zig");
+const opts = @import("opts");
 const sched = @import("sched.zig");
 const Teletype = @import("dev.zig").classes.Teletype;
 const vfs = @import("vfs.zig");
@@ -39,6 +40,8 @@ const InitSource = struct {
 };
 
 pub fn init() !void {
+    if (comptime opts.is_testing) return;
+
     startInit() catch |err| {
         if (err == error.InitNotFound) @panic("Init executable not found.");
         return err;

@@ -2,10 +2,7 @@
 
 // Copyright (C) 2026 Konstantin Pigulevskiy (bagggage@github)
 
-const std = @import("std");
-
 const sched = @import("../../sched.zig");
-const smp = @import("../../smp.zig");
 const Spinlock = @import("Spinlock.zig");
 const intr = @import("../../dev.zig").intr;
 
@@ -16,7 +13,9 @@ spinlock: Spinlock = .{},
 wait_lock: Spinlock = .{},
 
 pub inline fn init(init_state: enum{locked,unlocked}) Self {
-    return .{ .spinlock = .init(init_state)  };
+    return .{
+        .spinlock = .init(if (init_state == .locked) .locked else .unlocked),
+    };
 }
 
 pub fn lock(self: *Self) void {
@@ -64,11 +63,11 @@ pub fn unlock(self: *Self) void {
 
 /// Restore local interrupt state and releases the lock.
 pub fn unlockRestoreIntr(self: *Self) void {
-    const intr_enable = self.exclusion.raw == .locked_intr;
+    const intr_enable = self.spinlock.exclusion.load(.unordered) == .locked_intr;
     if (intr_enable) {
         self.unlockIntr();
     } else {
-        self.spinlock.unlockAtomic();
+        self.unlock();
     }
 }
 

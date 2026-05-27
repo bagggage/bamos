@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const opts = @import("opts");
 
 const arch = lib.arch;
 const dev = @import("dev.zig");
@@ -190,8 +191,13 @@ pub fn defaultLog(
 
     writer.print(format, args) catch return;
 
-    putLog(level, @tagName(scope), writer.buffered());
-    notifyWaiters() catch {};
+    if (comptime opts.is_testing) {
+        serial.write(writer.buffered());
+        serial.write(new_line);
+    } else {
+        putLog(level, @tagName(scope), writer.buffered());
+        notifyWaiters() catch {};
+    }
 }
 
 pub fn panicLog(msg: []const u8) void {
@@ -231,6 +237,8 @@ pub fn panicLog(msg: []const u8) void {
 
 pub fn flushBuffer(str: []const u8) void {
     serial.write(str);
+
+    if (comptime opts.is_testing) return;
 
     if (!dev.VirtualTerminal.isEnabled() and
         video.terminal.isInitialized()

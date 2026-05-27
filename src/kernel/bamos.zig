@@ -34,3 +34,16 @@
 //! - [**Architecture module**](./#bamos.arch.x86-64.arch): This module provides the implementation
 //! of the interface for architecture-dependent features.
 //! - [**Logging**](./#bamos.logger): The logging system.
+
+pub const boot = @import("boot.zig");
+pub const config = @import("config.zig");
+pub const dev = @import("dev.zig");
+pub const lib = @import("lib.zig");
+pub const logger = @import("logger.zig");
+pub const panic = @import("panic.zig");
+pub const sched = @import("sched.zig");
+pub const smp = @import("smp.zig");
+pub const sys = @import("sys.zig");
+pub const vfs = @import("vfs.zig");
+pub const video = @import("video.zig");
+pub const vm = @import("vm.zig");

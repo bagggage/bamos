@@ -50,7 +50,7 @@ pub const std_options = std.Options {
 /// Can be accessed from inline assembly just as `main`.
 /// 
 /// Should never return.
-pub export fn main() noreturn {
+pub fn main() noreturn {
     defer @panic("reached end of the main");
 
     if (!smp.bootCpu()) startNonBootCpu();
@@ -98,15 +98,19 @@ fn kernelStartupTask() noreturn {
     const allocated = @as(usize, vm.PageAllocator.getAllocatedPages()) * vm.page_size;
     log.info("used memory: {} KiB ({} MiB)", .{allocated / lib.kb_size, allocated / lib.mb_size});
 
-    init(sys);
+    if (comptime opts.is_testing) {
+        const runner = @import("../../tests/runner.zig");
+        runner.start();
+    }
 
+    init(sys);
     sched.terminate();
 }
 
 inline fn startNonBootCpu() void {
     sys.time.initPerCpu();
 
-    log.info("CPU {} initialized", .{smp.getIdx()});
+    if (comptime !opts.is_testing) log.info("CPU {} initialized", .{smp.getIdx()});
     sched.getCurrent().start();
 }
 

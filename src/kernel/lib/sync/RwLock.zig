@@ -58,10 +58,10 @@ pub fn writeLock(self: *Self) void {
 }
 
 pub fn tryWriteLock(self: *Self) bool {
-    if (self.readers.load(.release) > 0) return false;
+    if (self.readers.load(.acquire) > 0) return false;
     if (self.lock.tryLock() == false) return false;
 
-    if (self.readers.load(.release) > 0) {
+    if (self.readers.load(.acquire) > 0) {
         self.lock.unlock();
         return false;
     }

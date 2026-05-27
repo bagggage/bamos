@@ -12,6 +12,7 @@ const qemu_ram_default = "128M";
 var dbg_make_exe: *std.Build.Step.Compile = undefined;
 var tar_exe: *std.Build.Step.Compile = undefined;
 var zip_exe: *std.Build.Step.Compile = undefined;
+var testing: bool = false;
 
 pub fn build(b: *std.Build) void {
     const kernel_step = b.step("kernel", "Build the kernel");
@@ -20,6 +21,7 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Generate documentation");
 
     const arch = b.option(std.Target.Cpu.Arch, "arch", "The target CPU architecture") orelse .x86_64;
+    testing = b.option(bool, "testing", "Build and runs kernel tests") orelse false;
 
     makeTools(b);
 
@@ -37,6 +39,9 @@ pub fn build(b: *std.Build) void {
 
     // Make `zig build [install]` same as `zig build iso`
     b.getInstallStep().dependOn(&image.step);
+
+    // Always run qemu for tests
+    if (testing) b.getInstallStep().dependOn(&qemu.step);
 }
 
 fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallArtifact {
@@ -65,7 +70,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     const kernel_obj = b.addObject(.{
         .name = "bamos",
         .root_module = b.createModule(.{
-            .root_source_file = b.path(src_dir++"/kernel/main.zig"),
+            .root_source_file = b.path("kernel.zig"),
             .omit_frame_pointer = if (optimize == .Debug or optimize == .ReleaseSafe) false else null,
             .optimize = optimize,
             .target = target,
@@ -76,8 +81,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         .use_llvm = true
     });
 
-    const uacpi,
-    const uacpi_obj = makeUacpi(b, target, optimize);
+    const uacpi, const uacpi_obj = makeUacpi(b, target, optimize);
 
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
     kernel_obj.addIncludePath(uacpi.path("include"));
@@ -104,6 +108,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     kernel_opts.addOption(std.SemanticVersion, "version", kernel_ver);
     kernel_opts.addOption([]const u8, "version_string", b.fmt("{f}", .{kernel_ver}));
     kernel_opts.addOption([]const u8, "build", build_string);
+    kernel_opts.addOption(bool, "is_testing", testing);
 
     kernel_obj.root_module.addOptions("opts", kernel_opts);
 
@@ -267,7 +272,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     const cpu_num = b.option(u5, "qemu-cpus", "QEMU machine cpus number (default: 4)") orelse qemu_cores_default;
     const ram_size = b.option([]const u8, "qemu-ram", "QEMU machine RAM size (default: "++qemu_ram_default++")") orelse qemu_ram_default;
     const drives = b.option([]const []const u8, "qemu-drives", "QEMU additional NVMe drives (paths to images)") orelse &.{};
-    const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse false;
+    const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse testing;
     const no_uefi = b.option(bool, "qemu-noefi", "Legacy BIOS firmware") orelse false;
     const usb_devs = b.option(bool, "qemu-usb", "Enable USB device support (default: false)") orelse false;
 
