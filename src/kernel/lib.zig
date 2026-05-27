@@ -21,7 +21,7 @@ pub const arch = switch (builtin.cpu.arch) {
     else => @compileError("Unsupported architecture"),
 };
 
-pub const AnyData = struct {
+pub const AnyData = packed struct(usize) {
     ptr: ?*anyopaque = null,
 
     pub inline fn from(val: anytype) AnyData {
@@ -49,7 +49,7 @@ pub const AnyData = struct {
         const ptr: usize = @intFromPtr(self.ptr);
 
         if (comptime @bitSizeOf(usize) > @bitSizeOf(Int)) {
-            const int: Int = @truncate(@intFromPtr(ptr));
+            const int: Int = @truncate(ptr);
             return @bitCast(int);
         } else {
             const int: Int = ptr;
