@@ -26,7 +26,7 @@ pub const std_options = std.Options {
     .logFn = logger.defaultLog,
     .log_level = switch (builtin.mode) {
         .Debug,
-        .ReleaseSafe => .info,
+        .ReleaseSafe => .debug,
         .ReleaseSmall,
         .ReleaseFast => .info
     },
@@ -37,6 +37,7 @@ pub const std_options = std.Options {
         },
         .{ .level = .info, .scope = .pci },
         .{ .level = .info, .scope = .@"intr.except" },
+        .{ .level = .info, .scope = .uacpi },
         //.{ .level = .warn, .scope = .@"sys.MapUnit" },
     }
 };
@@ -104,10 +105,12 @@ fn kernelStartupTask() noreturn {
     init(vfs);
     init(dev);
 
+    const allocated = @as(usize, vm.PageAllocator.getAllocatedPages()) * vm.page_size;
+    log.info("used memory: {} KiB ({} MiB)", .{allocated / lib.kb_size, allocated / lib.mb_size});
+
     init(sys);
 
-    sched.pause();
-    unreachable;
+    sched.terminate();
 }
 
 inline fn startNonBootCpu() void {
