@@ -19,6 +19,7 @@ pub const AddressSpace = Process.AddressSpace;
 pub const call = @import("sys/call.zig");
 pub const Console = @import("sys/Console.zig");
 pub const exe = @import("sys/exe.zig");
+pub const FileTable = @import("sys/FileTable.zig");
 pub const input = @import("sys/input.zig");
 pub const limits = @import("sys/limits.zig");
 pub const Process = @import("sys/Process.zig");
@@ -42,7 +43,6 @@ const InitSource = struct {
 pub fn init() !void {
     try Teletype.dev_tty.init();
     try VirtualTerminal.init();
-    try Console.init();
 
     startInit() catch |err| {
         if (err == error.InitNotFound) @panic("Init executable not found.");
@@ -74,6 +74,8 @@ fn startInit() !void {
 
         const args = if (parsed_args.len > 0) parsed_args else &.{init_src.path.ptr};
         try bin.load(args, &.{});
+
+        try Console.init();
 
         const console = devfs.getRoot().lookup("console") orelse {
             @branchHint(.cold);
