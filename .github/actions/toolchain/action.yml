@@ -1,0 +1,10 @@
+name: Setup build toolchain
+description: Setup Zig compiler and maybe other tools in future.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Zig
+      uses: mlugg/setup-zig@v2
+      with:
+        version: 0.15.2

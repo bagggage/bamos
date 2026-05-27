@@ -1,0 +1,35 @@
+name: Build and Release
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@latest
+
+      - name: Setup toolchain
+        uses: ./.github/actions/toolchain
+
+      - name: Build x86-64
+        run: |
+          echo "Build release-safe"
+          zig build iso --release=safe -Darch=x86_64
+          mv ./zig-out/bamos.iso ./zig-out/bamos-safe-x86_64.iso
+
+          echo "Build release-fast"
+          zig build iso --release=fast -Darch=x86_64
+          mv ./zig-out/bamos.iso ./zig-out/bamos-x86_64.iso
+
+      - name: Create release
+        uses: marvinpinto/action-automatic-releases@latest
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          prerelease: false
+          files: |
+            ./zig-out/bamos-*.iso

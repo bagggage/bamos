@@ -1,0 +1,20 @@
+name: Build and run tests
+on:
+  push:
+    paths: [ 'config/**', 'src/**', 'tests/**' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    steps:
+      - name: Checkout
+        uses: actions/checkout@latest
+
+      - name: Setup toolchain
+        uses: ./.github/actions/toolchain
+
+      - name: Build x86-64
+        run: zig build iso --release=safe
+
+
+
