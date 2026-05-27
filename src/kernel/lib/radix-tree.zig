@@ -145,8 +145,8 @@ pub fn RadixTree(comptime K: type, comptime V: type, comptime Hasher: type, widt
 
     return struct {
         const Self = @This();
-        const Table = TableNode(width);
 
+        pub const Table = TableNode(width);
         pub const max_level = (@bitSizeOf(H) + (bit_shift - 1)) / bit_shift;
 
         root: ?*Table = null,
