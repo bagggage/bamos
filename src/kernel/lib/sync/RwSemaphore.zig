@@ -29,24 +29,35 @@ pub fn readUnlock(self: *Self) void {
     defer self.lock.unlock();
 
     self.readers -%= 1;
+    if (self.writing and self.readers == 0) sched.awakeAll(&self.wait_queue);
 }
 
 pub fn writeLock(self: *Self) void {
     self.waitUntilWriting();
+    defer self.lock.unlock();
 
     self.writing = true;
-    self.lock.unlock();
 
-    while (@atomicLoad(u32, &self.readers, .acquire) > 0) sched.yield();
+    while (@atomicLoad(u32, &self.readers, .acquire) > 0) {
+        sched.waitUnlock(&self.wait_queue, &self.lock);
+        self.lock.lock();
+    }
 }
 
 pub fn writeUnlock(self: *Self) void {
-    {
-        self.lock.lock();
-        defer self.lock.unlock();
+    self.lock.lock();
+    defer self.lock.unlock();
 
-        self.writing = false;
-    }
+    self.writing = false;
+    sched.awakeAll(&self.wait_queue);
+}
+
+pub fn writeToReadLock(self: *Self) void {
+    self.lock.lock();
+    defer self.lock.unlock();
+
+    self.writing = false;
+    self.readers +%= 1;
 
     sched.awakeAll(&self.wait_queue);
 }

@@ -20,19 +20,20 @@ pub inline fn init(init_state: enum{locked,unlocked}) Self {
 }
 
 pub fn lock(self: *Self) void {
-    sched.getCurrent().disablePreemption();
-
     while (true) {
+        sched.getCurrent().disablePreemption();
+
         if (self.spinlock.tryLockAtomic()) return;
         if (self.wait_lock.tryLockAtomic()) sched.waitUnlock(&self.wait_queue, &self.wait_lock);
     }
 }
 
 pub fn lockSaveIntr(self: *Self) void {
-    sched.getCurrent().disablePreemption();
     defer sched.getCurrent().enablePreemption();
 
     while (true) {
+        sched.getCurrent().disablePreemption();
+
         if (self.spinlock.tryLockSaveIntr()) return;
         if (self.wait_lock.tryLockAtomic()) sched.waitUnlock(&self.wait_queue, &self.wait_lock);
     }
@@ -40,10 +41,11 @@ pub fn lockSaveIntr(self: *Self) void {
 
 /// Acquire the lock, disable local interrupts.
 pub fn lockIntr(self: *Self) void {
-    sched.getCurrent().disablePreemption();
     defer sched.getCurrent().enablePreemption();
 
     while (true) {
+        sched.getCurrent().disablePreemption();
+
         if (self.spinlock.tryLockIntr()) return;
         if (self.wait_lock.tryLockAtomic()) sched.waitUnlock(&self.wait_queue, &self.wait_lock);
     }
