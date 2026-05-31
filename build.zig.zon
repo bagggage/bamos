@@ -16,9 +16,18 @@
             .url = "git+https://github.com/uACPI/uACPI#5.0.0",
             .hash = "N-V-__8AAPJOKQCmvBm20OcVV9z7cnNcWOy4bfb9d-p-iJr9",
         },
+        .zig_nvidia_open = .{
+            .url = "/home/whkostya/cpp-workspace/zig-nvidia-open/",
+            .hash = "zig_nvidia_open-1.0.0-rhgZ-MJCAABPs39k8AgYPZN6x1VZcyNzzGLBijSjibuv",
+        },
+        .nvidia_sources = .{
+            .url = "git+https://github.com/NVIDIA/open-gpu-kernel-modules#610.43.02",
+            .hash = "N-V-__8AAC22Pwhq39E13rfXNiL1U31ZtzLa_q2oil5pGRE2",
+        },
     },
 
     .paths = .{
+        "build-tools",
         "build.zig.zon",
         "build.zig",
         "config",
@@ -27,6 +36,6 @@
         "README.md",
         "screenshot.png",
         "src",
-        "third_party"
+        "third-party",
     },
 }

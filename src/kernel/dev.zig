@@ -137,6 +137,7 @@ const AutoInit = struct {
         pci,
         usb,
         @import("dev/drivers/blk/nvme.zig"),
+        @import("dev/drivers/video/nvidia/nvidia.zig"),
         tty,
         VirtualTerminal,
         Console,

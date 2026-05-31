@@ -48,6 +48,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     const debug_syscalls = b.option(bool, "debug-syscalls", "Enable debug logs for syscalls (default: false)") orelse false;
     const debug_pci = b.option(bool, "debug-pci", "Enable debug logs for PCI bus driver (default: false)") orelse false;
     const debug_uacpi = b.option(bool, "debug-uacpi", "Enable debug logs for uACPI integration (default: false)") orelse false;
+    const enable_nvidia_rm = b.option(bool, "nvidia-rm", "Build upstream NVIDIA RM object via upstream make (experimental)") orelse false;
 
     var cpu_feat: std.Target.Cpu.Feature.Set = .empty;
     if (enable_avx and arch == .x86_64) cpu_feat.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
@@ -154,9 +155,16 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     kernel_exe.addObject(dbg_obj);
     kernel_exe.setLinkerScript(b.path("config/kernel.ld"));
 
-    const kernel_install = b.addInstallArtifact(kernel_exe, .{});
+    if (enable_nvidia_rm) {
+        const nvidia = @import("src/kernel/dev/drivers/video/nvidia/build.zig");
 
-    return kernel_install;
+        const nvrm, const nvrm_obj = nvidia.make(b, target, optimize);
+        nvidia.addIncludePaths(kernel_obj.root_module, nvrm);
+
+        kernel_obj.addObjectFile(nvrm_obj);
+    }
+
+    return b.addInstallArtifact(kernel_exe, .{});
 }
 
 fn makeUacpi(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode)
