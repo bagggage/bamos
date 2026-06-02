@@ -292,6 +292,52 @@ pub fn wait(self: *Self) void {
     }
 }
 
+pub fn waitTimeout(self: *Self, ns: u64) error{Timeout}!void {
+    lib.debug.assert(self.isOnCurrentCpu(), @src());
+
+    // TODO: Implement high-percision sleep.
+    if (ns < sys.time.getNsPerTick()) return error.Timeout;
+
+    self.prepareToSleep();
+    self.disablePreemption();
+
+    const task = self.current_task.?;
+    if (task.stats.sleep.cmpxchgStrong(
+        .needs_wakeup, .awake,
+        .release, .monotonic
+    ) == null) {
+        @branchHint(.unlikely);
+        self.flags.want_sleep = false;
+        self.enablePreemption();
+        return;
+    }
+
+    lib.debug.assert(task.stats.sleep.raw != .awake, @src());
+    var entry: SleepQueue.Entry = .{
+        .delta_ns = ns,
+        .wait_entry = .init(task, sys.time.getFastTimestamp()),
+    };
+
+    {
+        if (self.sleep_lock.tryLockAtomic() == false) unreachable;
+        defer self.sleep_lock.unlockAtomic();
+
+        self.sleep_queue.push(&entry);
+    }
+
+    self.rescheduleAtomic();
+    lib.debug.assert(task.stats.sleep.raw == .awake, @src());
+
+    {
+        self.sleep_lock.lockIntr();
+        defer self.sleep_lock.unlockIntr();
+
+        self.sleep_queue.removeWeak(&entry);
+    }
+
+    if (entry.delta_ns == 0) return error.Timeout;
+}
+
 pub fn sleepFor(self: *Self, ns: u64) void {
     lib.debug.assert(self.isOnCurrentCpu(), @src());
 

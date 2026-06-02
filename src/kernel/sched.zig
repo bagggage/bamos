@@ -84,6 +84,29 @@ pub const SleepQueue = struct {
         self.list.prepend(&new_entry.wait_entry.node);
     }
 
+    pub fn removeWeak(self: *SleepQueue, entry: *Entry) void {
+        const head = self.list.first orelse return;
+        const node = &entry.wait_entry.node;
+
+        if (node.next) |n| {
+            const next: *Entry = .fromNode(n);
+            next.delta_ns +|= entry.delta_ns;
+        }
+
+        if (self.list.first == node) {
+            self.list.first = node.next;
+            return;
+        }
+
+        var prev = head;
+        while (prev.next) |n| : (prev = n) {
+            if (node != n) {
+                prev.next = node.next;
+                break;
+            }
+        }
+    }
+
     /// Returns the list of entries to be woken up
     pub fn process(self: *SleepQueue, elapsed_ns: usize) ?*Entry {
         const head = self.list.first orelse return null;
@@ -106,6 +129,7 @@ pub const SleepQueue = struct {
             }
 
             time_ns = entry_time;
+            entry.delta_ns = 0;
         }
 
         self.list.first = null;
