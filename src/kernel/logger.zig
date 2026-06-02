@@ -206,7 +206,12 @@ pub fn panicLog(msg: []const u8) void {
     };
 
     log.scope = panic_scope;
-    log.text = msg.ptr;
+    log.text = if (stage == .normal) blk: {
+        const buffer = allocBuffer(@truncate(msg.len)) orelse break :blk msg.ptr;
+        @memcpy(buffer, msg);
+
+        break :blk buffer.ptr;
+    } else msg.ptr;
     log.time_ns = time_ns;
 
     var meta = log.meta.raw;
