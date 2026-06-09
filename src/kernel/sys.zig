@@ -6,12 +6,14 @@ const std = @import("std");
 
 const arch = lib.arch;
 const config = @import("config.zig");
+const Console = dev.Console;
+const dev = @import("dev.zig");
 const devfs = vfs.devfs;
 const lib = @import("lib.zig");
 const log = std.log.scoped(.sys);
 const logger = @import("logger.zig");
 const sched = @import("sched.zig");
-const Teletype = @import("dev.zig").classes.Teletype;
+const Teletype = dev.classes.Teletype;
 const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
 
@@ -69,7 +71,9 @@ fn startInit() !void {
 
         const args = if (parsed_args.len > 0) parsed_args else &.{init_src.path.ptr};
         try bin.load(args, &.{});
+        errdefer log.err("failed to initialize Console", .{});
 
+        try Console.init();
         const console = devfs.getRoot().lookup("console") orelse {
             @branchHint(.cold);
             log.err("/dev/console not found: cannot start init", .{});

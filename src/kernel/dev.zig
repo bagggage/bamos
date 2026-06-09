@@ -139,7 +139,6 @@ const AutoInit = struct {
         @import("dev/drivers/blk/nvme.zig"),
         tty,
         VirtualTerminal,
-        Console,
     };
 };
 
