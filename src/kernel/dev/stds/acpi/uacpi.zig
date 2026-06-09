@@ -76,7 +76,7 @@ const Irq = struct {
 };
 
 pub fn init() !void {
-    if (c.uacpi_initialize(0) != c.UACPI_STATUS_OK) return error.UacpiFailed;
+    //if (c.uacpi_initialize(0) != c.UACPI_STATUS_OK) return error.UacpiFailed;
     //if (c.uacpi_namespace_load() != c.UACPI_STATUS_OK) return error.UacpiLoadFailed;
     //if (c.uacpi_namespace_initialize() != c.UACPI_STATUS_OK) return error.UacpiNamespaceFailed;
 
