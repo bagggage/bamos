@@ -1148,11 +1148,11 @@ fn seek(fd: linux.fd_t, offset: isize, whence: u8) isize {
     if (
         (offset < 0 and (new_offset < 0 or new_offset > base)) or
         (offset >= 0 and (new_offset < base)) or
-        (new_offset > file.dentry.inode.size)
+        (file.dentry.inode.type == .regular_file and new_offset > file.dentry.inode.size)
     ) return errorFromE(.INVAL);
 
     file.offset = @intCast(new_offset);
-    return 0;
+    return new_offset;
 }
 
 fn mkdir(path: [*:0]const u8, mode: linux.mode_t) isize {
