@@ -32,14 +32,25 @@ pub const std_options = std.Options {
     },
     .log_scope_levels = &.{
         .{
-            .level = if (lib.is_debug) .debug else .warn,
+            .level = if (opts.trace_syscalls) .info else .warn,
             .scope = .@"sys.call.trace"
         },
-        .{ .level = .info, .scope = .@"sys.call" },
-        .{ .level = .info, .scope = .pci },
-        .{ .level = .info, .scope = .@"intr.except" },
-        .{ .level = .info, .scope = .uacpi },
-        //.{ .level = .warn, .scope = .@"sys.MapUnit" },
+        .{
+            .level = if (opts.debug_syscalls) .debug else .info,
+            .scope = .@"sys.call",
+        },
+        .{
+            .level = if (opts.debug_pci) .debug else .info,
+            .scope = .pci
+        },
+        .{
+            .level = if (opts.trace_excepts) .debug else .info,
+            .scope = .@"intr.except"
+        },
+        .{
+            .level = if (opts.debug_uacpi) .debug else .info,
+            .scope = .uacpi
+        },
     }
 };
 

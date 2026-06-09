@@ -40,9 +40,14 @@ pub fn build(b: *std.Build) void {
 }
 
 fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallArtifact {
+    const optimize = b.standardOptimizeOption(.{});
     const name = b.option([]const u8, "exe-name", "Name of the kernel executable");
     const enable_avx = b.option(bool, "kernel-avx", "Build kernel with AVX instructions (default: false)") orelse false;
-    const optimize = b.standardOptimizeOption(.{});
+    const trace_syscalls = b.option(bool, "trace-syscalls", "Enable syscall tracing (default: false)") orelse false;
+    const trace_excepts = b.option(bool, "trace-excepts", "Enable CPU exceptions tracing (default: false)") orelse false;
+    const debug_syscalls = b.option(bool, "debug-syscalls", "Enable debug logs for syscalls (default: false)") orelse false;
+    const debug_pci = b.option(bool, "debug-pci", "Enable debug logs for PCI bus driver (default: false)") orelse false;
+    const debug_uacpi = b.option(bool, "debug-uacpi", "Enable debug logs for uACPI integration (default: false)") orelse false;
 
     var cpu_feat: std.Target.Cpu.Feature.Set = .empty;
     if (enable_avx and arch == .x86_64) cpu_feat.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
@@ -104,6 +109,11 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     kernel_opts.addOption(std.SemanticVersion, "version", kernel_ver);
     kernel_opts.addOption([]const u8, "version_string", b.fmt("{f}", .{kernel_ver}));
     kernel_opts.addOption([]const u8, "build", build_string);
+    kernel_opts.addOption(bool, "trace_syscalls", trace_syscalls);
+    kernel_opts.addOption(bool, "trace_excepts", trace_excepts);
+    kernel_opts.addOption(bool, "debug_syscalls", debug_syscalls);
+    kernel_opts.addOption(bool, "debug_pci", debug_pci);
+    kernel_opts.addOption(bool, "debug_uacpi", debug_uacpi);
 
     kernel_obj.root_module.addOptions("opts", kernel_opts);
 
