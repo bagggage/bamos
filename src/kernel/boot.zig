@@ -17,9 +17,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const lib = @import("lib.zig");
 const log = std.log.scoped(.boot);
+const video = @import("video.zig");
 const vm = @import("vm.zig");
-
-const Framebuffer = @import("video/Framebuffer.zig");
 
 const BootProtocol = enum(u8) {
     minimal = c.PROTOCOL_MINIMAL,
@@ -119,7 +118,7 @@ const map_null = MappingEntry.init(0, 0, 0, .{});
 var mem_map: MemMap = undefined;
 
 /// Converts the BOOTBOOT color format to the internal framebuffer color format.
-fn makeColorFmt(bb_fmt: u8) Framebuffer.ColorFormat {
+fn makeColorFmt(bb_fmt: u8) video.Color.Format {
     return switch (bb_fmt) {
         c.FB_ABGR => .ABGR,
         c.FB_ARGB => .ARGB,
@@ -149,12 +148,12 @@ pub inline fn init() !void {
 }
 
 /// Populates the framebuffer structure with information provided by the bootloader.
-pub fn getFb(fb_ptr: *Framebuffer) void {
-    fb_ptr.* = .{
+pub fn getFb(dest: *video.Framebuffer) void {
+    dest.* = .{
         .base = @ptrCast(&fb),
         .width = bootboot.fb_width,
         .height = bootboot.fb_height,
-        .scanline = bootboot.fb_scanline / @sizeOf(u32),
+        .scanline = bootboot.fb_scanline,
         .format = makeColorFmt(bootboot.fb_type)
     };
 }

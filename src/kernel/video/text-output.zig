@@ -8,7 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const boot = @import("../boot.zig");
-const Framebuffer = @import("Framebuffer.zig");
+const Framebuffer = @import("../video.zig").Framebuffer;
 const smp = @import("../smp.zig");
 const sched = @import("../sched.zig");
 const lib = @import("../lib.zig");
@@ -41,9 +41,8 @@ pub fn init(framebuffer: *Framebuffer) !void {
     if (comptime use_texture) {
         font_tex.len = (font.glyphs.len / font.charsize) * (font.height * font.width);
 
-        const font_tex_pages = std.math.divCeil(usize, font_tex.len * @sizeOf(u32), vm.page_size) catch unreachable;
-        font_tex_rank = std.math.log2_int_ceil(usize, font_tex_pages);
-        const phys = vm.PageAllocator.alloc(@truncate(font_tex_rank)) orelse return error.NoMemory;
+        font_tex_rank = vm.bytesToRank(font_tex.len * @sizeOf(u32));
+        const phys = vm.PageAllocator.alloc(font_tex_rank) orelse return error.NoMemory;
 
         font_tex.ptr = @ptrFromInt(vm.getVirtLma(phys));
         font_tex_vec = @alignCast(@ptrCast(font_tex.ptr));
@@ -68,7 +67,7 @@ pub fn drawChar(char: u8, color: u32, row: u16, col: u16) void {
 }
 
 pub fn fillRow(row: u16, col: u16, n: u16, color: u32) void {
-    const fb_vec_scanline = fb.scanline / font.width;
+    const fb_vec_scanline = fb.scanline / font.width / @sizeOf(u32);
     var fb_offset = fb_vec_scanline * row * font.height;
 
     const color_vec: FontVec = @splat(color);
@@ -81,7 +80,7 @@ pub fn fillRow(row: u16, col: u16, n: u16, color: u32) void {
 
 pub fn blink(row: u16, col: u16) void {
     const rows = 2;
-    const fb_vec_scanline = fb.scanline / font.width;
+    const fb_vec_scanline = fb.scanline / font.width / @sizeOf(u32);
     var fb_offset = fb_vec_scanline * (row * font.height + (font.height - rows));
 
     for (0..rows) |_| {
@@ -95,7 +94,7 @@ fn drawCharTextured(char: u8, color: u32, row: u16, col: u16) void {
     if (char == 0) { @branchHint(.unlikely); return; }
 
     const t_offset = @as(u32, char) * font.height;
-    const fb_vec_scanline = fb.scanline / font.width;
+    const fb_vec_scanline = fb.scanline / font.width / @sizeOf(u32);
     var fb_offset = (fb_vec_scanline * row * font.height) + col;
 
     const color_vec: FontVec = @splat(color);
@@ -110,8 +109,9 @@ fn drawCharRendered(char: u8, color: u32, row: u16, col: u16) void {
     @setRuntimeSafety(false);
     if (char == 0) return;
 
-    const offset = (row * fb.scanline * font.height) + (col * font.width);
-    renderChar(char, fb.base[offset..], color, fb.scanline);
+    const line_size = fb.scanline / @sizeOf(u32);
+    const offset = (row * line_size * font.height) + (col * font.width);
+    renderChar(char, fb.base[offset..], color, line_size);
 }
 
 /// Renders the font into a texture buffer for fast character drawing.

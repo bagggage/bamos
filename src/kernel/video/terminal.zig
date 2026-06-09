@@ -1,5 +1,5 @@
 //! # Video Terminal
-//! 
+//!
 //! Responsible for drawing text to the framebuffer,
 //! handling cursor position and special characters.
 
@@ -12,10 +12,11 @@ const boot = @import("../boot.zig");
 const config = @import("../config.zig");
 const log = std.log.scoped(.@"video.terminal");
 const lib = @import("../lib.zig");
+const video = @import("../video.zig");
 const vm = @import("../vm.zig");
 
-const Color = Framebuffer.Color;
-const Framebuffer = @import("Framebuffer.zig");
+const Color = video.Color;
+const Framebuffer = video.Framebuffer;
 const text_output = @import("text-output.zig");
 
 const use_buffers = true;
@@ -121,7 +122,6 @@ pub fn init() !void {
         char_buffer.len = cols * rows;
         color_buffer.len = char_buffer.len;
 
-
         // Allocate characters buffer
         const char_buffer_rank = vm.bytesToRank(char_buffer.len);
         const buf_phys = vm.PageAllocator.alloc(char_buffer_rank) orelse return error.NoMemory;
@@ -190,6 +190,10 @@ pub inline fn getSize() [2]u16 {
     return .{ rows, cols };
 }
 
+pub inline fn getColorFormat() Color.Format {
+    return framebuffer.format;
+}
+
 /// Writes the given string to the framebuffer.
 /// Handles special characters and moves cursor.
 pub fn write(str: []const u8) void {
@@ -205,7 +209,7 @@ pub fn write(str: []const u8) void {
         const char = str[i];
 
         if (char == cc.esc) {
-            i += handleEscapeSequence(str[i + 1..]);
+            i += handleEscapeSequence(str[i + 1 ..]);
         } else if (std.ascii.isControl(char)) {
             handleControlChar(char);
         } else if (std.ascii.isAscii(char)) {
@@ -230,7 +234,7 @@ pub fn clear() void {
 
 pub fn clearAt(row: u16, col: u16, n: u16) void {
     const pos = row * cols + col;
-    @memset(char_buffer[pos..pos + n], 0);
+    @memset(char_buffer[pos .. pos + n], 0);
 
     text_output.fillRow(row, col, n, 0);
 }
@@ -274,10 +278,8 @@ inline fn handleControlChar(char: u8) void {
             cacheTab(old_col);
         },
         cc.bs => cursor.left(),
-        cc.lf,
-        cc.vt,
-        cc.ff => cursor.nextRow(),
-        else => {}
+        cc.lf, cc.vt, cc.ff => cursor.nextRow(),
+        else => {},
     }
 }
 
@@ -297,13 +299,11 @@ fn handleEscapeSequence(seq: []const u8) u32 {
             const n = std.fmt.parseUnsigned(u16, seq[1..end], 10) catch 1;
             cursor.row -|= n;
         },
-        'B',
-        'e' => { // Move down
+        'B', 'e' => { // Move down
             const n = std.fmt.parseUnsigned(u16, seq[1..end], 10) catch 1;
             cursor.row = @min(cursor.row + n, rows - 1);
         },
-        'C',
-        'a' => { // Move right
+        'C', 'a' => { // Move right
             const n = std.fmt.parseUnsigned(u16, seq[1..end], 10) catch 1;
             cursor.col -|= n;
         },
@@ -324,8 +324,7 @@ fn handleEscapeSequence(seq: []const u8) u32 {
             const n = std.fmt.parseUnsigned(u16, seq[1..end], 10) catch cursor.col;
             cursor.col = @min(n -| 1, cols - 1);
         },
-        'H',
-        'f' => { // Set row, column
+        'H', 'f' => { // Set row, column
             var delim = std.mem.splitScalar(u8, seq[1..end], ';');
             const row_str = delim.first();
             const col_str = delim.rest();
@@ -344,9 +343,8 @@ fn handleEscapeSequence(seq: []const u8) u32 {
                     for (0..cursor.row) |r| clearAt(@truncate(r), 0, cols);
                     clearAt(cursor.row, 0, cursor.col);
                 },
-                '2',
-                '3' => clear(),
-                else => {}
+                '2', '3' => clear(),
+                else => {},
             };
         },
         'K' => { // Erase line
@@ -355,7 +353,7 @@ fn handleEscapeSequence(seq: []const u8) u32 {
             } else if (end == 2) switch (seq[1]) {
                 '1' => clearAt(cursor.row, 0, cursor.col),
                 '2' => clearAt(cursor.row, 0, cols),
-                else => {}
+                else => {},
             };
         },
         'd' => { // Set row
@@ -369,7 +367,7 @@ fn handleEscapeSequence(seq: []const u8) u32 {
                 handleSetAttribute(code);
             }
         },
-        else => {}
+        else => {},
     }
 
     return end + 1;
@@ -395,12 +393,11 @@ inline fn handleSetAttribute(code: u8) void {
             5 => Color.magenta,
             6 => Color.cyan,
             7 => Color.lgray,
-            else => unreachable
+            else => unreachable,
         };
 
         if (code < 40) setColor(color);
-    }
-    else if ((code >= 90 and code <= 97) or (code >= 100 and code <= 107)) {
+    } else if ((code >= 90 and code <= 97) or (code >= 100 and code <= 107)) {
         const color_idx = code % 10;
         const color = switch (color_idx) {
             0 => Color.gray,
@@ -411,7 +408,7 @@ inline fn handleSetAttribute(code: u8) void {
             5 => Color.lmagenta,
             6 => Color.lcyan,
             7 => Color.white,
-            else => unreachable
+            else => unreachable,
         };
 
         if (code < 100) setColor(color);
@@ -436,7 +433,8 @@ fn scroll() void {
                 var prev_c = char_buffer[prev_offset + col];
 
                 while (prev_c != 0 and col < cols) : ({
-                    col += 1; prev_c = char_buffer[prev_offset + col];
+                    col += 1;
+                    prev_c = char_buffer[prev_offset + col];
                 }) {
                     char_buffer[prev_offset + col] = 0;
                     text_output.drawChar(' ', color, @truncate(row - 1), @truncate(col));

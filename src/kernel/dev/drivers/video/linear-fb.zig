@@ -39,14 +39,14 @@ pub fn init() !void {
     boot.getFb(&boot_fb);
 
     const phys = vm.translateVirtToPhys(@intFromPtr(boot_fb.base)) orelse return error.Uninitialized;
-    const size = boot_fb.scanline * boot_fb.height * @sizeOf(u32);
+    const size = boot_fb.scanline * boot_fb.height;
 
     try fb_0.setup(
         "linear-fb",
         &ops,
         @intCast(boot_fb.width),
         @intCast(boot_fb.height),
-        boot_fb.scanline * @sizeOf(u32),
+        boot_fb.scanline,
         boot_fb.format,
         @intFromPtr(boot_fb.base),
         phys,

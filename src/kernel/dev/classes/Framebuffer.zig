@@ -257,11 +257,11 @@ pub const VariableScreenInfo = extern struct {
 
     _reserved: [4]u32 = undefined,
 
-    pub fn setFormat(self: *VariableScreenInfo, format: video.Framebuffer.ColorFormat) void {
+    pub fn setFormat(self: *VariableScreenInfo, format: video.Color.Format) void {
         const @"1st": BitField = .{ .length = @bitSizeOf(u8), .offset = 0 };
         const @"2nd": BitField = .{ .length = @bitSizeOf(u8), .offset = @bitSizeOf(u8) };
         const @"3rd": BitField = .{ .length = @bitSizeOf(u8), .offset = @bitSizeOf(u8) * 2 };
-        const @"4rs": BitField = .{ .length = @bitSizeOf(u8), .offset = @bitSizeOf(u8) * 3 };
+        const @"4rs": BitField = .{ .length = 0, .offset = 0 };
 
         switch (format) {
             .RGBA => { self.red = @"4rs"; self.green = @"3rd"; self.blue = @"2nd"; self.transp = @"1st"; },
@@ -323,7 +323,7 @@ dev_file: devfs.DevFile,
 width: u16,
 height: u16,
 scanline: u32,
-format: video.Framebuffer.ColorFormat,
+format: video.Color.Format,
 
 virt: usize,
 phys: usize,
@@ -336,7 +336,7 @@ pub fn setup(
     width: u16,
     height: u16,
     scanline: u32,
-    format: video.Framebuffer.ColorFormat,
+    format: video.Color.Format,
     virt: usize,
     phys: usize,
     size: u32,
@@ -415,13 +415,16 @@ pub fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
             };
 
             @memcpy(out.id[0..fb.id.len], fb.id);
+            if (fb.id.len < out.id.len) out.id[fb.id.len] = 0;
         },
         .get_vscreen_info => {
             const out = arg_data.asPtr(VariableScreenInfo).?;
             @memset(std.mem.asBytes(out), 0);
 
-            out.x_res = fb.width;
-            out.x_res_virt = fb.width;
+            const width = fb.scanline / @sizeOf(u32);
+
+            out.x_res = width;
+            out.x_res_virt = width;
             out.y_res = fb.height;
             out.y_res_virt = fb.height;
             out.setFormat(fb.format);
