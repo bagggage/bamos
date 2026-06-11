@@ -13,8 +13,8 @@
             .lazy = true,
         },
         .uacpi = .{
-            .url = "git+https://github.com/uACPI/uACPI#for-5.0",
-            .hash = "N-V-__8AAPspFACnNZvL7Qat26yH6jT2ND5XvcG_F18fXzSF",
+            .url = "git+https://github.com/uACPI/uACPI#5.0.0",
+            .hash = "N-V-__8AAPJOKQCmvBm20OcVV9z7cnNcWOy4bfb9d-p-iJr9",
         },
     },
 
