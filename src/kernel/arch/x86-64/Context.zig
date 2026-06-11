@@ -39,6 +39,28 @@ pub fn init(stack_ptr: usize, ip: usize) Self {
     return .{ .stack_ptr = .{ .ptr = @ptrFromInt(ptr) } };
 }
 
+pub fn initUnaligned(stack_ptr: usize, ip: usize) Self {
+    const ptr = stack_ptr - @sizeOf(CtxRegs);
+    const ctx_regs: *CtxRegs = @ptrFromInt(ptr);
+
+    ctx_regs.* = .{
+        .callee = .{ .rbp = ptr + @offsetOf(regs.CalleeRegs, "rbp") },
+        .ret_ptr = ip
+    };
+
+    return .{ .stack_ptr = .{ .ptr = @ptrFromInt(ptr) } };
+}
+
+pub fn initWorker(stack_ptr: usize, entry: usize, arg: usize) Self {
+    const self = init(stack_ptr, @intFromPtr(&workerEntry));
+    const callee_regs = &self.stack_ptr.asCtxRegs().callee;
+
+    callee_regs.r12 = entry;
+    callee_regs.r13 = arg;
+
+    return self;
+}
+
 pub inline fn setInstrPtr(self: *Self, value: usize) void {
     self.stack_ptr.asCtxRegs().ret_ptr = value;
 }
@@ -86,18 +108,34 @@ export fn switchToNaked() callconv(.naked) void {
     const from: *Self = asm volatile("" : [arg1] "={rdi}" (-> *Self));
     const to: *Self = asm volatile("" : [arg2] "={rsi}" (-> *Self));
 
-    comptime @export(&sched.Scheduler.postSwitch, .{ .name = "sched.Scheduler.postSwitch" });
-
     from.switchToHalf(to);
+    {
+        comptime @export(&sched.Scheduler.postSwitch, .{ .name = "sched.Scheduler.postSwitch" });
 
-    const scheduler = sched.getCurrent();
-    asm volatile ("call sched.Scheduler.postSwitch"
-        :: [arg1] "{rdi}" (scheduler), [arg2] "{rsi}" (to)
-        : regs.call_clobers
-    );
+        regs.alignStackUnsafe();
+        defer regs.restoreStackUnsafe();
+
+        const scheduler = sched.getCurrent();
+        asm volatile (
+            \\ call sched.Scheduler.postSwitch
+            :: [arg1] "{rdi}" (scheduler), [arg2] "{rsi}" (to)
+            : regs.call_clobers
+        );
+    }
 
     to.restore();
     asm volatile ("retq");
+}
+
+export fn workerEntry() callconv(.naked) noreturn {
+    const entry: sched.Task.WorkerFn = asm volatile("" : [arg1] "={r12}" (-> sched.Task.WorkerFn));
+    const arg: usize = asm volatile("" : [arg2] "={r13}" (-> usize));
+
+    asm volatile(
+        "jmp *%[entry]"
+        :: [entry] "r" (entry),
+           [arg] "{rdi}" (arg)
+    );
 }
 
 inline fn run(self: *Self) void {

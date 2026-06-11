@@ -31,6 +31,112 @@ pub const PrivilegeLevel = enum(u8) {
     kernel
 };
 
+pub const SleepQueue = struct {
+    pub const QList = std.SinglyLinkedList;
+    pub const QNode = QList.Node;
+
+    pub const max_sleep_sec = std.math.maxInt(u64) / std.time.ns_per_s;
+
+    pub const Entry = struct {
+        wait_entry: WaitQueue.Entry,
+        /// Number of nanosecond that task wants to sleep
+        /// relative to a previouse task in the queue
+        delta_ns: u64 = 0,
+
+        pub inline fn fromNode(node: *QNode) *Entry {
+            comptime std.debug.assert(QNode == SleepQueue.QNode);
+
+            const wait_entry = WaitQueue.Entry.fromNode(node);
+            return @fieldParentPtr("wait_entry", wait_entry);
+        }
+    };
+
+    list: QList = .{},
+
+    pub fn push(self: *SleepQueue, new_entry: *Entry) void {
+        var time_ns: u64 = 0;
+        var prev: ?*QNode = null;
+        var node: ?*QNode = self.list.first;
+
+        while (node) |n| : ({ prev = n; node = n.next; }) {
+            const entry = Entry.fromNode(n);
+            const entry_time = time_ns + entry.delta_ns;
+
+            if (entry_time <= new_entry.delta_ns) {
+                if (n.next != null) {
+                    time_ns = entry_time;
+                    continue;
+                }
+
+                new_entry.delta_ns -= entry_time;
+                n.next = &new_entry.wait_entry.node;
+            } else if (entry_time > new_entry.delta_ns) {
+                new_entry.delta_ns -= time_ns;
+                entry.delta_ns -= new_entry.delta_ns;
+
+                const p = prev orelse break;
+                p.insertAfter(&new_entry.wait_entry.node);
+            }
+
+            return;
+        }
+
+        self.list.prepend(&new_entry.wait_entry.node);
+    }
+
+    pub fn removeWeak(self: *SleepQueue, entry: *Entry) void {
+        const head = self.list.first orelse return;
+        const node = &entry.wait_entry.node;
+
+        if (node.next) |n| {
+            const next: *Entry = .fromNode(n);
+            next.delta_ns +|= entry.delta_ns;
+        }
+
+        if (self.list.first == node) {
+            self.list.first = node.next;
+            return;
+        }
+
+        var prev = head;
+        while (prev.next) |n| : (prev = n) {
+            if (node != n) {
+                prev.next = node.next;
+                break;
+            }
+        }
+    }
+
+    /// Returns the list of entries to be woken up
+    pub fn process(self: *SleepQueue, elapsed_ns: usize) ?*Entry {
+        const head = self.list.first orelse return null;
+
+        var time_ns: u64 = 0;
+        var prev: ?*QNode = null;
+        var node: ?*QNode = head;
+        while (node) |n| : ({ prev = n; node = n.next; }) {
+            const entry = Entry.fromNode(n);
+            const entry_time = time_ns + entry.delta_ns;
+
+            if (entry_time > elapsed_ns) {
+                entry.delta_ns = entry_time - elapsed_ns;
+                self.list.first = n;
+
+                const p = prev orelse return null;
+                p.next = null;
+
+                return Entry.fromNode(head);
+            }
+
+            time_ns = entry_time;
+            entry.delta_ns = 0;
+        }
+
+        self.list.first = null;
+        return Entry.fromNode(head);
+    }
+};
+
 pub const WaitQueue = struct {
     pub const QList = lib.atomic.SinglyLinkedList;
     pub const QNode = QList.Node;
@@ -46,6 +152,11 @@ pub const WaitQueue = struct {
                 .task = task,
                 .timestamp = timestamp
             };
+        }
+
+        inline fn updateSleepTime(self: *Entry) void {
+            const sleep_time = sys.time.getFastTimestamp() -| self.timestamp;
+            self.task.stats.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
         }
 
         inline fn fromNode(node: *QNode) *Entry {
@@ -112,6 +223,21 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn() noreturn) !void {
     if (cpu_idx == smp.getIdx()) scheduler.start();
 }
 
+pub fn rebornAsKernelTask(task: *Task, name: []const u8) void {
+    std.debug.assert(task.spec == .user);
+
+    const scheduler = getCurrent();
+    if (scheduler.current_task == task) {
+        scheduler.disablePreemption();
+        defer scheduler.enablePreemption();
+
+        task.spec = .{ .kernel = .{ .name = name } };
+        vm.setPageTable(vm.getRootPt());
+    } else {
+        task.spec = .{ .kernel = .{ .name = name } };
+    }
+}
+
 pub inline fn waitStartup() noreturn {
     getCurrent().start();
 }
@@ -130,6 +256,25 @@ pub inline fn yield() void {
     scheduler.yield();
 }
 
+pub inline fn sleepFor(ns: u64) void {
+    const scheduler = getCurrent();
+    scheduler.sleepFor(ns);
+}
+
+pub fn terminate() noreturn {
+    const scheduler = getCurrent();
+    const task = scheduler.current_task.?;
+    std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
+
+    if (task.spec == .user) @panic("User task is trying to terminate! Stop user thread before terminiation.");
+    if (!task.stats.lock.tryLock()) unreachable;
+
+    scheduler.flags.terminate = true;
+    scheduler.rescheduleAtomic();
+
+    unreachable;
+}
+
 pub inline fn pause() void {
     const scheduler = getCurrent();
     std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
@@ -145,9 +290,10 @@ pub fn pauseUnlock(lock: *lib.sync.Spinlock) void {
 
     var entry = scheduler.initWait();
     scheduler.pause_queue.push(&entry);
+    lock.unlock();
 
-    lock.unlockAtomic();
-    scheduler.rescheduleAtomic();
+    scheduler.prepareToSleep();
+    scheduler.reschedule();
 }
 
 pub fn pauseUnlockIntr(lock: *lib.sync.Spinlock) void {
@@ -158,7 +304,9 @@ pub fn pauseUnlockIntr(lock: *lib.sync.Spinlock) void {
 
     var entry = scheduler.initWait();
 
+    scheduler.prepareToSleep();
     scheduler.disablePreemption();
+
     scheduler.pause_queue.push(&entry);
 
     lock.unlockRestoreIntr();
@@ -180,9 +328,34 @@ pub fn waitUnlock(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
 
     var entry = scheduler.initWait();
     queue.push(&entry);
-    lock.unlockAtomic();
+    lock.unlock();
 
-    scheduler.rescheduleAtomic();
+    scheduler.prepareToSleep();
+    scheduler.reschedule();
+}
+
+pub fn waitUnlockIntr(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
+    const scheduler = getCurrent();
+    std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
+
+    var entry = scheduler.initWait();
+    queue.push(&entry);
+    lock.unlockRestoreIntr();
+
+    scheduler.prepareToSleep();
+    scheduler.reschedule();
+}
+
+pub fn waitEnableIntr(queue: *WaitQueue) void {
+    const scheduler = getCurrent();
+    std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
+
+    var entry = scheduler.initWait();
+    queue.push(&entry);
+    dev.intr.enableForCpu();
+
+    scheduler.prepareToSleep();
+    scheduler.reschedule();
 }
 
 pub fn resumeTask(task: *Task) void {
@@ -209,13 +382,29 @@ pub fn resumeTask(task: *Task) void {
 pub fn awake(queue: *WaitQueue) ?*Task {
     std.debug.assert(dev.intr.isEnabledForCpu());
 
-    const scheduler = getCurrent();
     const entry = queue.pop() orelse return null;
+    const scheduler = getCurrent();
 
-    const sleep_time = sys.time.getFastTimestamp() - entry.timestamp;
-    entry.task.stats.sleep_time +|= @truncate(sleep_time / sys.time.getNsPerTick());
+    entry.updateSleepTime();
 
+    entry.task.stats.lock.wait(.unlocked);
     scheduler.enqueueTask(entry.task);
+
+    return entry.task;
+}
+
+pub fn awakeEntry(entry: *WaitQueue.Entry) bool {
+    std.debug.assert(dev.intr.isEnabledForCpu());
+
+    if (!entry.task.tryWakeup()) return false;
+    entry.updateSleepTime();
+
+    const scheduler = getCurrent();
+
+    entry.task.stats.lock.wait(.unlocked);
+    scheduler.enqueueTask(entry.task);
+
+    return true;
 }
 
 /// Awake all tasks in wait queue.
@@ -227,9 +416,10 @@ pub fn awakeAll(queue: *WaitQueue) void {
     const ns_per_tick = sys.time.getNsPerTick();
 
     while (queue.pop()) |entry| {
-        const sleep_time = (timestamp - entry.timestamp) / ns_per_tick;
+        const sleep_time = (timestamp -| entry.timestamp) / ns_per_tick;
         entry.task.stats.sleep_time +|= @truncate(sleep_time);
 
+        entry.task.stats.lock.wait(.unlocked);
         scheduler.enqueueTask(entry.task);
     }
 }
@@ -241,6 +431,7 @@ pub inline fn getTimeGranuleMs() u32 {
 fn waitRaw(scheduler: *Scheduler, queue: *WaitQueue) void {
     var entry = scheduler.initWait();
 
+    scheduler.prepareToSleep();
     scheduler.disablePreemption();
     queue.push(&entry);
 

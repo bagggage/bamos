@@ -121,7 +121,7 @@ pub const Time = extern struct {
 
     pub fn addTicks(self: *Time, ticks: usize) void {
         @setRuntimeSafety(false);
-        const ns: usize = ticks * (std.time.ns_per_s / sys_timer_hz);
+        const ns: usize = ticks * (std.time.ns_per_s / sched_timer_hz);
         self.addNs(ns);
     }
 
@@ -208,13 +208,15 @@ const Keeper = struct {
         };
     }
 
-    pub fn update(self: *Keeper) void {
+    pub fn update(self: *Keeper) usize {
         const curr_count = sys_timer.getCounter();
         const delta_ns = self.deltaNs(curr_count);
 
         self.last_count = curr_count;
         self.time.addNs(delta_ns);
         self.uptime.addNs(delta_ns);
+
+        return delta_ns;
     }
 
     /// Complex inline function, don't use it everywhere.
@@ -231,6 +233,10 @@ const Keeper = struct {
     inline fn deltaNs(self: *const Keeper, count: usize) usize {
         return ((count -% self.last_count) & sys_timer.mask) *% self.ns_per_ticks;
     }
+
+    inline fn deltaNsAbs(self: *const Keeper, a_count: usize, b_count: usize) usize {
+        return ((a_count -% b_count) & sys_timer.mask) *% self.ns_per_ticks;
+    }
 };
 
 /// Clock used as source of system date-time.
@@ -243,8 +249,9 @@ var sched_timer: *Timer = undefined;
 var keeper: Keeper = undefined;
 var boot_time: Time = .{};
 
-/// System timer frequency.
-var sys_timer_hz: u32 = default_hz;
+/// Scheduler timer frequency.
+var sched_timer_hz: u32 = default_hz;
+
 var sys_up_ticks: std.atomic.Value(usize) = .init(0);
 var up_ticks_lock: lib.sync.Spinlock = .init(.unlocked);
 
@@ -256,9 +263,9 @@ pub fn init() !void {
     keeper = try.init();
     boot_time = keeper.time;
 
-    log.debug("count: {}, ns per tick: {}", .{keeper.last_count,keeper.ns_per_ticks});
+    log.debug("sys timer: last count: {}, ns per tick: {}", .{keeper.last_count, keeper.ns_per_ticks});
 
-    log.info("clock: {f}, timer: {f}", .{ sys_clock.device.name, sys_timer.device.name });
+    log.info("clock: {f}, timer: {f}", .{sys_clock.device.name, sys_timer.device.name});
     log.info("sched timer: {f}", .{sched_timer.device.name});
     log.info("{f}, epoch: {f}", .{
         std.fmt.alt(keeper.time, .formatDt),
@@ -344,11 +351,11 @@ pub inline fn getFastTimestamp() u64 {
 }
 
 pub inline fn getNsPerTick() u32 {
-    return std.time.ns_per_s / sys_timer_hz;
+    return std.time.ns_per_s / sched_timer_hz;
 }
 
 pub inline fn getHz() u32 {
-    return sys_timer_hz;
+    return sched_timer_hz;
 }
 
 pub fn timerInterruptHandler(local: *smp.LocalData) callconv(.c) void {
@@ -358,12 +365,16 @@ pub fn timerInterruptHandler(local: *smp.LocalData) callconv(.c) void {
 
 fn timerImmediateHandler(ctx: ?*anyopaque) void {
     const local: *smp.LocalData = @alignCast(@ptrCast(ctx.?));
-    if (local.idx == smp.boot_cpu) {
+    const elapsed_ns = if (local.idx == smp.boot_cpu) blk: {
         _ = sys_up_ticks.fetchAdd(1, .monotonic);
-        keeper.update();
-    }
+        break :blk keeper.update();
+    } else blk: {
+        const curr_count = sys_timer.getCounter();
+        defer local.sys_timer_delta = curr_count;
+        break :blk keeper.deltaNsAbs(curr_count, local.sys_timer_delta);
+    };
 
-    local.scheduler.timerEvent(1);
+    local.scheduler.timerEvent(elapsed_ns);
 }
 
 inline fn chooseClock() !*Clock {

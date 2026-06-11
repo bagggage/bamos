@@ -31,8 +31,26 @@ pub const std_options = std.Options {
         .ReleaseFast => .info
     },
     .log_scope_levels = &.{
-        //.{ .level = .warn, .scope = .@"sys.call.trace" },
-        .{ .level = .info, .scope = .@"intr.except" },
+        .{
+            .level = if (opts.trace_syscalls) .info else .warn,
+            .scope = .@"sys.call.trace"
+        },
+        .{
+            .level = if (opts.debug_syscalls) .debug else .info,
+            .scope = .@"sys.call",
+        },
+        .{
+            .level = if (opts.debug_pci) .debug else .info,
+            .scope = .pci
+        },
+        .{
+            .level = if (opts.trace_excepts) .debug else .info,
+            .scope = .@"intr.except"
+        },
+        .{
+            .level = if (opts.debug_uacpi) .debug else .info,
+            .scope = .uacpi
+        },
     }
 };
 
@@ -46,35 +64,26 @@ pub const std_options = std.Options {
 pub export fn main() noreturn {
     defer @panic("reached end of the main");
 
-    smp.preinit();
+    if (!smp.bootCpu()) startNonBootCpu();
+
     arch.preinit();
-
-    init(smp);
-
-    smp.initCpu(&main2);
-}
-
-/// `main` second half.
-/// 
-/// Main function is divided into two, because of stack switch.
-fn main2() noreturn {
-    defer @panic("reached end of the main2");
+    smp.init();
 
     log.info("{s} {s}", .{opts.os_name, opts.build});
-    {
-        const cpu = arch.getCpuInfo();
-        log.info("CPUs detected: {}, vendor: {s}, model: {s}", .{
-            smp.getNum(),
-            @tagName(cpu.vendor),
-            cpu.getName(),
-        });
-    }
+
+    const cpu = arch.getCpuInfo();
+    log.info("CPU: {} cores, vendor: {s}, model: {s}", .{
+        smp.getNum(),
+        @tagName(cpu.vendor),
+        cpu.getName(),
+    });
 
     init(vm);
-    log.warn("Used memory: {} KiB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / lib.kb_size});
+    init(logger);
+
+    log.info("used memory: {} KiB", .{vm.PageAllocator.getAllocatedPages() * vm.page_size / lib.kb_size});
 
     init(config);
-
     preinit(dev);
 
     init(sys.time);
@@ -90,54 +99,26 @@ fn main2() noreturn {
 /// This task is only for boot cpu.
 fn kernelStartupTask() noreturn {
     init(video.terminal);
-    logger.switchFromEarly();
-
     smp.initAll();
 
-    //const debug_task = sched.Task.create(
-    //    .{ .kernel = .{ .name = "debug_task" } },
-    //    @intFromPtr(&debugTask)
-    //) catch unreachable;
-    //sched.enqueue(debug_task);
-    //const other_task =  sched.Task.create(
-    //    .{ .kernel = .{ .name = "other_task" } },
-    //    @intFromPtr(&debugTask)
-    //) catch unreachable;
-    //sched.enqueue(other_task);
+    logger.initWorker() catch @panic("failed to start logger worker");
 
     init(vfs);
     init(dev);
 
+    const allocated = @as(usize, vm.PageAllocator.getAllocatedPages()) * vm.page_size;
+    log.info("used memory: {} KiB ({} MiB)", .{allocated / lib.kb_size, allocated / lib.mb_size});
+
     init(sys);
 
-    sched.pause();
-    unreachable;
+    sched.terminate();
 }
 
-fn debugTask() noreturn {
-    const task = sched.getCurrentTask();
+inline fn startNonBootCpu() void {
+    sys.time.initPerCpu();
 
-    while (true) {
-        log.info("{s}: {} - {}", .{
-            task.spec.kernel.name,
-            task.stats.time_slice,
-            @as(u32, 32) - task.stats.getPriority(),
-        });
-
-        const begin = sys.time.getCachedUpTime().sec;
-        while (begin == sys.time.getCachedUpTime().sec) {
-            sched.yield();
-        }
-    }
-
-    unreachable;
-}
-
-/// Specific task to wait until kernel initialization is done
-/// and run userspace after.
-fn awaitTask() noreturn {
-    sched.pause();
-    unreachable;
+    log.info("CPU {} initialized", .{smp.getIdx()});
+    sched.getCurrent().start();
 }
 
 fn preinit(comptime Module: type) void {

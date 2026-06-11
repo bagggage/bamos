@@ -25,13 +25,13 @@ pub const Drive = dev.classes.Drive;
 pub const File = @import("vfs/File.zig");
 pub const Inode = @import("vfs/Inode.zig");
 pub const Partition = parts.Partition;
+pub const Pipe = @import("vfs/Pipe.zig");
 pub const Superblock = @import("vfs/Superblock.zig");
 
 pub const Error = vm.Error || parts.Error || error {
-    BadDentry,
     BadFileDescriptor,
-    BadInode,
     BadOperation,
+    BadPipe,
     BadSuperblock,
     Busy,
     Exists,
@@ -40,15 +40,32 @@ pub const Error = vm.Error || parts.Error || error {
     NoAccess,
     NoEnt,
     NoFs,
+    NoSpace,
+    NoTTY,
+    NotDirectory,
+    NotRegularFile,
 };
 
 /// Filesystem context.
 /// 
 /// Contains unique FS data per each moutn point.
 pub const Context = union(enum) {
+    pub const Tag = enum(u2) {
+        none  = 0,
+        super = 1,
+        virt  = 2,
+        root  = 3,
+    };
+
+    pub const Handle = struct {
+        ptr: Ptr,
+        tag: Tag,
+    };
+
     pub const Ptr = union {
         super: *Superblock,
         virt: *Context.Virt,
+        root: *Dentry,
     };
 
     /// Represents virtual filesystem context.
@@ -174,14 +191,36 @@ pub const FileSystem = struct {
 
 pub const Path = struct {
     dentry: *const Dentry,
+    root: *const Dentry,
 
     pub fn format(self: Path, writer: *std.Io.Writer) std.Io.Writer.Error!void {
-        const parent = self.dentry.parent;
-        if (!std.mem.eql(u8, parent.name.str(), "/")) {
-            try format(.{ .dentry = self.dentry.parent }, writer);
+        try formatHelper(self.root, self.dentry, writer);
+    }
+
+    fn formatHelper(root: *const Dentry, dentry: *const Dentry, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        const parent = dentry.parent;
+        if (dentry != root and parent != dentry and parent != root) {
+            @branchHint(.likely);
+            try formatHelper(root, parent, writer);
         }
 
-        try writer.print("/{s}", .{ self.dentry.name.str() });
+        try writer.writeByte('/');
+
+        const name = dentry.name.str();
+        if (name.len == 1 and name[0] == '/') {
+            const mnt = dentry.getMountPoint();
+            if (dentry == mnt.getRootDentry()) {
+                @branchHint(.likely);
+                // The VFS root have the mount point that is pointing to itself.
+                if (dentry == root) { @branchHint(.cold); return; }
+
+                const hidden = mnt.getHiddenDentry();
+                try writer.writeAll(hidden.name.str());
+            }
+        } else {
+            @branchHint(.likely);
+            try writer.writeAll(name);
+        }
     }
 };
 
@@ -233,6 +272,12 @@ pub const MountPoint = struct {
     }
 };
 
+pub const CreateOptions = struct {
+    perm: u16 = Permissions.makeInt(.rw, .rw, .r),
+    uid: u16 = 0,
+    gid: u16 = 0,
+};
+
 pub const Permissions = enum(u16) {
     none = 0b000_000_000,
     x    = 0b001_001_001,
@@ -254,6 +299,14 @@ pub const Permissions = enum(u16) {
 
     pub inline fn mask(perm: Permissions, role: Role) u16 {
         return @intFromEnum(perm) & @intFromEnum(role);
+    }
+
+    pub inline fn add(perm: Permissions, rhs: Permissions) Permissions {
+        return @enumFromInt(@intFromEnum(perm) | @intFromEnum(rhs));
+    }
+
+    pub inline fn remove(perm: Permissions, rhs: Permissions) Permissions {
+        return @enumFromInt(@intFromEnum(perm) & ~@intFromEnum(rhs));
     }
 
     pub inline fn checkAccess(perm: Permissions, access: Permissions) bool {
@@ -334,10 +387,8 @@ pub fn deinit() void {
 }
 
 pub fn mount(dentry: *Dentry, fs_name: []const u8, blk_dev: ?*devfs.BlockDev) Error!*Dentry {
-    if (
-        dentry.inode.type != .directory or
-        (dentry == root_dentry)
-    ) return error.BadDentry;
+    if (dentry.inode.type != .directory) return error.NotDirectory;
+    if (dentry == root_dentry) return error.NoAccess;
 
     const fs = getFs(fs_name) orelse return error.NoFs;
     defer fs.deref();
@@ -416,7 +467,11 @@ pub fn getFs(name: []const u8) ?*FileSystem {
     return null;
 }
 
-pub fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
+pub inline fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
+    return lookupRaw(root, dir, path, true);
+}
+
+pub fn lookupRaw(root: ?*Dentry, dir: ?*Dentry, path: []const u8, follow_links: bool) Error!*Dentry {
     if (path.len == 0) return error.InvalidArgs;
     log.debug("lookup for: \"{s}\"", .{path});
 
@@ -432,7 +487,7 @@ pub fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
     );
 
     while (it.next()) |element| {
-        const dentry = ent.?;
+        var dentry = ent.?;
         errdefer dentry.deref();
 
         if (element.len == 0) continue;
@@ -447,8 +502,15 @@ pub fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
                 continue;
             }
         }
-    
-        if (dentry.inode.type != .directory) return error.BadDentry;
+
+        if (follow_links and dentry.inode.type == .symbolic_link) {
+            const sym_link = dentry;
+
+            dentry = try resolveSymLink(sym_link);
+            sym_link.deref();
+        }
+
+        if (dentry.inode.type != .directory) return error.NotDirectory;
 
         ent = dentry.lookup(element);
         dentry.deref();
@@ -463,7 +525,7 @@ pub fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Dentry {
 /// If any other error occurs, prints error message.
 pub fn tryLookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) ?*Dentry {
     return lookup(root, dir, path) catch |err| {
-        if (err != Error.NoEnt) {
+        if (err != error.NoEnt) {
             @branchHint(.unlikely);
             log.err("lookup for \"{s}\" failed: {s}", .{path, @errorName(err)});
         }
@@ -474,7 +536,7 @@ pub fn tryLookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) ?*Dentry {
 pub fn resolveSymLink(sym_dent: *Dentry) Error!*Dentry {
     if (sym_dent.inode.type != .symbolic_link) {
         @branchHint(.unlikely);
-        return error.BadDentry;
+        return error.InvalidArgs;
     }
 
     // TODO: Implement.
@@ -511,7 +573,11 @@ pub fn changeRoot(new: *Dentry) Error!void {
         const mnt_name = orig_dentry.name.str();
         const new_mnt_dentry = lookup(null, new, mnt_name) catch |err| blk: {
             if (err != error.NoEnt) return err;
-            break :blk try new.makeDirectory(mnt_name);
+            break :blk try new.makeDirectory(mnt_name, .{
+                .uid = orig_dentry.inode.uid,
+                .gid = orig_dentry.inode.gid,
+                .perm = orig_dentry.inode.perm
+            });
         };
 
         log.debug("move /{s} to new root", .{mnt_name});
@@ -533,17 +599,8 @@ pub fn changeRoot(new: *Dentry) Error!void {
     // TODO: Complete implementation, unmount old root and free resources
 }
 
-pub fn isMountPoint(dentry: *const Dentry) bool {
-    const gen = mount_list.ctrl.readLock();
-    defer mount_list.ctrl.readUnlock(gen);
-
-    var node = mount_list.first.load(.acquire);
-    while (node) |n| : (node = n.next) {
-        const mnt_point = MountPoint.fromNode(n);
-        if (mnt_point.getRootDentry() == dentry) return true;
-    }
-
-    return false;
+pub fn isFsRoot(dentry: *const Dentry) bool {
+    return dentry.getMountPoint().getRootDentry() == dentry;
 }
 
 /// Returns the actual root of the entire VFS
@@ -632,7 +689,8 @@ fn mountDriveFs(
     fs: *FileSystem, dentry: *Dentry,
     mnt_point: *MountPoint, blk_dev: *devfs.BlockDev
 ) !*Dentry {
-    const super = try fs.mountDrive(blk_dev.getDrive(), blk_dev.getPartition());
+    const part = blk_dev.getPartition();
+    const super = try fs.mountDrive(part.data.asPtr(Drive).?, part);
     if (!super.validateRoot()) {
         @branchHint(.cold);
         log.err(
@@ -644,6 +702,7 @@ fn mountDriveFs(
 
     mnt_point.* = .init(fs, dentry, .{ .super = super });
     super.root.ctx = .{ .super = super };
+    super.root.meta.fs = .super;
     super.mount_point = mnt_point;
 
     return super.root;
@@ -662,6 +721,7 @@ fn mountVirtualFs(fs: *FileSystem, dentry: *Dentry, mnt_point: *MountPoint) !*De
 
     mnt_point.* = .init(fs, dentry, .{ .virt = virt });
     virt.root.ctx = .{ .virt = &mnt_point.ctx.virt };
+    virt.root.meta.fs = .virt;
 
     return virt.root;
 }
@@ -681,6 +741,7 @@ fn initRoot() !void {
 
         mnt_point.* = .init(tmp_fs, virt.root, .{ .virt = virt });
         virt.root.ctx = .{ .virt = &mnt_point.ctx.virt };
+        virt.root.meta.fs = .virt;
 
         mount_list.prepend(&mnt_point.node);
     }
@@ -689,7 +750,9 @@ fn initRoot() !void {
 }
 
 fn initMountFs(dir: []const u8, fs_name: []const u8) Error!void {
-    const mnt_dent = try root_dentry.makeDirectory(dir);
+    const mnt_dent = try root_dentry.makeDirectory(
+        dir, .{ .perm = @intFromEnum(Permissions.rw) }
+    );
     defer mnt_dent.deref();
 
     const root = try mount(mnt_dent, fs_name, null);

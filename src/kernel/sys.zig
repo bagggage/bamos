@@ -11,18 +11,18 @@ const lib = @import("lib.zig");
 const log = std.log.scoped(.sys);
 const logger = @import("logger.zig");
 const sched = @import("sched.zig");
+const Teletype = @import("dev.zig").classes.Teletype;
 const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
 
 pub const AddressSpace = Process.AddressSpace;
 pub const call = @import("sys/call.zig");
-pub const Console = @import("sys/Console.zig");
 pub const exe = @import("sys/exe.zig");
+pub const FileTable = @import("sys/FileTable.zig");
 pub const input = @import("sys/input.zig");
 pub const limits = @import("sys/limits.zig");
 pub const Process = @import("sys/Process.zig");
 pub const time = @import("sys/time.zig");
-pub const VirtualTerminal = @import("sys/VirtualTerminal.zig");
 
 const init_paths: []const [:0]const u8 = &.{
     "/init",
@@ -39,9 +39,6 @@ const InitSource = struct {
 };
 
 pub fn init() !void {
-    try VirtualTerminal.init();
-    try Console.init();
-
     startInit() catch |err| {
         if (err == error.InitNotFound) @panic("Init executable not found.");
         return err;
@@ -83,6 +80,9 @@ fn startInit() !void {
         const console_fd = try init_proc.files.open(console, .rw);
         _ = try init_proc.files.duplicate(console_fd.idx); // stdout
         _ = try init_proc.files.duplicate(console_fd.idx); // stderr
+
+        const tty = Teletype.fromFile(console_fd.file);
+        try init_proc.attachControlTerminal(tty);
 
         log.info("start process: {f} ", .{init_proc});
         log.debug("{f}", .{init_proc.addr_space});
@@ -173,13 +173,13 @@ fn findRoot(root_path: []const u8) !*vfs.Dentry {
 fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
     return switch (dentry.inode.type) {
         .directory => {
-            if (vfs.isMountPoint(dentry) == false) return error.BadDentry;
+            if (vfs.isFsRoot(dentry) == false) return error.BadSuperblock;
             return dentry;
         },
         .block_device => blk: {
             const blk_dev = devfs.BlockDev.fromDentry(dentry);
 
-            const mnt_dir = try vfs.getRootWeak().makeDirectory("rootfs");
+            const mnt_dir = try vfs.getRootWeak().makeDirectory("rootfs", .{});
             defer mnt_dir.deref();
 
             break :blk try if (config.get("rootfs")) |fs_name|
@@ -187,6 +187,6 @@ fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
             else vfs.tryMount(mnt_dir, blk_dev);
         },
         .symbolic_link => resolveRoot(try vfs.resolveSymLink(dentry)),
-        else => return error.BadDentry
+        else => return error.InvalidArgs
     };
 }

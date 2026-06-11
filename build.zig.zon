@@ -12,6 +12,10 @@
             .hash = "N-V-__8AAA4RqgAEiQ7oQTlMBFe4ajBVxQj39MUUnuAl7QZ4",
             .lazy = true,
         },
+        .uacpi = .{
+            .url = "git+https://github.com/uACPI/uACPI#for-5.0",
+            .hash = "N-V-__8AAPspFACnNZvL7Qat26yH6jT2ND5XvcG_F18fXzSF",
+        },
     },
 
     .paths = .{

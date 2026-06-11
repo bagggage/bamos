@@ -28,7 +28,7 @@ pub const high_static_prior = std.math.minInt(PriorityDelta);
 /// Lower static priority value.
 pub const low_static_prior = std.math.maxInt(PriorityDelta);
 
-pub const kernel_stack_size = if (builtin.mode == .Debug) 8 * vm.page_size else 2 * vm.page_size;
+pub const kernel_stack_size = if (builtin.mode == .Debug) 16 * vm.page_size else 8 * vm.page_size;
 pub const kernel_stack_rank = vm.bytesToRank(kernel_stack_size);
 
 /// Struct contains all data used to calculate task's
@@ -148,6 +148,8 @@ pub const Specific = union(enum) {
     user: User,
 };
 
+pub const WorkerFn = *const fn (usize) noreturn;
+
 stats: Stats = .{},
 /// Arch-specific context used for context switching.
 context: arch.Context,
@@ -165,6 +167,19 @@ pub fn create(spec: Specific, ip: usize) !*Self {
     task.* = .{
         .spec = spec,
         .context = .init(stack_top, ip),
+    };
+
+    return task;
+}
+
+pub fn createWorker(name: []const u8, entry: WorkerFn, arg: lib.AnyData) vm.Error!*Self {
+    const stack = try createKernelStack();
+    const task: *Self = @ptrFromInt(stack + kernel_stack_size - @sizeOf(Self));
+    const stack_top = @intFromPtr(task);
+
+    task.* = .{
+        .spec = .{ .kernel = .{ .name = name } },
+        .context = .initWorker(stack_top, @intFromPtr(entry), arg.as(usize)),
     };
 
     return task;
@@ -217,6 +232,7 @@ pub inline fn tryWakeup(self: *Self) bool {
             .release, .monotonic
     ) == null) return false;
 
+    std.debug.assert(self.stats.sleep.raw == .sleep);
     self.stats.sleep.store(.awake, .release);
     return true;
 }

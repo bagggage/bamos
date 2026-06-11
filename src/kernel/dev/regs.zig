@@ -1,17 +1,14 @@
 //! # Registers compile time abstraction
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
 const io = @import("io.zig");
+const lib = @import("../lib.zig");
 
 pub const Register = struct {
-    pub const Access = enum {
-        read,
-        write,
-        rw
-    };
+    pub const Access = enum { read, write, rw };
 
     name: [:0]const u8,
     offset: comptime_int,
@@ -21,15 +18,15 @@ pub const Register = struct {
     pub inline fn init(
         comptime name: [:0]const u8,
         comptime offset: comptime_int,
-        comptime Type: ?type, 
+        comptime Type: ?type,
         comptime access: Access,
     ) Register {
         comptime {
             if (Type) |T| {
                 const info = @typeInfo(T);
 
-                if (info != .int and info != .@"struct")
-                    @compileError("Register type can only be an integer or a structure, found: "++@typeName(Type.?));
+                if (info != .int and info != .@"enum" and info != .@"union" and info != .@"struct")
+                    @compileError("Register type can only be an integer, enum, union or a structure, found: " ++ @typeName(Type.?));
             }
         }
 
@@ -41,12 +38,7 @@ pub const Register = struct {
     }
 };
 
-pub fn Group(
-    comptime IoMechanism: type,
-    comptime base: ?comptime_int,
-    comptime size: ?comptime_int,
-    comptime regs: []const Register
-) type {
+pub fn Group(comptime IoMechanism: type, comptime base: ?comptime_int, comptime size: ?comptime_int, comptime regs: []const Register) type {
     if (base) |val| {
         std.debug.assert(val % @sizeOf(IoMechanism.Address) == 0);
     }
@@ -54,20 +46,10 @@ pub fn Group(
     comptime var fields: []const std.builtin.Type.EnumField = &.{};
 
     inline for (regs[0..], 0..) |r, i| {
-        fields = fields ++ [_]std.builtin.Type.EnumField{.{
-            .name = r.name,
-            .value = i
-        }};
+        fields = fields ++ [_]std.builtin.Type.EnumField{.{ .name = r.name, .value = i }};
     }
 
-    const reg_names = std.builtin.Type{
-        .@"enum" = .{
-            .fields = fields,
-            .decls = &.{},
-            .tag_type = u8,
-            .is_exhaustive = false
-        }
-    };
+    const reg_names = std.builtin.Type{ .@"enum" = .{ .fields = fields, .decls = &.{}, .tag_type = u8, .is_exhaustive = false } };
     const NamesType: type = @Type(reg_names);
 
     return struct {
@@ -79,7 +61,7 @@ pub fn Group(
         pub const byte_size: comptime_int = if (size) |val| val else calcSize();
 
         const Self = @This();
-        const BaseType = if (base != null) void else AddressType; 
+        const BaseType = if (base != null) void else AddressType;
 
         dyn_base: BaseType = undefined,
 
@@ -121,7 +103,13 @@ pub fn Group(
             return ReferenceGroupEx(getRegInfo(member).offset, T);
         }
 
-        pub fn Ref(comptime T: type) type { return ReferenceGroupEx(0, T); }
+        fn BitFieldType(comptime member: Names, comptime bit_field: @TypeOf(.enum_literal)) type {
+            return @FieldType(getRegInfo(member).Type.?, @tagName(bit_field));
+        }
+
+        pub fn Ref(comptime T: type) type {
+            return ReferenceGroupEx(0, T);
+        }
 
         pub fn init() !Self {
             if (IoMechanism.init) |initFn| {
@@ -137,6 +125,13 @@ pub fn Group(
             }
 
             return .{ .dyn_base = base_addr };
+        }
+
+        pub inline fn addr(self: Self, comptime member: Names) AddressType {
+            @setRuntimeSafety(false);
+
+            const r = comptime getRegInfo(member);
+            return self.getBase() + r.offset;
         }
 
         pub inline fn read(self: Self, comptime member: Names) RegIntType(member) {
@@ -155,8 +150,7 @@ pub fn Group(
                     self.getBase(),
                     comptime r.offset * std.mem.byte_size_in_bits,
                 );
-            }
-            else {
+            } else {
                 return @truncate(IoMechanism.read(self.getBase() +% r.offset));
             }
         }
@@ -172,15 +166,34 @@ pub fn Group(
             }
 
             if (comptime (r.offset % @sizeOf(DataType)) != 0 or r_size != @sizeOf(DataType)) {
-                IoMechanism.writeNonUniform(
-                    self.getBase(),
-                    comptime r.offset * std.mem.byte_size_in_bits,
-                    data
-                );
-            }
-            else {
+                IoMechanism.writeNonUniform(self.getBase(), comptime r.offset * std.mem.byte_size_in_bits, data);
+            } else {
                 IoMechanism.write(self.getBase() +% r.offset, data);
             }
+        }
+
+        pub inline fn readBits(
+            self: Self, comptime member: Names, comptime bit_field: @Type(.enum_literal)
+        ) BitFieldType(member, bit_field) {
+            const r = getRegInfo(member);
+            if (comptime r.Type == null) @compileError("Register '" ++ r.name ++ "' is not backed by any struct");
+
+            const val: r.Type.? = @bitCast(self.read(member));
+            return @field(val, @tagName(bit_field));
+        }
+
+        pub inline fn writeBits(
+            self: Self, comptime member: Names, comptime bit_field: @Type(.enum_literal),
+            data: anytype
+        ) void {
+            const r = getRegInfo(member);
+            if (comptime r.access != .rw) @compileError("Register '" ++ r.name ++ "' might be read-write to use `writeBits`");
+            if (comptime r.Type == null) @compileError("Register '" ++ r.name ++ "' is not backed by any struct");
+
+            var val: r.Type.? = @bitCast(self.read(member));
+            @field(val, @tagName(bit_field)) = data;
+
+            self.write(member, @bitCast(val));
         }
 
         pub inline fn get(self: Self, comptime T: type, comptime member: Names) T {
@@ -191,11 +204,35 @@ pub fn Group(
             self.write(member, @bitCast(data));
         }
 
-        pub inline fn referenceAs(self: Self, comptime T: type, comptime member: Names) ReferenceGroup(member, T) {
-            return self.referenceAsOffset(T, getRegInfo(member).offset);
+        pub fn waitBitsClear(self: Self, comptime member: Names, comptime mask: RegIntType(member), timeout: u32) !void {
+            try io.waitFor(opaque{
+                    inline fn check(data: lib.AnyData) bool {
+                        const _self: Self = if (comptime base == null) .{ .dyn_base = data.as(AddressType) } else .{};
+                        return (_self.read(member) & mask) == 0;
+                    }
+                }.check,
+                if (comptime base == null) .from(self.dyn_base) else undefined,
+                timeout
+            );
         }
 
-        pub inline fn referenceAsOffset(self: Self, comptime T: type, offset: AddressType) ReferenceGroupEx(0, T) {
+        pub fn waitBitsSet(self: Self, comptime member: Names, comptime mask: RegIntType(member), timeout: u32) !void {
+            try io.waitFor(opaque{
+                    inline fn check(data: lib.AnyData) bool {
+                        const _self: Self = if (comptime base == null) .{ .dyn_base = data.as(AddressType) } else .{};
+                        return (_self.read(member) & mask) == mask;
+                    }
+                }.check,
+                if (comptime base == null) .from(self.dyn_base) else undefined,
+                timeout
+            );
+        }
+
+        pub inline fn referenceAs(self: Self, comptime T: type, comptime member: Names) ReferenceGroup(member, T) {
+            return self.referenceAt(T, getRegInfo(member).offset);
+        }
+
+        pub inline fn referenceAt(self: Self, comptime T: type, offset: AddressType) ReferenceGroupEx(0, T) {
             if (comptime base != null) {
                 return .{};
             } else {
@@ -206,66 +243,89 @@ pub fn Group(
 }
 
 /// Read-only modifier for register field in struct layout.
-/// 
+///
 /// For `extern`/`packed` structs use postfixies: `E`/`P`.
 pub fn ReadOnly(comptime IntType: type) type {
-    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    comptime {
+        std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType);
+    }
     return struct {
         pub const access = Register.Access.read;
-        value: IntType
+        value: IntType,
     };
 }
 
 /// Write-only modifier for register field in struct layout.
-/// 
+///
 /// For `extern`/`packed` structs use postfixies: `E`/`P`.
 pub fn WriteOnly(comptime IntType: type) type {
-    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    comptime {
+        std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType);
+    }
     return struct {
         pub const access = Register.Access.write;
-        value: IntType
+        value: IntType,
     };
 }
 
 /// Read-only modifier for register field in **`extern`** struct layout.
 pub fn ReadOnlyE(comptime IntType: type) type {
-    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    comptime {
+        std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType);
+    }
     return extern struct {
         pub const access = Register.Access.read;
-        value: IntType
+        value: IntType,
     };
 }
 
 /// Write-only modifier for register field in **`extern`** struct layout.
 pub fn WriteOnlyE(comptime IntType: type) type {
-    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    comptime {
+        std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType);
+    }
     return extern struct {
         pub const access = Register.Access.write;
-        value: IntType
+        value: IntType,
     };
 }
 
 /// Read-only modifier for register field in **`packed`** struct layout.
 pub fn ReadOnlyP(comptime IntType: type) type {
-    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    comptime {
+        std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType);
+    }
     return packed struct {
         pub const access = Register.Access.read;
-        value: IntType
+        value: IntType,
     };
 }
 
 /// Write-only modifier for register field in **`packed`** struct layout.
 pub fn WriteOnlyP(comptime IntType: type) type {
-    comptime { std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType); }
+    comptime {
+        std.debug.assert(std.meta.Int(.unsigned, @bitSizeOf(IntType)) == IntType);
+    }
     return packed struct {
         pub const access = Register.Access.write;
-        value: IntType
+        value: IntType,
     };
+}
+
+fn MaskType(comptime T: type) type {
+    return @Type(.{ .int = .{
+        .signedness = .unsigned,
+        .bits = @bitSizeOf(T),
+    }});
 }
 
 pub const reg = Register.init;
 
 pub fn from(comptime Layout: type) []const Register {
+    return fromWithModifier(Layout, null);
+}
+
+pub fn fromWithModifier(comptime Layout: type, comptime access: ?Register.Access) []const Register {
     comptime var result: []const Register = &.{};
     const layout_info = @typeInfo(Layout);
 
@@ -279,17 +339,32 @@ pub fn from(comptime Layout: type) []const Register {
                         field.name,
                         @offsetOf(Layout, field.name),
                         field.type,
-                        getTypeAccess(field.type)
+                        access orelse getTypeAccess(field.type)
                     )
                 };
             }
         },
         .@"union" => |info| {
             inline for (info.fields) |field| {
-                result = result ++ from(field.type);
+                result = result ++ fromWithModifier(field.type, access);
             }
         },
-        else => @compileError("Layout must be a struct or union, found '" ++ @typeName(Layout) ++ "'")
+        else => @compileError("Layout must be a struct or union, found '" ++ @typeName(Layout) ++ "'"),
+    }
+
+    return result;
+}
+
+pub fn makeMask(comptime T: type, comptime bits: []const @Type(.enum_literal)) MaskType(T) {
+    const Int = MaskType(T);
+
+    comptime var result: Int = 0;
+    inline for (bits) |field| {
+        const FieldType = @FieldType(T, @tagName(field));
+        const bit_size = @bitSizeOf(FieldType);
+        const mask = (@as(Int, 1) << bit_size) - 1;
+
+        result |= mask << @bitOffsetOf(T, @tagName(field));
     }
 
     return result;

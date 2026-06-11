@@ -12,7 +12,7 @@ const log = std.log.scoped(.@"pci.config");
 const vm = @import("../../../vm.zig");
 
 var cfg_io: IoType = undefined;
-var mcfg: ?*const Mcfg = null;
+var mcfg: ?*align(1) const Mcfg = null;
 
 var max_seg: usize = 1;
 
@@ -115,8 +115,8 @@ const Mcfg = extern struct {
         std.debug.assert(@sizeOf(Mcfg) == 44);
     }
 
-    pub inline fn entries(self: *const Mcfg) []const Entry {
-        const ptr: [*]const Entry = @ptrFromInt(@intFromPtr(self) + @sizeOf(Mcfg));
+    pub inline fn entries(self: *align(1) const Mcfg) []align(1) const Entry {
+        const ptr: [*]align(1) const Entry = @ptrFromInt(@intFromPtr(self) + @sizeOf(Mcfg));
         const len = (self.header.length - @sizeOf(acpi.SdtHeader)) / @sizeOf(Entry);
 
         return ptr[0..len];
@@ -340,6 +340,20 @@ pub const SubclassCode = extern union {
         raceway_bridge = 0x8,
         pci_to_pci_bridge_0x9 = 0x9,
         inf_to_pci_host_bridge = 0xa,
+
+        other = 0x80
+    },
+    serial_bus_controller: enum(u8) {
+        firewire = 0x0,
+        access_bus = 0x1,
+        sas = 0x2,
+        usb = 0x3,
+        fibre_channel = 0x4,
+        smbus = 0x5,
+        infiniband = 0x6,
+        ipmi_interface = 0x7,
+        sata_controller = 0x8,
+        usb3_controller = 0x9,
 
         other = 0x80
     }
@@ -665,7 +679,7 @@ pub inline fn getMaxSeg() usize {
     return max_seg;
 }
 
-fn initMmio(mcfg_hdr: *const acpi.SdtHeader) !void {
+fn initMmio(mcfg_hdr: *align(1) const acpi.SdtHeader) !void {
     mcfg = @ptrCast(mcfg_hdr);
 
     const entries = mcfg.?.entries();

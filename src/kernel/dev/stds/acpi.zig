@@ -5,6 +5,7 @@ const dev = @import("../../dev.zig");
 const io = @import("../io.zig");
 const lib = @import("../../lib.zig");
 const smp = @import("../../smp.zig");
+const uacpi = @import("acpi/uacpi.zig");
 const vm = @import("../../vm.zig");
 
 pub const timer = @import("../drivers/timer/acpi_timer.zig");
@@ -25,7 +26,7 @@ pub const SdtHeader = extern struct {
         std.debug.assert(@alignOf(@This()) == @alignOf(u32));
     }
 
-    pub fn checkSum(self: *const SdtHeader) bool {
+    pub fn checkSum(self: *align(1) const SdtHeader) bool {
         if (self.length == 0) return false;
 
         const ptr: [*]const u8 = @ptrCast(self);
@@ -37,17 +38,31 @@ pub const SdtHeader = extern struct {
     }
 };
 
+pub const Rsdt = extern struct {
+    header: SdtHeader,
+    _entries: u32,
+
+    pub inline fn entries(self: *align(1) Rsdt) u32 {
+        return (self.header.length - @sizeOf(SdtHeader)) / @sizeOf(@TypeOf(self._entries));
+    }
+
+    pub inline fn entry(self: *align(1) Rsdt, idx: u32) *align(1) SdtHeader {
+        const ptrs: [*]align(1) u32 = @ptrCast(&self._entries);
+        return @ptrFromInt(vm.getVirtLma(@as(usize, ptrs[idx])));
+    }
+};
+
 pub const Xsdt = extern struct {
     header: SdtHeader,
-    _entries: *SdtHeader align(4),
+    _entries: *SdtHeader align(1),
 
     comptime {
         std.debug.assert(@sizeOf(@This()) == @sizeOf(SdtHeader) + @sizeOf(*SdtHeader));
     }
 
-    pub inline fn entries(self: *Xsdt) []align(4) *SdtHeader {
+    pub inline fn entries(self: *align(1) Xsdt) []align(1) *SdtHeader {
         const len = (self.header.length - @sizeOf(SdtHeader)) / @sizeOf(@TypeOf(self._entries));
-        return @as([*]align(4) *SdtHeader, @ptrCast(&self._entries))[0..len];
+        return @as([*]align(1) *SdtHeader, @ptrCast(&self._entries))[0..len];
     }
 };
 
@@ -186,8 +201,9 @@ const GenericAddrStruct = extern struct {
 
 const mmio_size = 512 * lib.kb_size;
 
-var sdt: *Xsdt = undefined;
-var fadt: *Fadt = undefined;
+var old_rsdt = false;
+var sdt: *align(1) Xsdt = undefined;
+var fadt: *align(1) Fadt = undefined;
 
 pub fn init() !void {
     const phys = boot.getArchData().acpi_ptr;
@@ -198,12 +214,16 @@ pub fn init() !void {
     sdt = @ptrFromInt(vm.getVirtLma(phys));
 
     if (!sdt.header.checkSum()) return error.XsdtChecksumFailed;
+    old_rsdt = std.mem.eql(u8, &sdt.header.signature, "RSDT");
 
     const fadt_hdr = findEntry("FACP") orelse return error.FadtNotFound;
     if (!fadt_hdr.checkSum()) return error.FadtChecksumFailed;
 
     fadt = @alignCast(@ptrCast(fadt_hdr));
 }
+
+pub const initInterpreter = uacpi.init;
+pub const shutdown = uacpi.shutdown;
 
 /// Used by `dev.init` after preinitialization.
 /// Cannot be called in `acpi.init` because
@@ -214,25 +234,35 @@ pub fn postInit() !void {
     try enableSmm();
 }
 
-pub fn findEntry(signature: *const [4:0]u8) ?*SdtHeader {
-    const entries = sdt.entries();
+pub fn findEntry(signature: *const [4:0]u8) ?*align(1) SdtHeader {
+    if (old_rsdt) {
+        const rsdt: *align(1) Rsdt = @ptrCast(sdt);
+        const len = rsdt.entries();
 
-    for (entries) |ent| {
-        const entry: *SdtHeader = vm.getVirtLma(ent);
+        for (0..len) |i| {
+            const entry = rsdt.entry(@truncate(i));
+            if (!std.mem.eql(u8, &entry.signature, signature)) continue;
 
-        if (!std.mem.eql(u8, &entry.signature, signature)) continue;
+            return entry;
+        }
+    } else {
+        const entries = sdt.entries();
+        for (entries) |ent| {
+            const entry: *align(1) SdtHeader = vm.getVirtLma(ent);
+            if (!std.mem.eql(u8, &entry.signature, signature)) continue;
 
-        return entry;
+            return entry;
+        }
     }
 
     return null;
 }
 
-pub inline fn getSdt() *const Xsdt {
+pub inline fn getSdt() *align(1) const Xsdt {
     return sdt;
 }
 
-pub inline fn getFadt() *const Fadt {
+pub inline fn getFadt() *align(1) const Fadt {
     return fadt;
 }
 

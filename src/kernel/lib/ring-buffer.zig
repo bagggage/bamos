@@ -41,7 +41,7 @@ pub fn RingBuffer(comptime T: type) type {
                 const phys = vm.getPhysLma(self.ptr);
                 const rank = vm.bytesToRank(size);
                 vm.PageAllocator.free(phys, rank);
-            } else {
+            } else if (size > 0) {
                 vm.gpa.free(self.ptr);
             }
         }
@@ -74,6 +74,22 @@ pub fn RingBuffer(comptime T: type) type {
             const tmp_pos = self.read_pos;
             self.read_pos = self.nextPos(self.read_pos);
             return self.ptr[tmp_pos];
+        }
+
+        pub inline fn seekRead(self: *Self, new_pos: usize) void {
+            self.read_pos = @truncate(new_pos & (self.len -% 1));
+        }
+
+        pub inline fn seekWrite(self: *Self, new_pos: usize) void {
+            self.write_pos = @truncate(new_pos & (self.len -% 1));
+        }
+
+        pub inline fn itemsToRead(self: *Self) u16 {
+            return (self.write_pos -% self.read_pos) & (self.len -% 1);
+        }
+
+        pub inline fn writeCapacity(self: *Self) u16 {
+            return (self.lastWritePos() -% self.write_pos) & (self.len -% 1);
         }
 
         fn allocPages(size: u32, len: *u16) vm.Error![*]T {

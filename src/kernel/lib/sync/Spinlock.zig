@@ -11,6 +11,7 @@ const std = @import("std");
 
 const smp = @import("../../smp.zig");
 const sched = @import("../../sched.zig");
+const sys = @import("../../sys.zig");
 const intr = @import("../../dev.zig").intr;
 
 const Self = @This();
@@ -41,6 +42,13 @@ pub inline fn init(init_state: enum{locked,unlocked}) Self {
 pub fn lock(self: *Self) void {
     sched.getCurrent().disablePreemption();
     self.rawLock(.locked_no_intr);
+}
+
+pub fn lockTimeout(self: *Self, time_us: usize) error{Timeout}!void {
+    const end = sys.time.getUpTime().toNs() +| (time_us * std.time.ns_per_us);
+    while (!self.tryLock()) {
+        if (sys.time.getUpTime().toNs() >= end) return error.Timeout;
+    }
 }
 
 /// Saves the local state of interrupts and disables them on the current CPU.

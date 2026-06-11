@@ -1,6 +1,8 @@
 //! # Inode structure
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
+
+const std = @import("std");
 
 const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
@@ -29,16 +31,16 @@ type: Type,
 perm: u16 = vfs.Permissions.makeInt(.rw, .r, .r),
 size: u64 = 0, // In bytes
 
-access_time: u32 = 0,
-modify_time: u32 = 0,
-create_time: u32 = 0,
+access_time: u64 = 0,
+modify_time: u64 = 0,
+create_time: u64 = 0,
 
 gid: u16 = 0,
 uid: u16 = 0,
 
 links_num: u16 = 1,
 
-ref_count: lib.atomic.RefCount(u32) = .init(0),
+ref_count: lib.atomic.RefCount(u16) = .init(0),
 lock: lib.sync.Spinlock = .{},
 
 fs_data: lib.AnyData = .{},
@@ -53,6 +55,11 @@ pub inline fn new() ?*Inode {
 
 pub inline fn free(self: *Inode) void {
     vm.auto.free(Inode, self);
+}
+
+pub inline fn delete(self: *Inode) void {
+    self.cache_ctrl.deinit();
+    self.free();
 }
 
 pub inline fn ref(self: *Inode) void {
@@ -72,6 +79,8 @@ pub fn getRole(self: *const Inode, uid: u32, gid: u32) vfs.Role {
 
 pub inline fn checkAccess(self: *const Inode, perm: vfs.Permissions, role: vfs.Role) bool {
     const perm_mask = perm.mask(role);
+
+    if (perm_mask == 0) return false;
     return (self.perm & perm_mask) == perm_mask;
 }
 

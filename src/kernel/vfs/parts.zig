@@ -8,6 +8,7 @@ const dev = @import("../dev.zig");
 const devfs = vfs.devfs;
 const Drive = dev.classes.Drive;
 const log = std.log.scoped(.parts);
+const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
@@ -25,6 +26,7 @@ pub const Partition = struct {
     lba_start: usize,
     lba_end: usize,
 
+    data: lib.AnyData,
     dev_file: devfs.DevFile = undefined,
 
     node: Node = .{},
@@ -43,13 +45,16 @@ pub const Partition = struct {
 
     pub fn registerDevice(
         self: *Partition, name: dev.Name, num: devfs.DevNum,
-        ops: *const devfs.DevFile.Operations, data: ?*anyopaque
+        ops: *const devfs.DevFile.Operations
     ) !void {
         self.dev_file = .{
             .name = name,
             .num = num,
+            .access = .{
+                .gid = 0,
+                .perm = vfs.Permissions.makeInt(.rw, .rw, .none)
+            },
             .ops = ops,
-            .data = .fromPtr(data)
         };
         try devfs.registerBlockDev(&self.dev_file);
     }
@@ -172,13 +177,14 @@ pub fn probe(drive: *Drive) Error!void {
 
         part.* = .{
             .lba_start = entry.start_lba,
-            .lba_end = entry.end_lba
+            .lba_end = entry.end_lba,
+            .data = .fromPtr(drive),
         };
 
         drive.parts.append(&part.node);
         errdefer drive.parts.remove(&part.node);
 
-        try part.registerDevice(dev_name, dev_num, &Drive.devfile_ops, drive);
+        try part.registerDevice(dev_name, dev_num, &Drive.devfile_ops);
     }
 }
 

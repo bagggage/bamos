@@ -9,201 +9,363 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const arch = lib.arch;
+const dev = @import("dev.zig");
 const lib = @import("lib.zig");
 const serial = @import("dev/drivers/uart/8250.zig");
+const sched = @import("sched.zig");
 const smp = @import("smp.zig");
 const sys = @import("sys.zig");
 const terminal = video.terminal;
 const video = @import("video.zig");
-
-const EarlyWriter = struct {
-    const vtable: std.io.Writer.VTable = .{
-        .drain = drain,
-    };
-
-    var buf_writer: std.io.Writer = .fixed(&log_buffer);
-
-    fn setup() std.io.Writer {
-        return .{ .buffer = &.{}, .vtable = &vtable };
-    }
-
-    fn getPrinted() []const u8 {
-        return log_buffer[0..buf_writer.end];
-    }
-
-    fn drain(writer: *std.io.Writer, data: []const []const u8, _: usize) std.io.Writer.Error!usize {
-        const slice = writer.buffer[0..writer.end];
-
-        serial.write(slice);
-        _ = buf_writer.write(slice) catch { buf_writer.end = 0; };
-        writer.end = 0;
-
-        var bytes: usize = 0;
-        for (data) |d| {
-            serial.write(d);
-            _ = buf_writer.write(d) catch { buf_writer.end = 0; };
-
-            bytes += d.len;
-        }
-
-        return bytes;
-    }
-};
-
-const KernelWriter = struct {
-    var vtable: std.io.Writer.VTable = .{
-        .drain = drainBoth,
-    };
-
-    fn setup(buffer: []u8) std.io.Writer {
-        const early_logs = EarlyWriter.getPrinted();
-
-        if (terminal.isInitialized()) {
-            terminal.write(early_logs);
-        } else {
-            vtable.drain = drainSerial;
-        }
-
-        return .{ .buffer = buffer, .vtable = &vtable};
-    }
-
-    fn drainBoth(writer: *std.io.Writer, data: []const []const u8, _: usize) std.io.Writer.Error!usize {
-        defer writer.end = 0;
-
-        var bytes: usize = 0;
-        serial.write(writer.buffer[0..writer.end]);
-        for (data) |d| serial.write(d);
-
-        terminal.write(writer.buffer[0..writer.end]);
-        for (data) |d| { terminal.write(d); bytes += d.len; }
-
-        return bytes;
-    }
-
-    fn drainSerial(writer: *std.io.Writer, data: []const []const u8, _: usize) std.io.Writer.Error!usize {
-        defer writer.end = 0;
-
-        var bytes: usize = 0;
-        serial.write(writer.buffer[0..writer.end]);
-        for (data) |d| { serial.write(d); bytes += d.len; }
-
-        return bytes;
-    }
-};
+const vm = @import("vm.zig");
 
 pub const new_line = "\r\n";
-pub var log_writer: std.io.Writer = EarlyWriter.setup();
+
+const Message = struct {
+    const Status = enum(u8) { free = 0, processing = 1, commited = 2 };
+    const Level = enum(u8) {
+        debug = 0,
+        info = 1,
+        warn = 2,
+        err = 3,
+
+        fn fromStd(level: std.log.Level) Level {
+            return switch (level) {
+                .debug => .debug,
+                .info => .info,
+                .warn => .warn,
+                .err => .err,
+            };
+        }
+
+        fn toColor(self: Level) std.Io.tty.Color {
+            return switch (self) {
+                .debug => .bright_black,
+                .info => .reset,
+                .warn => .bright_yellow,
+                .err => .bright_red,
+            };
+        }
+    };
+
+    const Meta = packed struct(u64) {
+        idx: u32 = 0,
+        len: u16 = 0,
+        level: Level = .debug,
+        status: Status = .free,
+    };
+
+    meta: std.atomic.Value(Meta) = .init(.{}),
+    time_ns: u64 = 0,
+    text: [*]const u8,
+    scope: [*:0]const u8,
+};
+
+const RingBuffer = struct {
+    const Self = @This();
+
+    const Cursor = packed struct(u64) {
+        head: u32 = 0,
+        tail: u32 = 0,
+
+        inline fn capacity(self: Cursor, len: u32) u32 {
+            return (self.head -% self.tail) & (len -% 1);
+        }
+
+        inline fn avail(self: Cursor, len: u32) u32 {
+            return (self.head -% self.tail) & (len -% 1);
+        }
+
+        inline fn next(self: Cursor, len: u32) u32 {
+            return (self.head +% 1) & (len -% 1);
+        }
+
+        inline fn inRange(self: Cursor, idx: u32) bool {
+            return if (self.head < self.tail)
+                (idx <= self.head or idx >= self.tail)
+            else
+                (idx >= self.tail and idx <= self.head);
+        }
+    };
+
+    items: [*]Message = undefined,
+    len: u32 = 0,
+
+    cursor: std.atomic.Value(Cursor) = .init(.{}),
+
+    pub fn addOne(self: *Self) *Message {
+        var curr = self.cursor.load(.acquire);
+        while (true) {
+            var new = curr;
+            new.head = new.next(self.len);
+
+            if (new.head == new.tail) new.tail = new.next(self.len);
+
+            curr = self.cursor.cmpxchgStrong(
+                curr,
+                new,
+                .release,
+                .monotonic,
+            ) orelse break;
+        }
+
+        return &self.items[curr.head];
+    }
+};
+
+const Stage = enum {
+    boot,
+    early,
+    normal,
+};
+
+const panic_scope = "panic";
 
 const tty_config: std.io.tty.Config = .escape_codes;
+const msg_max_size = 512;
 
-/// Spinlock to ensure that logging is thread-safe.
-var lock: lib.sync.Spinlock = .init(.unlocked);
-var lock_owner: u16 = undefined;
-var double_lock = false;
+var boot_text_buffer: [vm.page_size]u8 = undefined;
+var boot_ring_buffer: [64]Message = .{ Message{.scope = undefined, .text = undefined} } ** 64;
 
-var log_buffer: [arch.vm.page_size]u8 = undefined;
+var stage: Stage = .boot;
+var msg_ring: RingBuffer = .{ .items = &boot_ring_buffer, .len = boot_ring_buffer.len };
+var msg_idx: std.atomic.Value(u32) = .init(0);
+var text_buffer: []u8 = &boot_text_buffer;
+var text_idx: std.atomic.Value(u32) = .init(0);
+var dropped: std.atomic.Value(u32) = .init(0);
+var wait_queue: sched.WaitQueue = .{};
+var wait_lock: lib.sync.Spinlock = .{};
 
-pub fn switchFromEarly() void {
-    log_writer = KernelWriter.setup(&log_buffer);
+pub fn init() !void {
+    const mem_size = vm.PageAllocator.getTotalPages() * vm.page_size;
+    const buf_size: u32 = if (mem_size < 128 * lib.mb_size) blk: {
+        break :blk lib.mb_size / 2;
+    } else if (mem_size < 512 * lib.mb_size) blk: {
+        break :blk 1 * lib.mb_size;
+    } else blk: {
+        break :blk 2 * lib.mb_size;
+    };
+
+    const msg_len = buf_size / (msg_max_size / 2);
+    const msg_rank = vm.bytesToRank(msg_len * @sizeOf(Message));
+
+    const buf_phys = vm.PageAllocator.alloc(vm.bytesToRank(buf_size)) orelse return error.NoMemory;
+    errdefer vm.PageAllocator.free(buf_phys, vm.bytesToRank(buf_size));
+    const msg_phys = vm.PageAllocator.alloc(msg_rank) orelse return error.NoMemory;
+    errdefer vm.PageAllocator.free(msg_phys, msg_rank);
+
+    text_buffer.ptr = @ptrFromInt(vm.getVirtLma(buf_phys));
+    text_buffer.len = buf_size;
+
+    const cursor = msg_ring.cursor.load(.acquire);
+
+    msg_ring = .{ .cursor = .init(cursor), .items = @ptrFromInt(vm.getVirtLma(msg_phys)), .len = msg_len };
+    @memset(msg_ring.items[cursor.head..msg_len], .{ .scope = undefined, .text = undefined });
+
+    for (cursor.tail..cursor.head) |i| msg_ring.items[i] = boot_ring_buffer[i];
+
+    stage = .early;
 }
 
-pub fn switchToUserspace() void {
-    KernelWriter.vtable.drain = &KernelWriter.drainSerial;
+pub fn initWorker() !void {
+    const worker = try sched.Task.createWorker("logger", &flushWorker, .{});
+    sched.enqueue(worker);
+
+    stage = .normal;
 }
 
-// FIXME
-pub fn capture() void {
-    const cpu_idx = smp.getIdx();
-
-    if (lock.isLocked() and lock_owner == cpu_idx) {
-        double_lock = true;
-        return;
-    }
-
-    if (!smp.getLocalData().isInInterrupt()) {
-        lock.lock();
-        lock_owner = cpu_idx;
-    }
+pub fn waitMessage() void {
+    wait_lock.lock();
+    sched.waitUnlock(&wait_queue, &wait_lock);
 }
 
-// FIXME
-pub fn release() void {
-    if (double_lock) {
-        double_lock = false;
-        return;
-    }
-
-    if (!smp.getLocalData().isInInterrupt()) lock.unlock();
-}
-
-pub inline fn flush() !void {
-    try log_writer.flush();
-}
-
-// @export
 pub fn defaultLog(
     comptime level: std.log.Level,
     comptime scope: @TypeOf(.EnumLiteral),
     comptime format: []const u8,
     args: anytype
 ) void {
-    const local = smp.getLocalData();
-    if (lock.isLocked() and local.idx == lock_owner) {
-        @branchHint(.cold);
+    var buffer: [msg_max_size]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
 
-        tty_config.setColor(&log_writer, .bright_red) catch {};
-        log_writer.print("<LOGGER DEADLOCK>" ++ new_line, .{}) catch {};
+    writer.print(format, args) catch return;
+
+    putLog(level, @tagName(scope), writer.buffered());
+    notifyWaiters() catch {};
+}
+
+pub fn panicLog(msg: []const u8) void {
+    const time_ns = sys.time.getUpTime().toNs();
+    const log = blk: {
+        for (0..10) |_| break :blk newLog() catch continue;
+
+        flushBuffer("panic: log allocation failed\n");
+        flushBuffer(msg);
+
         return;
-    }
-
-    // FIXME
-    lock.lock();
-    lock_owner = local.idx;
-    defer lock.unlock();
-
-    logFmtPrint(
-        level,
-        scope,
-        format,
-        args
-    ) catch |erro| {
-        tty_config.setColor(&log_writer, .bright_red) catch {};
-        log_writer.print("<LOGGER ERROR>: {s}", .{@errorName(erro)}) catch {
-            log_writer.writeAll("<LOGGER PANIC>") catch {};
-        };
     };
+
+    log.scope = panic_scope;
+    log.text = if (stage == .normal) blk: {
+        const buffer = allocBuffer(@truncate(msg.len)) orelse break :blk msg.ptr;
+        @memcpy(buffer, msg);
+
+        break :blk buffer.ptr;
+    } else msg.ptr;
+    log.time_ns = time_ns;
+
+    var meta = log.meta.raw;
+    meta = .{
+        .idx = meta.idx,
+        .level = .err,
+        .len = @truncate(msg.len),
+        .status = .commited,
+    };
+
+    log.meta.store(meta, .release);
+
+    switch (stage) {
+        .boot,
+        .early => flushBuffer(msg),
+        .normal => notifyWaiters() catch {
+            flushBuffer("panic: lock is dead?\n");
+            flushBuffer(msg);
+        },
+    }
 }
 
-inline fn logFmtPrint(
-    comptime level: std.log.Level,
-    comptime scope: @TypeOf(.EnumLiteral),
-    comptime format: []const u8,
-    args: anytype
-) !void {
-    const level_str = levelToString(level);
-    const color: std.io.tty.Color = switch (level) {
-        .info => .reset,
-        .debug => .bright_black,
-        .warn => .bright_yellow,
-        .err => .bright_red
-    };
+pub fn flushBuffer(str: []const u8) void {
+    serial.write(str);
 
-    try tty_config.setColor(&log_writer, color);
-    try log_writer.print("{f} [{s}] ", .{ std.fmt.alt(sys.time.getUpTime(), .formatUs), level_str });
-
-    if (scope != std.log.default_log_scope) {
-        try log_writer.writeAll(@tagName(scope) ++ ": ");
-    }
-
-    try log_writer.print(format ++ new_line, args);
-    try log_writer.flush();
+    if (!dev.VirtualTerminal.isEnabled() and
+        video.terminal.isInitialized()
+    ) video.terminal.write(str);
 }
 
-inline fn levelToString(comptime level: std.log.Level) []const u8 {
-    return switch (level) {
-        .debug  => "<dbg>",
-        .info   => "INFO",
-        .warn   => "WARN",
-        .err    => "ERROR"
-    };
+fn newLog() error{Drop}!*Message {
+    const idx = msg_idx.fetchAdd(1, .release);
+    const msg = msg_ring.addOne();
+
+    const meta = msg.meta.load(.acquire);
+    if (meta.status == .processing) return error.Drop;
+
+    var new = meta;
+    new = .{ .status = .processing, .idx = idx, .level = .debug, .len = 0 };
+
+    if (msg.meta.cmpxchgStrong(
+        meta, new, .release, .monotonic
+    ) != null) return error.Drop;
+
+    return msg;
+}
+
+fn putLog(level: std.log.Level, scope: [*:0]const u8, text: []const u8) void {
+    const msg = newLog() catch return drop();
+    var meta = msg.meta.raw;
+
+    if (allocBuffer(@truncate(text.len))) |buffer| {
+        msg.time_ns = sys.time.getUpTime().toNs();
+        msg.scope = scope;
+        msg.text = buffer.ptr;
+
+        @memcpy(buffer, text);
+        meta.level = .fromStd(level);
+        meta.len = @truncate(text.len);
+        meta.status = .commited;
+    } else {
+        meta.status = .free;
+    }
+
+    msg.meta.store(meta, .release);
+}
+
+fn allocBuffer(len: u32) ?[]u8 {
+    var idx = text_idx.load(.acquire);
+    while (true) {
+        // FIXME: Implement tail check!
+        const msg_tail = msg_ring.items[msg_ring.cursor.load(.acquire).tail];
+        const tail = @intFromPtr(msg_tail.text) -| @intFromPtr(text_buffer.ptr);
+
+        const avail = if (tail != idx) (tail -% idx) & (text_buffer.len -% 1) else text_buffer.len;
+        if (avail < len) return null;
+
+        var curr = idx;
+        var next = idx + len;
+        if (next >= text_buffer.len) {
+            curr = 0;
+            next = len;
+        }
+
+        idx = text_idx.cmpxchgStrong(
+            idx, next, .release, .monotonic
+        ) orelse return text_buffer[curr..next];
+    }
+}
+
+fn notifyWaiters() error{Timeout}!void {
+    if (stage != .normal or
+        smp.getLocalData().isInInterrupt() or
+        dev.intr.isEnabledForCpu() == false
+    ) return;
+
+    try wait_lock.lockTimeout(std.time.us_per_s / 2);
+    defer wait_lock.unlock();
+
+    sched.awakeAll(&wait_queue);
+}
+
+fn flushWorker(_: usize) noreturn {
+    var buffer: [vm.page_size]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    var i: u32 = 0;
+    var idx: u32 = 0;
+    while (true)  {
+        var cursor = msg_ring.cursor.load(.acquire);
+        if (!cursor.inRange(i)) i = cursor.head;
+
+        while (cursor.inRange(i)) : ({
+            i = (i +% 1) & (msg_ring.len -% 1);
+            cursor = msg_ring.cursor.load(.acquire);
+        }) {
+            const msg = &msg_ring.items[i];
+            const meta = msg.meta.load(.acquire);
+            if (meta.status != .commited) break;
+            if (meta.idx <= idx) continue;
+
+            idx = meta.idx;
+            defer writer.end = 0;
+
+            tty_config.setColor(&writer, meta.level.toColor()) catch continue;
+            defer tty_config.setColor(&writer, .reset) catch {};
+
+            const time: sys.time.Time = .fromNs(msg.time_ns);
+            if (msg.scope == panic_scope) {
+                @branchHint(.cold);
+                writer.print("{f} ", .{std.fmt.alt(time, .formatUs)}) catch {};
+
+                flushBuffer(writer.buffered());
+                flushBuffer(msg.text[0..meta.len]);
+
+                continue;
+            }
+
+            writer.print("{f} [{t}] ", .{std.fmt.alt(time, .formatUs), meta.level}) catch {};
+            if (msg.scope != @tagName(.default)) writer.print("{s}: ", .{msg.scope}) catch {};
+
+            writer.writeAll(msg.text[0..meta.len]) catch {};
+            writer.writeAll(new_line) catch {};
+
+            const new_meta = msg.meta.load(.acquire);
+            if (meta.idx != new_meta.idx) { @branchHint(.cold); continue; }
+
+            flushBuffer(writer.buffered());
+        }
+
+        waitMessage();
+    }
+}
+
+inline fn drop() void {
+    _ = dropped.fetchAdd(1, .release);
 }

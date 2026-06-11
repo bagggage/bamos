@@ -6,6 +6,28 @@ const Teletype = @import("../Teletype.zig");
 
 const Self = @This();
 
+pub const max_discpline_num = 32;
+
+pub const Builtin = enum(u5) {
+    tty   = 0,
+    slip  = 1,
+    mouse = 2,
+    ppp   = 3,
+
+    irda  = 11,
+    hdlc  = 13,
+    hci   = 14,
+    pps   = 18,
+
+    gsm0710 = 21,
+    @"null" = 27,
+    throw   = 31,
+
+    pub inline fn toInt(self: Builtin) u5 {
+        return @intFromEnum(self);
+    }
+};
+
 pub const Operations = struct {
     pub const SetupFn = *const fn (*Teletype) Teletype.Error!void;
     pub const ReadFn = *const fn (*Teletype, []u8) Teletype.Error!usize;
@@ -20,6 +42,7 @@ pub const Operations = struct {
 
 pub const null_disc: Self = .{
     .name = "null",
+    .num = Builtin.@"null".toInt(),
     .ops = .{
         .read = &nullRead,
         .receive = &nullReceive,
@@ -29,6 +52,7 @@ pub const null_disc: Self = .{
 
 pub const throw_disc: Self = .{
     .name = "throw",
+    .num = Builtin.throw.toInt(),
     .ops = .{
         .read = &throwRead,
         .receive = &throwReceive,
@@ -38,8 +62,23 @@ pub const throw_disc: Self = .{
 
 pub const tty_disc = @import("tty_discipline.zig").self;
 
+var disciplines: [max_discpline_num]?*const Self = blk: {
+    var array: [max_discpline_num]?*const Self = .{ null } ** max_discpline_num;
+
+    array[@intFromEnum(Builtin.tty)]     = &tty_disc;
+    array[@intFromEnum(Builtin.@"null")] = &null_disc;
+
+    break :blk array;
+};
+
 name: []const u8,
+num: u5,
+
 ops: Operations,
+
+pub inline fn choose(num: Builtin) *const Self {
+    return disciplines[@intFromEnum(num)] orelse &null_disc;
+}
 
 pub inline fn setup(self: *const Self, tty: *Teletype) Teletype.Error!void {
     const callback = self.ops.setup orelse return;

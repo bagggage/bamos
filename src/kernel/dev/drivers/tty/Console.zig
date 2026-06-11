@@ -4,12 +4,12 @@
 
 const std = @import("std");
 
-const dev = @import("../dev.zig");
+const dev = @import("../../../dev.zig");
 const devfs = vfs.devfs;
 const log = std.log.scoped(.Console);
-const logger = @import("../logger.zig");
+const logger = @import("../../../logger.zig");
 const Teletype = dev.classes.Teletype;
-const vfs = @import("../vfs.zig");
+const vfs = @import("../../../vfs.zig");
 const VirtualTerminal = @import("VirtualTerminal.zig");
 
 const Self = @This();
@@ -20,6 +20,8 @@ const dev_ops: devfs.DevFile.Operations = .{
     .fops = .{
         .read = &fileRead,
         .write = &fileWrite,
+        .ioctl = &fileIoctl,
+        .poll = &filePoll,
     }
 };
 
@@ -34,6 +36,7 @@ pub fn init() !void {
     instance.dev_file = .{
         .name = .init("console"),
         .num = .{ .major = 5, .minor = 1 },
+        .access = .{ .gid = 0, .perm = vfs.Permissions.makeInt(.rw, .none, .none) },
         .ops = &dev_ops
     };
 
@@ -44,7 +47,7 @@ pub fn init() !void {
 
         const ttys = dev.obj.getObjects(Teletype) orelse return;
         defer dev.obj.putObjects(ttys);
-        
+
         var node = ttys.first;
         while (node) |n| : (node = n.next) {
             const tty = dev.obj.fromNode(Teletype, n);
@@ -62,18 +65,17 @@ pub fn init() !void {
     instance.active_tty = tty;
 }
 
-fn devOpen(devf: *devfs.DevFile, file: *vfs.File) vfs.Error!void {
+fn devOpen(_: *devfs.DevFile, file: *vfs.File) vfs.Error!void {
     if (instance.active_tty) |tty| {
         @branchHint(.likely);
-        devf.data.setPtr(tty);
-        if (tty.dev_file.ops.open) |open| return open(devf, file);
+        if (tty.dev_file.ops.open) |open| return open(&tty.dev_file, file);
     }
 }
 
-fn devClose(devf: *devfs.DevFile, file: *vfs.File) void {
+fn devClose(_: *devfs.DevFile, file: *vfs.File) void {
     if (instance.active_tty) |tty| {
         @branchHint(.likely);
-        if (tty.dev_file.ops.close) |close| return close(devf, file);
+        if (tty.dev_file.ops.close) |close| return close(&tty.dev_file, file);
     }
 }
 
@@ -83,10 +85,8 @@ fn fileWrite(file: *vfs.File, offset: usize, buffer: []const u8) vfs.Error!usize
         return tty.dev_file.ops.fops.write(file, offset, buffer);
     }
 
-    logger.capture();
-    defer logger.release();
-
-    return logger.log_writer.write(buffer) catch return error.IoFailed;
+    logger.flushBuffer(buffer);
+    return buffer.len;
 }
 
 fn fileRead(file: *const vfs.File, offset: usize, buffer: []u8) vfs.Error!usize {
@@ -96,4 +96,22 @@ fn fileRead(file: *const vfs.File, offset: usize, buffer: []u8) vfs.Error!usize 
     }
 
     return 0;
+}
+
+fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
+    if (instance.active_tty) |tty| {
+        @branchHint(.likely);
+        return tty.dev_file.ops.fops.ioctl(file, cmd, arg);
+    }
+
+    return error.BadOperation;
+}
+
+fn filePoll(file: *vfs.File) vfs.Error!vfs.File.Poll {
+    if (instance.active_tty) |tty| {
+        @branchHint(.likely);
+        return tty.dev_file.ops.fops.poll(file);
+    }
+
+    return .{};
 }

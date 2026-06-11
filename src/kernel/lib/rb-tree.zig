@@ -4,6 +4,8 @@
 // The MIT license requires this copyright notice to be included in all copies
 // and substantial portions of the software.
 
+// Copyright (c) 2025-2026 Konstantin Pigulevskiy (bagggage@github)
+
 const std = @import("std");
 
 const assert = std.debug.assert;
@@ -11,15 +13,21 @@ const testing = std.testing;
 const Order = std.math.Order;
 
 const Color = enum(u1) {
-    Black,
-    Red,
+    black,
+    red,
 };
-
-const Red = Color.Red;
-const Black = Color.Black;
 
 const ReplaceError = error{NotEqual};
 const SortError = error{NotUnique}; // The new comparison function results in duplicates.
+const ValidateError = error{
+    RootIsRed,
+    ParentPointerMismatch,
+    MissingParentPointer,
+    NodeNotInParentChild,
+    RedNodeHasRedChild,
+    BSTPropertyViolation,
+    BlackHeightViolation,
+};
 
 /// Insert this into your struct that you want to add to a red-black tree.
 /// Do not use a pointer. Turn the *rb.Node results of the functions in rb
@@ -85,12 +93,12 @@ pub const Node = struct {
         return node.getParent() == null;
     }
 
-    fn isRed(node: *Node) bool {
-        return node.getColor() == Red;
+    pub fn isRed(node: *Node) bool {
+        return node.getColor() == .red;
     }
 
-    fn isBlack(node: *Node) bool {
-        return node.getColor() == Black;
+    pub fn isBlack(node: *Node) bool {
+        return node.getColor() == .black;
     }
 
     fn setParent(node: *Node, parent: ?*Node) void {
@@ -136,7 +144,10 @@ pub const Node = struct {
     }
 };
 
-pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
+pub const CompareFn = fn (lhs: *Node, rhs: *Node, parent: ?*Node) Order;
+pub const KeyCompareFn = fn (lhs: *Node, rhs_key: anytype) Order;
+
+pub fn Tree(compareFn: CompareFn, keyCompareFn: KeyCompareFn) type {
     return struct {
         pub const NodeType = Node;
 
@@ -145,18 +156,22 @@ pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
         root: ?*Node = null,
 
         /// Re-sorts a tree with a new compare function.
-        pub fn sort(tree: *Self, comptime newCompareFn: fn (*Node, *Node, ?*Node) Order) SortError!Tree(newCompareFn) {
-            var newTree: Tree(newCompareFn) = .{};
+        pub fn sort(
+            tree: *Self,
+            comptime newCompareFn: CompareFn,
+            comptime newKeyCompareFn: KeyCompareFn,
+        ) SortError!Tree(newCompareFn, newKeyCompareFn) {
+            var new_tree: Tree(newCompareFn, newKeyCompareFn) = .{};
             var node: *Node = undefined;
 
             while (true) {
                 node = tree.first() orelse break;
                 tree.remove(node);
 
-                if (newTree.insert(node) != null) return error.NotUnique;
+                if (new_tree.insert(node) != null) return error.NotUnique;
             }
 
-            return newTree;
+            return new_tree;
         }
 
         /// If you have a need for a version that caches this, please file a bug.
@@ -187,7 +202,7 @@ pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
 
             node.left = null;
             node.right = null;
-            node.setColor(Red);
+            node.setColor(.red);
             node.setParent(maybe_parent);
 
             if (maybe_parent) |parent| {
@@ -198,20 +213,17 @@ pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
 
             while (node.getParent()) |p| {
                 var parent = p;
-
                 if (parent.isBlack()) break;
+
                 // the root is always black
-                var grandpa = parent.getParent() orelse unreachable;
-
+                var grandpa = parent.getParent().?;
                 if (parent == grandpa.left) {
-                    const maybe_uncle = grandpa.right;
+                    const uncle = grandpa.right;
+                    if (uncle != null and uncle.?.getColor() == .red) {
+                        parent.setColor(.black);
+                        uncle.?.setColor(.black);
+                        grandpa.setColor(.red);
 
-                    if (maybe_uncle) |uncle| {
-                        if (uncle.isBlack()) break;
-
-                        parent.setColor(Black);
-                        uncle.setColor(Black);
-                        grandpa.setColor(Red);
                         node = grandpa;
                     } else {
                         if (node == parent.right) {
@@ -220,19 +232,17 @@ pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
                             parent = node.getParent().?; // Just rotated
                         }
 
-                        parent.setColor(Black);
-                        grandpa.setColor(Red);
+                        parent.setColor(.black);
+                        grandpa.setColor(.red);
                         rotateRight(grandpa, tree);
                     }
                 } else {
-                   const maybe_uncle = grandpa.left;
+                    const uncle = grandpa.left;
+                    if (uncle != null and uncle.?.getColor() == .red) {
+                        parent.setColor(.black);
+                        uncle.?.setColor(.black);
+                        grandpa.setColor(.red);
 
-                    if (maybe_uncle) |uncle| {
-                        if (uncle.isBlack()) break;
-
-                        parent.setColor(Black);
-                        uncle.setColor(Black);
-                        grandpa.setColor(Red);
                         node = grandpa;
                     } else {
                         if (node == parent.left) {
@@ -240,14 +250,16 @@ pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
                             node = parent;
                             parent = node.getParent().?; // Just rotated
                         }
-                        parent.setColor(Black);
-                        grandpa.setColor(Red);
+
+                        parent.setColor(.black);
+                        grandpa.setColor(.red);
                         rotateLeft(grandpa, tree);
                     }
                 }
             }
+
             // This was an insert, there is at least one node.
-            tree.root.?.setColor(Black);
+            tree.root.?.setColor(.black);
             return null;
         }
 
@@ -255,157 +267,24 @@ pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
         /// return a pointer to the node if it is there, otherwise it will return null.
         /// Complexity guaranteed O(log n), where n is the number of nodes book-kept
         /// by tree.
-        pub fn lookup(tree: *const Self, key: *Node) ?*Node {
-            var parent: ?*Node = undefined;
-            var is_left: bool = undefined;
-            return doLookup(key, tree, &parent, &is_left);
-        }
-
-        /// If node is not part of tree, behavior is undefined.
-        pub fn remove(tree: *Self, node_const: *Node) void {
-            var node = node_const;
-            // as this has the same value as node, it is unsafe to access node after newnode
-            var new_node: ?*Node = node_const;
-            var maybe_parent: ?*Node = node.getParent();
-            var color: Color = undefined;
-            var next: *Node = undefined;
-
-            // This clause is to avoid optionals
-            if (node.left == null and node.right == null) {
-                if (maybe_parent) |parent| {
-                    parent.setChild(null, parent.left == node);
-                } else {
-                    tree.root = null;
-                }
-                color = node.getColor();
-                new_node = null;
-            } else {
-                if (node.left == null) {
-                    next = node.right.?; // Not both null as per above
-                } else if (node.right == null) {
-                    next = node.left.?; // Not both null as per above
-                } else {
-                    next = node.right.?.getFirst(); // Just checked for null above
-                }
-
-                if (maybe_parent) |parent| {
-                    parent.setChild(next, parent.left == node);
-                } else {
-                    tree.root = next;
-                }
-
-                if (node.left != null and node.right != null) {
-                    const left = node.left.?;
-                    const right = node.right.?;
-
-                    color = next.getColor();
-                    next.setColor(node.getColor());
-
-                    next.left = left;
-                    left.setParent(next);
-
-                    if (next != right) {
-                        var parent = next.getParent().?; // Was traversed via child node (right/left)
-                        next.setParent(node.getParent());
-
-                        new_node = next.right;
-                        parent.left = node;
-
-                        next.right = right;
-                        right.setParent(next);
-                    } else {
-                        next.setParent(maybe_parent);
-                        maybe_parent = next;
-                        new_node = next.right;
-                    }
-                } else {
-                    color = node.getColor();
-                    new_node = next;
+        pub inline fn lookup(tree: *const Self, key: anytype) ?*Node {
+            var maybe_node: ?*Node = tree.root;
+            while (maybe_node) |node| {
+                const res = keyCompareFn(node, key);
+                switch (res) {
+                    .gt => maybe_node = node.left,
+                    .lt => maybe_node = node.right,
+                    .eq => return node,
                 }
             }
 
-            if (new_node) |n| n.setParent(maybe_parent);
-
-            if (color == Red) return;
-
-            if (new_node) |n| {
-                n.setColor(Black);
-                return;
-            }
-
-            while (node == tree.root) {
-                // If not root, there must be parent
-                var parent = maybe_parent.?;
-                if (node == parent.left) {
-                    var sibling = parent.right.?; // Same number of black nodes.
-
-                    if (sibling.isRed()) {
-                        sibling.setColor(Black);
-                        parent.setColor(Red);
-                        rotateLeft(parent, tree);
-                        sibling = parent.right.?; // Just rotated
-                    }
-                    if ((if (sibling.left) |n| n.isBlack() else true) and
-                        (if (sibling.right) |n| n.isBlack() else true))
-                    {
-                        sibling.setColor(Red);
-                        node = parent;
-                        maybe_parent = parent.getParent();
-                        continue;
-                    }
-                    if (if (sibling.right) |n| n.isBlack() else true) {
-                        sibling.left.?.setColor(Black); // Same number of black nodes.
-                        sibling.setColor(Red);
-                        rotateRight(sibling, tree);
-                        sibling = parent.right.?; // Just rotated
-                    }
-                    sibling.setColor(parent.getColor());
-                    parent.setColor(Black);
-                    sibling.right.?.setColor(Black); // Same number of black nodes.
-                    rotateLeft(parent, tree);
-                    new_node = tree.root;
-                    break;
-                } else {
-                    var sibling = parent.left.?; // Same number of black nodes.
-
-                    if (sibling.isRed()) {
-                        sibling.setColor(Black);
-                        parent.setColor(Red);
-                        rotateRight(parent, tree);
-                        sibling = parent.left.?; // Just rotated
-                    }
-                    if ((if (sibling.left) |n| n.isBlack() else true) and
-                        (if (sibling.right) |n| n.isBlack() else true))
-                    {
-                        sibling.setColor(Red);
-                        node = parent;
-                        maybe_parent = parent.getParent();
-                        continue;
-                    }
-                    if (if (sibling.left) |n| n.isBlack() else true) {
-                        sibling.right.?.setColor(Black); // Same number of black nodes
-                        sibling.setColor(Red);
-                        rotateLeft(sibling, tree);
-                        sibling = parent.left.?; // Just rotated
-                    }
-                    sibling.setColor(parent.getColor());
-                    parent.setColor(Black);
-                    sibling.left.?.setColor(Black); // Same number of black nodes
-                    rotateRight(parent, tree);
-                    new_node = tree.root;
-                    break;
-                }
-
-                if (node.isRed()) break;
-            }
-
-            if (new_node) |n| n.setColor(Black);
+            return null;
         }
 
         /// This is a shortcut to avoid removing and re-inserting an item with the same key.
         pub fn replace(tree: *Self, old: *Node, new: *Node) void {
             // I assume this can get optimized out if the caller already knows.
-            // if (compareFn(old, new, tree.root) != .eq) return ReplaceError.NotEqual;
+            //if (compareFn(old, new, tree.root) != .eq) return ReplaceError.NotEqual;
 
             if (old.getParent()) |parent| {
                 parent.setChild(new, parent.left == old);
@@ -419,54 +298,184 @@ pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
             new.* = old.*;
         }
 
-        fn rotateLeft(node: *Node, tree: *Self) void {
-            var p: *Node = node;
-            var q: *Node = node.right orelse unreachable;
-            var parent: *Node = undefined;
-
-            if (!p.isRoot()) {
-                parent = p.getParent().?;
-                if (parent.left == p) {
-                    parent.left = q;
-                } else {
-                    parent.right = q;
-                }
-                q.setParent(parent);
-            } else {
-                tree.root = q;
-                q.setParent(null);
+        pub fn validate(tree: *const Self) ValidateError!usize {
+            if (tree.root) |root| {
+                if (root.isRed()) return error.RootIsRed;
+                return try validateNode(root, null, tree);
             }
-            p.setParent(q);
+            return 0;
+        }
 
-            p.right = q.left;
-            if (p.right) |right| right.setParent(p);
+        pub fn remove(tree: *Self, node: *Node) void {
+            var to_remove = node;
+            var replacement = to_remove;
+            var replacement_color = replacement.getColor();
+            var child: ?*Node = null;
+            var child_parent: ?*Node = null;
 
-            q.left = p;
+            // If node has two children, swap with successor
+            if (to_remove.left != null and to_remove.right != null) {
+                // next returns the successor; it must exist since right is not null
+                replacement = to_remove.next().?;
+                replacement_color = replacement.getColor();
+                // successor may have a right child, but never a left child
+                child = replacement.right;
+                child_parent = replacement.getParent();
+
+                const y_parent = replacement.getParent().?;
+                if (y_parent == to_remove) {
+                    child_parent = replacement;
+                } else {
+                    // transplant y.right to y's current position
+                    if (child) |xr| xr.setParent(y_parent);
+
+                    y_parent.setChild(child, y_parent.left == replacement);
+                    replacement.right = to_remove.right;
+
+                    if (replacement.right) |yr| yr.setParent(replacement);
+                }
+                // transplant y to to_remove's position
+                tree.replaceParentsChild(to_remove, replacement);
+                replacement.left = to_remove.left;
+
+                if (replacement.left) |yl| yl.setParent(replacement);
+                replacement.setColor(to_remove.getColor());
+            } else {
+                // y == node; node with < 2 children
+                child = if (to_remove.left != null) to_remove.left else to_remove.right;
+                child_parent = to_remove.getParent();
+
+                if (child) |xx| xx.setParent(child_parent);
+                tree.replaceParentsChild(to_remove, child);
+            }
+
+            // Fixup if necessary
+            if (replacement_color == .black) {
+                var current = child;
+                while ((current == null or current.?.isBlack()) and child_parent != null) {
+                    const current_parent = child_parent.?;
+                    if (current_parent.left == current) {
+                        var sibling = current_parent.right;
+                        if (sibling != null and sibling.?.isRed()) {
+                            sibling.?.setColor(.black);
+                            current_parent.setColor(.red);
+                            rotateLeft(current_parent, tree);
+
+                            sibling = current_parent.right;
+                        }
+
+                        if (
+                            (sibling == null or (sibling.?.left == null or sibling.?.left.?.isBlack())) and
+                            (sibling == null or (sibling.?.right == null or sibling.?.right.?.isBlack()))
+                        ) {
+                            if (sibling) |ww| ww.setColor(.red);
+
+                            current = current_parent;
+                            child_parent = current_parent.getParent();
+                        } else {
+                            if (sibling != null and (sibling.?.right == null or sibling.?.right.?.isBlack())) {
+                                const sib = sibling.?;
+                                if (sib.left) |sl| sl.setColor(.black);
+
+                                sib.setColor(.red);
+                                rotateRight(sib, tree);
+                                sibling = current_parent.right;
+                            }
+
+                            if (sibling) |sib| {
+                                sib.setColor(current_parent.getColor());
+                                if (sib.right) |sr| sr.setColor(.black);
+                            }
+
+                            current_parent.setColor(.black);
+                            rotateLeft(current_parent, tree);
+
+                            current = tree.root;
+                            break;
+                        }
+                    } else {
+                        var sibling = current_parent.left;
+                        if (sibling != null and sibling.?.isRed()) {
+                            sibling.?.setColor(.black);
+                            current_parent.setColor(.red);
+
+                            rotateRight(current_parent, tree);
+                            sibling = current_parent.left;
+                        }
+
+                        if (
+                            (sibling == null or (sibling.?.right == null or sibling.?.right.?.isBlack())) and
+                            (sibling == null or (sibling.?.left == null or sibling.?.left.?.isBlack()))
+                        ) {
+                            if (sibling) |sib| sib.setColor(.red);
+
+                            current = current_parent;
+                            child_parent = current_parent.getParent();
+                        } else {
+                            if (sibling != null and (sibling.?.left == null or sibling.?.left.?.isBlack())) {
+                                const sib = sibling.?;
+                                if (sib.right) |sr| sr.setColor(.black);
+
+                                sib.setColor(.red);
+                                rotateLeft(sib, tree);
+                                sibling = current_parent.left;
+                            }
+
+                            if (sibling) |sib| {
+                                sib.setColor(current_parent.getColor());
+                                if (sib.left) |sl| sl.setColor(.black);
+                            }
+
+                            current_parent.setColor(.black);
+                            rotateRight(current_parent, tree);
+
+                            current = tree.root;
+                            break;
+                        }
+                    }
+                }
+
+                if (current) |c| c.setColor(.black);
+            }
+        }
+
+        fn rotateLeft(node: *Node, tree: *Self) void {
+            const right_child = node.right.?;
+
+            node.right = right_child.left;
+            if (node.right) |right| right.setParent(node);
+
+            tree.replaceParentsChild(node, right_child);
+
+            right_child.left = node;
+            node.setParent(right_child);
         }
 
         fn rotateRight(node: *Node, tree: *Self) void {
-            var p: *Node = node;
-            var q: *Node = node.left orelse unreachable;
-            var parent: *Node = undefined;
+            const left_child: *Node = node.left.?;
 
-            if (!p.isRoot()) {
-                parent = p.getParent().?;
-                if (parent.left == p) {
-                    parent.left = q;
+            node.left = left_child.right;
+            if (node.left) |left| left.setParent(node);
+
+            tree.replaceParentsChild(node, left_child);
+            
+            left_child.right = node;
+            node.setParent(left_child);
+        }
+
+        fn replaceParentsChild(tree: *Self, old: *Node, new: ?*Node) void {
+            if (!old.isRoot()) {
+                const parent = old.getParent().?;
+                if (parent.left == old) {
+                    parent.left = new;
                 } else {
-                    parent.right = q;
+                    parent.right = new;
                 }
-                q.setParent(parent);
+                if (new) |n| n.setParent(parent);
             } else {
-                tree.root = q;
-                q.setParent(null);
+                tree.root = new;
+                if(new) |n| n.setParent(null);
             }
-            p.setParent(q);
-
-            p.left = q.right;
-            if (p.left) |left| left.setParent(p);
-
-            q.right = p;
         }
 
         fn doLookup(key: *Node, tree: *const Self, pparent: *?*Node, is_left: *bool) ?*Node {
@@ -494,11 +503,76 @@ pub fn Tree(compareFn: fn (*Node, *Node, ?*Node) Order) type {
             }
             return null;
         }
+
+        fn validateNode(node: *Node, parent: ?*Node, tree: *const Self) ValidateError!usize {
+            // Verify parent-child relationship consistency
+            if (node.getParent()) |node_parent| {
+                if (node_parent != parent) return error.ParentPointerMismatch;
+            } else {
+                if (parent != null) return error.MissingParentPointer;
+            }
+
+            // Verify that node's parent correctly references this node as a child
+            if (parent) |p| {
+                if (p.left != node and p.right != node) return error.NodeNotInParentChild;
+            }
+
+            // Root must be black
+            if (parent == null and node.isRed()) return error.RootIsRed;
+
+            // Check red-red violation (red node cannot have red children)
+            if (node.isRed()) {
+                if (node.left) |left| {
+                    if (left.isRed()) return error.RedNodeHasRedChild;
+                }
+                if (node.right) |right| {
+                    if (right.isRed()) return error.RedNodeHasRedChild;
+                }
+            }
+
+            // Validate binary search tree property (direct children only)
+            if (node.left) |left| {
+                const cmp = compareFn(left, node, tree.root);
+                if (cmp != .lt) return error.BSTPropertyViolation;
+            }
+
+            if (node.right) |right| {
+                const cmp = compareFn(node, right, tree.root);
+                if (cmp != .lt) return error.BSTPropertyViolation;
+            }
+
+            // Recursively validate subtrees and collect black heights
+            var left_black_height: usize = 0;
+            var right_black_height: usize = 0;
+
+            if (node.left) |left| {
+                left_black_height = try validateNode(left, node, tree);
+            } else {
+                left_black_height = 1; // Null children count as black
+            }
+
+            if (node.right) |right| {
+                right_black_height = try validateNode(right, node, tree);
+            } else {
+                right_black_height = 1; // Null children count as black
+            }
+
+            // Check black height consistency
+            if (left_black_height != right_black_height) return error.BlackHeightViolation;
+
+            // Return black height for parent validation
+            const current_black_height = if (node.isBlack()) 
+                left_black_height + 1 
+            else 
+                left_black_height;
+
+            return current_black_height;
+        }
     };
 }
 
 const TestNumber = struct {
-    node: Node,
+    node: Node = .{},
     value: usize,
 };
 
@@ -519,12 +593,32 @@ fn testCompare(l: *Node, r: *Node, _: ?*Node) Order {
     return .gt;
 }
 
+fn testKeyCompare(l: *Node, key: anytype) Order {
+    const left = testGetNumber(l);
+
+    if (left.value < key) {
+        return .lt;
+    } else if (left.value == key) {
+        return .eq;
+    }
+
+    return .gt;
+}
+
 fn testCompareReverse(l: *Node, r: *Node, _: ?*Node) Order {
     return testCompare(r, l, undefined);
 }
 
+fn testKeyCompareReverse(l: *Node, key: anytype) Order {
+    return switch (testKeyCompare(l, key)) {
+        .lt => .gt,
+        .gt => .lt,
+        .eq => .eq
+    };
+}
+
 test "rb" {
-    var tree: Tree(testCompare) = .{};
+    var tree: Tree(testCompare, testKeyCompare) = .{};
     var ns: [10]TestNumber = undefined;
 
     ns[0].value = 42;
@@ -550,9 +644,15 @@ test "rb" {
     _ = tree.insert(&ns[7].node);
     _ = tree.insert(&ns[8].node);
     _ = tree.insert(&ns[9].node);
+    _ = try tree.validate();
+
     tree.remove(&ns[3].node);
+    _ = try tree.validate();
+
     try testing.expect(tree.insert(&dup.node) == &ns[7].node);
-    try tree.replace(&ns[7].node, &dup.node);
+
+    tree.replace(&ns[7].node, &dup.node);
+    _ = try tree.validate();
 
     var num: *TestNumber = undefined;
     num = testGetNumber(tree.first().?);
@@ -563,27 +663,27 @@ test "rb" {
 }
 
 test "inserting and looking up" {
-    var tree: Tree(testCompare) = .{};
+    var tree: Tree(testCompare, testKeyCompare) = .{};
     var number: TestNumber = undefined;
     number.value = 1000;
     _ = tree.insert(&number.node);
     var dup: TestNumber = undefined;
     //Assert that tuples with identical value fields finds the same pointer
     dup.value = 1000;
-    assert(tree.lookup(&dup.node) == &number.node);
+    assert(tree.lookup(dup.value) == &number.node);
     //Assert that tuples with identical values do not clobber when inserted.
     _ = tree.insert(&dup.node);
-    assert(tree.lookup(&dup.node) == &number.node);
-    assert(tree.lookup(&number.node) != &dup.node);
-    assert(testGetNumber(tree.lookup(&dup.node).?).value == testGetNumber(&dup.node).value);
+    _ = try tree.validate();
+
+    assert(tree.lookup(dup.value) == &number.node);
+    assert(tree.lookup(number.value) != &dup.node);
+    assert(testGetNumber(tree.lookup(dup.value).?).value == testGetNumber(&dup.node).value);
     //Assert that if looking for a non-existing value, return null.
-    var non_existing_value: TestNumber = undefined;
-    non_existing_value.value = 1234;
-    assert(tree.lookup(&non_existing_value.node) == null);
+    assert(tree.lookup(1234) == null);
 }
 
 test "multiple inserts, followed by calling first and last" {
-    var tree: Tree(testCompare) = .{};
+    var tree: Tree(testCompare, testKeyCompare) = .{};
     var zeroth: TestNumber = undefined;
     zeroth.value = 0;
     var first: TestNumber = undefined;
@@ -596,15 +696,112 @@ test "multiple inserts, followed by calling first and last" {
     _ = tree.insert(&first.node);
     _ = tree.insert(&second.node);
     _ = tree.insert(&third.node);
+    _ = try tree.validate();
+
     assert(testGetNumber(tree.first().?).value == 0);
     assert(testGetNumber(tree.last().?).value == 3);
 
-    var lookupNode: TestNumber = undefined;
-    lookupNode.value = 2;
-    assert(tree.lookup(&lookupNode.node) == &second.node);
+    assert(tree.lookup(2) == &second.node);
 
-    const new_tree = tree.sort(testCompareReverse) catch unreachable;
+    const new_tree = tree.sort(testCompareReverse, testKeyCompareReverse) catch unreachable;
+    _ = try new_tree.validate();
+
     assert(testGetNumber(new_tree.first().?).value == 3);
     assert(testGetNumber(new_tree.last().?).value == 0);
-    assert(new_tree.lookup(&lookupNode.node) == &second.node);
+    assert(new_tree.lookup(2) == &second.node);
+}
+
+test "custom 1" {
+    var tree: Tree(testCompare, testKeyCompare) = .{};
+    var _400: TestNumber = .{ .value = 0x400 };
+    var _401: TestNumber = .{ .value = 0x401 };
+    var _4a7: TestNumber = .{ .value = 0x4a7 };
+    var _501: TestNumber = .{ .value = 0x501 };
+    var _50d: TestNumber = .{ .value = 0x50d };
+    var _7ff: TestNumber = .{ .value = 0x7ff };
+    var _51a: TestNumber = .{ .value = 0x51a };
+    var _519: TestNumber = .{ .value = 0x519 };
+
+    _ = tree.insert(&_400.node);
+    _ = tree.insert(&_401.node);
+    _ = tree.insert(&_4a7.node);
+    _ = tree.insert(&_501.node);
+    _ = tree.insert(&_50d.node);
+    _ = tree.insert(&_7ff.node);
+    _ = tree.insert(&_51a.node);
+
+    _ = try tree.validate();
+    _ = tree.insert(&_519.node);
+
+    _ = try tree.validate();
+}
+
+test "custom 2" {
+    var tree: Tree(testCompare, testKeyCompare) = .{};
+    var _400: TestNumber = .{ .value = 0x400 };
+    var _401: TestNumber = .{ .value = 0x401 };
+    var _4a7: TestNumber = .{ .value = 0x4a7 };
+    var _501: TestNumber = .{ .value = 0x501 };
+    var _50d: TestNumber = .{ .value = 0x50d };
+    var _519: TestNumber = .{ .value = 0x519 };
+    var _51a: TestNumber = .{ .value = 0x51a };
+    var _51b: TestNumber = .{ .value = 0x51b };
+    var _51c: TestNumber = .{ .value = 0x51c };
+    var _523: TestNumber = .{ .value = 0x523 };
+    var _527: TestNumber = .{ .value = 0x527 };
+    var _528: TestNumber = .{ .value = 0x528 };
+    var _529: TestNumber = .{ .value = 0x529 };
+    var _52a: TestNumber = .{ .value = 0x52a };
+    var _52b: TestNumber = .{ .value = 0x52b };
+    var _52c: TestNumber = .{ .value = 0x52c };
+    var _52d: TestNumber = .{ .value = 0x52d };
+    var _52e: TestNumber = .{ .value = 0x52e };
+    var _530: TestNumber = .{ .value = 0x530 };
+    var _534: TestNumber = .{ .value = 0x534 };
+    var _538: TestNumber = .{ .value = 0x538 };
+    var _53c: TestNumber = .{ .value = 0x53c };
+    var _542: TestNumber = .{ .value = 0x542 };
+    var _548: TestNumber = .{ .value = 0x548 };
+    var _54e: TestNumber = .{ .value = 0x54e };
+    var _554: TestNumber = .{ .value = 0x554 };
+    var _55c: TestNumber = .{ .value = 0x55c };
+    var _55d: TestNumber = .{ .value = 0x55d };
+    var _55e: TestNumber = .{ .value = 0x55e };
+    var _7fc: TestNumber = .{ .value = 0x7fc };
+
+    _ = tree.insert(&_400.node);
+    _ = tree.insert(&_401.node);
+    _ = tree.insert(&_4a7.node);
+    _ = tree.insert(&_501.node);
+    _ = tree.insert(&_50d.node);
+    _ = tree.insert(&_519.node);
+    _ = tree.insert(&_51a.node);
+    _ = tree.insert(&_51b.node);
+    _ = tree.insert(&_51c.node);
+    _ = tree.insert(&_523.node);
+    _ = tree.insert(&_527.node);
+    _ = tree.insert(&_528.node);
+    _ = tree.insert(&_529.node);
+    _ = tree.insert(&_52a.node);
+    _ = tree.insert(&_52b.node);
+    _ = tree.insert(&_52c.node);
+    _ = tree.insert(&_52d.node);
+    _ = tree.insert(&_52e.node);
+    _ = tree.insert(&_530.node);
+    _ = tree.insert(&_534.node);
+    _ = tree.insert(&_538.node);
+    _ = tree.insert(&_53c.node);
+    _ = tree.insert(&_542.node);
+    _ = tree.insert(&_548.node);
+    _ = tree.insert(&_54e.node);
+    _ = tree.insert(&_554.node);
+    _ = tree.insert(&_55c.node);
+    _ = tree.insert(&_55d.node);
+    _ = tree.insert(&_55e.node);
+    _ = tree.insert(&_7fc.node);
+
+    _ = try tree.validate();
+
+    tree.remove(&_55c.node);
+    _ = try tree.validate();
 }

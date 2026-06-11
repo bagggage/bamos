@@ -31,6 +31,10 @@ pub const dentry_ops = opaque {
             return null;
         }
 
+        pub fn iterate(_: *const Dentry, _: *Dentry.Iterator) Error!void {
+            return;
+        }
+
         pub fn makeDirectory(_: *const Dentry, _: *Dentry) Error!void {
             return error.BadOperation;
         }
@@ -63,12 +67,17 @@ pub const dentry_ops = opaque {
             return null;
         }
 
-        pub fn makeDirectory(dentry: *const Dentry, _: *Dentry) Error!void {
+        pub fn iterate(dentry: *const Dentry, _: *Dentry.Iterator) Error!void {
+            std.log.warn("{f}: 'iterate' is not implemented", .{dentry.path()});
+            return;
+        }
+
+        pub fn makeDirectory(dentry: *const Dentry, _: *Dentry, _: vfs.CreateOptions) Error!void {
             std.log.warn("{f}: 'makeDirectory' is not implemented", .{dentry.path()});
             return error.BadOperation;
         }
 
-        pub fn createFile(dentry: *const Dentry, _: *Dentry) Error!void {
+        pub fn createFile(dentry: *const Dentry, _: *Dentry, _: vfs.CreateOptions) Error!void {
             std.log.warn("{f}: 'createFile' is not implemented", .{dentry.path()});
             return error.BadOperation;
         }
@@ -122,7 +131,7 @@ pub const file = opaque {
 
                 const copy_on_write = (cause == .write and !map_unit.flags.shared and map_unit.flags.map.write);
                 if (copy_on_write) {
-                    log.debug("copy on write happened: {f}", .{map_unit.file.?.dentry.path()});
+                    log.debug("copy on write happened: {f}: 0x{x}", .{map_unit.file.?.dentry.path(), map_unit.base() + offset});
                     const phys = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
                     const virt = vm.getVirtLma(phys);
                     errdefer vm.PageAllocator.free(phys, 0);
@@ -140,8 +149,10 @@ pub const file = opaque {
                     page.base = @truncate(phys / vm.page_size);
 
                     if (map_unit.region.getPage(page.dim.idx)) |_| {
-                        defer block.deref();
-                        return try map_unit.remapPage(pt, page, map_unit.flags.map);
+                        const new_page = try map_unit.remapPage(pt, page, map_unit.flags.map);
+                        // if page is mapped, then block should be dereferenced
+                        block.deref();
+                        return new_page;
                     } else {
                         return try map_unit.attachAndMapPage(pt, page, map_unit.flags.map);
                     }
@@ -158,18 +169,28 @@ pub const file = opaque {
                 const inode = map_unit.file.?.dentry.inode;
                 const mapped_page_offset = page.getOffset();
                 const virt = map_unit.base() + mapped_page_offset;
-                const page_attr = pt.accessPageAttributes(virt);
+                const file_offset = map_unit.page_offset * vm.page_size + mapped_page_offset;
+
+                const block = inode.cache_ctrl.getOrNull(@truncate(vm.cache.offsetToIdx(file_offset))) orelse {
+                    vm.PageAllocator.free(page.getPhysBase(), page.dim.rank);
+                    return;
+                };
+                defer block.deref();
 
                 // Check if page is backed by cache block
-                if (map_unit.flags.shared or !page_attr.writeable) {
-                    const file_offset = map_unit.page_offset * vm.page_size + mapped_page_offset;
-                    const block = vm.cache.getNoRef(&inode.cache_ctrl, vm.cache.offsetToIdx(file_offset))
-                        catch @panic("Trying to unmap cache page of non-existing cache block!");
+                const page_top = page.base + page.pagesNum();
+                if (page.base >= block.phys_base and page_top <= block.phys_base + block.size.toPages()) {
                     defer block.deref();
 
+                    const page_attr = pt.accessPageAttributes(virt);
                     if (page_attr.dirty) {
-                        const quant = block.offsetToQuant(file_offset);
-                        block.dirty_map.set(quant);
+                        std.debug.assert(map_unit.flags.shared);
+                        const inner_offset = block.innerOffset(file_offset);
+
+                        block.writeDown();
+                        defer block.writeUp();
+
+                        block.setDirtyAt(inner_offset);
                     }
                 } else {
                     // Copy-on-write - allocated page
@@ -182,6 +203,7 @@ pub const file = opaque {
 
         ops: File.Operations = .{
             .read = &read,
+            .write = &write,
             .mmapPrepare = &mmapPrepare,
         },
         readCacheBlock: ReadCacheBlockFn,
@@ -189,7 +211,7 @@ pub const file = opaque {
         pub fn read(self: *const File, offset: usize, buffer: []u8) Error!usize {
             const inode = self.dentry.inode;
 
-            if (inode.type != .regular_file) return error.BadInode;
+            if (inode.type != .regular_file) return error.NotRegularFile;
             if (offset >= inode.size) return 0;
 
             var len = @min(inode.size - offset, buffer.len);
@@ -212,8 +234,49 @@ pub const file = opaque {
             return tmp_offset;
         }
 
+        pub fn write(self: *File, offset: usize, buffer: []const u8) Error!usize {
+            const inode = self.dentry.inode;
+
+            if (inode.type != .regular_file) return error.NotRegularFile;
+            if (inode.cache_ctrl.write_back == null) return error.BadOperation;
+
+            var len = buffer.len;
+            var tmp_offset: usize = 0;
+            while (len > 0) {
+                const file_offset = tmp_offset + offset;
+                const block =
+                    if (file_offset < inode.size)
+                        try getCacheBlockOrRead(self, file_offset)
+                    else
+                        try createEmptyCacheBlock(self, file_offset);
+                defer block.deref();
+
+                const inner_offset = block.innerOffset(file_offset);
+                const inner_end = @min(inner_offset + len, block.size.toBytes());
+                const inner_len = inner_end - inner_offset;
+
+                block.writeDown();
+                defer block.writeUp();
+
+                @memcpy(block.asSlice()[inner_offset..inner_end], buffer[tmp_offset..tmp_offset + inner_len]);
+                log.info("set dirty: {}-{}", .{inner_offset, inner_end});
+                block.setDirtyRange(inner_offset, inner_end);
+
+                tmp_offset +%= inner_len;
+                len -%= inner_len;
+            }
+
+            self.dentry.inode.lock.lock();
+            defer self.dentry.inode.lock.unlock();
+
+            if (offset + tmp_offset > self.dentry.inode.size) {
+                self.dentry.inode.size = offset + tmp_offset;
+            }
+            return tmp_offset;
+        }
+
         pub fn mmapPrepare(self: *const File, map_unit: *sys.AddressSpace.MapUnit) Error!void {
-            if (self.dentry.inode.type != .regular_file) return error.BadInode;
+            if (self.dentry.inode.type != .regular_file) return error.NotRegularFile;
             map_unit.ops = &mmap.ops;
         }
 
@@ -221,16 +284,30 @@ pub const file = opaque {
             const inode = self.dentry.inode;
             const index = vm.cache.offsetToIdx(offset);
 
-            return vm.cache.getOrNull(&inode.cache_ctrl, index) orelse blk: {
+            return inode.cache_ctrl.getOrNull(@truncate(index)) orelse blk: {
                 const new_block = try vm.cache.createBlock(&inode.cache_ctrl, index, .small);
+                errdefer new_block.free();
+
                 const cached_ops = Cached.fromFile(self);
                 try cached_ops.readCacheBlock(self.dentry, new_block);
 
                 const rest_size = self.dentry.inode.size - new_block.getOffset();
                 if (rest_size < new_block.size.toBytes()) @memset(new_block.asSlice()[rest_size..], 0);
 
-                break :blk vm.cache.insertBlockOrFree(new_block) orelse new_block;
+                break :blk try inode.cache_ctrl.insertOrFree(new_block) orelse new_block;
             };
+        }
+
+        fn createEmptyCacheBlock(self: *const File, offset: usize) vm.Error!*cache.Block {
+            const inode = self.dentry.inode;
+            const index = vm.cache.offsetToIdx(offset);
+
+            const block = try vm.cache.createBlock(&inode.cache_ctrl, index, .small);
+            errdefer block.free();
+
+            @memset(block.asSlice(), 0);
+
+            return try inode.cache_ctrl.insertOrFree(block) orelse block;
         }
 
         inline fn fromFile(self: *const File) *const Cached {
@@ -255,11 +332,21 @@ pub const file = opaque {
             return error.BadOperation;
         }
 
+        pub fn poll(self: *File) Error!File.Poll {
+            return switch (self.dentry.inode.type) {
+                .directory,
+                .symbolic_link,
+                .regular_file => .{ .read_avail = true, .may_write = true },
+                else => error.BadOperation
+            };
+        }
+
         pub const ops: File.Operations = .{
             .read = &read,
             .write = &write,
             .ioctl = &ioctl,
             .mmapPrepare = &mmapPrepare,
+            .poll = &poll
         };
     };
 

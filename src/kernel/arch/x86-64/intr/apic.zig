@@ -66,8 +66,8 @@ pub const Madt = extern struct {
         std.debug.assert(@alignOf(@This()) == @alignOf(u32));
     }
 
-    pub fn findByType(self: *Madt, begin: ?*Entry, ent_type: Entry.Type) ?*Entry {
-        var entry: *Entry = if (begin) |ent| blk: {
+    pub fn findByType(self: *align(1) Madt, begin: ?*align(1) Entry, ent_type: Entry.Type) ?*align(1) Entry {
+        var entry: *align(1) Entry = if (begin) |ent| blk: {
             break :blk @ptrFromInt(@intFromPtr(ent) + ent.length);
         } else &self._entries;
 
@@ -120,7 +120,7 @@ const Msi = struct {
 
 const APIC_ENABLED = 0x800;
 
-var madt: *Madt = undefined;
+var madt: *align(1) Madt = undefined;
 
 pub fn init() !void {
     if (!isAvail()) return error.NotAvailable;
@@ -152,7 +152,7 @@ pub fn chip() intr.Chip {
     };
 }
 
-pub inline fn getMadt() *Madt {
+pub inline fn getMadt() *align(1) Madt {
     return madt;
 }
 

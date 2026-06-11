@@ -202,21 +202,53 @@ pub fn shrinkBottom(self: *Self, pages: u32, pt: *vm.PageTable) !void {
     std.debug.assert(self.page_capacity > pages);
 
     try self.unmapRegion(0, pages, pt);
+    self.moveBaseUp(pages);
+}
 
+pub fn moveBaseUp(self: *Self, pages: u32) void {
     self.region.base += pages * vm.page_size;
     self.page_capacity -= pages;
 
     if (self.file != null) self.page_offset += pages; 
+
+    var node = self.region.page_list.first;
+    while (node) |n| : (node = n.next) {
+        const page = vm.Page.fromNode(n);
+        page.dim.idx -= @truncate(pages);
+    }
+}
+
+pub fn moveBaseDown(self: *Self, pages: u32) void {
+    if (self.file != null) self.page_offset -= pages;
+
+    self.region.base -= pages * vm.page_size;
+    self.page_capacity += pages;
+
+    var node = self.region.page_list.first;
+    while (node) |n| : (node = n.next) {
+        const page = vm.Page.fromNode(n);
+        page.dim.idx += @truncate(pages);
+    }
+}
+
+pub fn attachPage(self: *Self, page: vm.Page) !*vm.Page {
+    const new_page = vm.auto.alloc(vm.Page) orelse return error.NoMemory;
+    errdefer vm.auto.free(vm.Page, new_page);
+
+    new_page.* = page;
+    self.region.attachPage(new_page);
+
+    return new_page;
 }
 
 pub fn attachAndMapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !*vm.Page {
     const new_page = vm.auto.alloc(vm.Page) orelse return error.NoMemory;
-    new_page.* = page;
     errdefer vm.auto.free(vm.Page, new_page);
 
-    try page.map(pt, self.base(), map_flags);
-    self.region.attachPage(new_page);
+    new_page.* = page;
+    try new_page.map(pt, self.base(), map_flags);
 
+    self.region.attachPage(new_page);
     return new_page;
 }
 
@@ -230,16 +262,19 @@ pub fn detachLastPage(self: *Self) ?vm.Page {
 
 pub fn remapPage(self: *Self, pt: *vm.PageTable, page: vm.Page, map_flags: vm.MapFlags) !*vm.Page {
     const target_page = self.region.getPage(page.dim.idx) orelse return error.NoEnt;
-    target_page.* = page;
+    target_page.base = page.base;
+    target_page.dim = page.dim;
 
-    try page.map(pt, self.base(), map_flags);
+    try target_page.map(pt, self.base(), map_flags);
     return target_page;
 }
 
 pub inline fn reinsertRegion(self: *Self, target: *Self, page_offset: u32, pages: u32) !void {
+    std.debug.assert(target.base() == (self.base() + page_offset * vm.page_size));
+
     try self.detachPagesTo(
-        page_offset, pages,
-        &target.region.page_list
+        page_offset, page_offset,
+        pages, &target.region.page_list
     );
 }
 
@@ -256,7 +291,7 @@ pub fn copyPages(self: *Self, target: *Self) !void {
         const new_page = vm.Page.new(page.dim.idx, page.dim.rank) orelse return error.NoMemory;
 
         @memcpy(new_page.asSlice(), page.asSlice());
-        target.region.page_list.prepend(&new_page.node);
+        target.region.attachPage(new_page);
     }
 }
 
@@ -268,8 +303,8 @@ pub fn pageFault(self: *Self, pt: *vm.PageTable, address: usize, cause: vm.Fault
 
     if (self.flags.grow_down and address < self.base()) {
         @branchHint(.unlikely);
-        std.debug.assert(address >= self.base() - vm.page_size);
-        return try self.growDownFault(pt, cause);
+        const offset = self.base() - lib.misc.alignDown(usize, address, vm.page_size);
+        return try self.growDownFault(pt, offset, cause);
     }
 
     const offset = address - self.base();
@@ -293,6 +328,20 @@ pub fn format(self: *const Self, writer: *std.Io.Writer) !void {
     });
 
     if (self.file) |f| try f.dentry.path().format(writer);
+}
+
+pub fn formatDebug(self: Self, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+    try writer.print("{x:0>8} - {x:0>8}: (", .{
+        self.base(), self.base() + self.size()
+    });
+
+    var node = self.region.page_list.first;
+    while (node) |n| : (node = n.next) {
+        const page = vm.Page.fromNode(n);
+        try writer.print("0x{x} ", .{self.base() + page.getOffset()});
+    }
+
+    try writer.writeByte(')');
 }
 
 fn fillWithNewPage(self: *Self, pt: *vm.PageTable, idx: u32, cause: vm.FaultCause) vfs.Error!*vm.Page {
@@ -337,36 +386,37 @@ fn unmapPages(self: *Self, list: vm.Page.List, pt: *vm.PageTable) void {
 /// specified region and return a list of them.
 inline fn detachPages(self: *Self, page_offset: u32, pages: u32) !vm.Page.List {
     var list: vm.Page.List = .{};
-    try detachPagesTo(self, page_offset, pages, &list);
+    try detachPagesTo(self, 0, page_offset, pages, &list);
 
     return list;
 }
 
 /// Detach mapped pages from the
 /// specified region to the list.
-fn detachPagesTo(self: *Self, page_base: u32, page_len: u32, list: *vm.Page.List) !void {
-    const page_top = page_base + page_len;
+fn detachPagesTo(self: *Self, rel_offset: u32, page_offset: u32, page_len: u32, list: *vm.Page.List) !void {
+    const page_top = page_offset + page_len;
 
-    while (self.findPage(page_base, page_len)) |h| {
-        const col_base = h.page.base;
+    while (self.findPage(page_offset, page_len)) |h| {
+        const col_offset = h.page.dim.idx;
         const col_len = h.page.pagesNum();
-        const col_top = h.page.dim.idx + col_len;
+        const col_top = col_offset + col_len;
 
         // Shrink or divide this physical region if needed.
-        if (page_base > col_base) {
+        if (page_offset > col_offset) {
             if (page_top >= col_top) {
                 // Shrink from the top.
-                try shrinkPageTop(list, h.page, page_base);
+                try shrinkPageTop(list, rel_offset, h.page, page_offset);
             } else {
                 // Smaller than collided page - divide.
-                try dividePages(list, h.page, page_base, page_top);
+                try dividePages(list, rel_offset, h.page, page_offset, page_top);
                 break;
             }
         } else if (page_top < col_top) {
             // Shrink from the bottom.
-            try shrinkPageBottom(list, h.page, page_top);
+            try shrinkPageBottom(list, rel_offset, h.page, page_top);
         } else {
             self.detachPage(list, &h);
+            h.page.dim.idx -= @truncate(rel_offset);
         }
     }
 }
@@ -404,45 +454,32 @@ fn findPage(self: *Self, page_base: u32, page_len: u32) ?PageHandle {
     return null;
 }
 
-fn growDownFault(self: *Self, pt: *vm.PageTable, cause: vm.FaultCause) !void {
+fn growDownFault(self: *Self, pt: *vm.PageTable, offset: usize, cause: vm.FaultCause) !void {
     std.debug.assert(self.flags.grow_down);
-
-    var node = self.region.page_list.first;
+    const pages = vm.bytesToPagesExact(offset);
 
     if (self.isAnonymous()) {
         const page = vm.Page.new(0, 0) orelse return error.NoMemory;
         errdefer page.delete();
 
-        try page.map(pt, self.base() - vm.page_size, self.flags.map);
-        self.region.attachPage(page);
+        try page.map(pt, self.base() - offset, self.flags.map);
 
-        self.page_capacity += 1;
-        self.region.base -= vm.page_size;
+        self.moveBaseDown(pages);
+        self.region.attachPage(page);
 
         page.fillZeroes();
     } else {
         @branchHint(.unlikely);
-        if (self.page_offset == 0) return error.SegFault;
+        if (self.page_offset < pages) return error.SegFault;
 
-        self.page_offset -= 1;
-        self.page_capacity += 1;
-        self.region.base -= vm.page_size;
-        errdefer {
-            self.page_offset += 1;
-            self.page_capacity -= 1;
-            self.region.base += vm.page_size;
-        }
+        self.moveBaseDown(pages);
+        errdefer self.moveBaseUp(pages);
 
         _ = try self.ops.pageFault(self, pt, 0, cause);
     }
-
-    while (node) |n| : (node = n.next) {
-        const page = vm.Page.fromNode(n);
-        page.dim.idx += 1;
-    }
 }
 
-fn shrinkPageTop(list: *vm.Page.List, page: *vm.Page, new_top_idx: u32) !void {
+fn shrinkPageTop(list: *vm.Page.List, rel_offset: u32, page: *vm.Page, new_top_idx: u32) !void {
     const page_len = page.pagesNum();
     const page_top_idx = page_len + page.dim.idx;
     const detach_len = page_top_idx - new_top_idx;
@@ -457,7 +494,7 @@ fn shrinkPageTop(list: *vm.Page.List, page: *vm.Page, new_top_idx: u32) !void {
 
     try buildPage( // Detached pages
         list, detach_base,
-        new_top_idx, detach_len, false
+        new_top_idx - rel_offset, detach_len, false
     );
 
     errdefer freePageList(list, list_end);
@@ -469,7 +506,7 @@ fn shrinkPageTop(list: *vm.Page.List, page: *vm.Page, new_top_idx: u32) !void {
     );
 }
 
-fn shrinkPageBottom(list: *vm.Page.List, page: *vm.Page, new_idx: u32) !void {
+fn shrinkPageBottom(list: *vm.Page.List, rel_offset: u32, page: *vm.Page, new_idx: u32) !void {
     const detach_len = new_idx - page.dim.idx;
     const page_new_base = page.base + detach_len;
     const page_new_len = page.pagesNum() - detach_len;
@@ -480,7 +517,7 @@ fn shrinkPageBottom(list: *vm.Page.List, page: *vm.Page, new_idx: u32) !void {
     var dummy_list: vm.Page.List = .{ .first = &page.node };
     try buildPage( // Detached pages.
         list, page.base,
-        page.dim.idx, detach_len, false
+        @as(u32, page.dim.idx) - rel_offset, detach_len, false
     );
 
     errdefer freePageList(list, list_end);
@@ -492,7 +529,7 @@ fn shrinkPageBottom(list: *vm.Page.List, page: *vm.Page, new_idx: u32) !void {
     );
 }
 
-fn dividePages(list: *vm.Page.List, page: *vm.Page, div_idx: u32, div_top_idx: u32) !void {
+fn dividePages(list: *vm.Page.List, rel_offset: u32, page: *vm.Page, div_idx: u32, div_top_idx: u32) !void {
     const page_new_len = div_idx - page.dim.idx;
     const div_len = div_top_idx - div_idx;
     const div_base = page.base + page_new_len;
@@ -521,7 +558,7 @@ fn dividePages(list: *vm.Page.List, page: *vm.Page, div_idx: u32, div_top_idx: u
 
     try buildPage( // Build detached part.
         list, div_base,
-        div_idx, div_len, false
+        div_idx - rel_offset, div_len, false
     );
 }
 

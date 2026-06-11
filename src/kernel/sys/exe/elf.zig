@@ -23,28 +23,37 @@ pub fn load(bin: *exe.Binary, args: []const [*:0]const u8, envs: []const [*:0]co
     const elf_hdr = (try loadAndValidateHeader(bin)).*;
     if (elf_hdr.type != .EXEC) bin.virt_base = exe.default_virt_base;
 
+    if (bin.proc.exe_file != null) {
+        const task = bin.proc.clear();
+        bin.proc.pushTask(task);
+    }
+
     bin.proc.assignExecutable(bin.file);
     errdefer bin.proc.detachExecutable();
 
     // Load executable itself
-    var elf_phdrs_virt: usize = 0;
     const elf_phdrs: []elf.Phdr = blk: {
         const size = @as(usize, elf_hdr.phnum) * @sizeOf(elf.Phdr);
         const buffer = try bin.args.allocateBuffer(size);
-        elf_phdrs_virt = bin.args.getCurrentPagePtr();
 
         try bin.readExeCached(elf_hdr.phoff, buffer);
         break :blk @ptrCast(@alignCast(buffer));
     };
 
     var interp_phdr: ?*elf.Phdr = null;
-    var elf_max_seg: usize = 0; 
+    var elf_phdrs_virt: usize = bin.virt_base;
+    var elf_max_seg: usize = 0;
     for (elf_phdrs) |*phdr| switch (phdr.p_type) {
         elf.PT_INTERP => {
             if (interp_phdr != null) return error.BadFormat;
             interp_phdr = phdr;
         },
         elf.PT_LOAD => {
+            if (vm.bytesToPagesExact(phdr.p_offset) <= vm.bytesToPagesExact(elf_hdr.phoff)) {
+                @branchHint(.unlikely);
+                elf_phdrs_virt = bin.virt_base + lib.misc.alignDown(usize, phdr.p_vaddr, vm.page_size);
+            }
+
             elf_max_seg = @max(elf_max_seg, bin.virt_base + phdr.p_vaddr + phdr.p_memsz);
             try loadProgramSegment(bin, bin.file, phdr, bin.virt_base);
         },
@@ -67,7 +76,7 @@ pub fn load(bin: *exe.Binary, args: []const [*:0]const u8, envs: []const [*:0]co
     errdefer bin.proc.detachInterpreter();
 
     try buildArgsAndEnvs(bin, args, envs);
-    try buildAuxVectors(bin, &elf_hdr, interp_base, elf_phdrs_virt);
+    try buildAuxVectors(bin, &elf_hdr, elf_phdrs_virt, interp_base);
 
     var stack_region = try bin.args.complete();
     errdefer stack_region.deinit();
@@ -133,9 +142,10 @@ fn loadProgramSegment(self: *exe.Binary, file: *vfs.File, phdr: *const elf.Phdr,
         const zero_start = file_size % vm.page_size;
         if (mem_size > file_size and zero_start > 0) {
             @branchHint(.unlikely);
-            // Need a garantee that a part of memory would be filled with zeroes,
-            // so use `.write` cause to prevent copy-on-write mechanism damage the memory.
-            const page = try map_unit.getPageSafe(addr_space.page_table, map_pages - 1, .write);
+            // Need a garantee that a part of memory would be filled with zeroes.
+            // Use `.write` cause to prevent copy-on-write mechanism damage the memory.
+            const cause: vm.FaultCause = if (map_unit.flags.map.write) .write else .read;
+            const page = try map_unit.getPageSafe(addr_space.page_table, map_pages - 1, cause);
             @memset(page.asSlice()[zero_start..], 0);
         }
     }
@@ -174,7 +184,7 @@ fn loadInterpreter(bin: *exe.Binary, interp: *vfs.File) exe.Error!usize {
             elf.PT_LOAD => {
                 max_alignment = @max(max_alignment, phdr.p_align);
                 interp_bounds[0] = @min(interp_bounds[0], phdr.p_vaddr);
-                interp_bounds[1] = @min(interp_bounds[1], phdr.p_vaddr + phdr.p_memsz);
+                interp_bounds[1] = @max(interp_bounds[1], phdr.p_vaddr + phdr.p_memsz);
             },
             else => {}
         };
@@ -237,7 +247,7 @@ fn buildArgsAndEnvs(bin: *exe.Binary, args: []const [*:0]const u8, envs: []const
     try bin.args.entries.append(0);
 }
 
-fn buildAuxVectors(bin: *exe.Binary, elf_hdr: *const elf.Header, interp_base: ?usize, phdrs_ptr: usize) exe.Error!void {
+fn buildAuxVectors(bin: *exe.Binary, elf_hdr: *const elf.Header, phdrs_virt: usize, interp_base: ?usize) exe.Error!void {
     const file_name_ptr = bin.args.getCurrentPtr();
     bin.args.writer.print("{f}\x00", .{bin.file.dentry.path()}) catch return error.NoMemory;
 
@@ -254,7 +264,7 @@ fn buildAuxVectors(bin: *exe.Binary, elf_hdr: *const elf.Header, interp_base: ?u
     try bin.args.appendAuxv(elf.AT_HWCAP, lib.arch.getCpuInfo().getHwCap());
     try bin.args.appendAuxv(elf.AT_PAGESZ, vm.page_size);
     try bin.args.appendAuxv(elf.AT_CLKTCK, sys.time.getHz());
-    try bin.args.appendAuxv(elf.AT_PHDR, phdrs_ptr);
+    try bin.args.appendAuxv(elf.AT_PHDR, elf_hdr.phoff + phdrs_virt);
     try bin.args.appendAuxv(elf.AT_PHENT, elf_hdr.phentsize);
     try bin.args.appendAuxv(elf.AT_PHNUM, elf_hdr.phnum);
     try bin.args.appendAuxv(elf.AT_BASE, interp_base orelse bin.virt_base);

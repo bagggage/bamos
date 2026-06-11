@@ -19,16 +19,17 @@ pub const boot_cpu = 0;
 /// Max supported number of CPUs.
 pub const max_cpus = 2048;
 
-/// Size of the initial stack in memory pages.
-pub const init_stack_pages = if (builtin.mode == .Debug) 8 else 1;
-
 pub const LocalData = struct {
     idx: u16 = 0,
 
+    /// Used by timer IRQ to calculate elapsed time.
+    sys_timer_delta: u64 = 0,
     scheduler: sched.Scheduler = .{},
+
     nested_intr: u8 = 0,
     force_immediate_intrs: bool = false,
     immediate_intrs: intr.SoftHandler.List = .{},
+
     arch_specific: arch.CpuLocalData = undefined,
 
     pub inline fn isInInterrupt(self: *const LocalData) bool {
@@ -52,39 +53,41 @@ pub const LocalData = struct {
     }
 };
 
+var is_boot_cpu: bool = true;
+
 var init_lock: lib.sync.Spinlock = .init(.unlocked);
 var init_cpu_idx: u16 = 0;
 
 var cpus_data: []LocalData = undefined;
 
-pub fn preinit() void {
-    const Static = opaque {
-        var is_boot_cpu = true;
-    };
-
+/// Returns `true` on kernel boot CPU, `false` otherwise.
+pub inline fn bootCpu() bool {
     init_lock.lockAtomic();
 
-    if (Static.is_boot_cpu) {
-        Static.is_boot_cpu = false;
+    if (!is_boot_cpu) {
+        initCpu();
+        init_lock.unlockAtomic();
 
-        const cpus_num = boot.getCpusNum();
-        if (cpus_num > max_cpus) {
-            @panic("The number of CPUs is bigger then maximum supported number!");
-        }
-
-        cpus_data.len = cpus_num;
-    } else {
-        initCpu(&waitForInit);
+        return false;
     }
+
+    arch.initCpu();
+    boot.init() catch lib.sync.halt();
+
+    const cpus_num = boot.getCpusNum();
+    cpus_data.len = cpus_num;
+
+    if (cpus_num > max_cpus) @panic("The number of CPUs is bigger then maximum supported number!");
+    return true;
 }
 
-pub fn init() !void {
+pub fn init() void {
     const cpus_num = getNum();
 
     const pool_size = @sizeOf(LocalData) * cpus_num;
     const pool_pages = std.math.divCeil(u32, pool_size, vm.page_size) catch unreachable;
 
-    const phys = boot.alloc(pool_pages) orelse return error.NoMemory;
+    const phys = boot.alloc(pool_pages) orelse @panic("No memory for CPU local storage");
 
     cpus_data.ptr = @ptrFromInt(vm.getVirtLma(phys));
     cpus_data.len = cpus_num;
@@ -93,37 +96,17 @@ pub fn init() !void {
         data.* = .{};
         data.scheduler.preinit();
     }
+
+    initCpuLocal();
+    is_boot_cpu = false;
 }
 
-/// @noexport
 pub inline fn initAll() void {
     init_lock.unlockAtomic();
 }
 
-pub fn initCpu(ret: *const fn() noreturn) void {
-    const cpu_idx = init_cpu_idx;
-    const is_boot = cpu_idx == boot_cpu;
-    init_cpu_idx += 1;
-
-    if (!is_boot) {
-        arch.initCpu();
-        vm.setPageTable(vm.getRootPt());
-
-        const pt = vm.createPageTable() orelse {
-            log.err("Not enough memory to allocate page table per each cpu", .{});
-            lib.sync.halt();
-        };
-
-        vm.setPageTable(pt);
-    }
-
-    const local_data = &cpus_data[cpu_idx];
-    local_data.idx = cpu_idx;
-
-    arch.setCpuLocalData(local_data);
-    arch.setupCpu(cpu_idx);
-
-    initStack(is_boot, ret);
+pub inline fn isEarlyBoot() bool {
+    return is_boot_cpu;
 }
 
 /// Returns the number of CPUs managed and detected by kernel.
@@ -149,31 +132,27 @@ pub inline fn getIdx() u16 {
     return arch.getCpuLocalData().idx;
 }
 
-/// Boot CPU: allocates initial stack to continue kernel initialization.
-/// Other: sets stack pointer to the top of the current stack (to free some memory).
-/// 
-/// Returns to the address specified in `ret`.
-inline fn initStack(is_boot: bool, ret: *const fn() noreturn) noreturn {
-    if (is_boot) {
-        @branchHint(.unlikely);
+fn initCpu() void {
+    arch.initCpu();
+    vm.setPageTable(vm.getRootPt());
 
-        const phys = boot.alloc(init_stack_pages) orelse {
-            @panic("Initialization failed: no memory for initial stack!");
-        };
-        const virt = vm.getVirtLma(phys);
-        const top = virt + (init_stack_pages * vm.page_size) - @sizeOf(usize);
+    const pt = vm.createPageTable() orelse {
+        log.err("Not enough memory to allocate page table per each cpu", .{});
+        lib.sync.halt();
+    };
 
-        arch.setupStack(top, ret);
-    }
+    vm.setPageTable(pt);
 
-    arch.setupStack(@frameAddress() + @alignOf(usize), ret);
+    initCpuLocal();
 }
 
-fn waitForInit() noreturn {
-    init_lock.unlockAtomic();
+fn initCpuLocal() void {
+    const cpu_idx = init_cpu_idx;
+    init_cpu_idx += 1;
 
-    sys.time.initPerCpu();
+    const local_data = &cpus_data[cpu_idx];
+    local_data.idx = cpu_idx;
 
-    log.warn("CPU {} initialized", .{getIdx()});
-    sched.getCurrent().start();
+    arch.setCpuLocalData(local_data);
+    arch.setupCpu(cpu_idx);
 }

@@ -598,37 +598,6 @@ pub fn freeVector(vec: Vector) void {
     reorderCpus(vec.cpu, .backward);
 }
 
-// TODO: Fix it, the implementation uses `unsched_list` field, that doesn't exists!
-//pub fn allocSoftHandler(device: *dev.Device, cpu_idx: ?u16) bool {
-//    const handler = vm.obj.new(SoftHandler) orelse return false;
-//
-//    const task_idx = if (cpu_idx) |idx| idx else smp.getIdx();
-//    const soft_task = &soft_tasks[task_idx];
-//
-//    log.debug("soft irq: {}, cpu: {}", .{device.name, task_idx});
-//
-//    const node = &handler.node;
-//    node.next = null;
-//
-//    soft_task.unsched_list.prepend(node);
-//    device.soft_intr_num.fetchAdd(1, .release);
-//
-//    return true;
-//}
-//
-//pub fn freeSoftHandler(device: *dev.Device, cpu_idx: ?u16) void {
-//    std.debug.assert(device.soft_intr_num.raw > 0);
-//
-//    device.soft_intr_num.fetchSub(1, .acquire);
-//
-//    const task_idx = if (cpu_idx) |idx| idx else smp.getIdx();
-//    const soft_task = &soft_tasks[task_idx];
-//
-//    const node = soft_task.unsched_list.popFirst() orelse unreachable;
-//
-//    vm.obj.free(SoftHandler, node.data);
-//}
-
 pub fn scheduleImmediate(intr: *SoftHandler) void {
     const local = smp.getLocalData();
 

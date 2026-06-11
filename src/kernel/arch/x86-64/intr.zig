@@ -180,7 +180,7 @@ fn initExceptHandlers() void {
             else          => .{ .self,         &handler.isr, &except.commonHandler }
         };
 
-        idts[0][vec] = .init(@intFromPtr(args.@"1"), args.@"0", trap_gate_flags);
+        idts[0][vec] = .init(@intFromPtr(args.@"1"), args.@"0", intr_gate_flags);
         except_handlers[vec] = args.@"2";
     }
 }

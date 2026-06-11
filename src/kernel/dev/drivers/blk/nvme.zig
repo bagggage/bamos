@@ -4,7 +4,7 @@
 //! 
 //! - Specification: NVM Express Base Specification, Revision 2.1
 
-// Copyright (C) 2024-2025 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -35,11 +35,13 @@ const SubmissionEntry = packed struct {
         };
         pub const Io = enum(u8) {
             write = 0x01,
-            read = 0x02,
+            read  = 0x02,
         };
 
+        const zero: Opcode = .{ .admin = .delete_submission_queue };
+
         admin: Admin,
-        io: Io
+        io: Io,
     };
 
     opcode: Opcode,
@@ -120,14 +122,21 @@ const SubmissionQueue = struct {
     tail: u16 = 0,
 
     pub fn init(buffer: []SubmissionEntry) SubmissionQueue {
+        std.debug.assert(std.math.isPowerOfTwo(buffer.len));
+        defer @memset(buffer, .{ .opcode = .zero, .cmd_id = 0, .nsid = 0, .prp1 = 0 });
         return .{
             .ptr = buffer.ptr,
             .size = @truncate(buffer.len),
         };
     }
 
+    pub inline fn prevTail(self: *SubmissionQueue) *SubmissionEntry {
+        const idx = (self.tail -% 1) & (self.size -% 1);
+        return &self.ptr[idx];
+    }
+
     pub inline fn nextTail(self: *SubmissionQueue) *SubmissionEntry {
-        defer self.tail = (self.tail + 1) % self.size;
+        defer self.tail = (self.tail + 1) & (self.size -% 1);
         return &self.ptr[self.tail];
     }
 };
@@ -139,6 +148,8 @@ const CompletionQueue = struct {
     phase_bit: u1 = 1,
 
     pub fn init(buffer: []CompletionEntry) CompletionQueue {
+        std.debug.assert(std.math.isPowerOfTwo(buffer.len));
+        defer @memset(buffer, std.mem.zeroes(CompletionEntry));
         return .{
             .ptr = buffer.ptr,
             .size = @truncate(buffer.len),
@@ -150,7 +161,7 @@ const CompletionQueue = struct {
     }
 
     pub inline fn nextHead(self: *CompletionQueue) *volatile CompletionEntry {
-        self.head = (self.head + 1) % self.size;
+        self.head = (self.head +% 1) & (self.size -% 1);
         if (self.head == 0) self.phase_bit = ~self.phase_bit;
 
         return &self.ptr[self.head];
@@ -218,18 +229,18 @@ const Namespace = struct {
 
     pub fn handleIo(self: *Drive, request: *const Drive.io.Request) bool {
         const ns = &@as(*NamespaceDrive, @ptrCast(self)).derived;
-        const pages = request.lba_num / (vm.page_size / self.lba_size);
+        const pages = vm.bytesToPages(self.lbaToOffset(request.lba_num));
         const prp1 = vm.getPhysLma(request.lma_buf);
         const prp2: usize = switch (pages) {
-            0 => 0,
-            1 => prp1 + vm.page_size,
+            0 => unreachable,
+            1 => 0,
+            2 => prp1 + vm.page_size,
             else => blk: {
                 // PRP List - the worst case
                 // Dirty and slow....
                 // FIXME!
 
-                const phys = vm.PageAllocator.alloc(0) orelse return false;
-                const list: [*]u64 = @ptrFromInt(vm.getVirtLma(phys));
+                const list = vm.gpa.allocMany(u64, pages - 1) orelse return false;
                 var offset: u32 = vm.page_size;
 
                 for (0..pages - 1) |i| {
@@ -237,7 +248,7 @@ const Namespace = struct {
                     offset += vm.page_size;
                 }
 
-                break :blk phys;
+                break :blk vm.getPhysLma(list.ptr);
             }
         };
 
@@ -262,9 +273,8 @@ const Namespace = struct {
     }
 
     pub fn completeIo(self: *NamespaceDrive, cqe: *const CompletionEntry, sqe: *const SubmissionEntry) void {
-        if (sqe.prp2 != 0 and sqe.prp2 != (sqe.prp1 + vm.page_size)) {
-            vm.PageAllocator.free(sqe.prp2, 0);
-        }
+        const pages = vm.bytesToPages(self.base.lbaToOffset((sqe.cmd_dword12 & 0xffff) + 1));
+        if (pages > 2) vm.gpa.free(@ptrFromInt(vm.getVirtLma(sqe.prp2)));
 
         self.base.completeIo(cqe.cmd_id, if (cqe.status == 0) .success else .failed);
     }
@@ -438,8 +448,7 @@ const Controller = struct {
         };
     };
 
-    const sq_len = vm.page_size / @sizeOf(SubmissionEntry);
-    const cq_len = vm.page_size / @sizeOf(CompletionEntry);
+    const queue_len = vm.page_size / @sizeOf(CompletionEntry);
 
     bar: BarRegs.Group,
     doorbells: usize,
@@ -607,71 +616,70 @@ const Controller = struct {
     }
 
     fn initAdminQueues(self: *Controller) !void {
-        const pool_phys = vm.PageAllocator.alloc(1) orelse return error.NoMemory;
+        const cq_rank = vm.bytesToRank(@sizeOf(CompletionEntry) * queue_len);
+        const cq_phys = vm.PageAllocator.alloc(cq_rank) orelse return error.NoMemory;
+        errdefer vm.PageAllocator.free(cq_phys, cq_rank);
 
-        const sub_phys = pool_phys;
-        const cmpl_phys = pool_phys + vm.page_size;
+        const sq_rank = vm.bytesToRank(@sizeOf(SubmissionEntry) * queue_len);
+        const sq_phys = vm.PageAllocator.alloc(sq_rank) orelse return error.NoMemory;
 
-        const sq: [*]SubmissionEntry = @ptrFromInt(vm.getVirtLma(sub_phys));
-        const cq: [*]CompletionEntry = @ptrFromInt(vm.getVirtLma(cmpl_phys));
+        const cq: [*]CompletionEntry = @ptrFromInt(vm.getVirtLma(cq_phys));
+        const sq: [*]SubmissionEntry = @ptrFromInt(vm.getVirtLma(sq_phys));
 
-        self.admin_submission = SubmissionQueue.init(sq[0..sq_len]);
-        self.admin_completion = CompletionQueue.init(cq[0..cq_len]);
-
-        @memset(cq[0..cq_len], std.mem.zeroes(CompletionEntry));
+        self.admin_submission = .init(sq[0..queue_len]);
+        self.admin_completion = .init(cq[0..queue_len]);
 
         self.bar.set(.aqa, BarRegs.AdminQueueAttributes{
-            .sub_queue_size = sq_len - 1,
-            .cmpl_queue_size = cq_len - 1,
+            .sub_queue_size = queue_len - 1,
+            .cmpl_queue_size = queue_len - 1,
         });
 
-        self.bar.set(.asq, sub_phys);
-        self.bar.set(.acq, cmpl_phys);
+        self.bar.set(.asq, sq_phys);
+        self.bar.set(.acq, cq_phys);
     }
 
     fn deinitAdminQueues(self: *Controller) void {
-        vm.PageAllocator.free(vm.getPhysLma(self.admin_submission.ptr), 1);
+        const sq_rank = vm.bytesToRank(@sizeOf(SubmissionEntry) * queue_len);
+        const cq_rank = vm.bytesToRank(@sizeOf(CompletionEntry) * queue_len);
+
+        vm.PageAllocator.free(vm.getPhysLma(self.admin_submission.ptr), sq_rank);
+        vm.PageAllocator.free(vm.getPhysLma(self.admin_completion.ptr), cq_rank);
     }
 
     fn initIoQueues(self: *Controller) !void {
         const cpus_num = smp.getNum();
-
-        const pool_pages = cpus_num * 2;
-        const pool_rank = std.math.log2_int_ceil(u32, pool_pages);
-        const pool_real_size = (@as(u32, 1) << @truncate(pool_rank)) * vm.page_size;
-
-        const pool = vm.PageAllocator.alloc(pool_rank) orelse return error.NoMemory;
-        errdefer vm.PageAllocator.free(pool, pool_rank);
-
-        const virt = vm.getVirtLma(pool);
-
-        self.io_queues_rank = pool_rank;
         self.admin_fail = 0;
 
-        comptime std.debug.assert(@sizeOf(SubmissionQueue) == @sizeOf(CompletionQueue));
-        const array_size = @sizeOf(SubmissionQueue) * cpus_num;
-
         { // I/O arrays initialization
-            const base = virt + pool_real_size - (array_size * 2);
+            comptime std.debug.assert(@sizeOf(SubmissionQueue) == @sizeOf(CompletionQueue));
+            const queues = vm.gpa.allocMany(SubmissionQueue, cpus_num * 2) orelse return error.NoMemory;
 
-            self.io_submission = @ptrFromInt(base);
-            self.io_completion = @ptrFromInt(base + array_size);
+            self.io_submission = queues.ptr;
+            self.io_completion = @ptrCast(queues[cpus_num..].ptr);
         }
+        errdefer vm.gpa.free(@ptrCast(self.io_submission));
 
         // Configure queues structures in arrays
-        for (0..cpus_num) |i| {
-            const base = virt + (i * 2 * vm.page_size);
-            const sq_buffer: [*]SubmissionEntry = @ptrFromInt(base);
-            const cq_buffer: [*]CompletionEntry = @ptrFromInt(base + vm.page_size);
+        var idx: u32 = 0;
+        errdefer for (0..idx) |i| {
+            const phys = vm.getPhysLma(self.io_submission[i].ptr);
+            vm.PageAllocator.free(phys, self.io_queues_rank);
+        };
+        for (0..cpus_num) |_| {
+            const sq_rank = comptime vm.bytesToRank(@sizeOf(SubmissionEntry) * queue_len);
+            const sq_phys = vm.PageAllocator.alloc(sq_rank) orelse return error.NoMemory;
+            errdefer vm.PageAllocator.free(sq_phys, sq_rank);
 
-            const cq_real_len = if (i != cpus_num - 1) cq_len else (
-                (cq_len * @sizeOf(CompletionEntry) - array_size * 2) / @sizeOf(CompletionEntry)
-            );
+            const cq_rank = comptime vm.bytesToRank(@sizeOf(CompletionEntry) * queue_len);
+            const cq_phys = vm.PageAllocator.alloc(cq_rank) orelse return error.NoMemory;
 
-            self.io_completion[i] = CompletionQueue.init(cq_buffer[0..cq_real_len]);
-            self.io_submission[i] = SubmissionQueue.init(sq_buffer[0..sq_len]);
+            const sq_buffer = @as([*]SubmissionEntry, @ptrFromInt(vm.getVirtLma(sq_phys)))[0..queue_len];
+            const cq_buffer = @as([*]CompletionEntry, @ptrFromInt(vm.getVirtLma(cq_phys)))[0..queue_len];
 
-            @memset(cq_buffer[0..cq_real_len], std.mem.zeroes(CompletionEntry));
+            self.io_submission[idx] = SubmissionQueue.init(sq_buffer);
+            self.io_completion[idx] = CompletionQueue.init(cq_buffer);
+
+            idx += 1;
         }
 
         // Send commands to create completion queues
@@ -694,7 +702,7 @@ const Controller = struct {
             const cmd_id = self.admin_submission.tail +% 1;
 
             self.sendAdminCmd(0, .create_submission_queue, cmd_id, sq.ptr, &.{
-                id   | (@as(u32, sq_len - 1) << 16), // (doorbell id) | (size - 1)
+                id   | (@as(u32, sq.size - 1) << 16), // (doorbell id) | (size - 1)
                 0b01 | (@as(u32, id) << 16) // (phys contiguous) | (completion queue id)
             }, false);
         }
@@ -730,16 +738,25 @@ const Controller = struct {
 
         // Wait for complete
         self.adminInitialWait(last_cmd);
-
         if (self.admin_fail != 0) log.err("Command failed during delete I/O queues; Ignoring", .{});
 
         // Free memory
-        const phys = vm.getPhysLma(self.io_submission[0].ptr);
-        vm.PageAllocator.free(phys, self.io_queues_rank);
+        for (0..cpus_num) |i| {
+            const sq_rank = vm.bytesToRank(self.io_submission[i].size * @sizeOf(SubmissionEntry));
+            const cq_rank = vm.bytesToRank(self.io_completion[i].size * @sizeOf(CompletionQueue));
+
+            const sq_phys = vm.getPhysLma(self.io_submission[i].ptr);
+            const cq_phys = vm.getPhysLma(self.io_completion[i].ptr);
+
+            vm.PageAllocator.free(sq_phys, sq_rank);
+            vm.PageAllocator.free(cq_phys, cq_rank);
+        }
+
+        vm.gpa.free(self.io_submission);
     }
 
     pub fn adminInitialWait(self: *Controller, cmd_id: u16) void {
-        const idx = (cmd_id -% 1) % self.admin_completion.size;
+        const idx = cmd_id -% 1;
         const cmpl: *volatile CompletionEntry = &self.admin_completion.ptr[idx];
 
         while (cmpl.cmd_id != cmd_id) sched.yield();
@@ -829,6 +846,7 @@ const Controller = struct {
         const cpu_idx = smp.getIdx();
         const queue = &self.io_submission[cpu_idx];
 
+        // FIXME: Check if queue is not full!
         const cmd = queue.nextTail();
         cmd.* = SubmissionEntry.init(
             .{ .io = command }, id,
@@ -843,14 +861,10 @@ const Controller = struct {
         const sq = &self.io_submission[id];
 
         var complete = queue.getHead();
-
         while (complete.phase_tag == queue.phase_bit) : (complete = queue.nextHead()) {
-            complete.phase_tag = ~queue.phase_bit;
-
-            const sqe_idx = queue.head % sq_len;
-            const sqe = &sq.ptr[sqe_idx];
-
+            const sqe = &sq.ptr[queue.head];
             const ns = self.namespaces[sqe.nsid - 1];
+
             Namespace.completeIo(ns, @volatileCast(complete), sqe);
         }
 
@@ -879,7 +893,7 @@ const Controller = struct {
         const pci_dev = pci.Device.from(device);
         const controller = pci_dev.data.asPtr(Controller) orelse return false;
 
-        dev.intr.scheduleSoft(&controller.soft_intrs[smp.getIdx()]);
+        dev.intr.scheduleImmediate(&controller.soft_intrs[smp.getIdx()]);
 
         return true;
     }
@@ -893,7 +907,8 @@ const Controller = struct {
     }
 };
 
-var pci_driver = pci.Driver.init("nvme-ctrl",
+var pci_driver = pci.Driver.init(
+    "nvme-ctrl",
     .{
         .probe = .{ .universal = probe },
         .remove = remove,
@@ -901,7 +916,7 @@ var pci_driver = pci.Driver.init("nvme-ctrl",
     .{
         .class_code = .mass_storage_controller,
         .subclass = .{ .mass_storage_device = .non_volatile_mem_controller }
-    }
+    },
 );
 
 var ctrl_idx: u32 = 0;

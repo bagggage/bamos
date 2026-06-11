@@ -35,6 +35,37 @@ pub const Cursor = struct {
         self.getBlock().deref();
     }
 
+    pub fn writeBack(self: *Cursor, size: usize) Drive.Error!void {
+        const inner_offset = self.innerOffset();
+        std.debug.assert(inner_offset + size <= self.getBlock().size.toBytes());
+        if (!self.getBlock().writeBackRange(inner_offset, inner_offset + size)) return error.IoFailed;
+    }
+
+    pub inline fn setDirty(self: *Cursor, size: usize) void {
+        const inner_offset = self.innerOffset();
+        std.debug.assert(inner_offset + size <= self.getBlock().size.toBytes());
+        self.getBlock().setDirtyRange(inner_offset, inner_offset + size);
+    }
+
+    pub fn setDirtyAt(self: *Cursor, pos: usize) void {
+        const block = self.getBlock();
+        const inner_offset = self.innerOffset() + pos;
+        std.debug.assert(inner_offset <= block.size.toBytes());
+
+        block.setDirtyAt(inner_offset);
+    }
+
+    pub fn fetchCache(self: *Cursor, comptime op: ?Drive.io.Operation, offset: usize) Drive.Error!void {
+        const idx = vm.cache.offsetToIdx(offset);
+        if (self.getBlock().index != idx) {
+            const block = try getOrReadSwapBlock(self.getBlock(), idx);
+            self.accessor = @ptrCast(block);
+        }
+
+        self.offset = offset;
+        self.lock(op);
+    }
+
     pub fn ensureCache(self: *Cursor, comptime op: ?Drive.io.Operation, offset: usize) Drive.Error!void {
         const idx = vm.cache.offsetToIdx(offset);
         if (self.isBlank()) {
@@ -52,6 +83,16 @@ pub const Cursor = struct {
         }
 
         self.offset = offset;
+    }
+
+    pub inline fn ensureAsSlice(self: *Cursor, comptime op: ?Drive.io.Operation, offset: usize) Drive.Error![]u8 {
+        try self.ensureCache(op, offset);
+        return self.asSlice();
+    }
+
+    pub inline fn ensureAs(self: *Cursor, comptime T: type, comptime op: ?Drive.io.Operation, offset: usize) Drive.Error!*T {
+        try self.ensureCache(op, offset);
+        return self.asObject(T);
     }
 
     pub fn next(self: *Cursor, comptime op: ?Drive.io.Operation) Drive.Error!void {
@@ -131,7 +172,7 @@ fn getOrReadSwapBlock(block: *vm.cache.Block, index: usize) Drive.Error!*vm.cach
 }
 
 fn getOrReadBlock(drive: *Drive, index: usize) Drive.Error!*vm.cache.Block {
-    return vm.cache.getOrNull(&drive.cache_ctrl, index) orelse {
+    return drive.cache_ctrl.getOrNull(@truncate(index)) orelse {
         const offset = vm.cache.idxToOffset(index);
         const new_block = try vm.cache.createBlock(&drive.cache_ctrl, index, .small);
         errdefer new_block.free();
@@ -139,6 +180,6 @@ fn getOrReadBlock(drive: *Drive, index: usize) Drive.Error!*vm.cache.Block {
         const lba_offset = drive.offsetToLba(offset);
         try drive.ioSync(.read, lba_offset, new_block.asSlice());
 
-        return vm.cache.insertBlockOrFree(new_block) orelse return new_block;
+        return try drive.cache_ctrl.insertOrFree(new_block) orelse return new_block;
     };
 }

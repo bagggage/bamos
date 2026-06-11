@@ -14,11 +14,14 @@ const sys = @import("../sys.zig");
 const Task = sched.Task;
 const vm = @import("../vm.zig");
 
+const SleepQueue = sched.SleepQueue;
 const WaitQueue = sched.WaitQueue;
 const Self = @This();
 
 const Flags = packed struct {
     need_resched: bool = false,
+    want_sleep:   bool = false,
+    terminate:    bool = false,
 };
 
 const TaskQueue = struct {
@@ -78,14 +81,21 @@ sleep_ctx: arch.Context = undefined,
 preemption: u16 = 1,
 flags: Flags = .{},
 
+sleep_queue: SleepQueue = .{},
+sleep_lock: lib.sync.Spinlock = .{},
+sleep_elapsed_ns: u64 = 0,
+
 pub fn preinit(self: *Self) void {
     self.active_queue = &self.task_queues[0];
     self.expired_queue = &self.task_queues[1];
 }
 
 pub fn start(self: *Self) noreturn {
-    std.debug.assert(self.current_task == null and self.isOnCurrentCpu());
-    std.debug.assert(intr.isEnabledForCpu() and self.preemption == 1);
+    lib.debug.assert(
+        (self.current_task == null and self.isOnCurrentCpu()) and
+        (intr.isEnabledForCpu() and self.preemption == 1),
+        @src(),
+    );
 
     const stack = Task.createKernelStack() catch |err| {
         log.err("Failed to create sleep context: {t}", .{err});
@@ -105,9 +115,11 @@ pub fn start(self: *Self) noreturn {
 /// Can be called from both atomic and kernel context.
 /// You have make sure that task is not already scheduled.
 pub fn enqueueTask(self: *Self, task: *Task) void {
-    std.debug.assert(intr.isEnabledForCpu());
-    std.debug.assert(task.stats.sleep.raw == .awake);
-    std.debug.assert(!task.stats.lock.isLocked());
+    lib.debug.assert(
+        intr.isEnabledForCpu() and task.stats.sleep.raw == .awake and
+        !task.stats.lock.isLocked(),
+        @src(),
+    );
 
     task.stats.updateBonus();
     task.stats.updateTimeSlice();
@@ -121,7 +133,7 @@ pub fn enqueueTask(self: *Self, task: *Task) void {
 }
 
 pub fn dequeueTask(self: *Self,  task: *Task) void {
-    std.debug.assert(task.stats.sleep.raw != .sleep);
+    lib.debug.assert(task.stats.sleep.raw != .sleep, @src());
 
     self.task_lock.lockIntr();
     defer self.task_lock.unlockIntr();
@@ -132,12 +144,11 @@ pub fn dequeueTask(self: *Self,  task: *Task) void {
 /// Yield current task time.
 pub fn yield(self: *Self) void {
     const task = self.current_task.?;
-    std.debug.assert(task.stats.sleep.raw == .awake);
+    lib.debug.assert(task.stats.sleep.raw == .awake, @src());
 
-    if (!task.stats.lock.tryLockAtomic()) {
-        log.err("something is wrong... p: {}, r: {}, i: {}", .{self.preemption, self.flags.need_resched, self.getCpuLocal().nested_intr});
-        return;
-    }
+    const locked = task.stats.lock.tryLockAtomic();
+    lib.debug.assert(locked, @src());
+
     task.stats.yieldTime();
 
     {
@@ -156,7 +167,7 @@ pub fn tryPreempt(self: *Self, task: *Task) bool {
     if (!self.isOnCurrentCpu()) return false;
 
     if (self.current_task) |current| {
-        if (!current.stats.lock.tryLockAtomic()) return false;
+        if (self.wantSleep() or !current.stats.lock.tryLockAtomic()) return false;
         if (current.stats.getPriority() <= task.stats.getPriority()) {
             current.stats.lock.unlockAtomic();
             return false;
@@ -167,14 +178,15 @@ pub fn tryPreempt(self: *Self, task: *Task) bool {
 
         self.active_queue.prepend(current);
         self.active_queue.prepend(task);
+        self.disablePreemption();
     } else {
         intr.disableForCpu();
         defer intr.enableForCpu();
 
         self.active_queue.prepend(task);
+        self.disablePreemption();
     }
 
-    self.disablePreemption();
     self.planRescheduling();
 
     // Because of immediate interrupts handlers we must check if CPU is within interrupt handler
@@ -191,8 +203,17 @@ pub inline fn planRescheduling(self: *Self) void {
     self.flags.need_resched = true;
 }
 
+pub inline fn prepareToSleep(self: *Self) void {
+    lib.debug.assert(self.isPreemptive(), @src());
+    self.flags.want_sleep = true;
+}
+
 pub inline fn needRescheduling(self: *const Self) bool {
     return self.flags.need_resched;
+}
+
+pub inline fn wantSleep(self: *const Self) bool {
+    return self.flags.want_sleep;
 }
 
 pub inline fn isPreemptive(self: *const Self) bool {
@@ -232,7 +253,7 @@ pub inline fn getCpuLocal(self: *Self) *smp.LocalData {
 pub fn initWait(self: *Self) WaitQueue.Entry {
     const task = self.current_task.?;
 
-    std.debug.assert(task.stats.sleep.raw == .awake);
+    lib.debug.assert(task.stats.sleep.raw == .awake, @src());
     task.stats.sleep.raw = .falling_asleep;
 
     return WaitQueue.Entry.init(
@@ -244,49 +265,115 @@ pub fn initWait(self: *Self) WaitQueue.Entry {
 pub fn wait(self: *Self) void {
     const task = self.current_task.?;
 
+    self.prepareToSleep();
     self.disablePreemption();
+
     if (task.stats.sleep.cmpxchgStrong(
         .needs_wakeup, .awake,
         .release, .monotonic
     ) == null) {
         @branchHint(.unlikely);
+        self.flags.want_sleep = false;
         self.enablePreemption();
         return;
+    }
+
+    if (task.stats.sleep.raw == .awake) {
+        @branchHint(.cold);
+        log.err("task is not ready to wait!", .{});
+        return;
+    }
+
+    self.rescheduleAtomic();
+
+    if (task.stats.sleep.raw != .awake and lib.is_debug) {
+        @branchHint(.cold);
+        log.err("no awake after wait!: {t}", .{task.stats.sleep.raw});
+    }
+}
+
+pub fn waitTimeout(self: *Self, ns: u64) error{Timeout}!void {
+    lib.debug.assert(self.isOnCurrentCpu(), @src());
+
+    // TODO: Implement high-percision sleep.
+    if (ns < sys.time.getNsPerTick()) return error.Timeout;
+
+    self.prepareToSleep();
+    self.disablePreemption();
+
+    const task = self.current_task.?;
+    if (task.stats.sleep.cmpxchgStrong(
+        .needs_wakeup, .awake,
+        .release, .monotonic
+    ) == null) {
+        @branchHint(.unlikely);
+        self.flags.want_sleep = false;
+        self.enablePreemption();
+        return;
+    }
+
+    lib.debug.assert(task.stats.sleep.raw != .awake, @src());
+    var entry: SleepQueue.Entry = .{
+        .delta_ns = ns,
+        .wait_entry = .init(task, sys.time.getFastTimestamp()),
+    };
+
+    {
+        if (self.sleep_lock.tryLockAtomic() == false) unreachable;
+        defer self.sleep_lock.unlockAtomic();
+
+        self.sleep_queue.push(&entry);
+    }
+
+    self.rescheduleAtomic();
+    lib.debug.assert(task.stats.sleep.raw == .awake, @src());
+
+    {
+        self.sleep_lock.lockIntr();
+        defer self.sleep_lock.unlockIntr();
+
+        self.sleep_queue.removeWeak(&entry);
+    }
+
+    if (entry.delta_ns == 0) return error.Timeout;
+}
+
+pub fn sleepFor(self: *Self, ns: u64) void {
+    lib.debug.assert(self.isOnCurrentCpu(), @src());
+
+    // TODO: Implement high-percision sleep.
+    if (ns < sys.time.getNsPerTick()) return;
+
+    self.prepareToSleep();
+    self.disablePreemption();
+
+    var entry: SleepQueue.Entry = .{
+        .delta_ns = ns,
+        .wait_entry = initWait(self),
+    };
+
+    {
+        if (self.sleep_lock.tryLockAtomic() == false) unreachable;
+        defer self.sleep_lock.unlockAtomic();
+
+        self.sleep_queue.push(&entry);
     }
 
     self.rescheduleAtomic();
 }
 
-pub fn timerEvent(self: *Self, elapsed: sched.Ticks) void {
-    std.debug.assert(self.getCpuLocal().isInInterrupt());
+pub fn timerEvent(self: *Self, elapsed_ns: u64) void {
+    lib.debug.assert(self.getCpuLocal().isInInterrupt(), @src());
     @setRuntimeSafety(false);
 
-    const task = self.current_task orelse return;
-    task.stats.cpu_time +|= elapsed;
+    self.processSleeping(elapsed_ns);
 
-    if (self.getCpuLocal().force_immediate_intrs) {
-        @branchHint(.unlikely);
-        return;
-    }
+    // When converting to ticks, roundup on a half of tick.
+    const ns_per_tick = sys.time.getNsPerTick();
+    const ticks = (elapsed_ns + (ns_per_tick / 2)) / ns_per_tick;
+    if (ticks == 0) return;
 
-    if (!task.stats.lock.tryLockAtomic()) return;
-
-    task.stats.time_slice -|= elapsed;
-    if (task.stats.time_slice == 0) {
-        @branchHint(.unlikely);
-        // Don't release stats.lock, it's used to say that nobody can
-        // scheduled this task again, because it's already scheduled
-
-        defer self.planRescheduling();
-
-        self.task_lock.lockAtomic();
-        defer self.task_lock.unlockAtomic();
-
-        self.expired_queue.push(task);
-        return;
-    }
-
-    task.stats.lock.unlockAtomic();
+    self.processTicks(@truncate(ticks));
 }
 
 /// Scheduler main function. Switches to next task from queue,
@@ -294,14 +381,14 @@ pub fn timerEvent(self: *Self, elapsed: sched.Ticks) void {
 /// 
 /// **Call this function only in kernel context!**
 pub inline fn reschedule(self: *Self) void {
-    std.debug.assert(self.isPreemptive());
+    lib.debug.assert(self.isPreemptive(), @src());
     self.disablePreemption();
     self.rescheduleAtomic();
 }
 
 pub fn rescheduleAtomic(self: *Self) void {
-    std.debug.assert(intr.isEnabledForCpu());
-    std.debug.assert(self.preemption == 1 and self.getCpuLocal().nested_intr < 2);
+    lib.debug.assert(intr.isEnabledForCpu(), @src());
+    lib.debug.assert(self.preemption == 1 and self.getCpuLocal().nested_intr < 2, @src());
 
     const next_task = self.nextTask() orelse blk: {
         self.schedule();
@@ -312,7 +399,7 @@ pub fn rescheduleAtomic(self: *Self) void {
         };
         if (next_task == self.current_task) {
             @branchHint(.unlikely);
-            std.debug.assert(next_task.stats.lock.isLocked());
+            lib.debug.assert(next_task.stats.lock.isLocked(), @src());
 
             updateTaskStatsAtomic(next_task);
             self.completeSwitch(next_task);
@@ -333,6 +420,17 @@ pub noinline fn postSwitch(self: *Self, new_ctx: *arch.Context) callconv(.c) voi
     if (self.current_task) |task| blk: {
         if (!task.stats.lock.tryLockAtomic()) {
             @branchHint(.likely);
+
+            if (self.flags.terminate) {
+                @branchHint(.cold);
+
+                self.flags = .{};
+                self.current_task = null;
+
+                task.delete();
+                break :blk;
+            }
+
             updateTaskStatsAtomic(task);
             break :blk;
         }
@@ -365,12 +463,23 @@ pub noinline fn postSwitch(self: *Self, new_ctx: *arch.Context) callconv(.c) voi
 
 pub inline fn completeSwitch(self: *Self, new_task: ?*Task) void {
     const old_task = self.current_task;
-    if (new_task) |task| {
-        _ = task.stats.sleep.cmpxchgStrong(
-            .needs_wakeup, .awake,
-            .release, .monotonic
-        );
-    }
+    // Why do we need this???
+    //
+    // This code adds a bug: 
+    // 1. Task was `falling_into_sleep`;
+    // 2. Someone awake it (sleep state is set to `needs_wakeup`);
+    // 3. Timer event preempt this task (equeue it to resume later);
+    // 4. Later task is resumed, but this code drops `needs_wakeup` state!
+    // 5. As a result, when the task finally calls `reschedule`
+    //    the scheduler would be surprised that task is not locked,
+    //    but at the same time it was in `awake` state
+    //
+    //if (new_task) |task| {
+    //    _ = task.stats.sleep.cmpxchgStrong(
+    //        .needs_wakeup, .awake,
+    //        .release, .monotonic
+    //    );
+    //}
 
     // Disable interrupts to prevent race condition when setting
     // `current_task` to new value, as `timerEvent` and `tryPreempt`
@@ -380,7 +489,7 @@ pub inline fn completeSwitch(self: *Self, new_task: ?*Task) void {
     intr.disableForCpu();
     defer intr.enableForCpu();
 
-    self.flags.need_resched = false;
+    self.flags = .{};
     self.current_task = new_task;
 
     if (old_task) |task| task.stats.lock.unlockAtomic();
@@ -411,7 +520,7 @@ fn fallIntoSleep(self: *Self) void {
     }
 }
 
-pub fn sleepTask() callconv(.c) noreturn {
+fn sleepTask() callconv(.c) noreturn {
     const self = sched.getCurrent();
 
     // After switch is done, flag `need_resched` was forcibly cleared,
@@ -437,4 +546,53 @@ inline fn isOnCurrentCpu(self: *Self) bool {
 inline fn updateTaskStatsAtomic(task: *Task) void {
     task.stats.updateBonus();
     task.stats.updateTimeSlice();
+}
+
+fn processSleeping(self: *Self, elapsed_ns: u64) void {
+    self.sleep_elapsed_ns += elapsed_ns;
+    if (self.sleep_lock.tryLockAtomic()) {
+        @branchHint(.likely);
+        defer self.sleep_lock.unlockAtomic();
+
+        const sleep_elapsed = self.sleep_elapsed_ns;
+        self.sleep_elapsed_ns = 0;
+
+        var entry = self.sleep_queue.process(sleep_elapsed);
+        while (entry) |e| {
+            const task = e.wait_entry.task;
+            if (task.tryWakeup()) self.enqueueTask(task);
+
+            entry = if (e.wait_entry.node.next) |n| SleepQueue.Entry.fromNode(n) else null;
+        }
+    }
+}
+
+fn processTicks(self: *Self, ticks: sched.Ticks) void {
+    const task = self.current_task orelse return;
+    task.stats.cpu_time +|= ticks;
+
+    // Don't handle task time slice in nested interrupt context.
+    if (self.getCpuLocal().force_immediate_intrs) {
+        @branchHint(.unlikely);
+        return;
+    }
+
+    if (self.wantSleep() or !task.stats.lock.tryLockAtomic()) return;
+    task.stats.time_slice -|= ticks;
+
+    if (task.stats.time_slice == 0) {
+        @branchHint(.unlikely);
+        // Don't release stats.lock, it's used to say that nobody can
+        // scheduled this task again, because it's already scheduled
+
+        defer self.planRescheduling();
+
+        self.task_lock.lockAtomic();
+        defer self.task_lock.unlockAtomic();
+
+        self.expired_queue.push(task);
+        return;
+    }
+
+    task.stats.lock.unlockAtomic();
 }

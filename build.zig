@@ -40,13 +40,17 @@ pub fn build(b: *std.Build) void {
 }
 
 fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallArtifact {
-    const name = b.option([]const u8, "exe-name", "Name of the kernel executable");
     const optimize = b.standardOptimizeOption(.{});
+    const name = b.option([]const u8, "exe-name", "Name of the kernel executable");
+    const enable_avx = b.option(bool, "kernel-avx", "Build kernel with AVX instructions (default: false)") orelse false;
+    const trace_syscalls = b.option(bool, "trace-syscalls", "Enable syscall tracing (default: false)") orelse false;
+    const trace_excepts = b.option(bool, "trace-excepts", "Enable CPU exceptions tracing (default: false)") orelse false;
+    const debug_syscalls = b.option(bool, "debug-syscalls", "Enable debug logs for syscalls (default: false)") orelse false;
+    const debug_pci = b.option(bool, "debug-pci", "Enable debug logs for PCI bus driver (default: false)") orelse false;
+    const debug_uacpi = b.option(bool, "debug-uacpi", "Enable debug logs for uACPI integration (default: false)") orelse false;
 
     var cpu_feat: std.Target.Cpu.Feature.Set = .empty;
-    if (arch == .x86_64) {
-        cpu_feat.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
-    }
+    if (enable_avx and arch == .x86_64) cpu_feat.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
 
     const target = b.resolveTargetQuery(.{
         .os_tag = .freestanding,
@@ -77,28 +81,39 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         .use_llvm = true
     });
 
+    const uacpi,
+    const uacpi_obj = makeUacpi(b, target, optimize);
+
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
+    kernel_obj.addIncludePath(uacpi.path("include"));
     kernel_obj.addIncludePath(b.path("third-party/boot"));
 
     const zon = @import("build.zig.zon");
     const kernel_opts = b.addOptions();
 
-    const timestamp = makeTimestamp(b, optimize);
-    defer b.allocator.free(timestamp);
-
-    const build_string = b.fmt("{s}-{t}: Zig {f} # {s}", .{
-        zon.version, optimize, builtin.zig_version, timestamp
-    });
     const kernel_ver = std.SemanticVersion.parse(zon.version) catch blk: {
         const parse_fail = b.addFail("Failed to parse version from build.zig.zon");
         kernel_obj.step.dependOn(&parse_fail.step);
         break :blk std.SemanticVersion{.major = 0, .minor = 0, .patch = 0};
     };
 
+    const is_release = kernel_ver.pre == null and (optimize != .Debug and optimize != .ReleaseSafe);
+    const timestamp = makeTimestamp(b, is_release);
+    defer b.allocator.free(timestamp);
+
+    const build_string = b.fmt("{t}: Zig {f} # {s}", .{
+        optimize, builtin.zig_version, timestamp
+    });
+
     kernel_opts.addOption([]const u8, "os_name", "BamOS");
     kernel_opts.addOption(std.SemanticVersion, "version", kernel_ver);
     kernel_opts.addOption([]const u8, "version_string", b.fmt("{f}", .{kernel_ver}));
     kernel_opts.addOption([]const u8, "build", build_string);
+    kernel_opts.addOption(bool, "trace_syscalls", trace_syscalls);
+    kernel_opts.addOption(bool, "trace_excepts", trace_excepts);
+    kernel_opts.addOption(bool, "debug_syscalls", debug_syscalls);
+    kernel_opts.addOption(bool, "debug_pci", debug_pci);
+    kernel_opts.addOption(bool, "debug_uacpi", debug_uacpi);
 
     kernel_obj.root_module.addOptions("opts", kernel_opts);
 
@@ -135,12 +150,61 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
         .use_llvm = true
     });
     kernel_exe.addObject(kernel_obj);
+    kernel_exe.addObject(uacpi_obj);
     kernel_exe.addObject(dbg_obj);
     kernel_exe.setLinkerScript(b.path("config/kernel.ld"));
 
     const kernel_install = b.addInstallArtifact(kernel_exe, .{});
 
     return kernel_install;
+}
+
+fn makeUacpi(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode)
+    struct { *std.Build.Dependency, *std.Build.Step.Compile }
+{
+    const uacpi = b.dependency("uacpi", .{});
+    const uacpi_module = b.addModule("uacpi", .{
+        .link_libc = false,
+        .sanitize_c = .trap,
+        .target = target,
+        .optimize = optimize,
+        .code_model = .kernel,
+    });
+
+    uacpi_module.addIncludePath(uacpi.path("include"));
+    uacpi_module.addCSourceFiles(.{
+        .language = .c,
+        .root = uacpi.path("./"),
+        .files = &.{
+            "source/tables.c",
+            "source/types.c",
+            "source/uacpi.c",
+            "source/utilities.c",
+            "source/interpreter.c",
+            "source/opcodes.c",
+            "source/namespace.c",
+            "source/stdlib.c",
+            "source/shareable.c",
+            "source/opregion.c",
+            "source/default_handlers.c",
+            "source/io.c",
+            "source/notify.c",
+            "source/sleep.c",
+            "source/registers.c",
+            "source/resources.c",
+            "source/event.c",
+            "source/mutex.c",
+            "source/osi.c",
+        },
+    });
+
+    const uacpi_obj = b.addObject(.{
+        .name = "uacpi",
+        .root_module = uacpi_module,
+        .use_llvm = true,
+    });
+
+    return .{ uacpi, uacpi_obj };
 }
 
 fn makeDocs(b: *std.Build, kernel: *std.Build.Step.InstallArtifact) *std.Build.Step {
@@ -207,13 +271,15 @@ fn makeImage(b: *std.Build, step: *std.Build.Step, kernel: *std.Build.Step.Insta
 fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.InstallFile) *std.Build.Step.Run {
     const enable_gdb = b.option(bool, "qemu-gdb", "Enable GDB server (default: false)") orelse false;
     const enable_serial = b.option(bool, "qemu-serial", "Serial output to stdout (default: true)") orelse true;
-    const enable_trace = b.option(bool, "qemu-trace", "Enable interrupts tracing (default: false)") orelse false;
+    const enable_trace = b.option(bool, "qemu-trace-irq", "Enable interrupts tracing (default: false)") orelse false;
+    const tracing = b.option([]const u8, "qemu-trace", "Set `-trace` option value (default: none)");
     const enable_kvm = b.option(bool, "qemu-kvm", "Enable KVM acceleration") orelse true;
     const cpu_num = b.option(u5, "qemu-cpus", "QEMU machine cpus number (default: 4)") orelse qemu_cores_default;
     const ram_size = b.option([]const u8, "qemu-ram", "QEMU machine RAM size (default: "++qemu_ram_default++")") orelse qemu_ram_default;
     const drives = b.option([]const []const u8, "qemu-drives", "QEMU additional NVMe drives (paths to images)") orelse &.{};
     const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse false;
     const no_uefi = b.option(bool, "qemu-noefi", "Legacy BIOS firmware") orelse false;
+    const usb_devs = b.option(bool, "qemu-usb", "Enable USB device support (default: false)") orelse false;
 
     const qemu_name = switch (arch) {
         .x86,
@@ -234,8 +300,9 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
         qemu_run.addFileArg(b.path("third-party/uefi/OVMF-efi.fd"));
     }
 
-    if (enable_gdb) qemu_run.addArg("-s");
+    if (enable_gdb) qemu_run.addArgs(&.{"-s"});
     if (enable_trace) qemu_run.addArgs(&.{"-d", "int"});
+    if (tracing) |trace| qemu_run.addArgs(&.{"-trace", trace});
 
     if (enable_serial and !no_gui) {
         qemu_run.addArgs(&.{
@@ -259,10 +326,16 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     // Add additional drives as NVMe devices
     for (drives, 0..) |drive, i| {
         qemu_run.addArgs(&.{
-            "-drive", b.fmt("file={s},if=none,id=drv{}", .{drive, i}),
+            "-drive", b.fmt("file={s},format=raw,if=none,id=drv{}", .{drive, i}),
             "-device", b.fmt("nvme,serial=QEMU-DRIVE-{},drive=drv{}", .{i, i})
         });
     }
+
+    if (usb_devs) qemu_run.addArgs(&.{
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-kbd,bus=xhci.0,id=kbd",
+        "-device", "usb-mouse,bus=xhci.0,id=mice"
+    });
 
     // Enable KVM on linux
     if (enable_kvm and builtin.os.tag == .linux and !enable_trace) {
@@ -304,7 +377,7 @@ fn makeTools(b: *std.Build) void {
     });
 }
 
-fn makeTimestamp(b: *std.Build, optimize: std.builtin.OptimizeMode) []const u8 {
+fn makeTimestamp(b: *std.Build, is_release: bool) []const u8 {
     const timestamp: std.time.epoch.EpochSeconds = .{ .secs = @intCast(std.time.timestamp()) };
     const day_secs = timestamp.getDaySeconds();
     const day_year = timestamp.getEpochDay().calculateYearDay();
@@ -316,10 +389,7 @@ fn makeTimestamp(b: *std.Build, optimize: std.builtin.OptimizeMode) []const u8 {
     );
     defer b.allocator.free(time_string);
 
-    const timestamp_postfix = switch (optimize) {
-        .Debug, .ReleaseSafe => "--:--:--",
-        else => time_string
-    };
+    const timestamp_postfix = if (is_release) time_string else "--:--:--";
 
     return b.fmt(
         "{} {t} {:0>4} {s}",

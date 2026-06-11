@@ -29,7 +29,7 @@ pub const Block = struct {
         }
 
         pub inline fn toPages(self: Size) u32 {
-            return @as(u32, 1) << self.toRank();
+            return @as(u32, 1) << @truncate(self.toRank());
         }
 
         pub inline fn toBytes(self: Size) u32 {
@@ -66,7 +66,7 @@ pub const Block = struct {
 
     pub const max_quants = @bitSizeOf(BitSet);
 
-    const List = lib.rcu.SinglyLinkedList;
+    const List = std.SinglyLinkedList;
     const Node = List.Node;
 
     const BitSet = std.bit_set.IntegerBitSet(16);
@@ -77,15 +77,14 @@ pub const Block = struct {
     node: Node = .{},
     lru_node: LruList.Node = .{},
 
-    /// 1-base reference counter.
     ref_count: lib.atomic.RefCount(u16) = .init(1),
     rw_sem: lib.sync.RwSemaphore = .{},
 
     phys_base: u32,
     dirty_map: BitSet = .initEmpty(),
-    lock_map: BitSet = .initEmpty(),
 
     size: Size = .{ .shift = Size.small_shift },
+    lock: lib.sync.Spinlock = .{},
 
     inline fn fromNode(node: *Node) *Block {
         return @fieldParentPtr("node", node);
@@ -122,6 +121,8 @@ pub const Block = struct {
     pub inline fn free(self: *Block) void {
         const base = @as(usize, self.phys_base) * vm.page_size;
         vm.PageAllocator.free(base, self.size.toRank());
+
+        block_oma.free(self);
     }
 
     pub inline fn ref(self: *Block) void {
@@ -129,23 +130,14 @@ pub const Block = struct {
     }
 
     pub fn deref(self: *Block) void {
-        const refs = self.ref_count.value.fetchSub(1, .release) - 1;
-        if (refs > 1) { @branchHint(.likely); return; }
+        self.lock.lock();
+        defer self.lock.unlock();
 
-        std.debug.assert(refs == 1);
-        lru_list.prepend(&self.lru_node);
+        if (self.ref_count.put()) lru_list.prepend(&self.lru_node);
     }
 
-    pub fn writeDown(self: *Block) void {
+    pub inline fn writeDown(self: *Block) void {
         self.rw_sem.writeLock();
-
-        self.rw_sem.lock.lock();
-        if (self.lock_map.mask != 0) {
-            @branchHint(.unlikely);
-            sched.waitUnlock(&self.rw_sem.wait_queue, &self.rw_sem.lock);
-        } else {
-            self.rw_sem.lock.unlock();
-        }
     }
 
     pub inline fn writeUp(self: *Block) void {
@@ -160,9 +152,47 @@ pub const Block = struct {
         self.rw_sem.readUnlock();
     }
 
-    pub inline fn writeBack(self: *Block) bool {
-        return self.ctrl.writeBack(self);
+    /// `start` and `end` is local offsets.
+    pub fn setDirtyRange(self: *Block, start: usize, end: usize) void {
+        std.debug.assert(self.rw_sem.writing);
+
+        const quant_shift = self.size.quantShift();
+        const start_quant = start >> quant_shift;
+        const end_quant = (end >> quant_shift) + 1;
+
+        self.dirty_map.setRangeValue(.{ .start = start_quant, .end = end_quant }, true);
+        self.tryPutIntoDirtyList();
     }
+
+    /// `pos` is relative to start of the block.
+    pub inline fn setDirtyAt(self: *Block, pos: usize) void {
+        std.debug.assert(self.rw_sem.writing);
+        self.dirty_map.set(pos >> self.size.quantShift());
+        self.tryPutIntoDirtyList();
+    }
+
+    //    /// `start` and `end` is local offsets.
+    //    pub fn writeBackRange(self: *Block, start: usize, end: usize) bool {
+    //        std.debug.assert(self.rw_sem.writing);
+    //
+    //        const write_back = self.ctrl.write_back orelse return true;
+    //
+    //        const quant_shift = self.size.quantShift();
+    //        const start_quant: u32 = @truncate(start >> quant_shift);
+    //        const end_quant: u32 = @truncate((end + self.size.quantSize() - 1) >> quant_shift);
+    //
+    //        const _start = start_quant << quant_shift;
+    //        const _end = end_quant << quant_shift;
+    //
+    //        self.dirty_map.setRangeValue(.{ .start = start_quant, .end = end_quant }, false);
+    //        self.rw_sem.writeToReadLock();
+    //        defer {
+    //            self.rw_sem.readUnlock();
+    //            self.rw_sem.writeLock();
+    //        }
+    //
+    //        return write_back(self, &.{ .{ .base = _start, .top = _end } }, quant_shift);
+    //    }
 
     pub fn asSlice(self: *const Block) []u8 {
         const ptr: [*]u8 = @ptrFromInt(self.getAddress());
@@ -186,117 +216,144 @@ pub const Block = struct {
     pub inline fn getAddress(self: *const Block) usize {
         return vm.getVirtLma(@as(usize, self.phys_base) * vm.page_size);
     }
+
+    inline fn tryPutIntoDirtyList(self: *Block) void {
+        if (@cmpxchgStrong(
+            ?*Node,
+            &self.node.next,
+            null,
+            &self.node,
+            .release,
+            .monotonic,
+        ) != null) return;
+
+        self.ctrl.dirty_list.prepend(&self.node);
+    }
+
+    inline fn takeFromDirtyList(self: *Block) void {
+        @atomicStore(?*Node, &self.node.next, null, .release);
+    }
 };
 
-const Table = struct {
-    const EntryList = lib.rcu.SinglyLinkedList;
+const TreeHasher = opaque {
+    pub const Result = u32;
 
-    entries: []EntryList = &.{},
-    mod_mask: u64 = 0,
+    pub inline fn hash(key: u32) u32 { return key; }
 
-    fn init(phys: usize, len: usize) Table {
-        std.debug.assert(std.math.isPowerOfTwo(len));
-        const entries_ptr: [*]EntryList = @ptrFromInt(vm.getVirtLma(phys));
-        @memset(entries_ptr[0..len], EntryList{});
-        return .{
-            .entries = entries_ptr[0..len],
-            .mod_mask = len - 1
-        };
-    }
-
-    fn getOrNull(self: *Table, ctrl: *Control, index: usize) ?*Block {
-        const entry_idx = self.calcIdx(ctrl, index);
-        const list = &self.entries[entry_idx];
-
-        const gen = list.ctrl.readLock();
-        defer list.ctrl.readUnlock(gen);
-
-        var node = list.head.load(.acquire);
-        while (node) |n| : (node = n.next) {
-            const block = Block.fromNode(n);
-            if (block.ctrl != ctrl or block.index != index) continue;
-            if (block.tableGet()) { @branchHint(.likely); return block; }
-
-            return null;
-        }
-
-        return null;
-    }
-
-    fn putOrGet(self: *Table, new_block: *Block) ?*Block {
-        const entry_idx = self.calcIdx(new_block.ctrl, new_block.index);
-        const list = &self.entries[entry_idx];
-
-        list.ctrl.writeLock();
-        defer list.ctrl.writeUnlock();
-
-        var node = list.head.load(.acquire);
-        while (node) |n| : (node = n.next) {
-            const block = Block.fromNode(n);
-            if (block.ctrl != new_block.ctrl or block.index != new_block.index) continue;
-
-            block.ref();
-            return block;
-        }
-
-        new_block.ref();
-        list.prependRaw(&new_block.node);
-        list.ctrl.update();
-
-        return null;
-    }
-
-    fn remove(self: *Table, block: *Block) void {
-        std.debug.assert(block.ref_count.count() == 0);
-        const entry_idx = self.calcIdx(block.ctrl, block.index);
-
-        const list = &self.entries[entry_idx];
-        _ = list.remove(&block.node) orelse unreachable;
-    }
-
-    fn calcIdx(self: *const Table, ctrl: *Control, idx: usize) u64 {
-        var hasher = std.hash.Fnv1a_64.init();
-        hasher.update(std.mem.asBytes(&ctrl));
-        hasher.update(std.mem.asBytes(&idx));
-
-        return hasher.final() & self.mod_mask;
+    pub inline fn keyByValue(val: *Block) u32 {
+        return val.index;
     }
 };
 
 pub const Control = struct {
     pub const WriteBackFn = *const fn (block: *Block, quants: []const Block.Quant, quant_shift: u5) bool;
 
+    const RadixTree = lib.RadixTree(u32, Block, TreeHasher, 8);
+
+    tree: RadixTree = .{},
+    rcu: lib.rcu.GenerationBlock = .{},
+    dirty_list: lib.atomic.SinglyLinkedList = .{},
+
     write_back: ?WriteBackFn,
+
+    pub fn deinit(self: *Control) void {
+        const Helper = opaque {
+            pub fn deinitTable(table: *RadixTree.Table) void {
+                if (table.count.raw > 0) for (table.entries[0..]) |ent| {
+                    if (ent.isNull()) continue;
+                    if (ent.isTable()) {
+                        deinitTable(ent.ptr(RadixTree.Table));
+                    } else {
+                        const block = ent.ptr(Block);
+
+                        if (block.ref_count.count() == 0) lru_list.remove(&block.lru_node);
+                        block.free();
+                    }
+                };
+
+                table.free();
+            }
+        };
+
+        if (self.tree.root) |table| Helper.deinitTable(table);
+    }
+
+    pub fn getOrNull(self: *Control, index: u32) ?*Block {
+        const block, const users = blk: {
+            const gen = self.rcu.readLock();
+            defer self.rcu.readUnlock(gen);
+
+            const block = self.tree.lookup(index) orelse return null;
+            break :blk .{block, block.ref_count.value.fetchAdd(1, .release)};
+        };
+
+        if (users == 0) {
+            block.lock.lock();
+            defer block.lock.unlock();
+
+            lru_list.remove(&block.lru_node);
+        }
+
+        return block;
+    }
+
+    pub fn getNoRef(self: *Control, index: u32) error{NoEnt}!*Block {
+        const gen = self.rcu.readLock();
+        defer self.rcu.readUnlock(gen);
+
+        const block = self.tree.lookup(index) orelse return error.NoEnt;
+        return block;
+    }
+
+    pub fn insert(self: *Control, block: *Block) !?*Block {
+        self.rcu.writeLock();
+        defer self.rcu.writeUnlock();
+
+        return try self.tree.insert(block.index, block) orelse {
+            self.rcu.updateSync();
+            return null;
+        };
+    }
+
+    pub fn insertOrFree(self: *Control, block: *Block) !?*Block {
+        const other = try self.insert(block) orelse return null;
+
+        block.free();
+        return other;
+    }
+
+    pub fn remove(self: *Control, block: *Block) void {
+        self.rcu.writeLock();
+        defer self.rcu.writeUnlock();
+
+        const removed = self.tree.remove(block.index);
+        std.debug.assert(block == removed);
+
+        self.rcu.updateSync();
+    }
 
     pub fn writeBack(self: *Control, block: *Block) bool {
         if (self.write_back == null) return true;
 
+        block.readDown();
+        defer block.readUp();
+
         if (block.dirty_map.mask == 0) return true;
-        if (block.lock_map.mask != 0) return false;
 
-        {
-            block.rw_sem.writeLock();
-            defer block.rw_sem.writeUnlock();
+        return self.writeBackRaw(block);
+    }
 
-            block.rw_sem.lock.lock();
-            defer block.rw_sem.lock.unlock();
+    pub fn writeBackAll(self: *Control) bool {
+        if (self.write_back == null) return true;
 
-            if (block.lock_map.mask != 0) return false;
-            if (block.dirty_map.mask == 0) return true;
-            block.lock_map.mask = block.dirty_map.mask;
+        while (self.dirty_list.popFirst()) |n| {
+            const block = Block.fromNode(n);
+            block.takeFromDirtyList();
+
+            if (!self.writeBack(block)) return false;
         }
 
-        const result = self.writeBackRaw();
-        const writer_waiting = blk: {
-            block.rw_sem.lock.lock();
-            defer block.rw_sem.lock.unlock();
-
-            block.lock_map.mask = 0;
-            break :blk block.rw_sem.writing;
-        };
-
-        if (writer_waiting) sched.awakeAll(&block.rw_sem.wait_queue);
-        return result;
+        return true;
     }
 
     fn writeBackRaw(self: *Control, block: *Block) bool {
@@ -313,8 +370,8 @@ pub const Control = struct {
                 top_idx +%= 1;
             } else {
                 if (top_idx != 0) quants.addOneAssumeCapacity().* = .{
-                    .base = base_idx << quant_shift,
-                    .top = top_idx << quant_shift
+                    .base = @intCast(base_idx << quant_shift),
+                    .top = @intCast(top_idx << quant_shift)
                 };
 
                 base_idx = i;
@@ -323,61 +380,32 @@ pub const Control = struct {
         }
 
         if (top_idx != 0) quants.addOneAssumeCapacity().* = .{
-            .base = base_idx << quant_shift,
-            .top = top_idx << quant_shift
+            .base = @intCast(base_idx << quant_shift),
+            .top = @intCast(top_idx << quant_shift)
         };
 
         return self.write_back.?(block, quants.items, quant_shift);
     }
 };
 
-var block_oma: vm.ObjectAllocator = undefined;
-var block_table: Table = .{};
+var block_oma: vm.ObjectAllocator = .initCapacity(@sizeOf(Block), 128);
 var lru_list: LruList = .{};
 
 pub fn init() !void {
     const assumed_pages = vm.PageAllocator.getTotalPages() - vm.PageAllocator.getAllocatedPages();
     const max_blocks = std.math.divCeil(usize, assumed_pages, comptime Block.Size.small.toPages()) catch unreachable;
     const oma_size = max_blocks * @sizeOf(Block);
-    const table_size = max_blocks * @sizeOf(Table.EntryList);
 
-    const oma_raw_pages = blk: {
-        const temp = std.math.divCeil(usize, oma_size, vm.page_size) catch unreachable;
-        break :blk @min(vm.PageAllocator.max_alloc_pages, temp);
-    };
-    const table_raw_pages = blk: {
-        const temp = std.math.divCeil(usize, table_size, vm.page_size) catch unreachable;
-        break :blk if (temp > vm.PageAllocator.max_alloc_pages) {
-            log.warn(
-                "Table size must be {} MB, but the PageAllocator is limited to {} MB",
-                .{temp * vm.page_size / lib.mb_size, vm.PageAllocator.max_alloc_pages * vm.page_size / lib.mb_size}
-            );
-            break :blk vm.PageAllocator.max_alloc_pages;
-        } else temp;
-    };
-
-    const table_rank = vm.pagesToRank(@intCast(table_raw_pages));
-    const oma_rank = vm.pagesToRankExact(@intCast(oma_raw_pages));
-
-    const table_phys = vm.PageAllocator.alloc(table_rank) orelse return error.CacheNoMemory;
-    errdefer vm.PageAllocator.free(table_phys, table_rank);
+    const oma_raw_pages = @min(vm.PageAllocator.max_alloc_pages, vm.bytesToPages(oma_size));
+    const oma_rank = vm.pagesToRankExact(oma_raw_pages);
 
     const oma_phys = vm.PageAllocator.alloc(oma_rank) orelse return error.CacheNoMemory;
     errdefer vm.PageAllocator.free(oma_phys, oma_rank);
 
     block_oma = try .initRaw(@sizeOf(Block), oma_phys, @intCast(vm.rankToPages(oma_rank)));
-
-    const real_table_size = vm.rankToBytes(table_rank) / @sizeOf(Table.EntryList);
-    block_table = .init(table_phys, real_table_size);
 }
 
 pub fn deinit() void {
-    const table_size = block_table.entries.len * @sizeOf(Table.EntryList);
-    const table_pages = std.math.divCeil(usize, table_size, vm.page_size) catch unreachable;
-    const table_rank = std.math.log2_int_ceil(u32, @truncate(table_pages));
-    const table_phys = vm.getPhysLma(block_table.entries.ptr);
-
-    vm.PageAllocator.free(table_phys, table_rank);
     block_oma.deinit();
 }
 
@@ -411,50 +439,53 @@ pub fn createBlock(ctrl: *Control, index: usize, size: Block.Size) !*Block {
     return block;
 }
 
-pub fn insertBlockOrFree(block: *Block) ?*Block {
-    const other = block_table.putOrGet(block) orelse return null;
-
-    block.free();
-    return other;
-}
-
-pub fn getOrNull(ctrl: *Control, index: usize) ?*Block {
-    return block_table.getOrNull(ctrl, index);
-}
-
-pub fn getNoRef(ctrl: *Control, index: usize) error{NoEnt}!*Block {
-    const block = block_table.getOrNull(ctrl, index) orelse return error.NoEnt;
-    block.ref_count.dec();
-
-    return block;
-}
+//pub fn insertBlockOrFree(block: *Block) ?*Block {
+//    const other = block_table.putOrGet(block) orelse return null;
+//
+//    block.free();
+//    return other;
+//}
+//
+//pub fn getOrNull(ctrl: *Control, index: usize) ?*Block {
+//    return block_table.getOrNull(ctrl, index);
+//}
+//
+//pub fn getNoRef(ctrl: *Control, index: usize) error{NoEnt}!*Block {
+//    const block = block_table.getOrNull(ctrl, index) orelse return error.NoEnt;
+//    block.ref_count.dec();
+//
+//    return block;
+//}
 
 pub fn cleanup(pages: u32) bool {
-    var freed: u32 = 0;
-    while (freed < pages) {
-        const block = blk: {
-            const gen = lru_list.ctrl.readLock();
-            defer lru_list.ctrl.readUnlock(gen);
+    _ = pages;
+    return false;
 
-            const node = lru_list.last.load(.acquire) orelse return false;
-            const block = Block.fromLruNode(node);
-
-            break :blk if (block.lruGet()) block else continue;
-        };
-
-        lru_list.remove(&block.lru_node);
-        if (block.writeBack()) {
-            if (!block.lruTake()) continue;
-
-            freed +%= block.size.toPages();
-            removeBlock(block);
-        }
-    }
-
-    return freed >= pages;
+    //    var freed: u32 = 0;
+    //    while (freed < pages) {
+    //        const block = blk: {
+    //            const gen = lru_list.ctrl.readLock();
+    //            defer lru_list.ctrl.readUnlock(gen);
+    //
+    //            const node = lru_list.last.load(.acquire) orelse return false;
+    //            const block = Block.fromLruNode(node);
+    //
+    //            break :blk if (block.lruGet()) block else continue;
+    //        };
+    //
+    //        lru_list.remove(&block.lru_node);
+    //        if (block.writeBack()) {
+    //            if (!block.lruTake()) continue;
+    //
+    //            freed +%= block.size.toPages();
+    //            removeBlock(block);
+    //        }
+    //    }
+    //
+    //    return freed >= pages;
 }
 
-inline fn removeBlock(block: *Block) void {
-    block_table.remove(block);
-    block.free();
-}
+//inline fn removeBlock(block: *Block) void {
+//    block_table.remove(block);
+//    block.free();
+//}

@@ -9,9 +9,16 @@ const File = @This();
 const Dentry = vfs.Dentry;
 const Error = vfs.Error;
 const lib = @import("../lib.zig");
+const Pipe = vfs.Pipe;
 const sys = @import("../sys.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
+
+pub const Type = enum(u8) {
+    file   = 0,
+    pipe   = 1,
+    socket = 2
+};
 
 pub const Operations = struct {
     const default = vfs.internals.file.default;
@@ -20,11 +27,48 @@ pub const Operations = struct {
     pub const WriteFn = *const fn(*File, usize, []const u8) Error!usize;
     pub const MmapPrepareFn = *const fn(*const File, *sys.AddressSpace.MapUnit) Error!void;
     pub const IoctlFn = *const fn(*File, c_uint, usize) Error!void;
+    pub const PollFn = *const fn(*File) Error!Poll;
 
     read: ReadFn = &default.read,
     write: WriteFn = &default.write,
     ioctl: IoctlFn = &default.ioctl,
     mmapPrepare: MmapPrepareFn = &default.mmapPrepare,
+    poll: PollFn = &default.poll,
+};
+
+pub const Poll = packed struct {
+    read_avail: bool = false,
+    read_prior: bool = false,
+    read_urgent: bool = false,
+    may_write: bool = false,
+    may_write_prior: bool = false,
+    hung_up: bool = false,
+    hung_up_read: bool = false,
+
+    pub fn fromLinux(in: i16) Poll {
+        const POLL = std.os.linux.POLL;
+        return .{
+            .read_avail = (in & POLL.IN) != 0,
+            .read_prior = (in & POLL.RDBAND) != 0,
+            .read_urgent = (in & POLL.PRI) != 0,
+            .may_write = (in & POLL.OUT) != 0,
+            .may_write_prior = (in & 0x200) != 0,
+        };
+    }
+
+    pub fn toLinux(self: Poll) i16 {
+        const POLL = std.os.linux.POLL;
+        var result: i16 = 0;
+        if (self.read_avail)      result |= POLL.IN | POLL.RDNORM;
+        if (self.read_prior)      result |= POLL.IN | POLL.RDBAND;
+        if (self.read_urgent)     result |= POLL.IN | POLL.PRI;
+        if (self.may_write)       result |= POLL.OUT | 0x100;
+        if (self.may_write_prior) result |= POLL.OUT | 0x200;
+        if (self.hung_up)         result |= POLL.HUP;
+        if (self.hung_up_read)    result |= POLL.HUP | 0x2000;
+
+        return result;
+    }
 };
 
 pub const alloc_config: vm.auto.Config = .{
@@ -34,8 +78,13 @@ pub const alloc_config: vm.auto.Config = .{
 
 dentry: *Dentry,
 ops: *const Operations = &Operations.default.ops,
+data: lib.AnyData = .{},
+
 ref_count: lib.atomic.RefCount(u32) = .init(0),
 perm: vfs.Permissions = .none,
+type: Type = .file,
+
+// TODO: Make `offset` atomic/thread-safe access
 offset: usize = 0,
 
 pub inline fn get(self: *File) bool {
@@ -50,8 +99,15 @@ pub inline fn ref(self: *File) void {
     self.ref_count.inc();
 }
 
-pub inline fn deref(self: *File) void {
-    if (self.ref_count.put()) self.dentry.onClose(self);
+pub fn deref(self: *File) void {
+    if (self.ref_count.put()) switch (self.type) {
+        .file => self.dentry.onClose(self),
+        .pipe => {
+            const pipe = self.data.asPtr(Pipe).?;
+            if (self.perm == .w) pipe.deref(.writer) else pipe.deref(.reader);
+        },
+        .socket => std.log.err("vfs.File: close not implemented for socket object", .{}),
+    };
 }
 
 pub inline fn validateAccess(self: *const File, access: vfs.Permissions) Error!void {
@@ -100,4 +156,8 @@ pub inline fn mmapPrepare(self: *File, map_unit: *sys.AddressSpace.MapUnit) Erro
 
 pub inline fn ioctl(self: *File, cmd: c_uint, arg: usize) Error!void {
     return self.ops.ioctl(self, cmd, arg);
+}
+
+pub inline fn poll(self: *File) Error!Poll {
+    return self.ops.poll(self);
 }
