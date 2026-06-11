@@ -7,15 +7,18 @@
     .minimum_zig_version = "0.15.2",
 
     .dependencies = .{
-        .bootboot_bin = .{
-            .url = "git+https://gitlab.com/bztsrc/bootboot#binaries",
-            .hash = "N-V-__8AAA4RqgAEiQ7oQTlMBFe4ajBVxQj39MUUnuAl7QZ4",
-            .lazy = true,
+        .bootboot = .{
+            .url = "git+https://gitlab.com/bztsrc/bootboot#master",
+            .hash = "N-V-__8AAAnKOwEY4U8zBiemBdjIF8kVf-iar22QV9QQMGrV",
         },
         .uacpi = .{
             .url = "git+https://github.com/uACPI/uACPI#5.0.0",
             .hash = "N-V-__8AAPJOKQCmvBm20OcVV9z7cnNcWOy4bfb9d-p-iJr9",
         },
+        .ovmf = .{
+            .url = "git+https://github.com/ilobilo/ovmf-binaries#c87d4c883735e77577ff077749a8cdbd1df1a0af",
+            .hash = "N-V-__8AAHMGHgTw-u9iQA04wneviRRVC1EGRoiaev_SShs-",
+        }
     },
 
     .paths = .{
@@ -27,6 +30,6 @@
         "README.md",
         "screenshot.png",
         "src",
-        "third_party"
+        "tools",
     },
 }

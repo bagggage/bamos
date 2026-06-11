@@ -8,6 +8,9 @@ const src_dir = "src";
 const qemu_cores_default = 4;
 const qemu_ram_default = "128M";
 
+// Global dependencies
+var bootboot: *std.Build.Dependency = undefined;
+
 // Build tools
 var dbg_make_exe: *std.Build.Step.Compile = undefined;
 var tar_exe: *std.Build.Step.Compile = undefined;
@@ -20,6 +23,8 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Generate documentation");
 
     const arch = b.option(std.Target.Cpu.Arch, "arch", "The target CPU architecture") orelse .x86_64;
+
+    bootboot = b.dependency("bootboot", .{}); 
 
     makeTools(b);
 
@@ -60,7 +65,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     });
 
     const dbg_module = b.createModule(.{
-        .root_source_file = b.path("build-tools/dbg-make/dbg.zig"),
+        .root_source_file = b.path("tools/dbg-make/dbg.zig"),
         .target = target,
         .optimize = optimize,
         .strip = true,
@@ -86,7 +91,7 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
 
     kernel_obj.root_module.addImport("dbg-info", dbg_module);
     kernel_obj.addIncludePath(uacpi.path("include"));
-    kernel_obj.addIncludePath(b.path("third-party/boot"));
+    kernel_obj.addIncludePath(bootboot.path("dist"));
 
     const zon = @import("build.zig.zon");
     const kernel_opts = b.addOptions();
@@ -296,8 +301,10 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     });
 
     if (no_uefi == false) {
+        const ovmf = b.dependency("ovmf", .{});
+
         qemu_run.addArg("-bios");
-        qemu_run.addFileArg(b.path("third-party/uefi/OVMF-efi.fd"));
+        qemu_run.addFileArg(ovmf.path("OVMF_X64.fd"));
     }
 
     if (enable_gdb) qemu_run.addArgs(&.{"-s"});
@@ -351,7 +358,7 @@ fn makeTools(b: *std.Build) void {
     dbg_make_exe = b.addExecutable(.{
         .name = "dbg-make",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("build-tools/dbg-make/main.zig"),
+            .root_source_file = b.path("tools/dbg-make/main.zig"),
             .target = b.graph.host,
             .optimize = .ReleaseFast,
             .strip = true
@@ -360,7 +367,7 @@ fn makeTools(b: *std.Build) void {
     tar_exe = b.addExecutable(.{
         .name = "tar",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("build-tools/tar/main.zig"),
+            .root_source_file = b.path("tools/tar/main.zig"),
             .target = b.graph.host,
             .optimize = .ReleaseFast,
             .strip = true
@@ -369,7 +376,7 @@ fn makeTools(b: *std.Build) void {
     zip_exe = b.addExecutable(.{
         .name = "zip",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("build-tools/zip/main.zig"),
+            .root_source_file = b.path("tools/zip/main.zig"),
             .target = b.graph.host,
             .optimize = .ReleaseFast,
             .strip = true
@@ -398,9 +405,6 @@ fn makeTimestamp(b: *std.Build, is_release: bool) []const u8 {
 }
 
 fn getMkbootimg(b: *std.Build, step: *std.Build.Step) !std.Build.LazyPath {
-    const bootboot_git =
-        b.lazyDependency("bootboot_bin", .{}) orelse return error.MkbootimgNotFetched;
-
     const mkbootimg_zip_name = comptime switch (builtin.os.tag) {
         .linux => "mkbootimg-Linux.zip",
         .macos => "mkbootimg-MacOSX.zip",
@@ -408,7 +412,7 @@ fn getMkbootimg(b: *std.Build, step: *std.Build.Step) !std.Build.LazyPath {
         else => @compileError("'mkbootimg' is not precompiled for your OS, please make issue on GitHub to fix it")
     };
     const mkbootimg_name = comptime if (builtin.os.tag == .windows) "mkbootimg.exe" else "mkbootimg";
-    const mkbootimg_zip_path = bootboot_git.path(mkbootimg_zip_name);
+    const mkbootimg_zip_path = bootboot.path(mkbootimg_zip_name);
 
     const mkbootimg_dst = unzip(b, step, mkbootimg_zip_path, "mkbootimg");
     return mkbootimg_dst.path(b, mkbootimg_name);
