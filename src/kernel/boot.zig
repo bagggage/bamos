@@ -357,7 +357,7 @@ fn initMemMap() void {
 
     // Some firmware may return entries not aligned to page size
     const min_align = comptime @min(vm.page_size, 1024);
-    while (i < mem_map.len) : (i += 1) {
+    outer: while (i < mem_map.len) : (i += 1) {
         const boot_ent = &boot_ents[i];
         const ent = &mem_map.entries[j];
 
@@ -393,6 +393,14 @@ fn initMemMap() void {
 
             pages = vm.max_phys_pages - base;
         }
+
+        // Check for duplication
+        for (mem_map.entries[0..j]) |*dup| if (base == dup.base) {
+            if (dup.type == .free) dup.pages = @min(pages, dup.pages);
+            invalid_ents += 1;
+
+            continue :outer;
+        };
 
         ent.base = base;
         ent.pages = pages;
