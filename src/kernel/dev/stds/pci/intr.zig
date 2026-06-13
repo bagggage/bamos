@@ -12,8 +12,8 @@ const log = std.log.scoped(.@"pci.intr");
 const vm = @import("../../../vm.zig");
 
 const Msi = struct {
-    pub const Msi32Ref = config.ConfigSpaceGroup.Ref(config.Capability.Msi.x32);
-    pub const Msi64Ref = config.ConfigSpaceGroup.Ref(config.Capability.Msi.x64);
+    pub const Msi32Ref = config.ConfigSpace.Group.Ref(config.Capability.Msi.x32);
+    pub const Msi64Ref = config.ConfigSpace.Group.Ref(config.Capability.Msi.x64);
     pub const MessageControl = config.Capability.Msi.MessageControl;
 
     ref: union {
@@ -96,7 +96,7 @@ const Msi = struct {
 };
 
 const MsiX = struct {
-    pub const MsiXRef = config.ConfigSpaceGroup.Ref(config.Capability.MsiX);
+    pub const MsiXRef = config.ConfigSpace.Group.Ref(config.Capability.MsiX);
     pub const MessageControl = config.Capability.MsiX.MessageControl;
 
     const VectorEntry = extern struct {
@@ -113,7 +113,7 @@ const MsiX = struct {
 
     msis: []u8,
 
-    pub fn init(cfg: config.ConfigSpace, cap_offset: u16) MsiX {
+    pub fn init(cfg: config.ConfigSpace, cap_offset: u16) Error!MsiX {
         const ref = cfg.internal.referenceAt(config.Capability.MsiX, cap_offset);
         const vec_offset = ref.read(.table_offset);
         const pba_offset = ref.read(.pba_offset);
@@ -121,8 +121,9 @@ const MsiX = struct {
         const vec_bar: u3 = @truncate(vec_offset);
         const pba_bar: u3 = @truncate(pba_offset);
 
-        const vec_table = vm.getVirtLma(cfg.readBar(vec_bar) + (vec_offset & 0xFFFF_FFF8));
-        const pba_table = vm.getVirtLma(cfg.readBar(pba_bar) + (pba_offset & 0xFFFF_FFF8));
+        const vec_table = vm.mmio(cfg.readBar(vec_bar).base + (vec_offset & 0xFFFF_FFF8), 1) catch return error.NoMemory;
+        errdefer vm.unmmio(vec_table, 1);
+        const pba_table = vm.mmio(cfg.readBar(pba_bar).base + (pba_offset & 0xFFFF_FFF8), 1) catch return error.NoMemory;
 
         return .{
             .msis = undefined,
@@ -140,6 +141,9 @@ const MsiX = struct {
 
             self.maskIdx(@truncate(i), true);
         }
+
+        vm.unmmio(@intFromPtr(self.vec_table), 1);
+        vm.unmmio(@intFromPtr(self.pba_table), 1);
 
         vm.gpa.free(@ptrCast(self.msis.ptr));
     }
@@ -160,7 +164,6 @@ const MsiX = struct {
 
     pub fn alloc(self: *MsiX, num: u8) Error!void {
         std.debug.assert(num > 0 and num <= self.getMax());
-
         const msis= @as([*]u8, @ptrCast(vm.gpa.alloc(@sizeOf(u8) * num) orelse return error.NoMemory))[0..num];
 
         for (0..num) |i| { msis[i] = 0xFF; }
@@ -272,7 +275,7 @@ pub const Control = struct {
         var num: u8 = 0;
 
         if (types.msi_x and self.meta.isMsiXAvail()) {
-            var msi_x = MsiX.init(cfg, self.meta.msi_x_offset);
+            var msi_x = try MsiX.init(cfg, self.meta.msi_x_offset);
 
             if (min > msi_x.getMax()) return Error.TooLittleIntr;
 

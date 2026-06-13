@@ -375,6 +375,36 @@ pub const Regs = struct {
 
         rsrvd_1: u5
     };
+
+    pub const Bar32 = packed struct(u32) {
+        type: Bar.Type,
+        data: packed union {
+            mmio: packed struct(u31) {
+                type: enum(u2) { @"32bit" = 0, @"64bit" = 2, _ },
+                prefetch: bool,
+                address: u28,
+
+                pub inline fn getBase(self: @This()) u32 {
+                    return @as(u32, self.address) << 4;
+                }
+            },
+            pio: packed struct(u31) {
+                rsvd: u1,
+                address: u30,
+
+                pub inline fn getBase(self: @This()) u32 {
+                    return @as(u32, self.address) << 2;
+                }
+            },
+        },
+
+        pub inline fn base(self: Bar32) u32 {
+            return if (self.type == .mmio)
+                    self.data.mmio.getBase()
+                else
+                    self.data.pio.getBase();
+        }
+    };
 };
 
 pub const Capability = struct {
@@ -494,11 +524,15 @@ pub const Capability = struct {
     } 
 };
 
-const ConfigSpaceLayout = extern union {
-    common: CommonHeader,
-    device: DeviceConfig,
-    device64: DeviceConfig64,
-    p2p:    Pci2PciConfig,
+pub const Bar = struct {
+    pub const Type = enum(u1) { mmio = 0, pio = 1 };
+
+    type: Type,
+    is_64: bool = false,
+    prefetch: bool = false,
+
+    base: u64,
+    size: u32,
 };
 
 const Fields = enum {
@@ -572,7 +606,7 @@ const Fields = enum {
 
 fn FieldMember(comptime field: Fields) type {
     const field_name = @tagName(field);
-    const info = @typeInfo(ConfigSpaceLayout);
+    const info = @typeInfo(ConfigSpace.Layout);
 
     for (info.@"union".fields) |member| {
         if (@hasField(member.type, field_name)) {
@@ -585,7 +619,6 @@ fn FieldMember(comptime field: Fields) type {
 
 fn FieldType(comptime field: Fields) type {
     const field_name = @tagName(field);
-
     if (comptime std.mem.endsWith(u8, field_name, "_64")) {
         return u64;
     }
@@ -601,23 +634,37 @@ const ConfigIoMechanism = io.Mechanism(
     usize, u32,
     read,
     write,
-    null
+    null,
+    null,
 );
 
 fn ConfigRegsFrom(comptime T: type) type {
     return regs.Group(ConfigIoMechanism, null, null, regs.from(T));
 }
 
-pub const ConfigSpaceGroup = regs.Group(
-    ConfigIoMechanism, null, null,
-    regs.from(ConfigSpaceLayout)
-);
-
 pub const ConfigSpace = struct {
-    internal: ConfigSpaceGroup,
+    pub const Group = regs.Group(
+        ConfigIoMechanism,
+        null,
+        null,
+        regs.from(Layout),
+    );
+
+    const Layout = extern union {
+        common: CommonHeader,
+        device: DeviceConfig,
+        device64: DeviceConfig64,
+        p2p: Pci2PciConfig,
+    };
+
+    internal: Group,
 
     pub inline fn init(seg: u16, bus: u8, dev: u8, func: u8) ConfigSpace {
-        return .{ .internal = ConfigSpaceGroup.initBase(cfg_io.getBase(seg, bus, dev, func)) catch unreachable };
+        return .{
+            .internal = Group.initBase(
+                cfg_io.getBase(seg, bus, dev, func),
+            ) catch unreachable,
+        };
     }
 
     pub inline fn read(self: *const ConfigSpace, offset: usize) u32 {
@@ -652,18 +699,33 @@ pub const ConfigSpace = struct {
         return Capability.init(self.internal.dyn_base, cap_ptr);
     }
 
-    pub fn readBar(self: *const ConfigSpace, bar_idx: u3) usize {
-        const base = @offsetOf(DeviceConfig, "bar0") + (@as(usize, bar_idx) * @sizeOf(u32));
-        const bar_l = self.read(base);
+    pub fn readBar(self: *const ConfigSpace, bar_idx: u3) Bar {
+        const bar_base = @offsetOf(DeviceConfig, "bar0") + (@as(usize, bar_idx) * @sizeOf(u32));
+        const bar32: Regs.Bar32 = @bitCast(self.read(bar_base));
 
-        // Is 64-bit ?
-        if ((bar_l & 0x7) == 0b100) {
-            const bar_h = self.read(base + @sizeOf(u32));
-            return (@as(u64, bar_h) << @bitSizeOf(u32)) | (bar_l & 0xFFFF_FFF0);
-        }
-        else {
-            return bar_l & 0xFFFF_FFFC;
-        }
+        const size = blk: {
+            self.write(bar_base, 0xFFFF_FFFF);
+            defer self.write(bar_base, @bitCast(bar32));
+
+            const value: Regs.Bar32 = @bitCast(self.read(bar_base));
+            break :blk (~value.base()) +% 1;
+        };
+
+        return switch (bar32.type) {
+            .mmio => .{
+                .type = .mmio,
+                .is_64 = bar32.data.mmio.type == .@"64bit",
+                .prefetch = bar32.data.mmio.prefetch,
+
+                // Prevent size overflow for 64-bit addresses
+                .size = if (size == 0) std.math.maxInt(u32) else size,
+                .base = if (bar32.data.mmio.type == .@"64bit") blk: {
+                    const bar_hi: u64 = self.read(bar_base + @sizeOf(u32));
+                    break :blk (bar_hi << @bitSizeOf(u32)) | bar32.data.mmio.getBase();
+                } else bar32.data.mmio.getBase(),
+            },
+            .pio => .{ .type = .pio, .size = size, .base = bar32.data.pio.getBase() },
+        };
     }
 };
 

@@ -180,19 +180,13 @@ pub inline fn translateVirtToPhys(virt: usize) ?usize {
 pub inline fn mmio(phys: usize, pages: u32) Error!usize {
     std.debug.assert(pages > 0);
 
-    const virt = blk: {
-        heap_lock.lock();
-        defer heap_lock.unlock();
-
-        break :blk heap.reserve(pages);
-    };
-
+    const virt = heapReserve(pages);
     try root_pt.map(
         virt, phys, pages,
-        .{ .write = true, .global = true, .cache_disable = true },
+        .{ .write = true, .global = true, .cache = .uncached },
     );
 
-    return virt;
+    return virt | (phys & (page_size -% 1));
 }
 
 /// Unmaps a previously mapped MMIO (Memory-Mapped I/O) region.
