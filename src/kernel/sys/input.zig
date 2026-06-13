@@ -32,7 +32,7 @@ pub fn registerDevice(device: *Input) Error!void {
         handler.handles.prepend(&handle.node);
     }
 
-    log.debug("{s}({s}) registered", .{device.device.name.str(), device.dev_file.name.str()});
+    log.debug("{s} registered", .{device.dev_file.name.str()});
 }
 
 pub fn unregisterDevice(device: *Input) void {
@@ -46,7 +46,7 @@ pub fn unregisterDevice(device: *Input) void {
         vm.auto.free(Input.Event.Handle, handle);
     }
 
-    log.debug("{s}({s}) unregistered", .{device.device.name.str(), device.dev_file.name.str()});
+    log.debug("{s} unregistered", .{device.dev_file.name.str()});
 }
 
 pub fn registerHandler(kind: Input.Kind, handler: *Input.Event.Handler) Error!void {
