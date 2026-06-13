@@ -37,8 +37,7 @@ pub const PageTable = struct {
         size: u1 = 0,
         global: u1 = 0,
         _ignored: u3 = 0,
-        base: u28 = 0,
-        _rsrvd: u12 = 0,
+        base: u40 = 0,
         _ignored2: u11 = 0,
         exec_disabled: u1 = 0,
 
