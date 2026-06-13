@@ -41,6 +41,8 @@ const InitSource = struct {
 };
 
 pub fn init() !void {
+    if (true) return;
+
     startInit() catch |err| {
         if (err == error.InitNotFound) @panic("Init executable not found.");
         return err;

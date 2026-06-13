@@ -169,7 +169,9 @@ pub fn init() !void {
 
 pub fn initWorker() !void {
     const worker = try sched.Task.createWorker("logger", &flushWorker, .{});
-    sched.enqueue(worker);
+
+    const target_cpu = smp.getNum() / 2;
+    sched.getScheduler(target_cpu).enqueueTask(worker);
 
     stage = .normal;
 }
@@ -362,7 +364,7 @@ fn flushWorker(_: usize) noreturn {
             flushBuffer(writer.buffered());
         }
 
-        waitMessage();
+        sched.yield();
     }
 }
 

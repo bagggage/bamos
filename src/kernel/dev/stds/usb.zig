@@ -13,8 +13,13 @@ const log = std.log.scoped(.usb);
 const vm = @import("../../vm.zig");
 const xhci = @import("../drivers/usb/xhci.zig");
 
-pub const Error = vm.Error || error {
+pub const max_interfaces = 32;
+pub const cmd_timeout_ns = std.time.ns_per_s;
+
+pub const Error = vm.Error || error{
+    InvalidArgs,
     IoFailed,
+    Timeout,
 };
 
 /// USB Device identification structure for driver matching.
@@ -24,7 +29,7 @@ pub const Id = struct {
     vendor_id: u16 = any,
     product_id: u16 = any,
 
-    mask: packed struct (u8) {
+    mask: packed struct(u8) {
         class: bool = false,
         subclass: bool = false,
         protocol: bool = false,
@@ -35,11 +40,11 @@ pub const Id = struct {
         _reserved: bool = false,
     },
 
-    class: Class = 0,
+    class: Class = .interface,
     subclass: u8 = 0,
     protocol: u8 = 0,
 
-    if_class: Class = 0,
+    if_class: Class = .interface,
     if_subclass: u8 = 0,
     if_protocol: u8 = 0,
     if_number: u8 = 0,
@@ -80,13 +85,13 @@ pub const Class = enum(u8) {
 
 /// USB device operating speed
 pub const Speed = enum(u4) {
-    unknown    = 0,
-    full       = 1, // 12 Mb/s (USB 1.1)
-    low        = 2, // 1.5 Mb/s (USB 1.0)
-    high       = 3, // 480 Mb/s (USB 2.0)
-    super      = 4, // 5 Gb/s (USB 3.0)
+    unknown = 0,
+    full = 1, // 12 Mb/s (USB 1.1)
+    low = 2, // 1.5 Mb/s (USB 1.0)
+    high = 3, // 480 Mb/s (USB 2.0)
+    super = 4, // 5 Gb/s (USB 3.0)
     super_plus = 5, // 10 Gb/s (USB 3.1+)
-    _
+    _,
 };
 
 /// USB endpoint transfer type
@@ -148,12 +153,23 @@ pub const Descriptor = opaque {
         device_capability = 16,
         hid = 33,
         superspeed_usb_endpoint_companion = 48,
-        _
+        _,
     };
 
     pub const Header = extern struct {
         length: u8,
-        @"type": Type,
+        type: Type,
+
+        pub inline fn next(self: *const Header) *Header {
+            return @ptrFromInt(@intFromPtr(self) + self.length);
+        }
+
+        pub fn iterateTo(self: *const Header, idx: u8) *Header {
+            var temp = self;
+            for (0..idx) |_| temp = temp.next();
+
+            return temp;
+        }
     };
 
     pub const Device = extern struct {
@@ -161,9 +177,9 @@ pub const Descriptor = opaque {
         pub const Payload = extern struct {
             usb_version: BCD.Version,
 
-            device_class: Class,
-            device_subclass: u8,
-            device_protocol: u8,
+            class: Class,
+            subclass: u8,
+            protocol: u8,
             max_packet_size: u8,
 
             vendor_id: u16,
@@ -180,9 +196,9 @@ pub const Descriptor = opaque {
         header: Header,
         usb_version: BCD.Version,
 
-        device_class: Class,
-        device_subclass: u8,
-        device_protocol: u8,
+        class: Class,
+        subclass: u8,
+        protocol: u8,
         max_packet_size: u8,
 
         vendor_id: u16,
@@ -202,19 +218,20 @@ pub const Descriptor = opaque {
 
     pub const Configuration = extern struct {
         pub const Payload = extern struct {
+            total_length: u16 align(1) = 0,
             num_interfaces: u8 = 0,
-            configuration_value: u8 = 0,
-            configuration_str: u8 = 0,
+            value: u8 = 0,
+            string: u8 = 0,
             attributes: u8 = 0,
             max_power: u8 = 0,
         };
 
         header: Descriptor.Header,
         /// Total length of this configuration (including all descriptors)
-        total_length: u16,
+        total_length: u16 align(1),
         num_interfaces: u8,
-        configuration_value: u8,
-        configuration_str: u8,
+        value: u8,
+        string: u8,
         attributes: u8,
         /// Maximum power consumption (in 2mA units)
         max_power: u8,
@@ -223,46 +240,81 @@ pub const Descriptor = opaque {
     pub const Interface = extern struct {
         /// Content of descriptor without header
         pub const Payload = extern struct {
-            interface_number: u8,
+            number: u8,
             alternate_setting: u8,
             num_endpoints: u8,
 
-            interface_class: Class,
-            interface_subclass: u8,
-            interface_protocol: u8,
-            interface_str: u8,
+            class: Class,
+            subclass: u8,
+            protocol: u8,
+            string: u8,
         };
 
         header: Descriptor.Header,
-        interface_number: u8,
+        number: u8,
         alternate_setting: u8,
         num_endpoints: u8,
 
-        interface_class: Class,
-        interface_subclass: u8,
-        interface_protocol: u8,
-        interface_str: u8,
+        class: Class,
+        subclass: u8,
+        protocol: u8,
+        string: u8,
     };
 
     pub const Endpoint = extern struct {
-        header: Descriptor.Header,
-        address: u8,
-        attributes: u8,
-        max_packet_size: u16,
-        interval: u8,
-    
-        /// Get the transfer type from attributes
-        pub inline fn transferType(self: *const Endpoint) TransferType {
-            return @enumFromInt(@as(u2, @truncate(self.attributes)));
-        }
-    
-        /// Check if this is an IN endpoint
-        pub inline fn isIn(self: *const Endpoint) bool {
-            return (self.address & 0x80) != 0;
-        }
+        pub const Payload = extern struct {
+            address: Address = .{},
+            attributes: Attributes = .{},
+            max_packet_size: u16 align(1),
+            interval: u8 = 0,
+        };
 
-        pub inline fn number(self: *const Endpoint) u4 {
-            return @truncate(self.address & 0x0f);
+        pub const Address = packed struct(u8) {
+            number: u4 = 0,
+            rsvd: u3 = 0,
+            dir: Direction = .in,
+        };
+
+        pub const Attributes = packed struct(u8) {
+            type: TransferType = .control,
+            payload: packed union {
+                ctrl: packed struct(u6) { rsvd: u6 = 0 },
+                bulk: packed struct(u6) { rsvd: u6 = 0 },
+                iso: packed struct(u6) {
+                    rsvd0: u2 = 0,
+                    usage: enum(u2) {
+                        periodic = 0,
+                        notification = 1,
+                        rsvd0 = 2,
+                        rsvd1 = 3,
+                    },
+                    rsvd1: u2 = 0,
+                },
+                intr: packed struct(u6) {
+                    sync_type: enum(u2) { none = 0, async = 1, adaptive = 2, sync = 3 },
+                    usage_type: enum(u2) {
+                        data = 0,
+                        feedback = 1,
+                        impl_data = 2,
+                        rsvd = 3,
+                    },
+                    rsvd: u2 = 0,
+                },
+
+                comptime {
+                    std.debug.assert(@bitSizeOf(@This()) == 6);
+                }
+            } = .{ .ctrl = .{} },
+        };
+
+        header: Descriptor.Header,
+        address: Address,
+        attributes: Attributes,
+        max_packet_size: u16 align(1),
+        interval: u8,
+
+        pub inline fn asPayload(self: *const Descriptor.Endpoint) *const Payload {
+            return @ptrCast(&self.address);
         }
     };
 
@@ -280,17 +332,16 @@ pub const Descriptor = opaque {
     };
 };
 
-pub const ActiveConfig = struct {
-    config: Descriptor.Configuration,
-    interfaces: []Descriptor.Interface,
-    endpoints: []Descriptor.Endpoint,
+pub const Pipe = struct {
+    endpoint: Descriptor.Endpoint.Payload,
+    host: lib.AnyData = .{},
 };
 
 pub const Completion = struct {
     pub const List = std.SinglyLinkedList;
     pub const Node = List.Node;
 
-    pub const CallbackFn = *const fn(device: lib.AnyData, ctx: lib.AnyData, data: lib.AnyData) void;
+    pub const CallbackFn = *const fn (device: lib.AnyData, ctx: lib.AnyData, data: lib.AnyData) void;
 
     pub const allo_config: vm.auto.Config = .{ .allocator = .oma };
 
@@ -313,7 +364,7 @@ pub const Device = struct {
         attached = 1,
         powered = 2,
         default = 3,
-        address = 4,
+        addressed = 4,
         configured = 5,
         suspended = 6,
     };
@@ -325,17 +376,17 @@ pub const Device = struct {
                 interface = 1,
                 endpoint = 2,
                 other = 3,
-                _
+                _,
             },
             @"type": enum(u2) {
                 standard = 0,
                 class = 1,
                 vendor = 2,
-                reserved = 3
+                reserved = 3,
             },
             dir: enum(u1) {
                 host_to_dev = 0,
-                dev_to_host = 1
+                dev_to_host = 1,
             }
         };
 
@@ -352,41 +403,177 @@ pub const Device = struct {
             set_interface = 11,
             synch_frame = 12,
             set_sel = 48,
-            set_isoch_delay = 49, 
+            set_isoch_delay = 49,
         };
 
         pub const Value = extern union {
             raw: u16,
             desc: extern struct {
                 index: u8 = 0,
-                @"type": Descriptor.Type,
+                type: Descriptor.Type,
             },
         };
 
-        @"type": Type,
+        type: Type,
         code: Code,
         value: Value,
         index: u16,
         length: u16,
+
+        pub fn initSetConfiguration(config: u8) Request {
+            return .{
+                .type = .{
+                    .@"type" = .standard,
+                    .recipient = .device,
+                    .dir = .host_to_dev,
+                },
+                .code = .set_config,
+                .value = .{ .raw = config },
+                .index = 0,
+                .length = 0,
+            };
+        }
+
+        pub fn initGetConfiguration() Request {
+            return .{
+                .type = .{
+                    .@"type" = .standard,
+                    .recipient = .device,
+                    .dir = .dev_to_host,
+                },
+                .code = .get_config,
+                .value = .{ .raw = 0 },
+                .index = 0,
+                .length = 1,
+            };
+        }
+
+        pub fn initGetDescriptor(@"type": Descriptor.Type, len: u16, index: u8) Request {
+            return .{
+                .@"type" = .{
+                    .@"type" = .standard,
+                    .recipient = .device,
+                    .dir = .dev_to_host,
+                },
+                .code = .get_descriptor,
+                .value = .{ .desc = .{
+                    .type = @"type",
+                    .index = index,
+                } },
+                .index = 0,
+                .length = len,
+            };
+        }
+    };
+
+    pub const Interface = struct {
+        desc: *const Descriptor.Interface,
+        end: usize,
+
+        pub fn getDescriptor(self: *const Interface, @"type": Descriptor.Type, index: u8) ?*const Descriptor.Header {
+            var temp = self.desc.header.next();
+            var i: u8 = 0;
+            while (@intFromPtr(temp) < self.end) : (temp = temp.next()) {
+                if (temp.type != @"type") continue;
+                if (i == index) return temp;
+
+                i += 1;
+            }
+
+            return null;
+        }
+
+        pub inline fn getDescriptorAs(
+            self: *const Interface,
+            comptime T: type,
+            @"type": Descriptor.Type,
+            index: u8,
+        ) ?*const T {
+            return @ptrCast(self.getDescriptor(@"type", index) orelse return null);
+        }
+
+        pub fn nextDesciptor(self: *const Interface, curr: *const Descriptor.Header) ?*const Descriptor.Header {
+            var temp = curr.next();
+            while (@intFromPtr(temp) < self.end) : (temp = temp.next()) {
+                if (temp.type == curr.type) return temp;
+            }
+
+            return null;
+        }
+
+        pub inline fn nextDescriptorAs(
+            self: *const Interface,
+            comptime T: type,
+            curr: *const T,
+        ) ?*const T {
+            return @ptrCast(self.nextDesciptor(&curr.header) orelse return null);
+        }
+
+        pub fn findEndpoint(self: *const Interface, @"type": TransferType, index: u8) ?*const Descriptor.Endpoint {
+            var temp = self.getDescriptorAs(Descriptor.Endpoint, .endpoint, 0) orelse return null;
+
+            var i: u8 = 0;
+            while (true) : (temp = self.nextDescriptorAs(Descriptor.Endpoint, temp) orelse return null) {
+                if (temp.attributes.type != @"type") continue;
+                if (i == index) return temp;
+
+                i += 1;
+            }
+        }
+    };
+
+    pub const Config = struct {
+        desc: *Descriptor.Configuration,
+
+        pub inline fn findDescriptor(self: Config, @"type": Descriptor.Type, index: u8) ?*const Descriptor.Header {
+            const end = @intFromPtr(self.desc) + self.desc.total_length;
+            var temp = self.desc.header.next();
+
+            var i: u8 = 0;
+            while (@intFromPtr(temp) < end) : (temp = temp.next()) {
+                if (temp.type != @"type") continue;
+                if (i == index) return temp;
+
+                i += 1;
+            }
+
+            return null;
+        }
+
+        pub fn getInterface(self: Config, index: u8) Interface {
+            const desc = self.findDescriptor(.interface, index).?;
+
+            const end = @intFromPtr(self.desc) + self.desc.total_length;
+            var temp = desc.next();
+            while (@intFromPtr(temp) < end) : (temp = temp.next()) {
+                if (temp.type == .interface) break;
+            }
+
+            return .{ .desc = @ptrCast(desc), .end = @intFromPtr(temp) };
+        }
     };
 
     pub const Operations = struct {
-        pub const GetDescriptorFn = *const fn (*Device, Descriptor.Type, u8, []u8) Error!void;
+        pub const SendRequestFn = *const fn (*Device, ?*Pipe, Request, []u8) Error!void;
+        pub const CreatePipeFn = *const fn (*Device, *const Descriptor.Endpoint.Payload) Error!Pipe;
 
-        get_descriptor: GetDescriptorFn,
+        send_request: SendRequestFn,
+        create_pipe: CreatePipeFn,
     };
 
     pub const alloc_config: vm.auto.Config = .{
         .allocator = .oma,
-        .capacity = 32
+        .capacity = 32,
     };
 
     device: dev.Device,
     address: AddressInfo,
 
-    desc: Descriptor.Device.Payload,
-    config: Descriptor.Configuration.Payload = .{},
-    interfaces: [*]Descriptor.Interface = undefined,
+    state: State = .default,
+    active_config: u8 = 0,
+
+    info: Descriptor.Device.Payload,
+    configs: [*]Config = undefined,
 
     host: lib.AnyData,
     data: lib.AnyData = .{},
@@ -400,56 +587,29 @@ pub const Device = struct {
         address: AddressInfo,
         ops: *const Operations,
     ) void {
+        self.address = address;
         self.* = .{
-            .device = .init(printName(&address), self),
-            .desc = desc,
+            .device = .init(dev.Name.print("usb-{f}", .{self}) catch unreachable, self),
+            .info = desc,
             .address = address,
             .host = host,
             .ops = ops,
         };
     }
 
-    pub inline fn deinit(self: *Device) void {
-        if (self.config.num_interfaces > 0) vm.gpa.free(self.interfaces);
-        self.config.num_interfaces = 0;
+    pub fn deinit(self: *Device) void {
+        const configs = self.getConfigs();
+        for (configs) |config| vm.gpa.free(config.desc);
+
+        if (configs.len > 0) vm.gpa.free(@ptrCast(self.configs));
     }
 
-    pub fn identify(self: *Device) Error!void {
-        var config: Descriptor.Configuration = undefined;
-        const phys = vm.translateVirtToPhys(@intFromPtr(&config)).?;
-        const virt: *Descriptor.Configuration = @ptrFromInt(vm.getVirtLma(phys));
-
-        log.debug("get descriptor", .{});
-        try self.getDescriptor(.config, 0, std.mem.asBytes(virt));
-
-        log.debug("config:\n{any}\n", .{config});
-        const buffer = vm.gpa.allocMany(u8, config.total_length) orelse return error.NoMemory;
-        defer vm.gpa.free(buffer.ptr);
-
-        try self.getDescriptor(.config, 0, buffer);
-
-        var temp = buffer;
-        while (true) {
-            const header: *Descriptor.Header = @alignCast(@ptrCast(temp.ptr));
-            //if (header.@"type" == .interface) break;
-            log.debug("{*}", .{header});
-            log.debug("{x:0>2}: len: {}", .{@intFromEnum(header.@"type"), header.length});
-
-            temp = temp[header.length..];
-            if (temp.len == 0) break;//return error.NoMemory;
+    pub fn format(self: *const Device, writer: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (self.address.hub_address == 0) {
+            try writer.print("{}.{}", .{ self.address.slot_id, self.address.port });
+        } else {
+            try writer.print("{}.{}.{}", .{ self.address.slot_id, self.address.hub_port, self.address.port });
         }
-
-        //const interface: *Descriptor.Interface = @alignCast(@ptrCast(temp.ptr));
-        //log.debug("interface:\n{any}\n", .{interface});
-    }
-
-    pub inline fn getDescriptor(
-        self: *Device,
-        @"type": Descriptor.Type,
-        index: u8,
-        buffer: []u8,
-    ) Error!void {
-        return self.ops.get_descriptor(self, @"type", index, buffer);
     }
 
     pub inline fn from(device: *dev.Device) *Device {
@@ -457,18 +617,67 @@ pub const Device = struct {
         return @fieldParentPtr("device", device);
     }
 
-    fn printName(address: *const AddressInfo) dev.Name {
-        if (address.hub_address == 0) {
-            return dev.Name.print(
-                "usb-{}.{}",
-                .{ address.slot_id, address.port },
-            ) catch unreachable;
-        } else {
-            return dev.Name.print(
-                "usb-{}.{}.{}",
-                .{ address.slot_id, address.hub_port, address.port },
-            ) catch unreachable;
+    pub inline fn sendControlRequest(self: *Device, request: Request, data: []u8) Error!void {
+        return self.ops.send_request(self, null, request, data);
+    }
+
+    pub inline fn createPipe(self: *Device, ep: *const Descriptor.Endpoint.Payload) Error!Pipe {
+        return self.ops.create_pipe(self, ep);
+    }
+
+    pub fn identify(self: *Device) Error!void {
+        var header: Descriptor.Configuration align(8) = undefined;
+        const config = getLmaPtr(Descriptor.Configuration, &header);
+
+        const num = self.info.num_configurations;
+        const configs = vm.gpa.allocMany(Config, num) orelse return error.NoMemory;
+        errdefer vm.gpa.free(configs.ptr);
+
+        var i: u8 = 0;
+        errdefer for (0..i) |_| vm.gpa.free(configs[i].desc);
+
+        while (i < num) : (i += 1) {
+            log.debug("read config descriptor: {}", .{i});
+            try self.readDescriptor(.config, i, std.mem.asBytes(config));
+
+            const buffer = vm.gpa.allocMany(u8, config.total_length) orelse return error.NoMemory;
+            errdefer vm.gpa.free(buffer.ptr);
+
+            try self.readDescriptor(.config, i, buffer);
+            configs[i].desc = @ptrCast(buffer.ptr);
         }
+
+        self.configs = configs.ptr;
+        self.state = .addressed;
+    }
+
+    pub fn setConfiguration(self: *Device, index: u8) Error!void {
+        const config = &self.configs[index];
+        try self.sendControlRequest(.initSetConfiguration(config.desc.value), &.{});
+
+        self.active_config = index;
+        self.state = .configured;
+    }
+
+    pub fn readDescriptor(
+        self: *Device,
+        @"type": Descriptor.Type,
+        index: u8,
+        buffer: []u8,
+    ) Error!void {
+        return self.sendControlRequest(
+            .initGetDescriptor(@"type", @truncate(buffer.len), index),
+            buffer,
+        );
+    }
+
+    pub inline fn activeConfig(device: *const Device) Config {
+        return device.configs[device.active_config];
+    }
+
+    pub inline fn getConfigs(device: *const Device) []const Config {
+        std.debug.assert(device.state != .default);
+        return device.configs[0..device.info.num_configurations];
     }
 };
 
@@ -481,7 +690,7 @@ pub const Driver = struct {
     pub fn init(
         comptime name: []const u8,
         comptime ops: dev.Driver.Operations,
-        comptime match_id: Id
+        comptime match_id: Id,
     ) Driver {
         return .{
             .base = dev.Driver.init(name, ops),
@@ -507,8 +716,17 @@ pub fn init() !void {
     dev.registerBus(&bus);
 
     try xhci.init();
+    try @import("../drivers/usb/hid.zig").init();
 }
 
+pub inline fn getBus() *dev.Bus {
+    return &bus;
+}
+
+/// Register a new USB device on the bus
+///
+/// This function is called by host controller drivers (like XHCI)
+/// to register newly enumerated devices.
 pub fn addDevice(
     host: lib.AnyData,
     desc: Descriptor.Device,
@@ -518,37 +736,61 @@ pub fn addDevice(
     const usb_dev = vm.auto.alloc(Device) orelse return error.NoMemory;
     errdefer vm.auto.free(Device, usb_dev);
 
-    log.debug("setup {*}", .{usb_dev});
+    log.debug("setup device: VID: 0x{x:0>4} PID: 0x{x:0>4}", .{ desc.vendor_id, desc.product_id });
     usb_dev.setup(host, desc.asPayload().*, address, ops);
 
     try usb_dev.identify();
+    //try usb_dev.setConfiguration(0);
 
     bus.addDevice(&usb_dev.device, null);
+
     return usb_dev;
 }
 
 fn match(driver: *const dev.Driver, device: *const dev.Device) bool {
-    //const usb_dev = Device.from(@constCast(device));
-    //const usb_driver = Driver.from(driver);
-    _ = driver; _ = device;
+    const usb_dev = Device.from(@constCast(device));
+    const usb_driver = Driver.from(driver);
+    const match_id = &usb_driver.match_id;
+
+    log.debug("device: class: {t}, subclass: {}, protocol: {}", .{
+        usb_dev.info.class,
+        usb_dev.info.subclass,
+        usb_dev.info.protocol,
+    });
+
+    const if_desc = usb_dev.activeConfig().getInterface(0).desc;
+    log.debug("interface: class: {t}, subclass: {}, protocol: {}", .{
+        if_desc.class,
+        if_desc.subclass,
+        if_desc.protocol,
+    });
+
+    if ((match_id.vendor_id != Id.any and
+        (match_id.vendor_id != usb_dev.info.vendor_id)) or
+        (match_id.product_id != Id.any and
+            (match_id.product_id != usb_dev.info.product_id)) or
+        (match_id.mask.class and
+            (match_id.class != usb_dev.info.class)) or
+        (match_id.mask.subclass and
+            (match_id.subclass != usb_dev.info.subclass)) or
+        (match_id.mask.protocol and
+            (match_id.protocol != usb_dev.info.protocol)) or
+        (match_id.mask.if_class and
+            (match_id.if_class != if_desc.class)) or
+        (match_id.mask.if_subclass and
+            (match_id.if_subclass != if_desc.subclass)) or
+        (match_id.mask.if_protocol and
+            (match_id.if_protocol != if_desc.protocol))) return false;
 
     return true;
 }
 
 fn remove(device: *dev.Device) void {
-    _ = device;
+    const usb_dev = Device.from(device);
+    usb_dev.deinit();
 }
 
-/// Register a new USB device on the bus
-/// 
-/// This function is called by host controller drivers (like XHCI)
-/// to register newly enumerated devices.
-//pub fn addDevice(
-//    descriptor: Descriptor.Device,
-//    addr_info: AddressInfo,
-//) !*Device {
-//}
-
-pub inline fn getBus() *dev.Bus {
-    return &bus;
+inline fn getLmaPtr(comptime T: type, ptr: *T) *T {
+    const phys = vm.translateVirtToPhys(@intFromPtr(ptr)).?;
+    return @ptrFromInt(vm.getVirtLma(phys));
 }

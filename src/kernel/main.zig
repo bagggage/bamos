@@ -117,7 +117,7 @@ fn kernelStartupTask() noreturn {
 inline fn startNonBootCpu() void {
     sys.time.initPerCpu();
 
-    log.info("CPU {} initialized", .{smp.getIdx()});
+    //log.info("CPU {} initialized", .{smp.getIdx()});
     sched.getCurrent().start();
 }
 

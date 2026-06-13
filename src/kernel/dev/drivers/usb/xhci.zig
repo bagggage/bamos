@@ -63,7 +63,7 @@ pub const TRB = extern struct {
 
     const EventStatus = packed struct(u32) {
         parameter: u24,
-        completion_code: CompletionCode
+        completion_code: CompletionCode,
     };
 
     const CompletionCode = enum(u8) {
@@ -104,7 +104,7 @@ pub const TRB = extern struct {
         invalid_stream_id     = 34,
         @"2_bandwidth_error"  = 35,
         split_transaction     = 36,
-        _
+        _,
     };
 
     const TransferType = enum(u8) {
@@ -117,7 +117,7 @@ pub const TRB = extern struct {
     };
 
     const ControlField = packed struct(u32) {
-        cycle: u1 = undefined,
+        cycle: u1 = 0,
         next_trb: bool = false,
         isp: bool = false,
         no_snoop: bool = false,
@@ -126,7 +126,7 @@ pub const TRB = extern struct {
         immediate: bool = false,
         _rsvd: u2 = 0,
         bei: bool = false,
-        @"type": Type,
+        type: Type,
         trt: TransferType = .no_data,
         slot_id: u8 = 0,
     };
@@ -142,7 +142,7 @@ pub const TRB = extern struct {
             .control = .{
                 .ioc = false,
                 .immediate = true,
-                .@"type" = .setup,
+                .type = .setup,
                 .trt = .in,
             },
         };
@@ -154,31 +154,31 @@ pub const TRB = extern struct {
             .status = .{ .length = len },
             .control = .{
                 .ioc = true,
-                .@"type" = Type.data,
+                .type = Type.data,
                 .trt = @enumFromInt(@intFromBool(dir_in)),
             },
         };
     }
 
     pub fn initDataImmediate(data: []const u8, dir_in: bool) TRB {
-        const data_ptr: *align(4) const u64 = @alignCast(@ptrCast(data.ptr));
+        const data_ptr: *align(4) const u64 = @ptrCast(@alignCast(data.ptr));
         return .{
             .data = .{ .imm = @bitCast(data_ptr.*) },
             .status = .{ .length = @truncate(data.len) },
             .control = .{
                 .ioc = true,
                 .immediate = true,
-                .@"type" = Type.data,
+                .type = Type.data,
                 .trt = @enumFromInt(@intFromBool(dir_in)),
             },
         };
     }
 
-    pub fn initStatus(dir_in: bool) TRB {
+    pub fn initStatus(dir_in: bool, ioc: bool) TRB {
         return .{
             .control = .{
-                .ioc = false,
-                .@"type" = Type.status,
+                .ioc = ioc,
+                .type = Type.status,
                 .trt = @enumFromInt(@intFromBool(dir_in)),
             },
         };
@@ -186,42 +186,32 @@ pub const TRB = extern struct {
 
     pub fn initEnableSlot() TRB {
         return .{
-            .control = .{
-                .@"type" = .enable_slot,
-                .ioc = true
-            },
+            .control = .{ .type = .enable_slot, .ioc = true },
         };
     }
 
     pub fn initAddressDevice(ctx_base: u64, slot_id: u8, set_address: bool) TRB {
-        return .{
-            .data = .{ .ptr = ctx_base },
-            .control = .{
-                .bei = !set_address,
-                .@"type" = .address_device,
-                .slot_id = slot_id,
-            }
-        };
+        return .{ .data = .{ .ptr = ctx_base }, .control = .{
+            .cycle = 1,
+            .bei = !set_address,
+            .type = .address_device,
+            .slot_id = slot_id,
+        } };
     }
 
     pub fn initConfigureEndpoint(ctx_base: u64, slot_id: u8) TRB {
         return .{
-            .data = .{ .ptr = ctx_base },
-            .control = .{
-                .@"type" = .configure_endpoint,
-                .slot_id = slot_id
-            }
-        };
+            .data = .{ .ptr = ctx_base }, .control = .{
+                .type = .configure_endpoint,
+                .slot_id = slot_id,
+        } };
     }
 
     pub fn initEvaluateContext(ctx_base: u64, slot_id: u8) TRB {
-        return .{
-            .data = .{ .ptr = ctx_base },
-            .control = .{
-                .@"type" = .evaluate_context,
-                .slot_id = slot_id,
-            }
-        };
+        return .{ .data = .{ .ptr = ctx_base }, .control = .{
+            .type = .evaluate_context,
+            .slot_id = slot_id,
+        } };
     }
 };
 
@@ -248,6 +238,8 @@ const CommandRing = struct {
 };
 
 const TransferRing = struct {
+    pub const alloc_config: vm.auto.Config = .{ .allocator = .oma };
+
     const default_size = vm.page_size / @sizeOf(TRB);
     var rq_oma: vm.ObjectAllocator = .initCapacity(@sizeOf([default_size]usb.Completion), 8);
 
@@ -259,7 +251,7 @@ const TransferRing = struct {
 
     lock: lib.sync.Spinlock = .{},
 
-    fn create() !TransferRing {
+    fn create() vm.Error!TransferRing {
         const phys = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
         errdefer vm.PageAllocator.free(phys, 0);
         const requests = rq_oma.alloc([default_size]usb.Completion) orelse return error.NoMemory;
@@ -304,20 +296,17 @@ const TransferRing = struct {
         completion_idx: u16,
         doorbell: *volatile Controller.Regs.Doorbell,
         ep: u8,
-    ) TRB {
+    ) error{Timeout}!TRB {
         const scheduler = sched.getCurrent();
         var sync_ctx: SyncRequest = .{ .wait = scheduler.initWait() };
 
         const request = &self.requests[completion_idx];
-        request.* = .{
-            .func = &completeRequestSync,
-            .ctx = .fromPtr(&sync_ctx)
-        };
+        request.* = .{ .func = &completeRequestSync, .ctx = .fromPtr(&sync_ctx) };
 
         doorbell.ringEndpoint(ep);
         self.lock.unlock();
 
-        scheduler.wait();
+        try scheduler.waitTimeout(usb.cmd_timeout_ns);
         return sync_ctx.complete_trb;
     }
 
@@ -389,9 +378,9 @@ const EventRing = struct {
 
 const SyncRequest = struct {
     wait: sched.WaitQueue.Entry,
-    complete_trb: TRB = .{ .control = .{
-        .cycle = 0, .@"type" = @enumFromInt(0) 
-    }},
+    complete_trb: TRB = .{
+        .control = .{ .cycle = 0, .type = @enumFromInt(0) },
+    },
 };
 
 const IoMechanism = dev.io.MmioMechanism("xhci", .dword);
@@ -400,8 +389,9 @@ const Port = opaque {
     const Regs = extern struct {
         const Group = dev.regs.Group(
             IoMechanism,
-            null, null,
-            dev.regs.from(Regs)
+            null,
+            null,
+            dev.regs.from(Regs),
         );
 
         const LinkState = packed union {
@@ -419,7 +409,7 @@ const Port = opaque {
                 compliance = 10,
                 test_mode  = 11,
                 @"resume"  = 15,
-                _
+                _,
             },
             write: enum(u4) {
                 u0_from_any    = 0,
@@ -429,8 +419,8 @@ const Port = opaque {
                 rx_detect_usb3 = 5,
                 compliance_usb3 = 10,
                 resume_for_u3_usb2 = 15,
-                _
-            }
+                _,
+            },
         };
 
         const Indicator = enum(u2) {
@@ -499,13 +489,13 @@ const Port = opaque {
                     packet = 4,
                     force_enable = 5,
                     ctrl_error = 15
-                }
+                },
             },
             usb3: packed struct(u32) {
                 u1_timeout: u8,
                 u2_timeout: u8,
                 force_link: u1,
-                _rsvd: u15
+                _rsvd: u15,
             },
         };
 
@@ -515,7 +505,7 @@ const Port = opaque {
                 error_count: u16,
                 rx_lane_count: u4,
                 tx_lane_count: u4,
-                _rsvd: u8
+                _rsvd: u8,
             },
         };
 
@@ -532,7 +522,7 @@ const Port = opaque {
         status_ctrl: StatusControl,
         power_status_ctrl: PowerMngmtStatusAndControl,
         link_info: LinkInfo,
-        lpm_ctrl: LpmControl
+        lpm_ctrl: LpmControl,
     };
 };
 
@@ -541,7 +531,7 @@ const Slot = struct {
     status: bool = false,
 
     ctrl: *Controller,
-    device: *usb.Device = undefined,
+    device: ?*usb.Device = null,
     in_ctx: *Context.Input = undefined,
     dev_ctx: *Context.Device = undefined,
     transfer_ring: TransferRing = .{},
@@ -566,7 +556,7 @@ const Slot = struct {
     fn deinit(self: *Slot) void {
         std.debug.assert(self.status == true);
 
-        self.device.host.setPtr(null);
+        if (self.device) |device| device.host.setPtr(null);
 
         self.ctrl.port_map[self.port] = 0;
         self.status = false;
@@ -575,9 +565,9 @@ const Slot = struct {
         self.dev_ctx.delete();
     }
 
-    fn sendRequestSync(self: *Slot, request: usb.Device.Request, data: []u8) TRB {
+    fn sendRequestSync(self: *Slot, request: usb.Device.Request, data: []u8) error{Timeout}!TRB {
         const idx = self.transfer_ring.startTransfer();
-        const dir = request.@"type".dir == .dev_to_host;
+        const dir = request.type.dir == .dev_to_host;
         self.transfer_ring.insertTrb(.initSetup(request));
 
         if (data.len > 0) if (data.len <= @sizeOf(TRB.DataField) and !dir) {
@@ -587,18 +577,83 @@ const Slot = struct {
             self.transfer_ring.insertTrb(.initData(phys, @truncate(data.len), dir));
         };
 
-        self.transfer_ring.insertTrb(.initStatus(!dir));
+        self.transfer_ring.insertTrb(.initStatus(!dir, data.len == 0));
 
         const doorbell = &self.ctrl.doorbells[self.getIndex() +% 1];
         return self.transfer_ring.completeTransferSync(idx +% 1, doorbell, 1);
     }
 
+    fn makeEndpointConfig(
+        self: *Slot,
+        ep: *const usb.Descriptor.Endpoint.Payload,
+        tr_ring: *TransferRing,
+    ) void {
+        const ep_idx = endpointIndex(ep.address);
+        const ep_ctx = &self.in_ctx.eps[ep_idx];
+        errdefer @memset(std.mem.asBytes(ep_ctx), 0);
+
+        ep_ctx.info.type = .fromTransferTypeAndDir(ep.attributes.type, ep.address.dir);
+        std.debug.assert(ep_ctx.info.type != .invalid);
+
+        ep_ctx.info.error_count = 3;
+        ep_ctx.info.max_packet_size = ep.max_packet_size;
+
+        // TODO: Implement logic for Enhanced SuperSpeed endpoints (USB3)
+        const speed = self.in_ctx.slot.dev_info.speed;
+        if (ep.attributes.type == .isochronous or ep.attributes.type == .interrupt) {
+            ep_ctx.info.max_burst_size = @truncate((ep.max_packet_size & 0x1800) >> 11);
+            ep_ctx.info.max_packet_size &= 0x7ff;
+
+            const max_esit_payload = @as(u32, ep_ctx.info.max_packet_size) * (ep_ctx.info.max_burst_size + 1);
+            ep_ctx.max_esit_lo = @truncate(max_esit_payload);
+            ep_ctx.info.max_esit_hi = @truncate(max_esit_payload >> @bitSizeOf(u16));
+            ep_ctx.info.interval = calcPollingInterval(ep.interval, ep.attributes.type, speed);
+        }
+
+        ep_ctx.average_trb_len = switch (ep.attributes.type) {
+            .control => 8,
+            .isochronous => blk: {
+                ep_ctx.info.error_count = 0;
+                break :blk ep_ctx.info.max_packet_size;
+            },
+            else => ep_ctx.info.max_packet_size *| (ep_ctx.info.max_burst_size + 1),
+        };
+
+        log.debug(
+            \\ pipe: {t}, speed: {t}, error count: {},
+            \\ max packet size: {}, max burst size: {}, avg trb len: {},
+            \\ max esit payload: {}, interval: {}, max pstreams: {}, mult: {}
+            ,.{
+                ep_ctx.info.type, speed, ep_ctx.info.error_count,
+                ep_ctx.info.max_packet_size, ep_ctx.info.max_burst_size, ep_ctx.average_trb_len,
+                (@as(u32, ep_ctx.info.max_esit_hi) << 16) | ep_ctx.max_esit_lo, ep_ctx.info.interval,
+                ep_ctx.info.max_pstreams, ep_ctx.info.mult,
+            }
+        );
+
+        ep_ctx.tr_dequeue_ptr = vm.getPhysLma(tr_ring.trbs) | 0x1;
+
+        const in_ctx = self.in_ctx;
+        in_ctx.control.drop_flags = .initEmpty();
+        in_ctx.control.add_flags = .initEmpty();
+        in_ctx.control.add_flags.set(0);
+        in_ctx.control.add_flags.set(ep_idx + 1);
+    }
+
     fn updateEndpoint(self: *Slot, ep: u8) !void {
         self.in_ctx.control.add_flags = .initEmpty();
         self.in_ctx.control.add_flags.set(ep);
+        errdefer self.in_ctx.control.add_flags.unset(ep);
 
         const phys = vm.getPhysLma(self.in_ctx);
-        const trb = self.ctrl.sendCommandSync(.initEvaluateContext(phys, ep +% 1));
+        const trb = try self.ctrl.sendCommandSync(.initEvaluateContext(phys, self.getIndex() +% 1));
+
+        if (trb.status.asEventStatus().completion_code != .success) return error.IoFailed;
+    }
+
+    fn evaluateContext(self: *Slot) !void {
+        const phys = vm.getPhysLma(self.in_ctx);
+        const trb = try self.ctrl.sendCommandSync(.initEvaluateContext(phys, self.getIndex() +% 1));
 
         if (trb.status.asEventStatus().completion_code != .success) return error.IoFailed;
     }
@@ -612,10 +667,10 @@ const Context = opaque {
     const Slot = extern struct {
         const State = enum(u5) {
             disabled_enabled = 0,
-            default          = 1,
-            addressed        = 2,
-            configured       = 3,
-            _
+            default = 1,
+            addressed = 2,
+            configured = 3,
+            _,
         };
 
         dev_info: packed struct(u64) {
@@ -655,21 +710,26 @@ const Context = opaque {
             halted   = 2,
             stopped  = 3,
             @"error" = 4,
-            _
+            _,
         };
 
         const Type = enum(u3) {
-            invalid   = 0,
+            invalid = 0,
             isoch_out = 1,
-            bulk_out  = 2,
-            intr_out  = 3,
-            control   = 4,
-            isoch_in  = 5,
-            bulk_in   = 6,
-            intr_in   = 7
+            bulk_out = 2,
+            intr_out = 3,
+            control = 4,
+            isoch_in = 5,
+            bulk_in = 6,
+            intr_in = 7,
+
+            inline fn fromTransferTypeAndDir(@"type": usb.TransferType, dir: usb.Direction) Type {
+                const temp: u3 = if (dir == .in) 0b100 else 0;
+                return @enumFromInt(temp | @intFromEnum(@"type"));
+            }
         };
 
-        info: packed struct (u64) {
+        info: packed struct(u64) {
             state: State,
             _rsvd: u5 = 0,
             mult: u2,
@@ -680,7 +740,7 @@ const Context = opaque {
 
             _rsvd2: u1 = 0,
             error_count: u2,
-            @"type": Type,
+            type: Type,
             _rsvd3: u1 = 0,
             host_init_disabled: u1,
             max_burst_size: u8,
@@ -696,9 +756,7 @@ const Context = opaque {
     };
 
     const Stream = packed struct(u128) {
-        const Type = enum(u3) {
-
-        };
+        const Type = enum(u3) {};
 
         tr_dequeue: packed union {
             bits: packed struct(u64) {
@@ -706,7 +764,7 @@ const Context = opaque {
                 @"type": u3,
                 ptr: u60,
             },
-            ptr: u64
+            ptr: u64,
         },
 
         stopped_edlta: u24,
@@ -724,7 +782,7 @@ const Context = opaque {
         config: u8,
         interface: u8,
         alt_setting: u8,
-        _rsvd2: u8 = 0
+        _rsvd2: u8 = 0,
     };
 
     const Input = extern struct {
@@ -750,7 +808,7 @@ const Context = opaque {
 
         fn getTrbRing(self: *Input) []TRB {
             const trbs: [*]TRB = @ptrFromInt(@intFromPtr(self) + @sizeOf(Input));
-            return trbs[0..(vm.page_size - @sizeOf(Input)) / @sizeOf(TRB)];
+            return trbs[0 .. (vm.page_size - @sizeOf(Input)) / @sizeOf(TRB)];
         }
 
         fn asDeviceContext(self: *Input) *Device {
@@ -786,29 +844,29 @@ const Controller = struct {
     const Regs = struct {
         const UsbLegacySupport = extern struct {
             const Capability = packed struct(u32) {
-                id:                      u8,
-                next_ext_cap_ptr:        u8,
-                bios_owned_sem:          u1,
-                _rsvd:                   u7,
-                os_owned_sem:            u1,
-                _rsvd2:                  u7,
+                id: u8,
+                next_ext_cap_ptr: u8,
+                bios_owned_sem: u1,
+                _rsvd: u7,
+                os_owned_sem: u1,
+                _rsvd2: u7,
             };
 
             const StatusControl = packed struct(u32) {
-                usb_smi_enable:          u1,
-                reserved_1:              u3,
+                usb_smi_enable: u1,
+                reserved_1: u3,
                 smi_host_sys_err_enable: u1,
-                reserved_2:              u8,
-                smi_os_own_enable:       u1,
-                smi_pci_cmd_enable:      u1,
-                smi_bar_enable:          u1,
-                smi_event_intr:          u1,
-                reserved_3:              u3,
-                smi_host_sys_err:        u1,
-                reserved_4:              u8,
-                smi_os_own_change:       u1,
-                smi_pci_cmd:             u1,
-                smi_on_bar:              u1,
+                reserved_2: u8,
+                smi_os_own_enable: u1,
+                smi_pci_cmd_enable: u1,
+                smi_bar_enable: u1,
+                smi_event_intr: u1,
+                reserved_3: u3,
+                smi_host_sys_err: u1,
+                reserved_4: u8,
+                smi_os_own_change: u1,
+                smi_pci_cmd: u1,
+                smi_on_bar: u1,
             };
 
             cap: UsbLegacySupport.Capability,
@@ -820,7 +878,7 @@ const Controller = struct {
                 IoMechanism,
                 null,
                 0x2000,
-                dev.regs.fromWithModifier(Capability, .read)
+                dev.regs.fromWithModifier(Capability, .read),
             );
 
             cap_length: u8,
@@ -834,7 +892,9 @@ const Controller = struct {
             rt_regs_offset: u32,
             hcc_params2: CapabilityParams2, // 0x1C
 
-            comptime { std.debug.assert(@offsetOf(Capability, "hcc_params2") == 0x1c); }
+            comptime {
+                std.debug.assert(@offsetOf(Capability, "hcc_params2") == 0x1c);
+            }
         };
 
         /// HCSPARAMS1
@@ -898,8 +958,9 @@ const Controller = struct {
         const Operational = packed struct {
             const Group = dev.regs.Group(
                 IoMechanism,
-                null, null,
-                dev.regs.from(Operational)  
+                null,
+                null,
+                dev.regs.from(Operational),
             );
 
             usb_cmd: UsbCommand,
@@ -974,7 +1035,7 @@ const Controller = struct {
             max_slots_enabled: u8,
             u3_entry_enable: u1,
             config_info_enable: u1,
-            _rsvd: u22
+            _rsvd: u22,
         };
 
         const Runtime = extern struct {
@@ -986,13 +1047,14 @@ const Controller = struct {
 
             micro_frame_idx: dev.regs.ReadOnlyE(u32),
             _rsvd: [7]u32,
-            intr: [1024]Interrupter
+            intr: [1024]Interrupter,
         };
 
         const Interrupter = extern struct {
             const Group = dev.regs.Group(
                 IoMechanism,
-                null, null,
+                null,
+                null,
                 dev.regs.from(Interrupter)
             );
 
@@ -1006,14 +1068,14 @@ const Controller = struct {
             const Moderation = packed struct(u32) {
                 /// 250ns increments: 4000 ~ 1ms
                 interval: u16,
-                counter: u16
+                counter: u16,
             };
 
             const DequeuePointer = packed struct(u64) {
                 seg_idx: u3,
                 // Write 1 to clear
                 handler_busy: bool = true,
-                ptr: u60
+                ptr: u60,
             };
 
             managment: Managment,
@@ -1056,7 +1118,8 @@ const Controller = struct {
         halted: bool = false,
         ports_update: bool = false,
         kill_worker: bool = false,
-        _reserved: u5 = 0,
+        lec: bool = false,
+        _reserved: u4 = 0,
     };
 
     cap_regs: Regs.Capability.Group,
@@ -1092,12 +1155,21 @@ const Controller = struct {
         pci_dev.config.setAs(.command, pci_cmd);
 
         const bar = pci_dev.config.readBar(0);
-        const cap_regs = try Regs.Capability.Group.initBase(bar);
-        errdefer dev.io.release(bar, .mmio);
+        if (bar.type != .mmio) return error.BadHardware;
+
+        const cap_regs = try Regs.Capability.Group.initBaseSized(bar.base, bar.size);
+        errdefer dev.io.release(bar.base, .mmio);
 
         const params = cap_regs.get(Regs.StructuralParams1, .hcs_params1);
         const params2 = cap_regs.get(Regs.StructuralParams2, .hcs_params2);
+        const cparams2 = cap_regs.get(Regs.CapabilityParams2, .hcc_params2);
+        const scratch_pages = (@as(u16, params2.max_scratchpad_hi) << 5) | params2.max_scratchpad_lo;
         const db_virt = cap_regs.dyn_base + cap_regs.read(.doorbell_offset);
+
+        log.info(
+            "intr: {}, slots: {}, ports: {}, scratchpad pages: {}",
+            .{ params.max_intrs, params.max_slots, params.max_ports, scratch_pages },
+        );
 
         const slots = vm.gpa.allocMany(Slot, params.max_slots) orelse return error.NoMemory;
         errdefer vm.gpa.free(slots.ptr);
@@ -1115,14 +1187,13 @@ const Controller = struct {
             .max_slots = params.max_slots,
             .max_intrs = @truncate(@min(params.max_intrs, smp.getNum())),
             .max_ports = params.max_ports,
+            .flags = .{ .lec = cparams2.lec == 1 },
             .slots = slots.ptr,
             .port_map = port_map.ptr,
             .event_worker = event_worker,
             .doorbells = @ptrFromInt(db_virt),
-            .pci_dev = pci_dev
+            .pci_dev = pci_dev,
         };
-
-        const scratch_pages = (@as(u16, params2.max_scratchpad_hi) << 5) | params2.max_scratchpad_lo;
 
         self.biosHandoff();
         try self.stop();
@@ -1131,10 +1202,6 @@ const Controller = struct {
         try self.initDeviceContextArray(scratch_pages);
         try self.initCommandRing();
         try self.initInterrupts();
-
-        log.info("intr: {}, slots: {}, ports: {}, scratchpad pages: {}", .{
-            params.max_intrs, self.max_slots, self.max_ports, scratch_pages
-        });
 
         @memset(slots, .{ .ctrl = self });
         @memset(port_map, 0);
@@ -1147,9 +1214,10 @@ const Controller = struct {
 
     pub fn deinit(self: *Controller) void {
         self.pci_dev.releaseInterrupts();
-        dev.io.release(vm.getPhysLma(self.cap_regs.dyn_base), .mmio);
-
         self.flags.kill_worker = true;
+
+        const regs_size = self.pci_dev.config.readBar(0).size;
+        self.cap_regs.deinitSized(regs_size);
 
         const scratchpad_phys = self.dev_ctx_ptrs[0];
         if (scratchpad_phys != 0) {
@@ -1169,7 +1237,7 @@ const Controller = struct {
             inline for (ring.table[0..]) |*seg| {
                 const seg_rank = vm.bytesToRank(seg.size * @sizeOf(TRB));
                 vm.PageAllocator.free(seg.base_addr, seg_rank);
-            } 
+            }
         }
 
         vm.gpa.free(self.event_rings);
@@ -1203,7 +1271,7 @@ const Controller = struct {
         errdefer vm.gpa.free(dev_ctx_ptrs.ptr);
 
         std.debug.assert(std.mem.isAligned(@intFromPtr(dev_ctx_ptrs.ptr), 64));
-    
+
         @memset(dev_ctx_ptrs, 0);
         self.dev_ctx_ptrs = dev_ctx_ptrs.ptr;
 
@@ -1290,7 +1358,7 @@ const Controller = struct {
 
     fn updatePort(self: *Controller, port: u8) void {
         const regs = self.getPortRegs(@truncate(port));
-        var status_ctrl = regs.get(Port.Regs.StatusControl, .status_ctrl);
+        const status_ctrl = regs.get(Port.Regs.StatusControl, .status_ctrl);
         if (status_ctrl.connect_change == 0 and status_ctrl.connected == 0) return;
 
         // Write value back to clear all change bits
@@ -1315,9 +1383,7 @@ const Controller = struct {
                 log.warn("port{} (usb3): failed to enable", .{port});
             },
             else => return
-        };
-
-        if (
+        } else if (
             status_ctrl.enabled == 1 and
             ((status_ctrl.connect_change == 1 and status_ctrl.link_state.read == .u0) or
             (status_ctrl.reset_change == 1 and status_ctrl.reset == 0))
@@ -1325,10 +1391,13 @@ const Controller = struct {
             log.debug("port{}: attach device", .{port});
             self.attachDevice(port) catch |err| {
                 log.err("failed to attach device on port{}: {t}", .{port, err});
+                return;
             };
-        }
 
-        if (status_ctrl.enabled == 0) log.debug("port{} is not enabled", .{port});
+            log.debug("device attached!", .{});
+        } else if (status_ctrl.enabled == 0) {
+            log.debug("port{} is not enabled", .{port});
+        }
     }
 
     fn attachDevice(self: *Controller, port: u8) !void {
@@ -1343,60 +1412,55 @@ const Controller = struct {
         errdefer slot.deinit();
 
         const in_ctx = slot.in_ctx;
-        const dev_ctx = slot.dev_ctx;
-
-        // Set A0 and A1 flags
-        in_ctx.control.add_flags.mask = comptime std.mem.nativeToLittle(u32, 0b11);
-
         in_ctx.slot.dev_info.entries = 1;
         in_ctx.slot.dev_info.root_hub_port = port + 1;
         in_ctx.slot.dev_info.ports = 0; // TODO: Check if device is hub and set correct value
         in_ctx.slot.dev_info.speed = speed;
 
-        const ep_ctx = &in_ctx.eps[0];
-        ep_ctx.info.@"type" = .control;
-        ep_ctx.info.error_count = 3;
-        ep_ctx.tr_dequeue_ptr = vm.getPhysLma(slot.transfer_ring.trbs) | 0x1;
-        ep_ctx.info.max_packet_size = switch (speed) {
+        const max_packet_size: u16 = switch (speed) {
+            .full,
             .low => 8,
             .high => 64,
-            .super,
-            .super_plus => 512,
-            else => 8,
+            else => 512,
         };
-        ep_ctx.average_trb_len = ep_ctx.info.max_packet_size;
 
-        self.dev_ctx_ptrs[slot_id] = vm.getPhysLma(dev_ctx);
+        const ctrl_ep: usb.Descriptor.Endpoint.Payload = .{ .max_packet_size = max_packet_size };
+        slot.makeEndpointConfig(&ctrl_ep, &slot.transfer_ring);
+
+        self.dev_ctx_ptrs[slot_id] = vm.getPhysLma(slot.dev_ctx);
         errdefer self.dev_ctx_ptrs[slot_id] = 0;
 
-        var trb = self.sendCommandSync(.initAddressDevice(vm.getPhysLma(in_ctx), slot_id, true));
+        var trb = try self.sendCommandSync(.initAddressDevice(vm.getPhysLma(in_ctx), slot_id, true));
         if (trb.status.asEventStatus().completion_code != .success) {
-            log.err("address deivce failed: p/s:{}/{} {t}", .{
-                port, slot_id, trb.status.asEventStatus().completion_code
-            });
+            log.debug("ptr: 0x{x}, slot id: {}", .{vm.getPhysLma(in_ctx), slot_id});
+            log.debug("ctx:\n {any}", .{in_ctx.control});
+            log.debug("\n {any}", .{in_ctx.slot});
+            log.err(
+                "address deivce failed: p.s:{}.{}({t}) {t}",
+                .{ port, slot_id, speed, trb.status.asEventStatus().completion_code },
+            );
             return error.IoFailed;
         }
 
-        in_ctx.slot.dev_state.usb_dev_addr = dev_ctx.slot.dev_state.usb_dev_addr;
+        in_ctx.slot.dev_state.usb_dev_addr = slot.dev_ctx.slot.dev_state.usb_dev_addr;
 
         var desc: usb.Descriptor.Device = undefined;
         const phys = vm.translateVirtToPhys(@intFromPtr(&desc)).?;
+        const buffer: [*]u8 = @ptrFromInt(vm.getVirtLma(phys));
 
-        trb = slot.sendRequestSync(
-            .{
-                .@"type" = .{
-                    .@"type" = .standard,
-                    .dir = .dev_to_host,
-                    .recipient = .device,
-                },
-                .code = .get_descriptor,
-                .value = .{ .desc = .{ .@"type" = .device } },
-                .index = 0,
-                .length = @sizeOf(usb.Descriptor.Device),
-            },
-            @as([*]u8, @ptrFromInt(vm.getVirtLma(phys)))[0..@sizeOf(usb.Descriptor.Device)]
+        trb = try slot.sendRequestSync(
+            .initGetDescriptor(.device, @sizeOf(usb.Descriptor.Device), 0),
+            buffer[0..@sizeOf(usb.Descriptor.Device)],
         );
         if (trb.status.asEventStatus().completion_code != .success) return error.IoFailed;
+
+        if (desc.class == .hub) {
+            log.warn("hub device detected: (not supported)", .{});
+            slot.deinit();
+            self.disableSlot(slot_id);
+
+            return;
+        }
 
         if (in_ctx.eps[0].info.max_packet_size != desc.max_packet_size) {
             log.debug("max packet size: {}", .{desc.max_packet_size});
@@ -1404,10 +1468,6 @@ const Controller = struct {
             in_ctx.eps[0].info.max_packet_size = desc.max_packet_size;
             try slot.updateEndpoint(0);
         }
-
-        log.debug("c: {t}, s: {}, v: 0x{x}, p: 0x{x}",
-            .{desc.device_class, desc.device_subclass, desc.vendor_id, desc.product_id}
-        );
 
         slot.device = try usb.addDevice(
             .fromPtr(slot),
@@ -1425,7 +1485,7 @@ const Controller = struct {
     fn detachDevice(self: *Controller, slot: u8) void {
         const desc = &self.slots[slot];
 
-        usb.getBus().removeDevice(&desc.device.device);
+        usb.getBus().removeDevice(&desc.device.?.device);
 
         self.disableSlot(slot + 1);
         desc.deinit();
@@ -1457,7 +1517,7 @@ const Controller = struct {
                 .port_status_change => controller.handlePortStatusChange(event),
                 .command_completion => controller.handleCompletionEvent(event),
                 .transfer_event => controller.handleTransferEvent(event),
-                else => {}
+                else => {},
             }
         }
 
@@ -1620,7 +1680,7 @@ const Controller = struct {
         self.doorbells[0].ringController();
     }
 
-    fn sendCommandSync(self: *Controller, trb: TRB) TRB {
+    fn sendCommandSync(self: *Controller, trb: TRB) error{Timeout}!TRB {
         const scheduler = sched.getCurrent();
         var sync_ctx: SyncRequest = .{ .wait = scheduler.initWait() };
 
@@ -1642,12 +1702,12 @@ const Controller = struct {
             self.ringDoorbell();
         }
 
-        scheduler.wait();
+        try scheduler.waitTimeout(usb.cmd_timeout_ns);
         return sync_ctx.complete_trb;
     }
 
     fn enableSlot(self: *Controller) !u8 {
-        const event_trb = self.sendCommandSync(.initEnableSlot());
+        const event_trb = try self.sendCommandSync(.initEnableSlot());
         const code = event_trb.status.asEventStatus().completion_code;
 
         if (code != .success) {
@@ -1659,9 +1719,9 @@ const Controller = struct {
     }
 
     fn disableSlot(self: *Controller, slot_id: u8) void {
-        const event_trb = self.sendCommandSync(.{ .control = .{
-            .@"type" = .disable_slot, .slot_id = slot_id
-        } });
+        const event_trb = self.sendCommandSync(
+            .{ .control = .{ .@"type" = .disable_slot, .slot_id = slot_id } },
+        ) catch return;
         const code = event_trb.status.asEventStatus().completion_code;
 
         if (code != .success) log.err("disable slot failed: {t}", .{code});
@@ -1674,12 +1734,13 @@ const Controller = struct {
         regs.set(.status_ctrl, status_ctrl);
 
         const mask = comptime dev.regs.makeMask(Port.Regs.StatusControl, &.{.enabled});
-        try regs.waitBitsSet(.status_ctrl, mask, reset_timeout);
+        try regs.waitBitsSet(.status_ctrl, mask, reset_timeout * 2);
     }
 };
 
 const usb_ops: usb.Device.Operations = .{
-    .get_descriptor = &usbGetDescriptor,
+    .send_request = &usbSendRequest,
+    .create_pipe = &usbCreatePipe,
 };
 
 var pci_driver = pci.Driver.init(
@@ -1733,24 +1794,65 @@ fn completeRequestSync(_: lib.AnyData, ctx: lib.AnyData, data: lib.AnyData) void
     _ = sched.awakeEntry(&request.wait);
 }
 
-fn usbGetDescriptor(
+fn usbSendRequest(
     device: *usb.Device,
-    @"type": usb.Descriptor.Type,
-    index: u8,
-    buffer: []u8,
+    pipe: ?*usb.Pipe,
+    request: usb.Device.Request,
+    data: []u8,
 ) usb.Error!void {
+    if (pipe != null) return error.InvalidArgs;
+
     const slot = device.host.asPtr(Slot).?;
-    const trb = slot.sendRequestSync(.{
-        .@"type" = .{
-            .@"type" = .standard,
-            .dir = .dev_to_host,
-            .recipient = .device,
-        },
-        .code = .get_descriptor,
-        .index = 0,
-        .value = .{ .desc = .{ .@"type" = @"type", .index = index } },
-        .length = @truncate(buffer.len),
-    }, buffer);
+    const trb = try slot.sendRequestSync(request, data);
 
     if (trb.status.asEventStatus().completion_code != .success) return error.IoFailed;
+}
+
+fn usbCreatePipe(
+    device: *usb.Device,
+    ep: *const usb.Descriptor.Endpoint.Payload,
+) usb.Error!usb.Pipe {
+    const transfer_ring = vm.auto.alloc(TransferRing) orelse return error.NoMemory;
+    errdefer vm.auto.free(TransferRing, transfer_ring);
+
+    transfer_ring.* = try .create();
+    errdefer transfer_ring.deinit();
+
+    const slot = device.host.asPtr(Slot).?;
+    if (slot.dev_ctx.slot.dev_info.entries == 1) {
+        log.debug("evaluate context", .{});
+
+        slot.in_ctx.slot.dev_info.entries = @truncate(slot.in_ctx.eps.len);
+        try slot.evaluateContext();
+    }
+
+    slot.makeEndpointConfig(ep, transfer_ring);
+
+    const trb = try slot.ctrl.sendCommandSync(.initConfigureEndpoint(vm.getPhysLma(slot.in_ctx), slot.getIndex() + 1));
+    if (trb.status.asEventStatus().completion_code != .success) {
+        log.err("failed to config endpoint: {t}", .{trb.status.asEventStatus().completion_code});
+        return error.IoFailed;
+    }
+
+    log.debug("device state: {}", .{slot.dev_ctx.slot.dev_state.state});
+    return .{ .endpoint = ep.*, .host = .fromPtr(transfer_ring) };
+}
+
+inline fn endpointIndex(addr: usb.Descriptor.Endpoint.Address) u8 {
+    return (@as(u8, addr.number) << 1 | @intFromEnum(addr.dir)) -| 1;
+}
+
+fn calcPollingInterval(
+    interval: u32, @"type": usb.TransferType, speed: usb.Speed
+) u8 {
+    const value = switch (speed) {
+        .full => if (@"type" == .isochronous)
+                std.math.clamp(interval, 1, 16) +% 2
+            else
+                std.math.clamp(interval, 1, 16) -% 1,
+        .low => std.math.log2(std.math.clamp(interval, 1, 255)) +% 3,
+        else => std.math.clamp(interval, 1, 16) -% 1,
+    };
+
+    return @truncate(value);
 }
