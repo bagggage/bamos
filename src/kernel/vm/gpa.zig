@@ -141,7 +141,9 @@ pub inline fn allocMany(comptime T: type, n: usize) ?[]T {
 /// - Returns: A pointer to the allocated memory block,
 /// or `null` if the allocation fails.
 pub fn alloc(size: usize) callconv(.c) ?*anyopaque {
-    std.debug.assert(size > 0 and size < (vm.PageAllocator.max_alloc_pages * vm.page_size));
+    lib.debug.assert(size > 0, @src());
+    lib.debug.assert(size <= max_alloc_size, @src());
+
     return if (size <= max_small_size) allocSmall(@truncate(size)) else allocHuge(@truncate(size));
 }
 
