@@ -134,10 +134,21 @@ pub inline fn getVirtLma(address: anytype) @TypeOf(address) {
     const typeInfo = @typeInfo(@TypeOf(address));
 
     return switch (typeInfo) {
-        .int, .comptime_int => address + lma_start,
-        .pointer => @ptrFromInt(@intFromPtr(address) + lma_start),
+        .int, .comptime_int => blk: {
+            assertLmaPhysAddress(address);
+            break :blk address + lma_start;
+        },
+        .pointer => blk: {
+            assertLmaPhysAddress(@intFromPtr(address));
+            break :blk @ptrFromInt(@intFromPtr(address) + lma_start);
+        },
         else => @compileError(intPtrErrorStr),
     };
+}
+
+inline fn assertLmaPhysAddress(address: usize) void {
+    if (comptime lib.is_debug == false) return;
+    if (address >= lmaSize()) @panic("physical address out of LMA bounds");
 }
 
 /// Translates a virtual address of the linear memory access (LMA) region to a physical.
