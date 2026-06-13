@@ -478,8 +478,10 @@ const Controller = struct {
         pci_dev.config.setAs(.command, pci_cmd);
 
         const bar = pci_dev.config.readBar(0);
-        const regs = try BarRegs.Group.initBase(bar);
-        errdefer dev.io.release(bar, .mmio);
+        if (bar.type != .mmio) return error.BadHardware;
+
+        const regs = try BarRegs.Group.initBaseSized(bar.base, bar.size);
+        errdefer dev.io.release(bar.base, .mmio);
 
         const cap = regs.get(BarRegs.Capabilities, .ctrl_cap);
 
@@ -508,7 +510,7 @@ const Controller = struct {
         self.disable() catch |err| log.err("deinit: cannot disable controller: {s}", .{@errorName(err)});
         self.deinitAdminQueues();
 
-        dev.io.release(vm.getPhysLma(self.bar.dyn_base), .mmio);
+        self.bar.deinit();
     }
 
     pub fn enable(self: *Controller) !void {

@@ -24,16 +24,15 @@ pub fn Mechanism(
     comptime DataT: type,
     comptime readFn: anytype,
     comptime writeFn: anytype,
-    comptime initFn: ?fn (AddressT, AddressT) anyerror!AddressT
+    comptime initFn: ?fn (AddressT, AddressT) anyerror!AddressT,
+    comptime deinitFn: ?fn (AddressT, AddressT) void,
 ) type {
     comptime {
         const data_info = @typeInfo(DataT);
-
         if (data_info != .int or data_info.int.signedness == .signed or data_info.int.bits % 8 != 0)
             @compileError("Data type must be an unsigned integer e.g. `u<x>`, where x - number of bits: 8, 16, 32, 64");
 
         const addr_info = @typeInfo(AddressT);
-
         if (addr_info != .int or addr_info.int.signedness != .unsigned)
             @compileError("Address type must be an unsigned integer e.g `u<x>`, where x - number of bits");
 
@@ -56,6 +55,7 @@ pub fn Mechanism(
         pub const Data = DataT;
 
         pub const init = initFn;
+        pub const deinit = deinitFn;
 
         pub inline fn read(address: Address) Data {
             return readFn(address);
@@ -191,40 +191,45 @@ pub fn BusDataType(comptime bus_width: BusWidth) type {
 }
 
 pub fn IoPortsMechanism(comptime name: [:0]const u8, comptime bus_width: BusWidth) type {
-    return Mechanism(u16, BusDataType(bus_width), switch (bus_width) {
-        .byte => arch.io.inb,
-        .word => arch.io.inw,
-        .dword => arch.io.inl,
-        .qword => @compileError("64-bit bus width unsupported with I/O ports"),
-    }, switch (bus_width) {
-        .byte => arch.io.outb,
-        .word => arch.io.outw,
-        .dword => arch.io.outl,
-        .qword => unreachable,
-    }, struct {
-        fn init(base: u16, size: u16) !u16 {
-            return @truncate(request(name, base, size, .io_ports) orelse return error.IoBusy);
-        }
-    }.init);
+    return Mechanism(
+        u16,
+        BusDataType(bus_width),
+        switch (bus_width) {
+            .byte => arch.io.inb,
+            .word => arch.io.inw,
+            .dword => arch.io.inl,
+            .qword => @compileError("64-bit bus width unsupported with I/O ports"),
+        },
+        switch (bus_width) {
+            .byte => arch.io.outb,
+            .word => arch.io.outw,
+            .dword => arch.io.outl,
+            .qword => unreachable,
+        },
+        IoPorts(name).init,
+        IoPorts(name).deinit,
+    );
 }
 
 pub fn MmioMechanism(comptime name: [:0]const u8, comptime bus_width: BusWidth) type {
-    return Mechanism(usize, BusDataType(bus_width), switch (bus_width) {
-        .byte => readb,
-        .word => readw,
-        .dword => readl,
-        .qword => readq,
-    }, switch (bus_width) {
-        .byte => writeb,
-        .word => writew,
-        .dword => writel,
-        .qword => writeq,
-    }, struct {
-        fn init(base: usize, size: usize) !usize {
-            _ = request(name, base, size, .mmio) orelse return error.MmioBusy;
-            return vm.getVirtLma(base);
-        }
-    }.init);
+    return Mechanism(
+        usize,
+        BusDataType(bus_width),
+        switch (bus_width) {
+            .byte => readb,
+            .word => readw,
+            .dword => readl,
+            .qword => readq,
+        },
+        switch (bus_width) {
+            .byte => writeb,
+            .word => writew,
+            .dword => writel,
+            .qword => writeq,
+        },
+        Mmio(name).init,
+        Mmio(name).deinit,
+    );
 }
 
 pub const BusWidth = enum(u2) { byte, word, dword, qword };
@@ -263,6 +268,32 @@ inline fn getIoList(io_type: Type) *Region.List {
     return switch (io_type) {
         .io_ports => &ports_list,
         .mmio => &mmio_list,
+    };
+}
+
+fn Mmio(comptime name: [:0]const u8) type {
+    return opaque {
+        pub fn init(base: usize, size: usize) !usize {
+            _ = request(name, base, size, .mmio) orelse return error.MmioBusy;
+            return vm.mmio(base, vm.bytesToPages(size));
+        }
+
+        pub fn deinit(base: usize, size: usize) void {
+            vm.unmmio(base, vm.bytesToPages(size));
+            release(base, .mmio);
+        }
+    };
+}
+
+fn IoPorts(comptime name: [:0]const u8) type {
+    return opaque {
+        pub fn init(base: u16, size: u16) !u16 {
+            return @truncate(request(name, base, size, .io_ports) orelse return error.IoBusy);
+        }
+
+        pub fn deinit(base: u16, _: u16) void {
+            release(base, .io_ports);
+        }
     };
 }
 

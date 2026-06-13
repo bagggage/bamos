@@ -1092,8 +1092,8 @@ const Controller = struct {
         pci_dev.config.setAs(.command, pci_cmd);
 
         const bar = pci_dev.config.readBar(0);
-        const cap_regs = try Regs.Capability.Group.initBase(bar);
-        errdefer dev.io.release(bar, .mmio);
+        const cap_regs = try Regs.Capability.Group.initBaseSized(bar.base, bar.size);
+        errdefer cap_regs.deinitSized(bar.size);
 
         const params = cap_regs.get(Regs.StructuralParams1, .hcs_params1);
         const params2 = cap_regs.get(Regs.StructuralParams2, .hcs_params2);

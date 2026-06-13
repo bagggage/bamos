@@ -38,7 +38,12 @@ pub const Register = struct {
     }
 };
 
-pub fn Group(comptime IoMechanism: type, comptime base: ?comptime_int, comptime size: ?comptime_int, comptime regs: []const Register) type {
+pub fn Group(
+    comptime IoMechanism: type,
+    comptime base: ?comptime_int,
+    comptime size: ?comptime_int,
+    comptime regs: []const Register,
+) type {
     if (base) |val| {
         std.debug.assert(val % @sizeOf(IoMechanism.Address) == 0);
     }
@@ -112,19 +117,30 @@ pub fn Group(comptime IoMechanism: type, comptime base: ?comptime_int, comptime 
         }
 
         pub fn init() !Self {
-            if (IoMechanism.init) |initFn| {
-                _ = try initFn(base.?, byte_size);
-            }
+            comptime std.debug.assert(base != null);
+            if (comptime IoMechanism.init) |initFn| _ = try initFn(base.?, byte_size);
 
             return .{};
         }
 
-        pub fn initBase(base_addr: AddressType) !Self {
-            if (IoMechanism.init) |initFn| {
-                return .{ .dyn_base = try initFn(base_addr, byte_size) };
-            }
+        pub inline fn initBase(base_addr: AddressType) !Self {
+            return initBaseSized(base_addr, byte_size);
+        }
 
-            return .{ .dyn_base = base_addr };
+        pub fn initBaseSized(base_addr: AddressType, io_size: AddressType) !Self {
+            comptime std.debug.assert(base == null);
+            const initFn = IoMechanism.init orelse return .{ .dyn_base = base_addr };
+
+            return .{ .dyn_base = try initFn(base_addr, @max(io_size, byte_size)) };
+        }
+
+        pub inline fn deinit(self: Self) void {
+            self.deinitSized(byte_size);
+        }
+
+        pub fn deinitSized(self: Self, io_size: AddressType) void {
+            const deinitFn = comptime IoMechanism.deinit orelse return;
+            deinitFn(if (base == null) self.dyn_base else base.?, io_size);
         }
 
         pub inline fn addr(self: Self, comptime member: Names) AddressType {

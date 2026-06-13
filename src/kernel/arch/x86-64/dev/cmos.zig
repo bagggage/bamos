@@ -18,9 +18,12 @@ const Ports = dev.regs.Group(
 const ports: Ports = .{};
 
 pub const IoMechanism = dev.io.Mechanism(
-    u8, u8,
-    read, write,
-    null
+    u8,
+    u8,
+    read,
+    write,
+    null,
+    null,
 );
 
 pub fn init() !void {
