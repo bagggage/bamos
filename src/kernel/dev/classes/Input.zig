@@ -374,7 +374,6 @@ var dev_region: devfs.Region = .{ .major = 13 };
 
 idx: u16,
 kind: Kind,
-device: dev.Device = .{ .bus = undefined },
 dev_file: devfs.DevFile,
 
 request_op: ?Request.Fn = null,
@@ -385,15 +384,15 @@ listeners: Event.Listener.List = .{},
 wait_lock: lib.sync.Spinlock = .{},
 event_wait: sched.WaitQueue = .{},
 
-node: INode = .{},
-
 immediate: dev.intr.SoftHandler = .{ .func = &immediateHandler },
+
+node: INode = .{},
 
 pub inline fn preinit() void {
     @memset(&num_map.masks, std.math.maxInt(usize));
 }
 
-pub fn setup(self: *Self, name: dev.Name, kind: Kind) Error!void {
+pub fn setup(self: *Self, kind: Kind) Error!void {
     const num = allocDevNum() orelse return error.MaxSize;
     errdefer freeDevNum(num);
 
@@ -403,9 +402,8 @@ pub fn setup(self: *Self, name: dev.Name, kind: Kind) Error!void {
     self.* = .{
         .idx = @intCast(idx),
         .kind = kind,
-        .device = .{ .name = name, .bus = undefined },
         .dev_file = .{
-            .name = try .print("event{}", .{idx}),
+            .name = dev.Name.print("event{}", .{idx}) catch unreachable,
             .num = num,
             .access = .{
                 .gid = 0,
@@ -434,7 +432,6 @@ pub fn deinit(self: *Self) void {
         dev_region.free(self.dev_file.num);
     }
 
-    self.device.deinit();
     self.dev_file.name.deinit();
 }
 
@@ -562,14 +559,14 @@ fn freeDevNum(num: devfs.DevNum) void {
     dev_region.free(num);
 }
 
-fn allocIndex() ?usize {
+fn allocIndex() ?u16 {
     num_lock.lock();
     defer num_lock.unlock();
 
-    return num_map.toggleFirstSet();
+    return @intCast(num_map.toggleFirstSet() orelse return null);
 }
 
-fn freeIndex(idx: usize) void {
+fn freeIndex(idx: u16) void {
     num_lock.lock();
     defer num_lock.unlock();
 

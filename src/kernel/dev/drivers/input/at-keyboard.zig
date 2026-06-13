@@ -240,6 +240,7 @@ const Command = enum(u8) {
 };
 
 const Keyboard = struct {
+    device: dev.Device,
     input: Input,
 
     state: packed struct {
@@ -270,17 +271,21 @@ const Keyboard = struct {
         const self = vm.gpa.create(Keyboard) orelse return error.NoMemory;
         errdefer vm.gpa.free(self);
 
-        var name: dev.Name = try .print("0.ps2.{t}", .{id});
-        errdefer name.deinit();
-
-        self.* = .{ .input = undefined };
+        self.* = .{
+            .device = .{
+                .bus = undefined,
+                .name = try .print("0.ps2.{t}", .{id}),
+            },
+            .input = undefined,
+        };
         self.immediate.ctx = self;
+        errdefer self.device.deinit();
 
         const irq = ps2.getIrqPin(0);
-        try dev.intr.requestIrq(irq, &self.input.device, &interruptHandler, .edge, true);
-        errdefer dev.intr.releaseIrq(irq, &self.input.device);
+        try dev.intr.requestIrq(irq, &self.device, &interruptHandler, .edge, true);
+        errdefer dev.intr.releaseIrq(irq, &self.device);
 
-        try self.input.setup(name, .keyboard);
+        try self.input.setup(.keyboard);
         errdefer self.input.deinit();
 
         self.input.request_op = &inputRequest;
@@ -298,6 +303,10 @@ const Keyboard = struct {
     inline fn delete(self: *Keyboard) void {
         self.deinit();
         vm.gpa.free(self);
+    }
+
+    inline fn fromDevice(device: *dev.Device) *Keyboard {
+        return @fieldParentPtr("device", device);
     }
 
     inline fn fromInput(device: *Input) *Keyboard {
@@ -340,9 +349,7 @@ const Keyboard = struct {
     }
 
     fn interruptHandler(device: *dev.Device) bool {
-        const input: *Input = @fieldParentPtr("device", device);
-        const kbd = Keyboard.fromInput(input);
-
+        const kbd = Keyboard.fromDevice(device);
         const code: scancodes.Code = @enumFromInt(ps2.readDataRaw());
 
         switch (code) {
@@ -409,7 +416,7 @@ pub fn init() !void {
         return err;
     };
 
-    driver.attachDevice(&kbd.input.device);
+    driver.attachDevice(&kbd.device);
 }
 
 fn inputRequest(device: *Input, request: Input.Request) Input.Error!void {
