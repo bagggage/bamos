@@ -130,6 +130,8 @@ pub inline fn setupCpu(cpu_idx: u16) void {
 
     useIdt(&idts[cpu_idx]);
     regs.setTss(gdt.getTssSelectorOffset(cpu_idx));
+
+    if (!smp.isEarlyBoot()) intr.chip.initPerCpu(cpu_idx);
 }
 
 pub fn setupIsr(vec: intr.Vector, isr_ptr: isr.Fn, stack: Stack, type_attr: u8) void {

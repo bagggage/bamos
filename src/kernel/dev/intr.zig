@@ -33,6 +33,7 @@ pub const Chip = struct {
         pub const MaskIrqFn = IrqFn;
         pub const UnmaksIrqFn = IrqFn;
         pub const ConfigMsiFn = *const fn(*Msi, u8, TriggerMode) void;
+        pub const InitPerCpuFn = *const fn (u16) void;
 
         eoi: EoiFn,
         bindIrq: BindIrqFn,
@@ -40,10 +41,15 @@ pub const Chip = struct {
         maskIrq: MaskIrqFn,
         unmaskIrq: UnmaksIrqFn,
         configMsi: ConfigMsiFn,
+        initPerCpu: ?InitPerCpuFn = null,
     };
 
     name: []const u8,
     ops: Operations,
+
+    pub fn is(self: *const Chip, check_name: []const u8) bool {
+        return std.mem.eql(u8, self.name, check_name);
+    }
 
     pub inline fn eoi(self: *const Chip) void {
         self.ops.eoi();
@@ -67,6 +73,10 @@ pub const Chip = struct {
 
     pub inline fn configMsi(self: *const Chip, msi: *Msi, idx: u8, trigger_mode: TriggerMode) void {
         self.ops.configMsi(msi, idx, trigger_mode);
+    }
+
+    pub inline fn initPerCpu(self: *const Chip, cpu: u16) void {
+        if (self.ops.initPerCpu) |func| func(cpu);
     }
 };
 

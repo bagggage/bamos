@@ -135,6 +135,8 @@ pub fn init() !void {
     regs.setMsr(regs.MSR_APIC_BASE, regs.getMsr(regs.MSR_APIC_BASE) | APIC_ENABLED);
 
     try lapic.init();
+    lapic.initPerCpu();
+
     try ioapic.init();
 }
 
@@ -148,6 +150,7 @@ pub fn chip() intr.Chip {
             .maskIrq = &maskIrq,
             .unmaskIrq = &unmaskIrq,
             .configMsi = &configMsi,
+            .initPerCpu = &initPerCpu,
         }
     };
 }
@@ -238,4 +241,9 @@ fn configMsi(msi: *intr.Msi, idx: u8, trigger_mode: intr.TriggerMode) void {
     );
 
     msi.message = .{ .address = @as(u32, @bitCast(address)), .data = @bitCast(data) };
+}
+
+fn initPerCpu(_: u16) void {
+    regs.setMsr(regs.MSR_APIC_BASE, regs.getMsr(regs.MSR_APIC_BASE) | APIC_ENABLED);
+    lapic.initPerCpu();
 }
