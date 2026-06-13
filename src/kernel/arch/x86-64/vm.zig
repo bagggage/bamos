@@ -1,6 +1,6 @@
 //! # Virtual memory managment implementation
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
@@ -37,8 +37,7 @@ pub const PageTable = struct {
         size: u1 = 0,
         global: u1 = 0,
         _ignored: u3 = 0,
-        base: u28 = 0,
-        _rsrvd: u12 = 0,
+        base: u40 = 0,
         _ignored2: u11 = 0,
         exec_disabled: u1 = 0,
 
@@ -68,11 +67,11 @@ pub const PageTable = struct {
         }
 
         inline fn getBase(self: *const @This()) usize {
-            return @as(usize, @intCast(self.base)) * vm.page_size;
+            return @as(usize, self.base) * vm.page_size;
         }
 
         inline fn nextPageTable(self: *const @This()) *PageTable {
-            return @ptrFromInt(vm.getVirtLma(@as(usize, self.base) * page_size));
+            return @ptrFromInt(vm.getVirtLma(self.getBase()));
         }
 
         fn prioritizeFlags(self: *@This(), flags: vm.MapFlags) void {
@@ -431,7 +430,7 @@ pub const PageTable = struct {
         return @truncate((virt >> @truncate((pt_idx * 9) + 12)) & 0x1FF);
     }
 
-    inline fn getInpageOffset(pt_idx: u8, virt: usize) u12 {
+    inline fn getInpageOffset(pt_idx: u8, virt: usize) u30 {
         return @truncate(virt & ~(~@as(usize, 0xFFF) << @truncate(pt_idx * 9)));
     }
 };
