@@ -102,23 +102,23 @@ pub const PageTable = struct {
             }
         }
 
-        fn formatHelper(self: *const Entry, writer: *std.Io.Writer, region_len: u16, level: u3) void {
+        fn formatHelper(self: *const Entry, writer: *std.Io.Writer, region_len: u16, level: u3) std.Io.Writer.Error!void {
             const pte_idx = (@intFromPtr(self) & 0xFFF) / @sizeOf(Entry);
             const prefix = fmt.prefixies[level];
 
             if (region_len > 1) {
-                writer.print("{s}P{} [{}-{}]: 0x{x}->0x{x} {} {s}\n", .{
+                try writer.print("{s}P{} [{}-{}]: 0x{x}->0x{x} {} {s}\n", .{
                     prefix, 4 - level, pte_idx, pte_idx + region_len - 1,
                     self.getBase(), self.getBase() + ((region_len - 1) * fmt.size_steps[level]),
                     fmt.size_units[level] * region_len, fmt.size_strs[level]
                 });
             } else if (level != 3 and self.size == 0) {
-                writer.print("{s}P{} [{}]: 0x{x}->0x{x}\n", .{
+                try writer.print("{s}P{} [{}]: 0x{x}->0x{x}\n", .{
                     prefix, 4 - level, pte_idx,
                     vm.getPhysLma(self), self.getBase()
                 });
             } else {
-                writer.print("{s}P{} [{}] -> 0x{x} {} {s}\n", .{
+                try writer.print("{s}P{} [{}] -> 0x{x} {} {s}\n", .{
                     prefix, 4 - level, pte_idx, self.getBase(),
                     fmt.size_units[level], fmt.size_strs[level]
                 });
@@ -369,11 +369,11 @@ pub const PageTable = struct {
         }
     }
 
-    pub inline fn format(writer: *std.Io.Writer, self: *const PageTable) void {
-        self.formatLevel(writer, 0);
+    pub inline fn format(writer: *std.Io.Writer, self: *const PageTable) std.Io.Writer.Error!void {
+        try self.formatLevel(writer, 0);
     }
 
-    fn formatLevel(self: *const PageTable, writer: *std.Io.Writer, level: u2) void {
+    fn formatLevel(self: *const PageTable, writer: *std.Io.Writer, level: u2) std.Io.Writer.Error!void {
         var pte_idx: u16 = 0;
 
         while (pte_idx < PageTable.len) : (pte_idx += 1) {
@@ -394,11 +394,11 @@ pub const PageTable = struct {
                     }
                 }
 
-                pte.formatHelper(writer, region, level);
+                try pte.formatHelper(writer, region, level);
                 pte_idx += region - 1;
             } else {
-                pte.formatHelper(writer, 1, level);
-                pte.nextPageTable().formatLevel(writer, level + 1);
+                try pte.formatHelper(writer, 1, level);
+                try pte.nextPageTable().formatLevel(writer, level + 1);
             }
         }
     }
