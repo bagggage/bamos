@@ -43,6 +43,7 @@ pub const Error = vm.Error || parts.Error || error {
     NoSpace,
     NoTTY,
     NotDirectory,
+    NotEmpty,
     NotRegularFile,
 };
 
@@ -573,7 +574,7 @@ pub fn changeRoot(new: *Dentry) Error!void {
         const mnt_name = orig_dentry.name.str();
         const new_mnt_dentry = lookup(null, new, mnt_name) catch |err| blk: {
             if (err != error.NoEnt) return err;
-            break :blk try new.makeDirectory(mnt_name, .{
+            break :blk try new.createFile(mnt_name, .directory, .{
                 .uid = orig_dentry.inode.uid,
                 .gid = orig_dentry.inode.gid,
                 .perm = orig_dentry.inode.perm
@@ -750,8 +751,8 @@ fn initRoot() !void {
 }
 
 fn initMountFs(dir: []const u8, fs_name: []const u8) Error!void {
-    const mnt_dent = try root_dentry.makeDirectory(
-        dir, .{ .perm = @intFromEnum(Permissions.rw) }
+    const mnt_dent = try root_dentry.createFile(
+        dir, .directory, .{ .perm = @intFromEnum(Permissions.rw) }
     );
     defer mnt_dent.deref();
 

@@ -13,6 +13,7 @@
 const std = @import("std");
 
 const log = std.log.scoped(.tmpfs);
+const lib = @import("../../lib.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
@@ -21,35 +22,51 @@ const EntryKind = enum {
     file
 };
 
-const File = struct {
-    const Page = struct {
-        const List = std.SinglyLinkedList;
-        const Node = List.Node;
+pub const Context = packed struct(usize) {
+    pub const max_inodes = std.math.maxInt(u16);
+    pub const bitmap_size = max_inodes / lib.byte_size;
 
-        base: u32,
-        node: Node = .{},
-    };
+    const bitmap_rank = vm.bytesToRank(bitmap_size);
 
-    pub const alloc_config: vm.auto.Config = .{
-        .allocator = .oma,
-        .capacity = 128
-    };
+    bitmap: lib.BitmapUnbounded,
 
-    page_list: Page.List = .{},
+    pub fn init() vm.Error!Context {
+        const phys = vm.PageAllocator.alloc(bitmap_rank) orelse return error.NoMemory;
+        const bytes: [*]u8 = @ptrFromInt(vm.getVirtLma(phys));
 
-    pub fn deinit(_: *File) void {}
+        const bitmap: lib.BitmapUnbounded = .init(bytes[0..bitmap_size], false);
+        return .{ .bitmap = bitmap };
+    }
 
-    pub fn delete(self: *File) void {
-        self.deinit();
-        vm.auto.free(File, self);
+    pub fn deinit(self: Context) void {
+        const phys = vm.getPhysLma(self.bitmap.bytes);
+        vm.PageAllocator.free(phys, bitmap_rank);
+    }
+
+    pub fn allocateInodeIndex(self: Context) ?u32 {
+        const index = self.bitmap.find(max_inodes, false) orelse return null;
+        self.bitmap.set(index);
+
+        return @truncate(index + 1);
+    }
+
+    pub fn reserveInodeIndex(self: Context, index: u32) error{Busy}!void {
+        if (self.bitmap.get(index) != 0) return error.Busy;
+        self.bitmap.set(index);
+    }
+
+    pub inline fn freeInodeIndex(self: Context, index: u32) void {
+        self.bitmap.clear(index);
     }
 };
 
 pub const DentryOps = opaque {
     pub const lookup = dentryLookup;
     pub const iterate = dentryIterate;
-    pub const makeDirectory = dentryMakeDirectory;
-    pub const createFile = dentryCreateFile;
+    pub const link = dentryLink;
+    pub const unlink = dentryUnlink;
+    pub const updateInode = dentryUpdateInode;
+    pub const deinitInode = vfs.internals.dentry_ops.default.deinitInode;
 };
 
 pub const dentry_ops = &fs.dentry_ops;
@@ -67,9 +84,10 @@ var fs = vfs.FileSystem.init(
         .open = dentryOpen,
         .lookup = dentryLookup,
         .iterate = dentryIterate,
-        .makeDirectory = dentryMakeDirectory,
-        .createFile = dentryCreateFile,
-        .deinitInode = deinitInode,
+        .link = dentryLink,
+        .unlink = dentryUnlink,
+        .updateInode = dentryUpdateInode,
+        .deinitInode = vfs.internals.dentry_ops.default.deinitInode,
     },
 );
 
@@ -81,13 +99,65 @@ pub fn deinit() void {
     vfs.unregisterFs(&fs);
 }
 
+pub fn createRoot(
+    inode_idx: u32,
+    ops: *vfs.Dentry.Operations,
+    opts: vfs.CreateOptions,
+) vm.Error!*vfs.Dentry {
+    const inode = try createInode(.directory, inode_idx, opts);
+    errdefer inode.free();
+
+    return createDentry("/", inode, .{ .tag = .none, .ptr = undefined }, ops);
+}
+
+pub fn createInode(kind: vfs.Inode.Type, index: u32, opts: vfs.CreateOptions) vm.Error!*vfs.Inode {
+    const inode = vfs.Inode.new() orelse return error.NoMemory;
+    errdefer inode.free();
+
+    const time = vfs.getTime();
+    inode.* = .{
+        .index = index,
+        .type = kind,
+        .cache_ctrl = .{ .write_back = &vfs.internals.cache.noWriteBack },
+        .access_time_sec = time.sec,
+        .create_time_sec = time.sec,
+        .modify_time_sec = time.sec,
+        .access_time_ns = time.ns,
+        .create_time_ns = time.ns,
+        .modify_time_ns = time.ns,
+        .links_num = 1,
+        .gid = opts.gid,
+        .uid = opts.uid,
+        .perm = opts.perm,
+    };
+
+    return inode;
+}
+
+pub fn createDentry(
+    name: []const u8,
+    inode: *vfs.Inode,
+    ctx: vfs.Context.Handle,
+    ops: *vfs.Dentry.Operations,
+) !*vfs.Dentry {
+    const dentry = vfs.Dentry.new() orelse return error.NoMemory;
+    errdefer dentry.free();
+
+    try dentry.setup(name, ctx, inode, ops);
+    // Prevent auto-freeing dentry
+    dentry.ref();
+
+    return dentry;
+}
+
 fn mount() vfs.Error!vfs.Context.Virt {
-    const root = try createDirectory("/", undefined, .{
-        .uid = 0,
-        .gid = 0,
-        .perm = @intFromEnum(vfs.Permissions.rw)
-    });
-    return .{ .root = root };
+    const ctx: Context = try .init();
+    errdefer ctx.deinit();
+
+    const inode_idx = ctx.allocateInodeIndex() orelse unreachable;
+    const root = try createRoot(inode_idx, dentry_ops, .{});
+
+    return .{ .root = root, .data = .from(ctx) };
 }
 
 fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
@@ -95,6 +165,11 @@ fn dentryOpen(_: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
 }
 
 fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
+    const lock: *lib.sync.Spinlock = @constCast(&parent.lock);
+
+    lock.lock();
+    defer lock.unlock();
+
     var node = parent.child.first;
     while (node) |n| : (node = n.next) {
         const dentry = vfs.Dentry.fromNode(n);
@@ -105,8 +180,19 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
 }
 
 fn dentryIterate(dentry: *const vfs.Dentry, iter: *vfs.Dentry.Iterator) vfs.Error!void {
+    // Fill dot entries
+    if (iter.pos == 0) {
+        if (!iter.fillNext(".", dentry.inode.index, .directory)) return;
+        iter.pos += 1;
+    }
+
+    if (iter.pos == 1) {
+        if (!iter.fillNext("..", dentry.parent.inode.index, .directory)) return;
+        iter.pos += 1;
+    }
+
     var node = dentry.child.first;
-    for (0..iter.pos) |_| {
+    for (2..iter.pos) |_| {
         if (node) |n| {
             @branchHint(.likely);
             node = n.next;
@@ -126,76 +212,48 @@ fn dentryIterate(dentry: *const vfs.Dentry, iter: *vfs.Dentry.Iterator) vfs.Erro
     }
 }
 
-fn dentryMakeDirectory(_: *const vfs.Dentry, child: *vfs.Dentry, opts: vfs.CreateOptions) vfs.Error!void {
-    const inode = try createInode(.directory, opts);
-    child.assignInode(inode);
+fn dentryLink(dentry: *vfs.Dentry, inode: *vfs.Inode) vfs.Error!void {
+    if (inode.index == 0) {
+        const ctx = dentry.getVirtualCtx().data.as(Context);
+        const index = ctx.allocateInodeIndex() orelse return error.NoSpace;
+
+        inode.index = index;
+    }
+
     // Prevent auto-freeing
-    child.ref();
+    dentry.ref();
 }
 
-fn dentryCreateFile(_: *const vfs.Dentry, child: *vfs.Dentry, opts: vfs.CreateOptions) vfs.Error!void {
-    const inode = try createInode(.regular_file, opts);
-    child.assignInode(inode);
-    // Prevent auto-freeing
-    child.ref();
+fn dentryUnlink(dentry: *const vfs.Dentry) vfs.Error!void {
+    const mut_dentry: *vfs.Dentry = @constCast(dentry);
+    const inode = dentry.inode;
+
+    if (inode.type == .directory) {
+        mut_dentry.lock.lock();
+        defer mut_dentry.lock.unlock();
+
+        if (mut_dentry.child.first != null) return error.NotEmpty;
+    }
+
+    mut_dentry.deref();
+}
+
+fn dentryUpdateInode(inode: *const vfs.Inode, update: vfs.Inode.Update) vfs.Error!void {
+    switch (update) {
+        .size => |s| {
+            if (inode.type != .regular_file) return error.InvalidArgs;
+            if (s.value <= inode.size) return;
+
+            const avail_pages = vm.PageAllocator.getTotalPages() - vm.PageAllocator.getAllocatedPages();
+            const avail_mem = avail_pages * vm.page_size;
+
+            const increment = (s.value - inode.size);
+            if (increment > (avail_mem / 2)) return error.NoSpace;
+        },
+        else => {},
+    }
 }
 
 fn fileReadCacheBlock(_: *const vfs.Dentry, block: *vm.cache.Block) vfs.Error!void {
     @memset(block.asSlice(), 0);
-}
-
-pub fn createRegularFile(name: []const u8, ctx: vfs.Context.Handle, opts: vfs.CreateOptions) !*vfs.Dentry {
-    const inode = try createInode(.regular_file, opts);
-    errdefer inode.free();
-
-    const dentry = try createDentry(name, inode, ctx);
-    return dentry;
-}
-
-pub inline fn createDirectory(name: []const u8, ctx: vfs.Context.Handle, opts: vfs.CreateOptions) !*vfs.Dentry {
-    const inode = try createInode(.directory, opts);
-    errdefer inode.free();
-
-    const dentry = try createDentry(name, inode, ctx);
-    return dentry;
-}
-
-pub fn createDentry(
-    name: []const u8, inode: *vfs.Inode,
-    ctx: vfs.Context.Handle
-) !*vfs.Dentry {
-    const dentry = vfs.Dentry.new() orelse return error.NoMemory;
-    errdefer dentry.free();
-
-    try dentry.setup(name, ctx, inode, &fs.dentry_ops);
-    // Prevent auto-freeing dentry
-    dentry.ref();
-    return dentry;
-}
-
-pub fn createInode(kind: vfs.Inode.Type, opts: vfs.CreateOptions) !*vfs.Inode {
-    const inode = vfs.Inode.new() orelse return error.NoMemory;
-    errdefer inode.free();
-
-    const time = vfs.getTime().posix();
-    inode.* = .{
-        .index = 0,
-        .type = kind,
-        .cache_ctrl = .{ .write_back = &vfs.internals.cache.noWriteBack },
-        .access_time = @intCast(time),
-        .create_time = @intCast(time),
-        .modify_time = @intCast(time),
-        .gid = opts.gid,
-        .uid = opts.uid,
-        .perm = opts.perm
-    };
-
-    return inode;
-}
-
-fn deinitInode(inode: *const vfs.Inode) void {
-    if (inode.type == .regular_file) {
-        const file = inode.fs_data.asPtr(File).?;
-        file.delete();
-    }
 }

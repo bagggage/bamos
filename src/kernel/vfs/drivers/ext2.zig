@@ -9,6 +9,7 @@ const std = @import("std");
 const cache = vfs.Drive.cache;
 const lib = @import("../../lib.zig");
 const log = std.log.scoped(.ext2);
+const sys = @import("../../sys.zig");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
 
@@ -116,6 +117,8 @@ const Superblock = extern struct {
         return (self.magic == super_magic) and (self.major_ver < 1 or self.bgd_size <= @sizeOf(BlockGroupDescriptor));
     }
 };
+
+const Operation = vfs.Drive.io.Operation;
 
 const BlockGroupDescriptor = extern struct {
     block_bitmap: u32,
@@ -248,12 +251,16 @@ const Inode = extern struct {
         ptr_stack: [2]u32 = .{ 0, 0 },
     };
 
+    inline fn size(self: *const Inode) u64 {
+        return (@as(u64, self.size_hi) << 32) | self.size_lo;
+    }
+
     inline fn ptrPerBlockShift(super: *const vfs.Superblock) u5 {
         return super.block_shift - std.math.log2(@sizeOf(u32));
     }
 
     inline fn ptrsPerBlock(super: *const vfs.Superblock) u32 {
-        return @as(u32, 1) << ptrPerBlockShift(super);
+        return super.block_size / @sizeOf(u32);
     }
 
     fn calcPtrPath(begin_idx: u32, super: *const vfs.Superblock) PtrPath {
@@ -301,11 +308,15 @@ const Inode = extern struct {
 
         ptrs: [*]const u32 = undefined,
         ptr_stack: [2]u32 = .{ 0, 0 },
+        indir_blk: u32 = 0,
 
         super: *const vfs.Superblock,
         inode: *const Inode,
 
-        pub inline fn init(begin_idx: u32, super: *const vfs.Superblock, inode: *const Inode) !BlockIter {
+        pub inline fn init(
+            begin_idx: u32, super: *const vfs.Superblock,
+            inode: *const Inode, comptime op: ?Operation,
+        ) !BlockIter {
             const path = Inode.calcPtrPath(begin_idx, super);
 
             var self: BlockIter = .{
@@ -316,22 +327,22 @@ const Inode = extern struct {
                 .super = super,
                 .inode = inode,
             };
-            try self.openStartLocation();
+            try self.openStartLocation(op);
 
             return self;
         }
 
-        pub inline fn deinit(self: *BlockIter) void {
-            self.cursor.close(.read);
+        pub inline fn deinit(self: *BlockIter, comptime op: ?Operation) void {
+            self.cursor.close(op);
         }
 
-        pub inline fn next(self: *BlockIter) !u32 {
-            if (self.indir_level == 0) return self.nextDirectPtr();
+        pub inline fn next(self: *BlockIter, comptime op: ?Operation) !u32 {
+            if (self.indir_level == 0) return self.nextDirectPtr(op);
 
-            return self.nextIndirPtr();
+            return self.nextIndirPtr(op);
         }
 
-        fn nextDirectPtr(self: *BlockIter) !u32 {
+        fn nextDirectPtr(self: *BlockIter, comptime op: ?Operation) !u32 {
             const ptr = self.inode.direct_ptrs[self.inner_idx];
             self.inner_idx +%= 1;
 
@@ -340,26 +351,26 @@ const Inode = extern struct {
                 self.indir_level = 1;
                 self.inner_idx = 0;
 
-                try self.readPtrBlock(self.inode.indir_ptrs[0]);
+                try self.readPtrBlock(self.inode.indir_ptrs[0], op);
             }
 
             return ptr;
         }
 
-        fn nextIndirPtr(self: *BlockIter) !u32 {
+        fn nextIndirPtr(self: *BlockIter, comptime op: ?Operation) !u32 {
             // Have to process next pointers block ?
             if (self.inner_idx >= Inode.ptrsPerBlock(self.super)) {
                 @branchHint(.unlikely);
-                try self.nextIndirBlock();
+                try self.nextIndirBlock(op);
             }
 
-            const ptr = try self.getIndirectPtr(self.inner_idx);
+            const ptr = try self.getIndirectPtr(self.inner_idx,op);
             self.inner_idx +%= 1;
 
             return ptr;
         }
 
-        fn nextIndirBlock(self: *BlockIter) !void {
+        fn nextIndirBlock(self: *BlockIter, comptime op: ?Operation) !void {
             self.inner_idx = 0;
 
             var carry: u1 = 1;
@@ -384,34 +395,40 @@ const Inode = extern struct {
                 self.indir_level += 1;
             }
 
-            try self.readPtrBlock(self.inode.indir_ptrs[self.indir_level - 1]);
+            try self.readPtrBlock(self.inode.indir_ptrs[self.indir_level - 1], op);
 
             for (0..self.indir_level - 1) |i| {
                 const idx = self.ptr_stack[i];
-                try self.readPtrBlock(try self.getIndirectPtr(idx));
+                try self.readPtrBlock(try self.getIndirectPtr(idx, op), op);
             }
         }
 
-        fn openStartLocation(self: *BlockIter) !void {
+        fn openStartLocation(self: *BlockIter, comptime op: ?Operation) !void {
             if (self.indir_level == 0) return;
 
-            try self.readPtrBlock(self.inode.indir_ptrs[self.indir_level - 1]);
+            try self.readPtrBlock(self.inode.indir_ptrs[self.indir_level - 1], op);
             for (0..self.indir_level - 1) |i| {
-                try self.readPtrBlock(try self.getIndirectPtr(self.ptr_stack[i]));
+                try self.readPtrBlock(try self.getIndirectPtr(self.ptr_stack[i], op), op);
             }
         }
 
-        fn readPtrBlock(self: *BlockIter, block: u32) !void {
+        fn readPtrBlock(self: *BlockIter, block: u32, comptime op: ?Operation) !void {
             const offset = calcBlockOffset(self.super, block);
-            try self.cursor.ensureCache(.read, offset);
+            try self.cursor.ensureCache(op, offset);
+
             self.ptrs = @ptrCast(self.cursor.asObject(u32));
+            if (comptime op != .read) self.indir_blk = block;
         }
 
-        fn getIndirectPtr(self: *BlockIter, i: usize) !u32 {
-            const offset = self.cursor.innerOffset() + (i * @sizeOf(u32));
-            if (offset >= cache.block_size) {
-                @branchHint(.unlikely);
-                try self.cursor.seekAndEnsure(.read, cache.block_size);
+        fn getIndirectPtr(self: *BlockIter, i: usize, comptime op: ?Operation) !u32 {
+            const offset = i * @sizeOf(u32);
+            if (self.cursor.innerOffset() + offset >= cache.block_size) {
+                @branchHint(.cold);
+                try self.cursor.seekAndEnsure(op, @intCast(offset));
+
+                // Pointers magic to make it able to take next pointers using sequential `i` index
+                const ptrs_addr = @intFromPtr(self.cursor.asObject(u32));
+                self.ptrs = @ptrFromInt(ptrs_addr - offset);
             }
             return self.ptrs[i];
         }
@@ -446,22 +463,18 @@ const Inode = extern struct {
 
     pub fn makeCache(self: *const Inode, super: *const vfs.Superblock, idx: u32) !*vfs.Inode {
         const inode = vfs.Inode.new() orelse return error.NoMemory;
-
         inode.* = .{
             .index = idx,
             .type = self.type_perm.type.toVfsType(),
-            .perm = @as(u16, @bitCast(self.type_perm)) & 0x0FFF,
-            .size = @as(usize, self.size_hi) << 32 | self.size_lo,
+            .perm = self.type_perm.perm,
+            .size = self.size(),
             .fs_data = .fromPtr(@constCast(super)),
             .cache_ctrl = .{ .write_back = &fileWriteBackCache },
-
-            .create_time = self.create_time,
-            .access_time = self.access_time,
-            .modify_time = self.modify_time,
-
+            .create_time_sec = self.create_time,
+            .access_time_sec = self.access_time,
+            .modify_time_sec = self.modify_time,
             .gid = self.gid,
             .uid = self.uid,
-
             .links_num = self.links_num,
         };
 
@@ -492,6 +505,7 @@ const Dentry = extern struct {
 
             try self.cursor.seekAndEnsure(.read, self.dent.size);
             self.dent = self.cursor.asObject(Dentry);
+
             return self.dent;
         }
 
@@ -509,9 +523,9 @@ const Dentry = extern struct {
                 const block_idx = try self.readBlockIdx(super);
                 const offset = super.part_offset + super.blockToOffset(block_idx) + self.inner_offset;
 
-                try self.cursor.ensureCache(.read, offset);
-                self.dent = self.cursor.asObject(Dentry);
+                self.dent = try self.cursor.ensureAs(Dentry, .read, offset);
                 if (self.dent.size == 0) return error.BadSuperblock;
+
                 return self.dent;
             }
 
@@ -521,9 +535,10 @@ const Dentry = extern struct {
         fn readBlockIdx(self: *const Iterator, super: *const vfs.Superblock) !u32 {
             if (self.block_i < Inode.direct_ptrs_num) return self.inode.direct_ptrs[self.block_i];
 
-            var ptr_iter = try Inode.BlockIter.init(self.block_i, super, self.inode);
-            defer ptr_iter.deinit();
-            return try ptr_iter.next();
+            var ptr_iter = try Inode.BlockIter.init(self.block_i, super, self.inode, .read);
+            defer ptr_iter.deinit(.read);
+
+            return try ptr_iter.next(.read);
         }
     };
 
@@ -562,8 +577,10 @@ var fs = vfs.FileSystem.init(
     .{
         .lookup = dentryLookup,
         .iterate = dentryIterate,
-        .createFile = dentryCreateFile,
-        .makeDirectory = dentryMakeDirectory,
+        .link = dentryLink,
+        .unlink = dentryUnlink,
+        .updateInode = dentryUpdateInode,
+        .deinitInode = dentryDeinitInode,
         .open = dentryOpen,
         .close = dentryClose,
     },
@@ -618,9 +635,18 @@ pub fn mount(drive: *vfs.Drive, part: *const vfs.Partition) vfs.Error!*vfs.Super
         const dentry = vfs.Dentry.new() orelse return error.NoMemory;
         errdefer dentry.free();
 
-        dentry.setup("/", undefined, try inode.makeCache(super, root_inode), &fs.dentry_ops) catch unreachable;
+        dentry.setup(
+            "/",
+            undefined,
+            try inode.makeCache(super, root_inode),
+            &fs.dentry_ops,
+        ) catch unreachable;
+
         super.root = dentry;
     }
+
+    ext_super.mount_time = @truncate(vfs.getTime().posix());
+    ext_super.mount_num += 1;
 
     return super;
 }
@@ -637,7 +663,7 @@ fn calcBgdOffset(super: *const vfs.Superblock, group: u32) usize {
 fn readInode(
     super: *const vfs.Superblock,
     inode: u32,
-    comptime op: vfs.Drive.io.Operation,
+    comptime op: Operation,
     cursor: *cache.Cursor,
 ) !*Inode {
     const ext_super = super.fs_data.asPtr(Superblock).?;
@@ -653,9 +679,13 @@ fn readInode(
     return try cursor.ensureAs(Inode, op, offset);
 }
 
-fn readDirectory(super: *const vfs.Superblock, inode: *vfs.Inode, cursor: *cache.Cursor) !Dentry.Iterator {
+fn readDirectory(
+    super: *const vfs.Superblock,
+    inode: *vfs.Inode,
+    cursor: *cache.Cursor,
+) !Dentry.Iterator {
     const ext_inode = try readInode(super, inode.index, .read, cursor);
-    const blocks_num = inode.size >> super.block_shift;
+    const blocks_num = super.offsetToBlock(ext_inode.size());
 
     return .{
         .inode = ext_inode,
@@ -670,11 +700,13 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
     var cache_cursor = super.drive.blankCursor();
     defer cache_cursor.close(.read);
 
-    var dent_it = readDirectory(super, parent.inode, &cache_cursor) catch return null;
-    defer dent_it.deinit();
+    var iter = readDirectory(super, parent.inode, &cache_cursor) catch return null;
+    defer iter.deinit();
 
     const ext_dent = blk: {
-        while (dent_it.next(super) catch return null) |dent| {
+        while (iter.next(super) catch return null) |dent| {
+            if (dent.inode == 0) continue;
+
             if (std.mem.eql(u8, name, dent.name())) break :blk dent;
         }
 
@@ -683,6 +715,10 @@ fn dentryLookup(parent: *const vfs.Dentry, name: []const u8) ?*vfs.Dentry {
 
     // Init new vfs dentry
     const child_inode = readInode(super, ext_dent.inode, .read, &cache_cursor) catch return null;
+    if (child_inode.links_num == 0) {
+        @branchHint(.cold);
+        return null;
+    }
 
     const child_dentry = vfs.Dentry.new() orelse return null;
     const vfs_inode = child_inode.makeCache(super, ext_dent.inode) catch {
@@ -705,12 +741,16 @@ fn dentryIterate(dentry: *const vfs.Dentry, iter: *vfs.Dentry.Iterator) vfs.Erro
     var cache_cursor = super.drive.blankCursor();
     defer cache_cursor.close(.read);
 
-    var dent_it = readDirectory(super, dentry.inode, &cache_cursor) catch return error.IoFailed;
-    defer dent_it.deinit();
+    var ext_iter = readDirectory(super, dentry.inode, &cache_cursor) catch return error.IoFailed;
+    defer ext_iter.deinit();
 
-    dent_it.seek(super, iter.pos);
-    while (dent_it.next(super) catch return error.IoFailed) |dent| {
-        iter.pos = super.blockToOffset(dent_it.block_i) + dent_it.inner_offset;
+    ext_iter.seek(super, iter.pos);
+    while (ext_iter.next(super) catch return error.IoFailed) |dent| {
+        iter.pos = super.blockToOffset(ext_iter.block_i) + ext_iter.inner_offset;
+        if (dent.inode < 1) {
+            @branchHint(.cold);
+            continue;
+        }
 
         const @"type": Inode.Type = @enumFromInt(dent.type);
         if (!iter.fillNext(dent.name(), dent.inode, @"type".toVfsType())) {
@@ -719,80 +759,311 @@ fn dentryIterate(dentry: *const vfs.Dentry, iter: *vfs.Dentry.Iterator) vfs.Erro
         }
     }
 
-    iter.pos = super.blockToOffset(dent_it.block_i) + dent_it.inner_offset;
+    iter.pos = super.blockToOffset(ext_iter.block_i) + ext_iter.inner_offset;
 }
 
-fn dentryMakeDirectory(parent: *const vfs.Dentry, child: *vfs.Dentry, opts: vfs.CreateOptions) vfs.Error!void {
+fn dentryLink(dentry: *vfs.Dentry, inode: *vfs.Inode) vfs.Error!void {
+    lib.debug.assert(dentry.parent != dentry, @src());
+
+    const parent = dentry.parent;
     const super = parent.ctx.super;
 
     var cursor = super.drive.blankCursor();
     defer cursor.close(.write);
 
-    const inode_idx = try allocInode(super, parent.inode.index, true, &cursor);
-    errdefer freeInode(super, inode_idx, true, &cursor) catch {};
+    const time: u32 = @truncate(inode.access_time_sec);
+    const inode_idx = if (inode.index == 0) blk: {
+        lib.debug.assert(inode.links_num == 0, @src());
 
-    const block_idx = try allocBlock(super, inode_idx, &cursor);
-    errdefer freeBlock(super, block_idx, &cursor) catch {};
+        const inode_idx = try allocInode(
+            super, parent.inode.index,
+            inode.type == .directory, &cursor,
+        );
+        const opts: vfs.CreateOptions = .{
+            .perm = inode.perm,
+            .uid = inode.uid,
+            .gid = inode.gid,
+        };
 
-    const time = vfs.getTime().posix();
-    try initializeDirectoryInode(
+        if (inode.type == .directory) {
+            try makeDirectory(parent, inode_idx, opts, time, &cursor);
+        } else {
+            try writeInode(
+                super, inode_idx, inode.type,
+                opts, time, 0,
+                0, 1, &cursor,
+            );
+        }
+
+        break :blk inode_idx;
+    } else inode.index;
+
+    errdefer if (inode.index == 0) {
+        if (inode.type == .directory) clearDirectory(parent, inode_idx, time, &cursor) catch {};
+        freeInode(super, inode_idx, inode.type == .directory, &cursor) catch {};
+    };
+
+    try addDentryToDirectory(
         super,
+        parent.inode.index,
+        dentry.name.str(),
         inode_idx,
-        block_idx,
-        opts,
+        inode.type,
         time,
         &cursor,
     );
 
-    try makeDirectoryEntries(super, inode_idx, parent.inode.index, block_idx, &cursor);
-    try addDentryToDirectory(
-        super,
-        parent.inode.index,
-        child.name.str(),
-        inode_idx,
-        .directory,
-        &cursor,
-    );
+    if (!inode.isAllocated() and inode.type == .directory) {
+        inode.links_num += 1;
+        inode.size = super.block_size;
+    }
 
-    const parent_inode = try readInode(super, parent.inode.index, .write, &cursor);
-    parent_inode.links_num += 1;
-    parent_inode.modify_time = @truncate(time);
-    parent_inode.access_time = @truncate(time);
-    cursor.setDirty(@sizeOf(Inode));
-
-    var vfs_inode = try makeInode(super, inode_idx, .directory, opts, time, 2);
-    errdefer vfs_inode.free();
-
-    vfs_inode.size = super.block_size;
-    child.assignInode(vfs_inode);
-    child.ref();
+    inode.index = inode_idx;
+    inode.fs_data.setPtr(super);
 }
 
-fn dentryCreateFile(parent: *const vfs.Dentry, child: *vfs.Dentry, opts: vfs.CreateOptions) vfs.Error!void {
-    const super = parent.ctx.super;
+fn dentryUnlink(dentry: *const vfs.Dentry) vfs.Error!void {
+    lib.debug.assert(dentry.parent != dentry, @src());
+
+    const super = dentry.ctx.super;
+    const parent = dentry.parent;
+    const inode = dentry.inode;
+
+    if (inode.type == .directory) {
+        log.debug("dir: links: {}, size: {}", .{inode.links_num, inode.size});
+        if (inode.links_num > 2 or inode.size > super.block_size) return error.NotEmpty;
+
+        var cursor = super.drive.blankCursor();
+        defer cursor.close(.read);
+
+        var iter = try readDirectory(super, inode, &cursor);
+        defer iter.deinit();
+
+        var i: u32 = 0;
+        while (try iter.next(super)) |dent| {
+            log.debug("dent: {} / {s}", .{dent.inode, dent.name()});
+
+            if (dent.inode == 0) continue;
+            i += 1;
+
+            if (i > 2) return error.NotEmpty;
+        }
+    }
+
+    const dent_offset = blk: {
+        var cursor = super.drive.blankCursor();
+        defer cursor.close(.read);
+
+        var iter = try readDirectory(super, parent.inode, &cursor);
+        defer iter.deinit();
+
+        while (try iter.next(super)) |dent| {
+            if (dent.inode != inode.index) continue;
+
+            break :blk iter.cursor.offset;
+        }
+
+        unreachable;
+    };
 
     var cursor = super.drive.blankCursor();
     defer cursor.close(.write);
 
-    const inode_idx = try allocInode(super, parent.inode.index, false, &cursor);
-    errdefer freeInode(super, inode_idx, false, &cursor) catch {};
+    const dent = try cursor.ensureAs(Dentry, .write, dent_offset);
+    dent.inode = 0;
+    cursor.setDirty(@sizeOf(Dentry));
 
-    const time = vfs.getTime().posix();
-    try writeInode(super, inode_idx, .regular_file, opts, time, 0, 0, 1, &cursor);
-    try addDentryToDirectory(
-        super,
-        parent.inode.index,
-        child.name.str(),
-        inode_idx,
-        .regular_file,
-        &cursor,
+    const time: u32 = @truncate(inode.access_time_sec);
+    errdefer internalError(super, "unlink failed: cannot update inode links num");
+
+    const dir_inode = try readInode(super, parent.inode.index, .write, &cursor);
+    dir_inode.links_num -= if (inode.type == .directory) 1 else 0;
+    dir_inode.modify_time = time;
+    dir_inode.access_time = time;
+    cursor.setDirty(@sizeOf(Inode));
+
+    const ext_inode = try readInode(super, inode.index, .write, &cursor);
+    ext_inode.links_num -= 1;
+    ext_inode.access_time = time;
+    ext_inode.modify_time = time;
+    cursor.setDirty(@sizeOf(Inode));
+
+    if (inode.type == .directory) {
+        parent.inode.links_num -= 1;
+        inode.links_num = 1;
+    }
+}
+
+fn dentryUpdateInode(inode: *const vfs.Inode, update: vfs.Inode.Update) vfs.Error!void {
+    const super = inode.fs_data.asPtr(vfs.Superblock).?;
+
+    var cursor = super.drive.blankCursor();
+    defer cursor.close(.write);
+
+    const ext_inode = try readInode(super, inode.index, .write, &cursor);
+    switch (update) {
+        .time => |t| {
+            ext_inode.access_time = @truncate(t.access.posix());
+            ext_inode.modify_time = @truncate(t.modify.posix());
+        },
+        .size => |s| {
+            const ext_super = super.fs_data.asPtr(Superblock).?;
+            if (s.value >= super.blockToOffset(ext_super.free_blocks)) return error.NoSpace;
+
+            ext_inode.size_lo = @truncate(s.value);
+            ext_inode.size_hi = @truncate(s.value >> 32);
+        },
+        .perm => |p| {
+            ext_inode.type_perm.perm = @truncate(@intFromEnum(p.value));
+            ext_inode.uid = p.owner_uid;
+            ext_inode.gid = p.owner_gid;
+        },
+    }
+
+    cursor.setDirty(@sizeOf(Inode));
+}
+
+fn dentryDeinitInode(inode: *const vfs.Inode) void {
+    if (!inode.isRemoved()) return;
+
+    log.debug("inode {}: is removed", .{inode.index});
+
+    const super = inode.fs_data.asPtr(vfs.Superblock).?;
+    var cursor = super.drive.blankCursor();
+    defer cursor.close(.write);
+
+    const ext_inode = readInode(super, inode.index, .write, &cursor) catch |err| {
+        log.err("inode {}: failed to complete deleting: {t}", .{inode.index, err});
+        return;
+    };
+
+    const dump_inode = ext_inode.*;
+    ext_inode.delete_time = @truncate(inode.modify_time_sec);
+    ext_inode.size_lo = 0;
+    ext_inode.size_hi = 0;
+    ext_inode.sectors_num = 0;
+    ext_inode.links_num = 0;
+
+    // Is it needed? Maybe it's better to leave
+    // pointers to be able to restore deleted data?
+    for (&ext_inode.direct_ptrs) |*dir_ptr| dir_ptr.* = 0;
+    for (&ext_inode.indir_ptrs) |*indir_ptr| indir_ptr.* = 0;
+
+    cursor.setDirty(@sizeOf(Inode));
+
+    var iter = Inode.BlockIter.init(0, super, &dump_inode, null) catch |err| {
+        log.err("inode {}: failed to complete deleting: block iterator: {t}", .{inode.index, err});
+        return;
+    };
+    defer iter.deinit(null);
+
+    const blocks_num = super.offsetToBlock(dump_inode.size() + (super.block_size - 1));
+    const ptrs_per_block = Inode.ptrsPerBlock(super);
+    if (blocks_num == 0) return;
+
+    var freed: u32 = 0;
+    for (0..blocks_num) |i| {
+        const block_idx = iter.next(null) catch |err| {
+            log.err("inode {}: failed to complete deleting: read block: {t}", .{inode.index, err});
+            return;
+        };
+
+        freeBlockPartially(super, block_idx, &cursor) catch |err| {
+            log.err("inode {}: failed to free block {} ({} from {}): {t}", .{
+                inode.index, block_idx, i + 1, blocks_num, err,
+            });
+            break;
+        };
+        freed += 1;
+
+        // Free indirect pointer block if needed
+        if (
+            iter.indir_level > 0 and
+            (iter.inner_idx == ptrs_per_block - 1 or i == blocks_num - 1)
+        ) {
+            log.debug("inode {}: free indirect pointer block {}", .{inode.index, iter.indir_blk});
+
+            freeBlockPartially(super, iter.indir_blk, &cursor) catch |err| {
+                log.err("inode {}: failed to free block {} ({} from {}): {t}", .{
+                    inode.index, block_idx, i + 1, blocks_num, err,
+                });
+                break;
+            };
+            freed += 1;
+        }
+    }
+
+    const super_offset_abs = super.part_offset + superblock_disk_offset;
+    cursor.ensureCache(.write, super_offset_abs) catch |err| {
+        log.err("inode {}: failed to change free blocks number in superblock: {t}", .{
+            inode.index, err,
+        });
+        return;
+    };
+
+    cursor.asObject(Superblock).free_blocks += freed;
+    cursor.setDirty(@sizeOf(Superblock));
+
+    freeInode(super, inode.index, inode.type == .directory, &cursor) catch |err| {
+        log.err("inode {}: failed to free inode: {t}", .{inode.index, err});
+    };
+}
+
+fn makeDirectory(
+    parent: *const vfs.Dentry,
+    inode_idx: u32,
+    opts: vfs.CreateOptions,
+    time: u32,
+    cursor: *cache.Cursor,
+) vfs.Error!void {
+    const super = parent.ctx.super;
+
+    const block_idx = try allocBlock(super, inode_idx, cursor);
+    errdefer freeBlock(super, block_idx, cursor) catch {};
+
+    try writeInode(
+        super, inode_idx, .directory, 
+        opts, time, super.block_size,
+        sectorsPerBlock(super), 2, cursor,
     );
 
-    var vfs_inode = try makeInode(super, inode_idx, .regular_file, opts, time, 1);
-    errdefer vfs_inode.free();
+    const inode = cursor.asObject(Inode);
+    inode.direct_ptrs[0] = block_idx;
 
-    child.assignInode(vfs_inode);
-    child.ref();
+    try makeDirectoryEntries(
+        super, inode_idx,
+        parent.inode.index, block_idx,
+        time, cursor,
+    );
+
+    parent.inode.links_num += 1;
+}
+
+fn clearDirectory(parent: *const vfs.Dentry, inode_idx: u32, time: u32, cursor: *cache.Cursor) vfs.Error!void {
+    const super = parent.ctx.super;
+
+    const ext_inode = try readInode(super, inode_idx, .write, cursor);
+    if (ext_inode.size() != super.block_size) {
+        log.warn("inode {}: clearing non empty directory?", .{inode_idx});
+        return error.InvalidArgs;
+    } else if (ext_inode.direct_ptrs[0] == 0) {
+        log.warn("inode {}: clearing non allocated directory?", .{inode_idx});
+        return error.InvalidArgs;
+    }
+
+    try freeBlock(parent.ctx.super, ext_inode.direct_ptrs[0], cursor);
+
+    ext_inode.links_num -= 1;
+    ext_inode.direct_ptrs[0] = 0;
+    cursor.setDirty(@sizeOf(Inode));
+
+    const parent_inode = try readInode(super, parent.inode.index, .write, cursor);
+    parent_inode.links_num -= 1;
+    parent_inode.modify_time = time;
+    parent_inode.access_time = time;
+    cursor.setDirty(@sizeOf(Inode));
+
+    parent.inode.links_num -= 1;
 }
 
 fn allocInode(super: *const vfs.Superblock, parent_inode_idx: u32, is_dir: bool, cursor: *cache.Cursor) vfs.Error!u32 {
@@ -921,40 +1192,12 @@ fn bitmapAlloc(
     return error.NoSpace;
 }
 
-fn makeInode(
-    super: *const vfs.Superblock,
-    idx: u32,
-    kind: vfs.Inode.Type,
-    opts: vfs.CreateOptions,
-    time: u64,
-    links_num: u16
-) vfs.Error!*vfs.Inode {
-    const inode = vfs.Inode.new() orelse return error.NoMemory;
-    errdefer inode.free();
-
-    inode.* = .{
-        .index = idx,
-        .type = kind,
-        .perm = opts.perm,
-        .fs_data = .fromPtr(@constCast(super)),
-        .cache_ctrl = .{ .write_back = &fileWriteBackCache },
-        .access_time = time,
-        .create_time = time,
-        .modify_time = time,
-        .gid = opts.gid,
-        .uid = opts.uid,
-        .links_num = links_num,
-    };
-
-    return inode;
-}
-
 fn writeInode(
     super: *const vfs.Superblock,
     idx: u32,
     kind: vfs.Inode.Type,
     opts: vfs.CreateOptions,
-    time: u64,
+    time: u32,
     size: u64,
     sectors_num: u32,
     links_num: u16,
@@ -977,13 +1220,13 @@ fn writeInode(
         .type = .fromVfsType(kind),
     };
     ext_inode.uid = opts.uid;
+    ext_inode.gid = opts.gid;
     ext_inode.size_lo = @truncate(size);
     ext_inode.size_hi = @truncate(size >> 32);
-    ext_inode.access_time = @truncate(time);
-    ext_inode.create_time = @truncate(time);
-    ext_inode.modify_time = @truncate(time);
+    ext_inode.access_time = time;
+    ext_inode.create_time = time;
+    ext_inode.modify_time = time;
     ext_inode.delete_time = 0;
-    ext_inode.gid = opts.gid;
     ext_inode.links_num = links_num;
     ext_inode.sectors_num = sectors_num;
     ext_inode.flags = 0;
@@ -1005,13 +1248,13 @@ fn addDentryToDirectory(
     name: []const u8,
     child_inode_idx: u32,
     child_type: vfs.Inode.Type,
+    time: u32,
     cursor: *cache.Cursor,
 ) vfs.Error!void {
     const ext_dir = (try readInode(super, dir_inode_idx, .write, cursor)).*;
-    const blocks_num = super.offsetToBlock(inodeSize(&ext_dir));
+    const blocks_num = super.offsetToBlock(ext_dir.size());
     const record_size = Dentry.calcSize(@min(name.len, 255));
     const ext_type = DentryType.fromVfsType(child_type);
-    const now = vfs.getTime().posix();
 
     if (blocks_num == 0) return error.IoFailed;
 
@@ -1035,7 +1278,7 @@ fn addDentryToDirectory(
                 writeDentry(dent, child_inode_idx, ext_type, name, dent.size);
                 cursor.setDirty(offset + dent.size);
 
-                try touchDirectory(super, dir_inode_idx, @truncate(now), cursor);
+                try touchDirectory(super, dir_inode_idx, time, cursor);
                 return;
             }
 
@@ -1049,7 +1292,7 @@ fn addDentryToDirectory(
                 writeDentry(new_dent, child_inode_idx, ext_type, name, remaining);
                 cursor.setDirty(new_offset + remaining);
 
-                try touchDirectory(super, dir_inode_idx, @truncate(now), cursor);
+                try touchDirectory(super, dir_inode_idx, time, cursor);
                 return;
             }
 
@@ -1062,7 +1305,7 @@ fn addDentryToDirectory(
     const new_block_idx = try allocBlock(super, dir_inode_idx, cursor);
     errdefer freeBlock(super, new_block_idx, cursor) catch {};
 
-    try appendDirectoryBlock(super, dir_inode_idx, new_block_idx, @truncate(now), cursor);
+    try appendDirectoryBlock(super, dir_inode_idx, new_block_idx, time, cursor);
 
     const new_block_offset = calcBlockOffset(super, new_block_idx);
     const block = try cursor.ensureAsSlice(.write, new_block_offset);
@@ -1084,6 +1327,7 @@ fn makeDirectoryEntries(
     dir_inode_idx: u32,
     parent_inode_idx: u32,
     block_idx: u32,
+    time: u32,
     cursor: *cache.Cursor,
 ) vfs.Error!void {
     const block_offset = calcBlockOffset(super, block_idx);
@@ -1107,18 +1351,13 @@ fn makeDirectoryEntries(
     );
 
     cursor.setDirty(super.block_size);
-}
 
-fn initializeDirectoryInode(
-    super: *const vfs.Superblock,
-    inode_idx: u32,
-    block_idx: u32,
-    opts: vfs.CreateOptions,
-    time: u64,
-    cursor: *cache.Cursor,
-) vfs.Error!void {
-    try writeInode(super, inode_idx, .directory, opts, time, super.block_size, blockSectors(super), 2, cursor);
-    _ = try setInodeDataBlock(super, inode_idx, 0, block_idx, cursor);
+    const parent_inode = try readInode(super, parent_inode_idx, .write, cursor);
+    parent_inode.links_num += 1;
+    parent_inode.modify_time = time;
+    parent_inode.access_time = time;
+
+    cursor.setDirty(@sizeOf(Inode));
 }
 
 fn writeDentry(dent: *Dentry, inode_idx: u32, dent_type: DentryType, name: []const u8, size: u16) void {
@@ -1147,7 +1386,7 @@ fn appendDirectoryBlock(
     cursor: *cache.Cursor,
 ) vfs.Error!void {
     const ext_dir = try readInode(super, dir_inode_idx, .write, cursor);
-    const size = inodeSize(ext_dir);
+    const size = ext_dir.size();
     const logical_block = super.offsetToBlock(size);
 
     const extra_sectors = try setInodeDataBlock(
@@ -1155,14 +1394,14 @@ fn appendDirectoryBlock(
         dir_inode_idx,
         @truncate(logical_block),
         block_idx,
-        cursor
+        cursor,
     );
 
     const inode = try readInode(super, dir_inode_idx, .write, cursor);
     const new_size = size + super.block_size;
     inode.size_lo = @truncate(new_size);
     inode.size_hi = @truncate(new_size >> 32);
-    inode.sectors_num += blockSectors(super) + extra_sectors;
+    inode.sectors_num += sectorsPerBlock(super) + extra_sectors;
     inode.modify_time = time;
     inode.access_time = time;
 
@@ -1182,6 +1421,26 @@ fn touchDirectory(
     cursor.setDirty(@sizeOf(Inode));
 }
 
+fn internalError(super: *const vfs.Superblock, msg: []const u8) void {
+    if (super.drive.openCursor(.write, super.part_offset + superblock_disk_offset)) |c| {
+        var cursor = c;
+
+        // Force filesystem check/repair
+        const ext_super = cursor.asObject(Superblock);
+        ext_super.check_time = 0;
+
+        cursor.setDirty(@sizeOf(Superblock));
+        cursor.close(.write);
+    } else |_| {
+        log.err("{s}: failed to force superblock repair", .{super.part.dev_file.name.str()});
+    }
+
+    const ext_super = super.fs_data.asPtr(Superblock).?;
+    if (ext_super.errors == .panic) @panic(msg);
+
+    log.err("{s}: {s}", .{super.part.dev_file.name.str(), msg});
+} 
+
 fn inodeGroup(super: *const vfs.Superblock, inode_idx: u32) u32 {
     const ext_super = super.fs_data.asPtr(Superblock).?;
     return (inode_idx - 1) / ext_super.inodes_per_group;
@@ -1192,12 +1451,8 @@ fn blockGroupCount(super: *const vfs.Superblock) u32 {
     return (ext_super.total_blocks + ext_super.blocks_per_group - 1) >> std.math.log2_int(u32, ext_super.blocks_per_group);
 }
 
-fn blockSectors(super: *const vfs.Superblock) u32 {
+fn sectorsPerBlock(super: *const vfs.Superblock) u32 {
     return super.block_size / 512;
-}
-
-fn inodeSize(inode: *const Inode) u64 {
-    return (@as(u64, inode.size_hi) << 32) | inode.size_lo;
 }
 
 fn setInodeDataBlock(
@@ -1227,7 +1482,7 @@ fn setInodeDataBlock(
         ext_inode.indir_ptrs[path.indir_level - 1] = current_block;
         cursor.setDirty(@sizeOf(Inode));
 
-        extra_sectors += blockSectors(super);
+        extra_sectors += sectorsPerBlock(super);
     }
 
     for (0..path.indir_level - 1) |depth| {
@@ -1236,7 +1491,7 @@ fn setInodeDataBlock(
         if (next_block == 0) {
             const allocated_block = try allocBlock(super, inode_idx, cursor);
             try zeroBlock(super, allocated_block, cursor);
-            extra_sectors += blockSectors(super);
+            extra_sectors += sectorsPerBlock(super);
 
             try writePointer(super, current_block, entry_idx, allocated_block, cursor);
             current_block = allocated_block;
@@ -1264,9 +1519,8 @@ fn freeInode(
     cursor: *cache.Cursor,
 ) vfs.Error!void {
     const ext_super = super.fs_data.asPtr(Superblock).?;
-    const zero_based_idx = inode_idx - 1;
-    const group = zero_based_idx / ext_super.inodes_per_group;
-    const inner_idx = zero_based_idx % ext_super.inodes_per_group;
+    const group = inodeGroup(super, inode_idx);
+    const inner_idx = (inode_idx -% 1) % ext_super.inodes_per_group;
 
     const bgd_offset = calcBgdOffset(super, group);
     const bgd = try cursor.ensureAs(BlockGroupDescriptor, .write, bgd_offset);
@@ -1284,7 +1538,7 @@ fn freeInode(
     cursor.setDirty(@sizeOf(Superblock));
 
     if (is_dir) {
-        const dir_bgd_offset = calcBgdOffset(super, inodeGroup(super, inode_idx));
+        const dir_bgd_offset = calcBgdOffset(super, group);
         const dir_bgd = try cursor.ensureAs(BlockGroupDescriptor, .write, dir_bgd_offset);
 
         dir_bgd.dirs_num -%= 1;
@@ -1292,7 +1546,7 @@ fn freeInode(
     }
 }
 
-fn freeBlock(super: *const vfs.Superblock, block_idx: u32, cursor: *cache.Cursor) vfs.Error!void {
+fn freeBlockPartially(super: *const vfs.Superblock, block_idx: u32, cursor: *cache.Cursor) vfs.Error!void {
     const ext_super = super.fs_data.asPtr(Superblock).?;
     const group = block_idx / ext_super.blocks_per_group;
     const inner_idx = block_idx % ext_super.blocks_per_group;
@@ -1304,6 +1558,10 @@ fn freeBlock(super: *const vfs.Superblock, block_idx: u32, cursor: *cache.Cursor
 
     bgd.free_blocks += 1;
     cursor.setDirty(@sizeOf(BlockGroupDescriptor));
+}
+
+fn freeBlock(super: *const vfs.Superblock, block_idx: u32, cursor: *cache.Cursor) vfs.Error!void {
+    try freeBlockPartially(super, block_idx, cursor);
 
     const super_offset_abs = super.part_offset + superblock_disk_offset;
     try cursor.ensureCache(.write, super_offset_abs);
@@ -1316,7 +1574,7 @@ fn getInodeDataBlock(
     super: *const vfs.Superblock,
     inode: *const Inode,
     logical_idx: u32,
-    comptime op: vfs.Drive.io.Operation,
+    comptime op: Operation,
     cursor: *cache.Cursor,
 ) vfs.Error!u32 {
     const path = Inode.calcPtrPath(logical_idx, super);
@@ -1340,7 +1598,7 @@ inline fn readPointer(
     super: *const vfs.Superblock,
     block_idx: u32,
     entry_idx: u32,
-    comptime op: vfs.Drive.io.Operation,
+    comptime op: Operation,
     cursor: *cache.Cursor,
 ) vfs.Error!u32 {
     const offset = calcBlockOffset(super, block_idx) + (entry_idx * @sizeOf(u32));
@@ -1416,8 +1674,8 @@ fn fileReadCacheBlock(dentry: *const vfs.Dentry, block: *vm.cache.Block) vfs.Err
     defer inode_cache.close(.read);
 
     const ext_inode = try readInode(super, inode.index, .read, &inode_cache);
-    var ptr_iter: Inode.BlockIter = try .init(@truncate(start_blk_i), super, ext_inode);
-    defer ptr_iter.deinit();
+    var ptr_iter: Inode.BlockIter = try .init(@truncate(start_blk_i), super, ext_inode, .read);
+    defer ptr_iter.deinit(.read);
 
     var buffer = block.asSlice()[0..len];
     var base_blk: u32 = 0;
@@ -1432,7 +1690,7 @@ fn fileReadCacheBlock(dentry: *const vfs.Dentry, block: *vm.cache.Block) vfs.Err
         }
 
         while (n < len_blk) : (n += 1) {
-            i_blk = try ptr_iter.next();
+            i_blk = try ptr_iter.next(.read);
             if (top_blk == 0) {
                 base_blk = i_blk;
                 top_blk = i_blk + 1;
@@ -1459,7 +1717,7 @@ fn fileWriteBackCache(block: *vm.cache.Block, quants: []const vm.cache.Block.Qua
     const super = inode.fs_data.asPtr(vfs.Superblock) orelse return false;
     const block_offset = block.getOffset();
 
-    log.info("write back: {}", .{block.index});
+    log.debug("inode {}: write back block {}", .{inode.index, block.index});
 
     var cursor = super.drive.blankCursor();
     defer cursor.close(.write);
@@ -1490,7 +1748,7 @@ fn fileWriteBackCache(block: *vm.cache.Block, quants: []const vm.cache.Block.Qua
                 ) catch return false;
 
                 cursor.ensureCache(.write, inode_offset) catch return false;
-                ext_inode.sectors_num += blockSectors(super) + extra_sectors;
+                ext_inode.sectors_num += sectorsPerBlock(super) + extra_sectors;
             } else {
                 cursor.ensureCache(.write, inode_offset) catch return false;
             }
@@ -1506,16 +1764,33 @@ fn fileWriteBackCache(block: *vm.cache.Block, quants: []const vm.cache.Block.Qua
     }
 
     cursor.ensureCache(.write, inode_offset) catch return false;
-    if (inode.size > inodeSize(ext_inode)) {
+
+    inode.rw_sem.writeLock();
+    defer inode.rw_sem.writeUnlock();
+
+    if (inode.size != ext_inode.size()) {
+        log.debug("inode {}: size is changed: {} -> {}", .{
+            inode.index, ext_inode.size(), inode.size
+        });
+
         ext_inode.size_lo = @truncate(inode.size);
         ext_inode.size_hi = @truncate(inode.size >> 32);
     }
 
-    const time = vfs.getTime().posix();
-    ext_inode.access_time = @truncate(time);
-    ext_inode.modify_time = @truncate(time);
-    inode.access_time = time;
-    inode.modify_time = time;
+    const time = vfs.getTime();
+    const posix_time = time.posix();
+
+    ext_inode.access_time = @truncate(posix_time);
+    ext_inode.modify_time = @truncate(posix_time);
+    inode.access_time_sec = time.sec;
+    inode.modify_time_sec = time.sec;
+    inode.access_time_ns = time.ns;
+    inode.modify_time_ns = time.ns;
+
+    if (ext_inode.links_num < 1) {
+        @branchHint(.cold);
+        log.warn("inode {}: syncing, but there are no hard links", .{inode.index});
+    }
 
     cursor.setDirty(@sizeOf(Inode));
     return true;

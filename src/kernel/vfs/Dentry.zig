@@ -31,23 +31,23 @@ pub const Node = List.Node;
 pub const Operations = struct {
     const default = vfs.internals.dentry_ops.debug;
 
-    pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
-    pub const IterateFn = *const fn (*const Dentry, *Iterator) Error!void;
-    pub const MakeDirectoryFn = *const fn(*const Dentry, *Dentry, CreateOptions) Error!void;
-    pub const CreateFileFn = *const fn(*const Dentry, *Dentry, CreateOptions) Error!void;
-    pub const DeinitInodeFn = *const fn(*const Inode) void;
-
     pub const OpenFn = *const fn(*const Dentry, *File) Error!void;
     pub const CloseFn = *const fn(*const Dentry, *File) void;
-
-    lookup: LookupFn = &default.lookup,
-    iterate: IterateFn = &default.iterate,
-    makeDirectory: MakeDirectoryFn = &default.makeDirectory,
-    createFile: CreateFileFn = &default.createFile,
-    deinitInode: DeinitInodeFn = &default.deinitInode,
+    pub const LookupFn = *const fn(*const Dentry, []const u8) ?*Dentry;
+    pub const IterateFn = *const fn (*const Dentry, *Iterator) Error!void;
+    pub const LinkFn = *const fn(*Dentry, *Inode) Error!void;
+    pub const UnlinkFn = *const fn(*const Dentry) Error!void;
+    pub const UpdateInodeFn = *const fn (*const Inode, Inode.Update) Error!void;
+    pub const DeinitInodeFn = *const fn(*const Inode) void;
 
     open: OpenFn = &default.open,
     close: CloseFn = &default.close,
+    lookup: LookupFn = &default.lookup,
+    iterate: IterateFn = &default.iterate,
+    link: LinkFn = &default.link,
+    unlink: UnlinkFn = &default.unlink,
+    updateInode: UpdateInodeFn = &default.updateInode,
+    deinitInode: DeinitInodeFn = &default.deinitInode,
 };
 
 pub const Name = struct {
@@ -158,7 +158,7 @@ pub inline fn new() ?*Dentry {
     const dentry = vm.auto.alloc(Dentry) orelse return null;
     dentry.* = .{
         .name = undefined,
-        .parent = undefined,
+        .parent = dentry,
         .ctx = undefined,
         .inode = undefined,
     };
@@ -206,7 +206,7 @@ pub inline fn getVirtualCtx(self: *const Dentry) *Context.Virt {
 pub fn setup(
     self: *Dentry, name: []const u8,
     ctx: Context.Handle, inode: *Inode, ops: *Operations
-) !void {
+) vm.Error!void {
     const dent_name: Name = try .init(name);
     inode.ref();
 
@@ -225,7 +225,15 @@ pub fn deinit(self: *Dentry) void {
 
     _ = lookup_cache.uncache(self);
 
-    if (self.parent != self) self.parent.removeChild(self);
+    if (self.parent != self) {
+        if (!self.inode.isRemoved()) {
+            @branchHint(.likely);
+            self.parent.removeChild(self);
+        } else {
+            self.parent.deref();
+            self.parent = self;
+        }
+    }
 
     if (self.inode.deref()) {
         self.ops.deinitInode(self.inode);
@@ -253,9 +261,28 @@ pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
         if (new_child.parent != self) self.addChild(new_child);
 
         log.debug("new: {s}: inode: {}", .{new_child.name.str(), new_child.inode.index});
-
         lookup_cache.insert(hash, new_child);
+
         return new_child;
+
+        // WIP: Atomic way
+        //        const result = if (lookup_cache.insert(hash, new_child)) |col| blk: {
+        //            @branchHint(.cold);
+        //
+        //            self.removeChild(new_child);
+        //
+        //            new_child.ref_count = .{};
+        //            new_child.deinit();
+        //
+        //            break :blk col;
+        //        } else blk: {
+        //            log.debug("{f}: cached '{s}', inode: {}", .{
+        //                self.path(), new_child.name.str(), new_child.inode.index
+        //            });
+        //            break :blk new_child;
+        //        };
+        //
+        //        return result;
     }
 
     return child;
@@ -266,26 +293,100 @@ pub inline fn iterate(self: *const Dentry, iter: *Iterator) Error!void {
     return self.ops.iterate(self, iter);
 }
 
-pub fn makeDirectory(self: *Dentry, name: []const u8, opts: CreateOptions) Error!*Dentry {
-    const dir_dentry = try self.createLike(name);
-    errdefer { dir_dentry.name.deinit(); dir_dentry.free(); }
+pub fn createFile(self: *Dentry, name: []const u8, @"type": Inode.Type, opts: CreateOptions) Error!*Dentry {
+    const inode = Inode.new() orelse return error.NoMemory;
+    errdefer inode.delete();
 
-    try self.ops.makeDirectory(self, dir_dentry, opts);
-    self.addChild(dir_dentry);
-    dir_dentry.ref();
+    const time = vfs.getTime();
+    inode.* = .{
+        .type = @"type",
+        .perm = opts.perm,
+        .uid = opts.uid,
+        .gid = opts.gid,
+        .links_num = 0,
+        .cache_ctrl = .{ .write_back = self.inode.cache_ctrl.write_back },
+        .access_time_sec = time.sec,
+        .modify_time_sec = time.sec,
+        .create_time_sec = time.sec,
+        .access_time_ns = time.ns,
+        .modify_time_ns = time.ns,
+        .create_time_ns = time.ns,
+    };
 
-    return dir_dentry;
+    return self.createLink(name, inode);
 }
 
-pub fn createFile(self: *Dentry, name: []const u8, opts: CreateOptions) Error!*Dentry {
-    const file_dentry = try self.createLike(name);
-    errdefer { file_dentry.name.deinit(); file_dentry.free(); }
+pub fn createLink(self: *Dentry, name: []const u8, inode: *Inode) Error!*Dentry {
+    const dentry = try self.createLike(name);
+    errdefer { dentry.name.deinit(); dentry.free(); }
 
-    try self.ops.createFile(self, file_dentry, opts);
-    self.addChild(file_dentry);
-    file_dentry.ref();
+    dentry.parent = self;
+    dentry.inode = inode;
 
-    return file_dentry;
+    {
+        const time = vfs.getTime();
+        const parent = self.inode;
+
+        inode.rw_sem.writeLock();
+        defer inode.rw_sem.writeUnlock();
+
+        inode.access_time_sec = time.sec;
+        inode.access_time_ns = time.ns;
+
+        parent.rw_sem.writeLock();
+        defer parent.rw_sem.writeUnlock();
+
+        try self.ops.link(dentry, inode);
+
+        inode.links_num += 1;
+        inode.modify_time_sec = time.sec;
+        inode.modify_time_ns = time.ns;
+
+        parent.access_time_sec = time.sec;
+        parent.access_time_ns = time.ns;
+        parent.modify_time_sec = time.sec;
+        parent.modify_time_ns = time.ns;
+    }
+
+    dentry.ref();
+    inode.ref();
+    self.addChild(dentry);
+
+    // TODO: Make it race-condition free
+    lookup_cache.cache(dentry);
+
+    return dentry;
+}
+
+pub fn unlink(self: *Dentry) Error!void {
+    lib.debug.assert(self.inode.isAllocated(), @src());
+
+    if (self.parent == self) return error.InvalidArgs;
+
+    // TODO: Make sure there are no race conditions
+    const was_cached = lookup_cache.uncache(self);
+    errdefer if (was_cached) lookup_cache.cache(self);
+
+    {
+        const time = vfs.getTime();
+        const inode = self.inode;
+
+        inode.rw_sem.writeLock();
+        defer inode.rw_sem.writeUnlock();
+
+        if (inode.isRemoved()) return error.NoEnt;
+
+        inode.access_time_sec = time.sec;
+        inode.access_time_ns = time.ns;
+
+        try self.ops.unlink(self);
+
+        inode.links_num -= 1;
+        inode.modify_time_sec = time.sec;
+        inode.modify_time_ns = time.ns;
+    }
+
+    self.parent.removeChildAnonymously(self);
 }
 
 pub fn open(self: *Dentry, perm: vfs.Permissions) Error!*File {
@@ -311,6 +412,7 @@ pub fn onClose(self: *Dentry, file: *File) void {
 
     self.ops.close(self, file);
     self.deref();
+
     vm.auto.free(File, file);
 }
 
@@ -325,41 +427,57 @@ pub fn addChild(self: *Dentry, child: *Dentry) void {
 }
 
 pub fn removeChild(self: *Dentry, child: *Dentry) void {
-    child.parent = child;
-    self.child.remove(&child.node);
+    {
+        self.lock.lock();
+        defer self.lock.unlock();
 
-    if (self.ref_count.put()) self.moveToLru();
+        child.parent = child;
+        self.child.remove(&child.node);
+    }
+
+    self.deref();
 }
 
-/// Remove inode associated with the dentry.
-/// Number of hardlinks should be 0.
-pub fn remove(self: *Dentry) Error!void {
-    // FIXME: Implement.
-
+pub fn removeChildAnonymously(self: *Dentry, child: *Dentry) void {
     self.lock.lock();
     defer self.lock.unlock();
 
-    return error.BadOperation;
-}
-
-pub fn unlink(self: *Dentry) Error!void {
-    // FIXME: Implement.
-
-    self.inode.lock.lock();
-    defer self.inode.lock.unlock();
-
-    return error.BadOperation;
+    self.child.remove(&child.node);
 }
 
 pub fn touch(self: *Dentry, access: sys.time.Time, modify: ?sys.time.Time) Error!void {
-    // TODO: Implement correct time update and add fs driver logic.
     const inode = self.inode;
 
-    inode.lock.lock();
-    defer inode.lock.unlock();
+    inode.rw_sem.writeLock();
+    defer inode.rw_sem.writeUnlock();
 
-    inode.access_time = access.posix();
-    if (modify) |m| inode.modify_time = m.posix();
+    try self.ops.updateInode(inode, .{
+        .time = .{
+            .access = access,
+            .modify = if (modify) |m| m else inode.modifyTime(),
+        },
+    });
+
+    inode.access_time_sec = access.sec;
+    inode.access_time_ns = access.ns;
+    
+    if (modify) |m| {
+        inode.modify_time_sec = m.sec;
+        inode.modify_time_ns = m.ns;
+    }
+}
+
+pub fn resize(self: *Dentry, size: u64) Error!void {
+    const inode = self.inode;
+    if (inode.type == .directory) return error.InvalidArgs;
+
+    inode.rw_sem.writeLock();
+    defer inode.rw_sem.writeUnlock();
+
+    if (inode.isRemoved()) return error.NoEnt;
+    try self.ops.updateInode(self.inode, .{ .size = .{ .value = size } });
+
+    inode.size = size;
 }
 
 pub inline fn path(self: *const Dentry) Path {
@@ -398,8 +516,15 @@ pub fn tryRef(self: *Dentry) bool {
     return true;
 }
 
-pub inline fn deref(self: *Dentry) void {
-    if (self.ref_count.put()) self.moveToLru();
+pub fn deref(self: *Dentry) void {
+    if (!self.ref_count.put()) return;
+    if (self.inode.isRemoved()) {
+        self.delete();
+        return;
+    }
+
+    log.debug("move to lru: {} / {s}", .{self.inode.links_num, self.name.str()});
+    self.moveToLru();
 }
 
 fn moveToLru(self: *Dentry) void {

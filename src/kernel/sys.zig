@@ -183,7 +183,7 @@ fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
         .block_device => blk: {
             const blk_dev = devfs.BlockDev.fromDentry(dentry);
 
-            const mnt_dir = try vfs.getRootWeak().makeDirectory("rootfs", .{});
+            const mnt_dir = try vfs.getRootWeak().createFile("rootfs", .directory, .{});
             defer mnt_dir.deref();
 
             break :blk try if (config.get("rootfs")) |fs_name|

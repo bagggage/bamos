@@ -35,11 +35,15 @@ pub const dentry_ops = opaque {
             return;
         }
 
-        pub fn makeDirectory(_: *const Dentry, _: *Dentry) Error!void {
+        pub fn link(_: *const Dentry, _: *Dentry, _: *Inode) Error!void {
             return error.BadOperation;
         }
 
-        pub fn createFile(_: *const Dentry, _: *Dentry) Error!void {
+        pub fn unlink(_: *const Dentry) Error!void {
+            return error.BadOperation;
+        }
+
+        pub fn updateInode(_: *Inode, _: Inode.Update) Error!void {
             return error.BadOperation;
         }
 
@@ -53,11 +57,12 @@ pub const dentry_ops = opaque {
 
         pub const ops: Dentry.Operations = .{
             .lookup = &lookup,
-            .makeDirectory = &makeDirectory,
-            .createFile = &createFile,
+            .link = &link,
+            .unlink = &unlink,
             .open = &open,
             .close = &close,
-            .deinitInode = &deinitInode
+            .updateInode = &updateInode,
+            .deinitInode = &deinitInode,
         };
     };
 
@@ -72,13 +77,18 @@ pub const dentry_ops = opaque {
             return;
         }
 
-        pub fn makeDirectory(dentry: *const Dentry, _: *Dentry, _: vfs.CreateOptions) Error!void {
-            std.log.warn("{f}: 'makeDirectory' is not implemented", .{dentry.path()});
+        pub fn link(dentry: *Dentry, _: *Inode) Error!void {
+            std.log.warn("{f}: 'link' is not implemented", .{dentry.path()});
             return error.BadOperation;
         }
 
-        pub fn createFile(dentry: *const Dentry, _: *Dentry, _: vfs.CreateOptions) Error!void {
-            std.log.warn("{f}: 'createFile' is not implemented", .{dentry.path()});
+        pub fn unlink(dentry: *const Dentry) Error!void {
+            std.log.warn("{f}: 'unlink' is not implemented", .{dentry.path()});
+            return error.BadOperation;
+        }
+
+        pub fn updateInode(inode: *const Inode, _: Inode.Update) Error!void {
+            std.log.warn("{*}: 'updateInode' is not implemented", .{inode});
             return error.BadOperation;
         }
 
@@ -97,10 +107,11 @@ pub const dentry_ops = opaque {
 
         pub const ops: Dentry.Operations = .{
             .lookup = &lookup,
-            .makeDirectory = &makeDirectory,
-            .createFile = &createFile,
+            .link = &link,
+            .unlink = &unlink,
             .open = &open,
             .close = &close,
+            .updateInode = &updateInode,
             .deinitInode = &deinitInode
         };
     };

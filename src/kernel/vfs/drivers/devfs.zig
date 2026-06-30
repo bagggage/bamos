@@ -13,8 +13,7 @@ const vm = @import("../../vm.zig");
 
 const max_major = vm.page_size * std.mem.byte_size_in_bits;
 
-pub const Error = error {
-    NoMemory,
+pub const Error = vm.Error || error {
     DevMajorLimit,
     DevMinorLimit,
 };
@@ -76,11 +75,7 @@ pub const DevFile = struct {
     access: Access,
 
     ops: *const Operations,
-    node: Node = .{},
-
-    pub inline fn fromNode(node: *Node) *DevFile {
-        return @fieldParentPtr("node", node);
-    }
+    inode: ?*vfs.Inode = null,
 
     pub inline fn fromDentry(dentry: *const vfs.Dentry) *DevFile {
         std.debug.assert(
@@ -122,8 +117,6 @@ const DevList = struct {
     lock: lib.sync.Spinlock = .{},
 };
 
-const init_inode_idx = 1;
-
 var fs: vfs.FileSystem = .init(
     fs_name,
     .{ .virt = .{
@@ -133,19 +126,21 @@ var fs: vfs.FileSystem = .init(
     .{
         .lookup = tmpfs.DentryOps.lookup,
         .iterate = tmpfs.DentryOps.iterate,
-        .createFile = tmpfs.DentryOps.createFile,
-        .makeDirectory = tmpfs.DentryOps.makeDirectory,
+        .link = tmpfs.DentryOps.link,
+        .unlink = tmpfs.DentryOps.unlink,
+        .updateInode = tmpfs.DentryOps.updateInode,
+        .deinitInode = tmpfs.DentryOps.deinitInode,
 
         .open = dentryOpen,
         .close = dentryClose,
     },
 );
 
+var context: tmpfs.Context = undefined;
 var root: *vfs.Dentry = undefined;
+
 var major_bitmap: lib.BitmapUnbounded = undefined;
 var major_lock: lib.sync.Spinlock = .{};
-
-var inode_idx: u32 = init_inode_idx;
 
 const AutoInit = .{
     @import("../../dev/drivers/misc/null.zig"),
@@ -154,17 +149,24 @@ const AutoInit = .{
 };
 
 pub fn init() !void {
-    const phys_pool = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
-    const vm_pool: [*]u8 = @ptrFromInt(vm.getVirtLma(phys_pool));
-    errdefer vm.PageAllocator.free(phys_pool, 0);
+    const phys = vm.PageAllocator.alloc(0) orelse return error.NoMemory;
+    const virt: [*]u8 = @ptrFromInt(vm.getVirtLma(phys));
+    errdefer vm.PageAllocator.free(phys, 0);
 
-    major_bitmap = .init(vm_pool[0..vm.page_size], false);
-    root = try tmpfs.createDirectory(
-        "/",
-        .{ .tag = .none, .ptr = undefined },
-        .{ .perm = @intFromEnum(vfs.Permissions.rw) },
-    );
+    major_bitmap = .init(virt[0..vm.page_size], false);
 
+    context = try .init();
+    errdefer context.deinit();
+
+    const index = context.allocateInodeIndex() orelse unreachable;
+    root = try tmpfs.createRoot(index, tmpfs.dentry_ops, .{
+        .gid = 0,
+        .uid = 0,
+        .perm = vfs.Permissions.makeInt(.rwx, .rx, .rx),
+    });
+    errdefer root.deinit();
+
+    root.meta.fs = .none;
     if (vfs.registerFs(&fs) == false) return error.RegisterFailed;
 
     inline for (AutoInit) |Driver| {
@@ -175,7 +177,7 @@ pub fn init() !void {
 }
 
 pub fn mount() vfs.Error!vfs.Context.Virt {
-    return .{ .root = root };
+    return .{ .root = root, .data = .from(context) };
 }
 
 pub fn unmount(_: *vfs.Context.Virt) void {}
@@ -205,6 +207,19 @@ pub inline fn registerCharDev(devf: *DevFile) Error!void {
     _ = try registerDevice(devf, .char_device);
 }
 
+pub fn unregisterDevice(devf: *DevFile) void {
+    const inode = devf.inode.?;
+    devf.inode = null;
+
+    inode.deref();
+
+    // TODO: Unlink all dentries?
+    // dentry.unlink() catch |err| switch (err) {
+    //     .NoEnt => {},
+    //     else => unreachable,
+    // };
+}
+
 pub inline fn getDevData(dentry: *const vfs.Dentry) lib.AnyData {
     return dentry.inode.fs_data.asPtr(DevFile).?.data;
 }
@@ -218,25 +233,31 @@ pub inline fn getRoot() *vfs.Dentry {
 }
 
 fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
-    const inode = try createInode(
-        kind, .{ .gid = devf.access.gid, .perm = devf.access.perm }
-    );
-    errdefer vfs.Inode.free(inode);
+    const index = context.allocateInodeIndex() orelse return error.NoMemory;
+    errdefer context.freeInodeIndex(index);
 
-    const dentry = try tmpfs.createDentry(devf.name.str(), inode, .{
-        .tag = .root, .ptr = .{ .root = root }
-    });
-    dentry.ops = &fs.dentry_ops;
+    const inode = try tmpfs.createInode(
+        kind,
+        index,
+        .{ .gid = devf.access.gid, .perm = devf.access.perm },
+    );
+    errdefer inode.free();
 
     inode.fs_data.setPtr(devf);
+    inode.ref(); // Prevent inode freeing
+
+    const dentry = try tmpfs.createDentry(
+        devf.name.str(),
+        inode,
+        .{ .tag = .root, .ptr = .{ .root = root } },
+        &fs.dentry_ops,
+    );
+
+    devf.inode = inode;
     root.addChild(dentry);
 
     return dentry;
 }
-
-// TODO: implement
-//fn unregisterDevice(devf: *DevFile, kind: vfs.Inode.Type) void {
-//}
 
 fn dentryOpen(dentry: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
     const devf = dentry.inode.fs_data.asPtr(DevFile).?;
@@ -248,12 +269,4 @@ fn dentryOpen(dentry: *const vfs.Dentry, file: *vfs.File) vfs.Error!void {
 fn dentryClose(dentry: *const vfs.Dentry, file: *vfs.File) void {
     const devf = dentry.inode.fs_data.asPtr(DevFile).?;
     if (devf.ops.close) |close| close(devf, file);
-}
-
-fn createInode(kind: vfs.Inode.Type, opts: vfs.CreateOptions) Error!*vfs.Inode {
-    const inode = try tmpfs.createInode(kind, opts);
-    inode.index = inode_idx;
-    inode_idx += 1;
-
-    return inode;
 }

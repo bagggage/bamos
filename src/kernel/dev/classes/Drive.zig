@@ -10,6 +10,7 @@ const lib = @import("../../lib.zig");
 const log = std.log.scoped(.Drive);
 const sched = @import("../../sched.zig");
 const smp = @import("../../smp.zig");
+const sys = @import("../../sys.zig");
 const vm = @import("../../vm.zig");
 const vfs = @import("../../vfs.zig");
 
@@ -85,8 +86,9 @@ pub const io = opaque {
 
         fn allocAtomic(self: *Queue) *Request {
             while (true) {
-                if (self.getBitmap().find(self.len, false)) |idx| {
-                    @branchHint(.likely);
+                const bitmap = self.getBitmap();
+                if (bitmap.find(self.len, false)) |idx| {
+                    @branchHint(.likely); bitmap.set(idx);
                     return preinitRequest(&self.requests[idx], idx);
                 }
 
@@ -98,8 +100,13 @@ pub const io = opaque {
         fn alloc(self: *Queue) *Request {
             while (true) {
                 self.lock.lockIntr();
-                if (self.getBitmap().find(self.len, false)) |idx| {
-                    @branchHint(.likely); self.lock.unlockIntr();
+
+                const bitmap = self.getBitmap();
+                if (bitmap.find(self.len, false)) |idx| {
+                    @branchHint(.likely);
+                    bitmap.set(idx);
+                    self.lock.unlockIntr();
+
                     return preinitRequest(&self.requests[idx], idx);
                 }
 
@@ -426,8 +433,8 @@ pub fn getPartition(self: *const Self, part: u32) ?*vfs.Partition {
 }
 
 fn syncCallback(_: *const io.Request, status: io.Status, data: lib.AnyData) void {
-    const status_ptr = data.asPtr(io.Status).?;
-    status_ptr.* = status;
+    const dest = data.asPtr(io.Status).?;
+    @atomicStore(io.Status, dest, status, .release);
 }
 
 inline fn makeRequest(
@@ -489,7 +496,10 @@ fn cacheWorker(arg: usize) noreturn {
     const drive: *Self = @ptrFromInt(arg);
 
     while (true) {
-        _ = drive.cache_ctrl.writeBackAll();
+        if (!drive.cache_ctrl.writeBackAll()) {
+            log.warn("{s}: cache write back failed", .{drive.getName().str()});
+        }
+
         sched.sleepFor(delay_sec * std.time.ns_per_s);   
     }
 }
@@ -507,13 +517,28 @@ fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, 
             .data = .fromPtr(&statuses[i]),
         });
 
-        log.info("sended: {}", .{lba_offset});
+        log.debug("{s}: drop internal cache: lba 0x{x}", .{self.getName().str(), lba_offset});
     }
 
     var successed = true;
     for (0..quants.len) |i| {
-        const status: *volatile io.Status = &statuses[i];
-        while (status.* == .none) sched.yield();
+        const timeout = std.time.ns_per_s;
+        const time: usize = sys.time.getUpTime().toNs();
+
+        const status = &statuses[i];
+        while (@atomicLoad(io.Status, status, .acquire) == .none) {
+            if (sys.time.getUpTime().toNs() -| time >= timeout) {
+                @branchHint(.cold);
+                const lba_offset = self.offsetToLba(offset + quants[i].base);
+                log.warn("{s}: write back timeout: lba 0x{x}", .{self.getName().str(), lba_offset});
+
+                status.* = .failed;
+                break;
+            }
+
+            sched.yield();
+        }
+
         if (status.* == .failed) {
             successed = false;
             continue;

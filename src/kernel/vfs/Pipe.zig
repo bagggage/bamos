@@ -33,6 +33,9 @@ const pipe_fs_ctx: vfs.Context.Virt = .{};
 const pipe_inode: Inode = .{
     .index = 0,
     .type = .unknown,
+    .gid = 0,
+    .uid = 0,
+    .links_num = 0,
     .cache_ctrl = .{ .write_back = null },
 };
 
