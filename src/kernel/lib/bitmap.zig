@@ -6,7 +6,7 @@ const std = @import("std");
 
 const lib = @import("../lib.zig"); 
 
-pub const BitmapUnbounded = struct {
+pub const BitmapUnbounded = packed struct(usize) {
     bytes: [*]u8,
 
     pub inline fn init(bytes: []u8, comptime is_setted: bool) BitmapUnbounded {
