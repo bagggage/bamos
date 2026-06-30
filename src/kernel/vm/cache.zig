@@ -158,7 +158,7 @@ pub const Block = struct {
 
         const quant_shift = self.size.quantShift();
         const start_quant = start >> quant_shift;
-        const end_quant = (end >> quant_shift) + 1;
+        const end_quant = (end +% self.size.quantSize() -% 1) >> quant_shift;
 
         self.dirty_map.setRangeValue(.{ .start = start_quant, .end = end_quant }, true);
         self.tryPutIntoDirtyList();
@@ -227,7 +227,7 @@ pub const Block = struct {
             .monotonic,
         ) != null) return;
 
-        self.ctrl.dirty_list.prepend(&self.node);
+        self.ctrl.putIntoDirtyList(self);
     }
 
     inline fn takeFromDirtyList(self: *Block) void {
@@ -346,10 +346,7 @@ pub const Control = struct {
     pub fn writeBackAll(self: *Control) bool {
         if (self.write_back == null) return true;
 
-        while (self.dirty_list.popFirst()) |n| {
-            const block = Block.fromNode(n);
-            block.takeFromDirtyList();
-
+        while (self.popFromDirtyList()) |block| {
             if (!self.writeBack(block)) return false;
         }
 
@@ -385,6 +382,34 @@ pub const Control = struct {
         };
 
         return self.write_back.?(block, quants.items, quant_shift);
+    }
+
+    fn putIntoDirtyList(self: *Control, block: *Block) void {
+        const list = &self.dirty_list;
+
+        var expected = list.first.raw;
+        block.node.next = expected orelse &block.node;
+
+        while (list.first.cmpxchgWeak(expected, &block.node, .release, .monotonic)) |new| {
+            expected = new;
+            block.node.next = new orelse &block.node;
+        }
+    }
+
+    fn popFromDirtyList(self: *Control) ?*Block {
+        const list = &self.dirty_list;
+        while (list.first.raw) |n| {
+            const next = if (n.next == n) null else n.next;
+
+            if (list.first.cmpxchgWeak(n, next, .release, .monotonic) == null) {
+                const block = Block.fromNode(n);
+                block.takeFromDirtyList();
+
+                return block;
+            }
+        }
+
+        return null;
     }
 };
 
