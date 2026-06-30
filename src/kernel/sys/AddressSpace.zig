@@ -387,7 +387,7 @@ pub fn unmapRange(self: *Self, base: usize, pages: u32) vm.Error!void {
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
-    const top = base + (pages * vm.page_size);
+    const top = base + @as(usize, pages) * vm.page_size;
     while (self.lookupMapUnit(base, top)) |map_unit| {
         const curr_top = map_unit.top();
         if (map_unit.base() >= base) {
@@ -436,7 +436,7 @@ pub fn protectRange(self: *Self, base: usize, pages: u32, flags: MapUnit.Flags) 
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
-    const top = base + (pages * vm.page_size);
+    const top = base + @as(usize, pages) * vm.page_size;
     const map_unit = self.lookupMapUnit(base, top) orelse return error.NoEnt;
 
     var curr_top = map_unit.top();
@@ -624,7 +624,7 @@ fn validateProtection(map_unit: *MapUnit, flags: MapUnit.Flags) error{NoAccess}!
 }
 
 fn allocRegion(self: *Self, pages: u32) vm.Error!usize {
-    const size = pages * vm.page_size;
+    const size = @as(usize, pages) * vm.page_size;
 
     var base_unit = blk: {
         const base = MapUnit.fromRbNode(self.rb_tree.first() orelse return vm.page_size);
@@ -712,7 +712,7 @@ fn divideMapping(self: *Self, map_unit: *MapUnit, div_unit: *MapUnit) !void {
 }
 
 fn cutMapping(self: *Self, map_unit: *MapUnit, offset: usize, pages: u32) !*MapUnit {
-    const new_base = map_unit.base() + offset + (pages * vm.page_size);
+    const new_base = map_unit.base() + offset + @as(usize, pages) * vm.page_size;
     const new_top = map_unit.top();
     const new_pages = vm.bytesToPagesExact(new_top - new_base);
 
