@@ -190,7 +190,7 @@ fn resolveRoot(dentry: *vfs.Dentry) !*vfs.Dentry {
                 vfs.mount(mnt_dir, fs_name, blk_dev) 
             else vfs.tryMount(mnt_dir, blk_dev);
         },
-        .symbolic_link => resolveRoot(try vfs.resolveSymLink(dentry)),
+        .symbolic_link => resolveRoot(try vfs.resolveSymLink(null, dentry)),
         else => return error.InvalidArgs
     };
 }

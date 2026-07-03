@@ -37,6 +37,7 @@ pub const Operations = struct {
     pub const IterateFn = *const fn (*const Dentry, *Iterator) Error!void;
     pub const LinkFn = *const fn(*Dentry, *Inode) Error!void;
     pub const UnlinkFn = *const fn(*const Dentry) Error!void;
+    pub const ReadLinkFn = *const fn (*const Dentry, []u8) Error!usize;
     pub const UpdateInodeFn = *const fn (*const Inode, Inode.Update) Error!void;
     pub const DeinitInodeFn = *const fn(*const Inode) void;
 
@@ -46,6 +47,7 @@ pub const Operations = struct {
     iterate: IterateFn = &default.iterate,
     link: LinkFn = &default.link,
     unlink: UnlinkFn = &default.unlink,
+    readLink: ReadLinkFn = &default.readLink,
     updateInode: UpdateInodeFn = &default.updateInode,
     deinitInode: DeinitInodeFn = &default.deinitInode,
 };
@@ -288,12 +290,26 @@ pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
     return child;
 }
 
+pub inline fn readLink(self: *const Dentry, buffer: []u8) Error!usize {
+    return self.ops.readLink(self, buffer);
+}
+
 pub inline fn iterate(self: *const Dentry, iter: *Iterator) Error!void {
     if (self.inode.type != .directory) return error.NotDirectory;
     return self.ops.iterate(self, iter);
 }
 
-pub fn createFile(self: *Dentry, name: []const u8, @"type": Inode.Type, opts: CreateOptions) Error!*Dentry {
+pub inline fn createFile(self: *Dentry, name: []const u8, @"type": Inode.Type, opts: CreateOptions) Error!*Dentry {
+    return self.createFileRaw(name, @"type", opts, .{});
+}
+
+pub fn createFileRaw(
+    self: *Dentry,
+    name: []const u8,
+    @"type": Inode.Type,
+    opts: CreateOptions,
+    fs_data: lib.AnyData,
+) Error!*Dentry {
     const inode = Inode.new() orelse return error.NoMemory;
     errdefer inode.delete();
 
@@ -305,6 +321,7 @@ pub fn createFile(self: *Dentry, name: []const u8, @"type": Inode.Type, opts: Cr
         .gid = opts.gid,
         .links_num = 0,
         .cache_ctrl = .{ .write_back = self.inode.cache_ctrl.write_back },
+        .fs_data = fs_data,
         .access_time_sec = time.sec,
         .modify_time_sec = time.sec,
         .create_time_sec = time.sec,
@@ -335,6 +352,13 @@ pub fn createLink(self: *Dentry, name: []const u8, inode: *Inode) Error!*Dentry 
 
         parent.rw_sem.writeLock();
         defer parent.rw_sem.writeUnlock();
+
+        if (self.lookup(name)) |child| {
+            @branchHint(.unlikely);
+
+            child.deref();
+            return error.Exists;
+        }
 
         try self.ops.link(dentry, inode);
 

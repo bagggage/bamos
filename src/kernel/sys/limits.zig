@@ -22,6 +22,9 @@ pub const default_max_process = 65565;
 pub const max_stack_size = lib.mb_size * 32;
 pub const max_args_size = lib.mb_size * 8;
 
+pub const max_path = 1024;
+pub const max_links = 32;
+
 pub var max_threads: u32 = default_max_threads;
 pub var max_process: u32 = default_max_process;
 

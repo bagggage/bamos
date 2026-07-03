@@ -43,6 +43,10 @@ pub const dentry_ops = opaque {
             return error.BadOperation;
         }
 
+        pub fn readLink(_: *const Dentry, _: []u8) Error!usize {
+            return error.BadOperation;
+        }
+
         pub fn updateInode(_: *Inode, _: Inode.Update) Error!void {
             return error.BadOperation;
         }
@@ -56,11 +60,13 @@ pub const dentry_ops = opaque {
         pub fn close(_: *const Dentry, _: *File) void {}
 
         pub const ops: Dentry.Operations = .{
-            .lookup = &lookup,
-            .link = &link,
-            .unlink = &unlink,
             .open = &open,
             .close = &close,
+            .lookup = &lookup,
+            .iterate = &iterate,
+            .link = &link,
+            .unlink = &unlink,
+            .readLink = readLink,
             .updateInode = &updateInode,
             .deinitInode = &deinitInode,
         };
@@ -87,6 +93,11 @@ pub const dentry_ops = opaque {
             return error.BadOperation;
         }
 
+        pub fn readLink(dentry: *const Dentry, _: []u8) Error!usize {
+            std.log.warn("{f}: 'readLink' is not implemented", .{dentry.path()});
+            return error.BadOperation;
+        }
+
         pub fn updateInode(inode: *const Inode, _: Inode.Update) Error!void {
             std.log.warn("{*}: 'updateInode' is not implemented", .{inode});
             return error.BadOperation;
@@ -106,11 +117,13 @@ pub const dentry_ops = opaque {
         }
 
         pub const ops: Dentry.Operations = .{
-            .lookup = &lookup,
-            .link = &link,
-            .unlink = &unlink,
             .open = &open,
             .close = &close,
+            .lookup = &lookup,
+            .iterate = &iterate,
+            .link = &link,
+            .unlink = &unlink,
+            .readLink = &readLink,
             .updateInode = &updateInode,
             .deinitInode = &deinitInode
         };

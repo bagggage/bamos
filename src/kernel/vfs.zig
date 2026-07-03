@@ -37,6 +37,7 @@ pub const Error = vm.Error || parts.Error || error {
     Exists,
     InvalidArgs,
     IoFailed,
+    NameTooLong,
     NoAccess,
     NoEnt,
     NoFs,
@@ -45,6 +46,7 @@ pub const Error = vm.Error || parts.Error || error {
     NotDirectory,
     NotEmpty,
     NotRegularFile,
+    TooManyLinks,
 };
 
 /// Filesystem context.
@@ -478,9 +480,12 @@ pub fn lookupRaw(root: ?*Dentry, dir: ?*Dentry, path: []const u8, follow_links: 
 
     const root_dent = root orelse root_dentry;
     const start_dent = if (path[0] == '/') root_dent else dir orelse root_dent;
-
     start_dent.ref();
-    var ent: ?*Dentry = start_dent;
+
+    var dentry: *Dentry = start_dent;
+    errdefer dentry.deref();
+
+    var link_depth: u32 = 0;
     var it = std.mem.splitScalar(
         u8,
         if (path[0] == '/') path[1..] else path[0..],
@@ -488,38 +493,45 @@ pub fn lookupRaw(root: ?*Dentry, dir: ?*Dentry, path: []const u8, follow_links: 
     );
 
     while (it.next()) |element| {
-        var dentry = ent.?;
-        errdefer dentry.deref();
-
         if (element.len == 0) continue;
         if (element[0] == '.') {
             if (element.len == 1) continue;
 
             if (element.ptr[1] == '.' and element.len == 2) {
-                dentry.parent.ref();
-                defer dentry.deref();
+                const child = dentry;
+                defer child.deref();
 
-                ent = dentry.parent;
+                dentry.parent.ref();
+                dentry = dentry.parent;
+
                 continue;
             }
         }
 
-        if (follow_links and dentry.inode.type == .symbolic_link) {
-            const sym_link = dentry;
-
-            dentry = try resolveSymLink(sym_link);
-            sym_link.deref();
-        }
-
         if (dentry.inode.type != .directory) return error.NotDirectory;
 
-        ent = dentry.lookup(element);
-        dentry.deref();
+        if (dentry.lookup(element)) |child| {
+            dentry.deref();
+            dentry = child;
+        } else return error.NoEnt;
 
-        if (ent == null) break;
+        while (dentry.inode.type == .symbolic_link and follow_links) {
+            @branchHint(.unlikely);
+
+            if (link_depth >= sys.limits.max_links) {
+                @branchHint(.cold);
+                return error.TooManyLinks;
+            }
+
+            const sym_link = dentry;
+            link_depth += 1;
+
+            dentry = try resolveSymLink(root_dent, sym_link);
+            sym_link.deref();
+        }
     }
 
-    return ent orelse error.NoEnt;
+    return dentry;
 }
 
 /// Same as `vfs.lookup`, but returns `null` if dentry not found.
@@ -534,14 +546,16 @@ pub fn tryLookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) ?*Dentry {
     };
 }
 
-pub fn resolveSymLink(sym_dent: *Dentry) Error!*Dentry {
+pub fn resolveSymLink(root: ?*Dentry, sym_dent: *Dentry) Error!*Dentry {
     if (sym_dent.inode.type != .symbolic_link) {
         @branchHint(.unlikely);
         return error.InvalidArgs;
     }
 
-    // TODO: Implement.
-    return error.BadOperation;
+    var buffer: [1024] u8 = undefined;
+    const len = try sym_dent.readLink(&buffer);
+
+    return lookupRaw(root, sym_dent.parent, buffer[0..len], false);
 }
 
 pub fn changeRoot(new: *Dentry) Error!void {
