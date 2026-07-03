@@ -165,6 +165,7 @@ const DentryType = enum(u8) {
 
 const Inode = extern struct {
     const direct_ptrs_num = 12;
+    const symlink_max_size = 60;
 
     const Type = enum(u4) {
         fifo = 0x1,
@@ -218,28 +219,28 @@ const Inode = extern struct {
     access_time: u32,
     create_time: u32,
     modify_time: u32,
-    delete_time: u32,
+    delete_time: u32 = 0,
 
     gid: u16,
 
     links_num: u16,
     sectors_num: u32,
-    flags: u32,
+    flags: u32 = 0,
 
-    os_specific: u32,
+    os_specific: u32 = 0,
 
-    direct_ptrs: [direct_ptrs_num]u32,
-    indir_ptrs: [3]u32,
+    direct_ptrs: [direct_ptrs_num]u32 = .{0} ** direct_ptrs_num,
+    indir_ptrs: [3]u32 = .{0} ** 3,
 
-    generation_num: u32,
-    ext_attr_block: u32,
+    generation_num: u32 = 0,
+    ext_attr_block: u32 = 0,
 
     size_hi: u32,
 
-    frag_block: u32,
-    os_specific2: u32,
+    frag_block: u32 = 0,
+    os_specific2: u32 = 0,
 
-    rsrvd: [2]u32,
+    rsrvd: [2]u32 = .{0} ** 2,
 
     comptime {
         std.debug.assert(@sizeOf(Inode) == 128);
@@ -255,8 +256,12 @@ const Inode = extern struct {
         return (@as(u64, self.size_hi) << 32) | self.size_lo;
     }
 
+    inline fn blocksNum(self: *const Inode, super: *const vfs.Superblock) u32 {
+        return self.sectors_num >> (super.block_shift - comptime std.math.log2(512));
+    }
+
     inline fn ptrPerBlockShift(super: *const vfs.Superblock) u5 {
-        return super.block_shift - std.math.log2(@sizeOf(u32));
+        return super.block_shift - comptime std.math.log2(@sizeOf(u32));
     }
 
     inline fn ptrsPerBlock(super: *const vfs.Superblock) u32 {
@@ -575,14 +580,15 @@ var fs = vfs.FileSystem.init(
         },
     },
     .{
+        .open = dentryOpen,
+        .close = dentryClose,
         .lookup = dentryLookup,
         .iterate = dentryIterate,
         .link = dentryLink,
         .unlink = dentryUnlink,
+        .readLink = dentryReadLink,
         .updateInode = dentryUpdateInode,
         .deinitInode = dentryDeinitInode,
-        .open = dentryOpen,
-        .close = dentryClose,
     },
 );
 
@@ -785,21 +791,36 @@ fn dentryLink(dentry: *vfs.Dentry, inode: *vfs.Inode) vfs.Error!void {
             .gid = inode.gid,
         };
 
-        if (inode.type == .directory) {
-            try makeDirectory(parent, inode_idx, opts, time, &cursor);
-        } else {
-            try writeInode(
+        switch (inode.type) {
+            .directory => try makeDirectory(parent, inode_idx, opts, time, &cursor),
+            .symbolic_link => {
+                const content = inode.fs_data.asPtr([]const u8).?;
+                try makeSymLink(
+                    super, inode_idx,
+                    content.*, opts,
+                    time, &cursor,
+                );
+            },
+            else => try writeInode(
                 super, inode_idx, inode.type,
                 opts, time, 0,
                 0, 1, &cursor,
-            );
+            ),
         }
 
         break :blk inode_idx;
     } else inode.index;
 
     errdefer if (inode.index == 0) {
-        if (inode.type == .directory) clearDirectory(parent, inode_idx, time, &cursor) catch {};
+        switch (inode.type) {
+            .directory => clearDirectory(parent, inode_idx, time, &cursor) catch {},
+            .symbolic_link => {
+                const content = inode.fs_data.asPtr([]const u8).?;
+                if (content.len > Inode.symlink_max_size) internalError(super, "symlink block leaked");
+            },
+            else => {},
+        }
+
         freeInode(super, inode_idx, inode.type == .directory, &cursor) catch {};
     };
 
@@ -813,10 +834,17 @@ fn dentryLink(dentry: *vfs.Dentry, inode: *vfs.Inode) vfs.Error!void {
         &cursor,
     );
 
-    if (!inode.isAllocated() and inode.type == .directory) {
-        inode.links_num += 1;
-        inode.size = super.block_size;
-    }
+    if (!inode.isAllocated()) switch (inode.type) {
+        .directory => {
+            inode.links_num += 1;
+            inode.size = super.block_size;
+        },
+        .symbolic_link => {
+            const content = inode.fs_data.asPtr([]const u8).?;
+            inode.size = content.len;
+        },
+        else => {},
+    };
 
     inode.index = inode_idx;
     inode.fs_data.setPtr(super);
@@ -894,6 +922,37 @@ fn dentryUnlink(dentry: *const vfs.Dentry) vfs.Error!void {
     }
 }
 
+fn dentryReadLink(dentry: *const vfs.Dentry, buffer: []u8) vfs.Error!usize {
+    const super = dentry.ctx.super;
+    const inode = dentry.inode;
+
+    std.debug.assert(inode.type == .symbolic_link);
+
+    var cursor = super.drive.blankCursor();
+    defer cursor.close(.read);
+
+    const ext_inode = try readInode(super, inode.index, .read, &cursor);
+    if (ext_inode.size_hi > 0) return error.IoFailed;
+
+    const size = ext_inode.size_lo;
+    const len = @min(buffer.len, size);
+
+    if (size <= Inode.symlink_max_size) {
+        const path: [*]u8 = @ptrCast(&ext_inode.direct_ptrs);
+        @memcpy(buffer[0..len], path[0..len]);
+    } else {
+        if (len > super.block_size or ext_inode.sectors_num == 0) return error.IoFailed;
+
+        const offset = calcBlockOffset(super, ext_inode.direct_ptrs[0]);
+        const path = try cursor.ensureAsSlice(.read, offset);
+
+        @memcpy(buffer[0..len], path[0..len]);
+    }
+
+    log.debug("link: '{s}'", .{buffer[0..len]});
+    return if (size <= buffer.len) len else error.MaxSize;
+}
+
 fn dentryUpdateInode(inode: *const vfs.Inode, update: vfs.Inode.Update) vfs.Error!void {
     const super = inode.fs_data.asPtr(vfs.Superblock).?;
 
@@ -957,9 +1016,8 @@ fn dentryDeinitInode(inode: *const vfs.Inode) void {
     };
     defer iter.deinit(null);
 
-    const blocks_num = super.offsetToBlock(dump_inode.size() + (super.block_size - 1));
+    const blocks_num = dump_inode.blocksNum(super);
     const ptrs_per_block = Inode.ptrsPerBlock(super);
-    if (blocks_num == 0) return;
 
     var freed: u32 = 0;
     for (0..blocks_num) |i| {
@@ -993,16 +1051,18 @@ fn dentryDeinitInode(inode: *const vfs.Inode) void {
         }
     }
 
-    const super_offset_abs = super.part_offset + superblock_disk_offset;
-    cursor.ensureCache(.write, super_offset_abs) catch |err| {
-        log.err("inode {}: failed to change free blocks number in superblock: {t}", .{
-            inode.index, err,
-        });
-        return;
-    };
+    if (freed > 0) {
+        const super_offset_abs = super.part_offset + superblock_disk_offset;
+        cursor.ensureCache(.write, super_offset_abs) catch |err| {
+            log.err("inode {}: failed to change free blocks number in superblock: {t}", .{
+                inode.index, err,
+            });
+            return;
+        };
 
-    cursor.asObject(Superblock).free_blocks += freed;
-    cursor.setDirty(@sizeOf(Superblock));
+        cursor.asObject(Superblock).free_blocks += freed;
+        cursor.setDirty(@sizeOf(Superblock));
+    }
 
     freeInode(super, inode.index, inode.type == .directory, &cursor) catch |err| {
         log.err("inode {}: failed to free inode: {t}", .{inode.index, err});
@@ -1043,7 +1103,7 @@ fn clearDirectory(parent: *const vfs.Dentry, inode_idx: u32, time: u32, cursor: 
     const super = parent.ctx.super;
 
     const ext_inode = try readInode(super, inode_idx, .write, cursor);
-    if (ext_inode.size() != super.block_size) {
+    if (ext_inode.size() > super.block_size) {
         log.warn("inode {}: clearing non empty directory?", .{inode_idx});
         return error.InvalidArgs;
     } else if (ext_inode.direct_ptrs[0] == 0) {
@@ -1064,6 +1124,61 @@ fn clearDirectory(parent: *const vfs.Dentry, inode_idx: u32, time: u32, cursor: 
     cursor.setDirty(@sizeOf(Inode));
 
     parent.inode.links_num -= 1;
+}
+
+fn makeSymLink(
+    super: *const vfs.Superblock,
+    inode_idx: u32,
+    content: []const u8,
+    opts: vfs.CreateOptions,
+    time: u32,
+    cursor: *cache.Cursor,
+) vfs.Error!void {
+    if (content.len > super.block_size or content.len > sys.limits.max_path) return error.NameTooLong;
+
+    const block_idx = if (content.len > Inode.symlink_max_size) blk: {
+        @branchHint(.unlikely);
+        log.debug("write big symlink: '{s}'", .{content});
+
+        const block_idx = try allocBlock(super, inode_idx, cursor);
+        const offset = calcBlockOffset(super, block_idx);
+
+        const dest = try cursor.ensureAsSlice(.write, offset);
+        defer cursor.setDirty(content.len);
+
+        @memcpy(dest[0..content.len], content);
+        break :blk block_idx;
+    } else 0;
+
+    const ext_inode = try readInode(super, inode_idx, .write, cursor);
+    defer cursor.setDirty(@sizeOf(Inode));
+
+    ext_inode.* = .{
+        .type_perm = .{
+            .perm = @truncate(opts.perm),
+            .type = .symlink,
+        },
+        .uid = opts.uid,
+        .gid = opts.gid,
+        .size_lo = @truncate(content.len),
+        .size_hi = @truncate(content.len >> 32),
+        .access_time = time,
+        .create_time = time,
+        .modify_time = time,
+        .links_num = 1,
+        .sectors_num = 0,
+    };
+
+    if (block_idx != 0) {
+        ext_inode.direct_ptrs[0] = block_idx;
+        ext_inode.sectors_num = sectorsPerBlock(super);
+    } else {
+        @branchHint(.likely);
+        log.debug("write small symlink: '{s}'", .{content});
+
+        const dest: [*]u8 = @ptrCast(&ext_inode.direct_ptrs);
+        @memcpy(dest[0..content.len], content);
+    }
 }
 
 fn allocInode(super: *const vfs.Superblock, parent_inode_idx: u32, is_dir: bool, cursor: *cache.Cursor) vfs.Error!u32 {
@@ -1203,43 +1318,24 @@ fn writeInode(
     links_num: u16,
     cursor: *cache.Cursor,
 ) vfs.Error!void {
-    const ext_super = super.fs_data.asPtr(Superblock).?;
+    const ext_inode = try readInode(super, idx, .write, cursor);
+    defer cursor.setDirty(@sizeOf(Inode));
 
-    const group_idx = (idx - 1) / ext_super.inodes_per_group;
-    const inner_idx = (idx - 1) % ext_super.inodes_per_group;
-
-    const bgd_offset = calcBgdOffset(super, group_idx);
-    const bgd = try cursor.ensureAs(BlockGroupDescriptor, .write, bgd_offset);
-
-    const offset = super.part_offset + super.blockToOffset(bgd.inode_table) +
-        (inner_idx * ext_super.inode_size);
-
-    const ext_inode = try cursor.ensureAs(Inode, .write, offset);
-    ext_inode.type_perm = .{
-        .perm = @truncate(opts.perm),
-        .type = .fromVfsType(kind),
+    ext_inode.* = .{
+        .type_perm = .{
+            .perm = @truncate(opts.perm),
+            .type = .fromVfsType(kind),
+        },
+        .uid = opts.uid,
+        .gid = opts.gid,
+        .size_lo = @truncate(size),
+        .size_hi = @truncate(size >> 32),
+        .access_time = time,
+        .create_time = time,
+        .modify_time = time,
+        .links_num = links_num,
+        .sectors_num = sectors_num,
     };
-    ext_inode.uid = opts.uid;
-    ext_inode.gid = opts.gid;
-    ext_inode.size_lo = @truncate(size);
-    ext_inode.size_hi = @truncate(size >> 32);
-    ext_inode.access_time = time;
-    ext_inode.create_time = time;
-    ext_inode.modify_time = time;
-    ext_inode.delete_time = 0;
-    ext_inode.links_num = links_num;
-    ext_inode.sectors_num = sectors_num;
-    ext_inode.flags = 0;
-    ext_inode.os_specific = 0;
-    ext_inode.direct_ptrs = .{0} ** 12;
-    ext_inode.indir_ptrs = .{0} ** 3;
-    ext_inode.generation_num = 0;
-    ext_inode.ext_attr_block = 0;
-    ext_inode.frag_block = 0;
-    ext_inode.os_specific2 = 0;
-    ext_inode.rsrvd = .{0} ** 2;
-
-    cursor.setDirty(@sizeOf(Inode));
 }
 
 fn addDentryToDirectory(
