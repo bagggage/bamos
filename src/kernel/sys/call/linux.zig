@@ -87,6 +87,8 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.poll)]            = @ptrCast(&poll);
     result[@intFromEnum(linux.SYS.pipe)]            = @ptrCast(&pipe);
     result[@intFromEnum(linux.SYS.read)]            = @ptrCast(&read);
+    result[@intFromEnum(linux.SYS.readlink)]        = @ptrCast(&readLink);
+    result[@intFromEnum(linux.SYS.readlinkat)]      = @ptrCast(&readLinkAt);
     result[@intFromEnum(linux.SYS.readv)]           = @ptrCast(&readv);
     result[@intFromEnum(linux.SYS.rseq)]            = @ptrCast(&rseq);
     result[@intFromEnum(linux.SYS.rmdir)]           = @ptrCast(&rmdir);
@@ -99,6 +101,8 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.sethostname)]     = @ptrCast(&setHostName);
     result[@intFromEnum(linux.SYS.setpgid)]         = @ptrCast(&setProcGroup);
     result[@intFromEnum(linux.SYS.stat)]            = @ptrCast(&stat);
+    result[@intFromEnum(linux.SYS.symlink)]         = @ptrCast(&symlink);
+    result[@intFromEnum(linux.SYS.symlinkat)]       = @ptrCast(&symlinkAt);
     //result[@intFromEnum(linux.SYS.tgkill)]          = @ptrCast(&tgkill);
     //result[@intFromEnum(linux.SYS.tkill)]           = @ptrCast(&tkill);
     result[@intFromEnum(linux.SYS.time)]            = @ptrCast(&time);
@@ -263,6 +267,7 @@ fn errorFromZig(e: sys.exe.Error) isize {
         error.InvalidArgs       => errorFromE(.INVAL),
         error.IoFailed          => errorFromE(.IO),
         error.MaxSize           => errorFromE(.FBIG),
+        error.NameTooLong       => errorFromE(.NAMETOOLONG),
         error.NoAccess          => errorFromE(.ACCES),
         error.NoEnt             => errorFromE(.NOENT),
         error.NoMemory          => errorFromE(.NOMEM),
@@ -273,7 +278,8 @@ fn errorFromZig(e: sys.exe.Error) isize {
         error.NotRegularFile    => errorFromE(.ISDIR),
         error.SegFault          => errorFromE(.FAULT),
         error.NoFs,
-        error.Uninitialized     => errorFromE(.NODEV)
+        error.TooManyLinks      => errorFromE(.LOOP),
+        error.Uninitialized     => errorFromE(.NODEV),
     };
 }
 
@@ -568,7 +574,7 @@ fn close(fd: linux.fd_t) isize {
 
 fn chdir(path: [*c]const u8) isize {
     trace.info("chdir(0x{x})", .{path});
-    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
     const path_slice = std.mem.span(path);
@@ -669,7 +675,7 @@ fn execve(path: [*c]const u8, args: ?[*:null][*c]const u8, envs: ?[*:null][*c]co
         @intFromPtr(path), @intFromPtr(args), @intFromPtr(envs)
     });
 
-    validateMemoryArgs(@intFromPtr(path), linux.PATH_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(args), vm.page_size) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(envs), vm.page_size) catch return errorFromE(.FAULT);
 
@@ -839,10 +845,22 @@ fn fdAtGet(proc: *sys.Process, fd: linux.fd_t) ?*vfs.Dentry {
     return file.dentry;
 }
 
+fn lookupSymLink(root: ?*vfs.Dentry, dir: ?*vfs.Dentry, path: []const u8) vfs.Error!*vfs.Dentry {
+    const dir_path = path[0..(std.mem.lastIndexOfScalar(u8, path, '/') orelse 0)];
+
+    return if (dir_path.len > 0) blk: {
+        const parent = try vfs.lookup(root, dir, dir_path);
+        if (dir_path.len + 1 >= path.len) return parent;
+
+        defer parent.deref();
+        break :blk parent.lookup(path[dir_path.len + 1..]) orelse return error.NoEnt;
+    } else try vfs.lookupRaw(root, dir, path, false);
+}
+
 fn stat(path: [*c]const u8, stats: *linux.Stat) isize {
     trace.info("stat(0x{x}, 0x{x})", .{@intFromPtr(path), @intFromPtr(stats)});
 
-    validateMemoryArgs(@intFromPtr(path), linux.PATH_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
     const dentry = vfs.lookup(
@@ -856,11 +874,13 @@ fn stat(path: [*c]const u8, stats: *linux.Stat) isize {
 fn lstat(path: [*c]const u8, stats: *linux.Stat) isize {
     trace.info("lstat(0x{x}, 0x{x})", .{@intFromPtr(path), @intFromPtr(stats)});
 
-    validateMemoryArgs(@intFromPtr(path), linux.PATH_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
-    const dentry = vfs.lookupRaw(
-        proc.root_dir, proc.work_dir, std.mem.span(path), false
+    const slice = std.mem.span(path);
+
+    const dentry = lookupSymLink(
+        proc.root_dir, proc.work_dir, slice
     ) catch |err| return errorFromZig(err);
     defer dentry.deref();
 
@@ -880,7 +900,7 @@ fn fstat(fd: linux.fd_t, stats: *linux.Stat) isize {
 fn fstatAt(fd: linux.fd_t, path: [*c]const u8, stats: *linux.Stat, flags: u32) isize {
     trace.info("fstatat64({}, 0x{x}, 0x{x}, 0x{x})", .{fd, @intFromPtr(path), @intFromPtr(stats), flags});
 
-    validateMemoryArgs(@intFromPtr(path), linux.PATH_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(stats), @sizeOf(linux.Stat)) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
@@ -959,6 +979,49 @@ fn statImpl(dentry: *vfs.Dentry, stats: *linux.Stat) isize {
         const dev_file = vfs.devfs.DevFile.fromDentry(dentry);
         stats.rdev = (@as(linux.dev_t, dev_file.num.major) << 8) | dev_file.num.minor;
     }
+
+    return 0;
+}
+
+fn symlink(target: [*:0]const u8, link_path: [*:0]const u8) isize {
+    trace.info("symlink(0x{x}, 0x{x})", .{@intFromPtr(target), @intFromPtr(link_path)});
+    const proc = sys.Process.getCurrent();
+
+    return symlinkImpl(proc, null, target, link_path);
+}
+
+fn symlinkAt(dir_fd: linux.fd_t, target: [*:0]const u8, link_path: [*:0]const u8) isize {
+    trace.info("symlinkat({}, 0x{x}, 0x{x})", .{
+        dir_fd, @intFromPtr(target), @intFromPtr(link_path)
+    });
+
+    const proc = sys.Process.getCurrent();
+    const dir = fdAtGet(proc, dir_fd) orelse return errorFromE(.BADF);
+    defer dir.deref();
+
+    return symlinkImpl(proc, dir, target, link_path);
+}
+
+fn symlinkImpl(
+    proc: *sys.Process,
+    dir: ?*vfs.Dentry,
+    target: [*:0]const u8,
+    link_path: [*:0]const u8,
+) isize {
+    validateMemoryArgs(@intFromPtr(target), sys.limits.max_path) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(link_path), sys.limits.max_path) catch return errorFromE(.FAULT);
+
+    const at_dir = if (dir) |d| d else proc.work_dir;
+    const path = std.mem.span(link_path);
+    const content = std.mem.span(target);
+
+    const dentry = createAnyFile(
+        proc, at_dir,
+        path, .symbolic_link,
+        @intFromEnum(vfs.Permissions.rwx),
+        .fromPtr(@ptrCast(@constCast(&content))),
+    ) catch |err| return errorFromZig(err);
+    dentry.deref();
 
     return 0;
 }
@@ -1166,7 +1229,7 @@ fn seek(fd: linux.fd_t, offset: isize, whence: u8) isize {
 fn mkdir(path: [*:0]const u8, mode: linux.mode_t) isize {
     trace.info("mkdir(0x{x}, 0o{o})", .{@intFromPtr(path), mode});
 
-    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
     return mkdirImpl(proc, proc.work_dir, path, mode);
@@ -1174,7 +1237,7 @@ fn mkdir(path: [*:0]const u8, mode: linux.mode_t) isize {
 
 fn mkdirAt(fd: linux.fd_t, path: [*:0]const u8, mode: linux.mode_t) isize {
     trace.info("mkdirat({}, 0x{x}, 0o{o})", .{fd, @intFromPtr(path), mode});
-    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
     const at_dir = fdAtGet(proc, fd) orelse return errorFromE(.BADF);
@@ -1209,11 +1272,6 @@ fn mkdirImpl(proc: *sys.Process, at_dir: *vfs.Dentry, path: [*:0]const u8, mode:
     if (item.len == 0 or
         (item[0] == '.' and (item.len == 1 or (item.len == 2 and item[1] == '.')))
     ) return errorFromE(.EXIST);
-
-    if (parent.lookup(item)) |child| {
-        child.deref();
-        return errorFromE(.EXIST);
-    }
 
     log.debug("create dir: '{s}'", .{item});
     const new_dir = parent.createFile(item, .directory, .{
@@ -1368,7 +1426,7 @@ fn openImpl(proc: *sys.Process, dir: *vfs.Dentry, path: [*c]const u8, flags: lin
     const dentry = vfs.lookup(
         proc.root_dir, dir, path_slice
     ) catch |err| {
-        if (err == error.NoEnt and flags.CREAT) return createFile(
+        if (err == error.NoEnt and flags.CREAT) return createAndOpenFile(
             proc, dir, path_slice, perm, mode
         );
         return @intCast(errorFromZig(err));
@@ -1392,16 +1450,22 @@ fn openImpl(proc: *sys.Process, dir: *vfs.Dentry, path: [*c]const u8, flags: lin
     return desc.idx;
 }
 
-fn createFile(proc: *sys.Process, dir: *vfs.Dentry, path: []const u8, perm: vfs.Permissions, mode: linux.mode_t) isize {
+fn createAnyFile(
+    proc: *sys.Process,
+    dir: *vfs.Dentry,
+    path: []const u8,
+    @"type": vfs.Inode.Type,
+    mode: linux.mode_t,
+    fs_data: lib.AnyData,
+) vfs.Error!*vfs.Dentry {
     const index = std.mem.lastIndexOfScalar(u8, path, '/');
     const name = if (index) |i| path[i + 1..] else path;
+
     const target_dir = if (index) |i| blk: {
-        const dentry = vfs.lookup(
-            proc.root_dir, dir, path[0..i]
-        ) catch |err| return errorFromZig(err);
+        const dentry = try vfs.lookup(proc.root_dir, dir, path[0..i]);
         if (dentry.inode.type != .directory) {
             dentry.deref();
-            return errorFromE(.NOTDIR);
+            return error.NotDirectory;
         }
         break :blk dentry;
     } else blk: {
@@ -1411,14 +1475,28 @@ fn createFile(proc: *sys.Process, dir: *vfs.Dentry, path: []const u8, perm: vfs.
     defer target_dir.deref();
 
     const role = target_dir.inode.getRole(proc.uid, proc.gid);
-    if (!target_dir.inode.checkAccess(.w, role)) return errorFromE(.ACCES);
+    if (!target_dir.inode.checkAccess(.w, role)) return error.NoAccess;
 
     log.debug("create file: {s}, perm: 0o{o}", .{name, mode});
-    const dentry = target_dir.createFile(name, .regular_file, .{
+    return target_dir.createFileRaw(name, @"type", .{
         .uid = proc.uid,
         .gid = proc.gid,
         .perm = @truncate(mode)
-    }) catch |err| return errorFromZig(err);
+    }, fs_data);
+}
+
+fn createAndOpenFile(
+    proc: *sys.Process,
+    dir: *vfs.Dentry,
+    path: []const u8,
+    perm: vfs.Permissions,
+    mode: linux.mode_t,
+) isize {
+    const dentry = createAnyFile(
+        proc, dir,
+        path, .regular_file,
+        mode, .{},
+    ) catch |err| return errorFromZig(err);
     defer dentry.deref();
 
     const desc = proc.files.open(dentry, perm) catch |err| {
@@ -1672,6 +1750,49 @@ fn readv(fd: linux.fd_t, iov: [*]posix.iovec, num: c_int) isize {
     return @intCast(readed);
 }
 
+fn readLink(path: [*:0]const u8, buffer: [*]u8, len: usize) isize {
+    trace.info("readlink(0x{x}, 0x{x}, {})", .{@intFromPtr(path), @intFromPtr(buffer), len});
+
+    const proc = sys.Process.getCurrent();
+    return readLinkImpl(null, proc, path, buffer[0..len]);
+}
+
+fn readLinkAt(dir_fd: linux.fd_t, path: [*:0]const u8, buffer: [*]u8, len: usize) isize {
+    trace.info("readlinkat({}, 0x{x}, 0x{x}, {})", .{
+        dir_fd, @intFromPtr(path), @intFromPtr(buffer), len
+    });
+
+    const proc = sys.Process.getCurrent();
+    const dir = fdAtGet(proc, dir_fd) orelse return errorFromE(.BADF);
+    defer dir.deref();
+
+    return readLinkImpl(dir, proc, path, buffer[0..len]);
+}
+
+fn readLinkImpl(dir: ?*vfs.Dentry, proc: *sys.Process, path: [*:0]const u8, buffer: []u8) isize {
+    if (buffer.len == 0) return errorFromE(.INVAL);
+
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(buffer.ptr), buffer.len) catch return errorFromE(.FAULT);
+
+    const at_dir = if (dir) |d| d else proc.work_dir;
+    const slice = std.mem.span(path);
+
+    const dentry = lookupSymLink(
+        proc.root_dir, at_dir, slice
+    ) catch |err| return errorFromZig(err);
+    defer dentry.deref();
+
+    if (dentry.inode.type != .symbolic_link) return errorFromE(.INVAL);
+
+    const size = dentry.readLink(buffer) catch |err| blk: {
+        if (err == error.MaxSize) break :blk buffer.len;
+        return errorFromZig(err);
+    };
+
+    return @intCast(size);
+}
+
 fn rseq(ptr: ?*RestartableSequence, size: u32, flags: RestartableSequence.CallFlags, sig: u32) isize {
     trace.info("rseq(0x{x}, {}, 0x{x}, 0x{x})", .{@intFromPtr(ptr), size, flags, sig});
 
@@ -1715,11 +1836,11 @@ fn rseq(ptr: ?*RestartableSequence, size: u32, flags: RestartableSequence.CallFl
 fn rmdir(path: [*:0]const u8) isize {
     trace.info("rmdir(0x{x})", .{@intFromPtr(path)});
 
-    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
     const proc = sys.Process.getCurrent();
 
     const slice = std.mem.span(path);
-    const dentry = vfs.lookup(
+    const dentry = lookupSymLink(
         proc.root_dir, proc.work_dir, slice
     ) catch |err| return errorFromZig(err);
     defer dentry.deref();
@@ -2008,7 +2129,7 @@ fn getTimeOfDay(value: *linux.timeval, zone: ?*linux.timezone) isize {
 fn truncate(path: [*:0]const u8, length: i64) isize {
     trace.info("truncate(0x{x}, {})", .{@intFromPtr(path), length});
 
-    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
     const slice = std.mem.span(path);
@@ -2137,7 +2258,7 @@ fn utimeNsAt(fd: linux.fd_t, path: [*:0]const u8, times: ?*const [2]linux.timesp
 }
 
 fn utimeImpl(proc: *sys.Process, dir: *vfs.Dentry, path: [*:0]const u8, times: ?*const [2]sys.time.Time) isize {
-    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
     // TODO: Implement support for UTIME_NOW, UTIME_OMIT
 
     const slice = std.mem.span(path);
@@ -2163,11 +2284,11 @@ fn utimeImpl(proc: *sys.Process, dir: *vfs.Dentry, path: [*:0]const u8, times: ?
 
 fn unlink(path: [*:0]const u8) isize {
     trace.info("unlink(0x{x})", .{@intFromPtr(path)});
-    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
     const slice = std.mem.span(path);
-    const dentry = vfs.lookup(
+    const dentry = lookupSymLink(
         proc.root_dir,
         proc.work_dir,
         slice,
@@ -2177,21 +2298,10 @@ fn unlink(path: [*:0]const u8) isize {
     return unlinkImpl(proc, dentry);
 }
 
-fn unlinkImpl(proc: *sys.Process, dentry: *vfs.Dentry) isize {
-    if (dentry.inode.type == .directory) return errorFromE(.ISDIR);
-
-    const parent = dentry.parent;
-    const role = parent.inode.getRole(proc.uid, proc.gid);
-    if (!parent.inode.checkAccess(.w, role)) return errorFromE(.ACCES);
-
-    dentry.unlink() catch |err| return errorFromZig(err);
-    return 0;
-}
-
 fn unlinkAt(dir_fd: linux.fd_t, path: [*:0]const u8, flags: u32) isize {
     trace.info("unlinkat({}, 0x{x}, 0x{x})", .{dir_fd, @intFromPtr(path), flags});
 
-    validateMemoryArgs(@intFromPtr(path), linux.NAME_MAX) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
     if (flags != 0 and flags != linux.AT.REMOVEDIR) return errorFromE(.INVAL);
 
     const proc = sys.Process.getCurrent();
@@ -2204,7 +2314,7 @@ fn unlinkAt(dir_fd: linux.fd_t, path: [*:0]const u8, flags: u32) isize {
     ) return errorFromE(.NOTDIR);
 
     const slice = std.mem.span(path);
-    const dentry = vfs.lookup(
+    const dentry = lookupSymLink(
         proc.root_dir,
         proc.work_dir,
         slice,
@@ -2215,6 +2325,17 @@ fn unlinkAt(dir_fd: linux.fd_t, path: [*:0]const u8, flags: u32) isize {
             rmdirImpl(proc, dentry)
         else
             unlinkImpl(proc, dentry);
+}
+
+fn unlinkImpl(proc: *sys.Process, dentry: *vfs.Dentry) isize {
+    if (dentry.inode.type == .directory) return errorFromE(.ISDIR);
+
+    const parent = dentry.parent;
+    const role = parent.inode.getRole(proc.uid, proc.gid);
+    if (!parent.inode.checkAccess(.w, role)) return errorFromE(.ACCES);
+
+    dentry.unlink() catch |err| return errorFromZig(err);
+    return 0;
 }
 
 fn waitPid(pid: linux.pid_t, status: ?*i32, options: u32, usage: ?*linux.rusage) isize {
