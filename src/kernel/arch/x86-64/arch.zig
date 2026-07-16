@@ -160,9 +160,15 @@ pub inline fn initCpu() void {
     regs.setEfer(efer);
 
     var cr0 = regs.getCr0();
+    cr0 &= ~@as(u64, 1 << 30); // clear CD bit
+    cr0 &= ~@as(u64, 1 << 29); // clear NW bit
     cr0 &= ~@as(u64, 1 << 2); // clear EM bit
     cr0 |= @as(u64, 1 << 1);  // set MP bit
     regs.setCr0(cr0);
+
+    var cr4 = regs.getCr4();
+    cr4 |= @as(u64, 1 << 7); // set PGE bit
+    regs.setCr4(cr4);
 
     const feat = cpuid(cpuid_features, undefined, undefined, undefined);
     if (feat.c | (1 << 28) != feat.c) {
@@ -170,7 +176,6 @@ pub inline fn initCpu() void {
         return;
     }
 
-    var cr4 = regs.getCr4();
     cr4 |= @as(u64, 1 << 18); // enable OSXSAVE
     regs.setCr4(cr4);
 
