@@ -195,7 +195,7 @@ pub fn defaultLog(
 }
 
 pub fn panicLog(msg: []const u8) void {
-    const time_ns = sys.time.getUpTime().toNs();
+    const time_ns = getUpTimeSafe();
     const log = blk: {
         for (0..10) |_| break :blk newLog() catch continue;
 
@@ -259,12 +259,21 @@ fn newLog() error{Drop}!*Message {
     return msg;
 }
 
+fn getUpTimeSafe() u64 {
+    if (!sys.time.isInitialized()) {
+        @branchHint(.cold);
+        return 0;
+    }
+
+    return sys.time.getUpTimeNs();
+}
+
 fn putLog(level: std.log.Level, scope: [*:0]const u8, text: []const u8) void {
     const msg = newLog() catch return drop();
     var meta = msg.meta.raw;
 
     if (allocBuffer(@truncate(text.len))) |buffer| {
-        msg.time_ns = sys.time.getUpTime().toNs();
+        msg.time_ns = getUpTimeSafe();
         msg.scope = scope;
         msg.text = buffer.ptr;
 

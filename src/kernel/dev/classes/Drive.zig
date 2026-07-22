@@ -523,11 +523,11 @@ fn cacheWriteBack(block: *vm.cache.Block, quants: []const vm.cache.Block.Quant, 
     var successed = true;
     for (0..quants.len) |i| {
         const timeout = std.time.ns_per_s;
-        const time: usize = sys.time.getUpTime().toNs();
+        const time: usize = sys.time.getUpTimeNs();
 
         const status = &statuses[i];
         while (@atomicLoad(io.Status, status, .acquire) == .none) {
-            if (sys.time.getUpTime().toNs() -| time >= timeout) {
+            if (sys.time.getUpTimeNs() -| time >= timeout) {
                 @branchHint(.cold);
                 const lba_offset = self.offsetToLba(offset + quants[i].base);
                 log.warn("{s}: write back timeout: lba 0x{x}", .{self.getName().str(), lba_offset});

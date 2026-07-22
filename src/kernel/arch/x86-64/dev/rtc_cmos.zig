@@ -46,12 +46,12 @@ const RtcRegs = dev.regs.Group(
     dev.regs.from(RtcRegsLayout)
 );
 
-const rtc_irq = 8;
-const rtc_frequency = 32768;
+const x86_irq_num = 8;
+const frequency_hz = 32768;
 
 const device_name = "rtc_cmos";
 
-const vtable: Clock.VTable = .{
+const ops: Clock.Operations = .{
     .getDateTime = getDateTime,
     .setDateTime = setDateTime,
     .maskIrq = maskIrq,
@@ -62,7 +62,6 @@ var device: dev.Device = .init(.init(device_name), null);
 var regs: RtcRegs = .{};
 
 var clock: *Clock = undefined;
-var intr_callback: ?Clock.IntrCallbackFn = null;
 
 pub fn init() void {
     initDevice(dev.getKernelDriver()) catch |err| {
@@ -82,24 +81,26 @@ fn initDevice(self: *const dev.Driver) !void {
     errdefer dev.obj.free(Clock, clock);
 
     try dev.intr.requestIrq(
-        rtc_irq,
+        x86_irq_num,
         &device,
         irqHandler,
         .edge,
         false
     );
-    errdefer dev.intr.releaseIrq(rtc_irq, &device);
+    errdefer dev.intr.releaseIrq(x86_irq_num, &device);
 
     // Select status register A, and disable NMI (by setting the 0x80 bit).
     // Then write to CMOS/RTC RAM.
     cmos.write(0x8A, 0x20);
 
-    clock.* = .init(&device, &vtable, rtc_frequency, .system_low);
+    clock.* = .init(&device, &ops, frequency_hz);
+    device.driver_data.setPtr(clock);
+
     try dev.obj.add(Clock, clock);
 }
 
 fn irqHandler(_: *dev.Device) bool {
-    if (intr_callback) |callback| callback(clock);
+    if (clock.callback.func) |func| func(clock, clock.callback.data);
 
     _ = regs.read(.reg_c);
     return true;
@@ -158,9 +159,7 @@ fn maskIrq(_: *Clock, mask: bool) void {
     }
 }
 
-fn configIrq(_: *Clock, freq_div_rank: u8, callback: Clock.IntrCallbackFn) dev.intr.Error!void {
-    intr_callback = callback;
-
+fn configIrq(_: *Clock, freq_div_rank: u8) dev.intr.Error!void {
     dev.intr.disableForCpu();
     defer dev.intr.enableForCpu();
 

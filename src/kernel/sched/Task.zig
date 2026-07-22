@@ -42,17 +42,16 @@ pub const Stats = struct {
         sleep,
     };
 
-    /// Number of scheduler ticks allocated to task.
-    time_slice: sched.Ticks = 0,
+    time_slice_ns: u32 = 0,
 
     static_prior: PriorityDelta = 0,
     bonus_prior: PriorityDelta = 0,
 
-    cpu_time: u16 = 0,
-    sleep_time: u16 = 0,
+    cpu_time_ns: u32 = 0,
+    sleep_time_ns: u32 = 0,
 
     sleep: std.atomic.Value(Sleep) = .init(.awake),
-    lock: lib.sync.Spinlock = .{},
+    sched_lock: lib.sync.Spinlock = .{},
 
     comptime {
         const max_val = (std.math.maxInt(PriorityDelta) * 2) + base_priority;
@@ -71,36 +70,35 @@ pub const Stats = struct {
 
     /// Calculate and set time slice for the task.
     pub inline fn updateTimeSlice(self: *Stats) void {
-        self.time_slice = self.calcTimeSlice();
+        self.time_slice_ns = self.calcTimeSlice();
     }
 
     /// Update priority bonus based on task interactivity.
     pub fn updateBonus(self: *Stats) void {
-        const max_inter: comptime_int = lib.fp_scale;
-        const base_inter: comptime_int = (max_inter - 1) / 2;
-        const max_bonus: comptime_int = (std.math.maxInt(Priority) + 1) / 2;
-        const norm_mul: comptime_int = (max_inter * lib.fp_scale) / max_bonus;
-
-        const interactivity: i32 = self.getInteractivity();
-        const bonus = @divFloor(-interactivity * norm_mul, lib.fp_scale);
-        self.bonus_prior = @truncate(bonus + base_inter);
+        //const max_inter: comptime_int = lib.fp_scale;
+        //const base_inter: comptime_int = (max_inter - 1) / 2;
+        //const max_bonus: comptime_int = (std.math.maxInt(Priority) + 1) / 2;
+        //const norm_mul: comptime_int = (max_inter * lib.fp_scale) / max_bonus;
+        //const interactivity: i32 = self.getInteractivity();
+        //const bonus = @divFloor(-interactivity * norm_mul, lib.fp_scale);
+        self.bonus_prior = 0;//@truncate(bonus + base_inter);
     }
 
     pub fn yieldTime(self: *Stats) void {
-        self.sleep_time +|= self.time_slice;
+        self.sleep_time_ns +|= self.time_slice_ns;
     }
 
     fn getInteractivity(self: *const Stats) u8 {
         @setRuntimeSafety(false);
-        const time = @as(u32, self.cpu_time) + self.sleep_time;
+        const time = self.cpu_time_ns + self.sleep_time_ns;
         if (time == 0) return 0;
 
-        const result = (@as(u32, self.sleep_time + 1) * lib.fp_scale) / time;
+        const result = ((self.sleep_time_ns + 1) * lib.fp_scale) / time;
         return @truncate(result);
     }
 
     /// Caclulate time slice for the task and return it.
-    fn calcTimeSlice(self: *const Stats) Ticks {
+    fn calcTimeSlice(self: *const Stats) u32 {
         const max_bonus: comptime_int = comptime calcTimeBonus(sched.max_priority);
         const norm_mult: comptime_int = ((sched.max_slice_ticks + 1) * lib.fp_scale) / max_bonus;
 
@@ -108,8 +106,10 @@ pub const Stats = struct {
         const bonus: u32 = calcTimeBonus(reverse_prior);
         const norm_bonus: Ticks = @truncate((bonus * norm_mult) / lib.fp_scale);
 
-        return if (norm_bonus < sched.min_slice_ticks)
+        const ticks = if (norm_bonus < sched.min_slice_ticks)
             sched.min_slice_ticks else norm_bonus;
+
+        return sys.time.getNsPerTick() * ticks;
     }
 
     inline fn calcTimeBonus(reverse_prior: u32) u32 {
@@ -238,7 +238,7 @@ pub inline fn tryWakeup(self: *Self) bool {
 }
 
 pub fn onSwitch(self: *Self) void {
-    defer self.stats.lock.unlockAtomic();
+    defer self.stats.sched_lock.unlockAtomic();
     switch (self.spec) {
         .kernel => {
             const pt = vm.getRootPt();
@@ -252,3 +252,4 @@ pub fn onSwitch(self: *Self) void {
         }
     }
 }
+

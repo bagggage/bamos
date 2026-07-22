@@ -20,14 +20,14 @@ const Self = @This();
 
 const Flags = packed struct {
     need_resched: bool = false,
-    want_sleep:   bool = false,
-    terminate:    bool = false,
+    want_sleep: bool = false,
+    terminate: bool = false,
 };
 
 const TaskQueue = struct {
     const len = sched.max_priority;
 
-    lists: [len]Task.List = .{ Task.List{} } ** len,
+    lists: [len]Task.List = .{Task.List{}} ** len,
     size: u32 = 0,
 
     last_min: u8 = 0,
@@ -49,7 +49,7 @@ const TaskQueue = struct {
     }
 
     pub fn pop(self: *TaskQueue) ?*Task {
-        for (self.lists[self.last_min..len]) |*list| {
+        for (self.lists[self.last_min..self.lists.len]) |*list| {
             if (list.popFirst()) |n| {
                 self.size -= 1;
                 return Task.fromNode(n);
@@ -68,7 +68,7 @@ const TaskQueue = struct {
 };
 
 task_lock: lib.sync.Spinlock = .init(.unlocked),
-task_queues: [2]TaskQueue = .{ TaskQueue{} } ** 2,
+task_queues: [2]TaskQueue = .{TaskQueue{}} ** 2,
 
 pause_queue: sched.WaitQueue = .{},
 
@@ -83,7 +83,10 @@ flags: Flags = .{},
 
 sleep_queue: SleepQueue = .{},
 sleep_lock: lib.sync.Spinlock = .{},
-sleep_elapsed_ns: u64 = 0,
+
+event_deadline_ns: u64 = std.math.maxInt(u64),
+max_event_deadline_ns: u64 = std.time.ns_per_s,
+last_task_time_ns: u64 = 0,
 
 pub fn preinit(self: *Self) void {
     self.active_queue = &self.task_queues[0];
@@ -93,7 +96,7 @@ pub fn preinit(self: *Self) void {
 pub fn start(self: *Self) noreturn {
     lib.debug.assert(
         (self.current_task == null and self.isOnCurrentCpu()) and
-        (intr.isEnabledForCpu() and self.preemption == 1),
+            (intr.isEnabledForCpu() and self.preemption == 1),
         @src(),
     );
 
@@ -104,25 +107,22 @@ pub fn start(self: *Self) noreturn {
     const top = stack + Task.kernel_stack_size;
     self.sleep_ctx = .init(top, undefined);
 
-    sys.time.maskTimerIntr(false);
     self.rescheduleAtomic();
-
     unreachable;
 }
 
 /// Schedule task.
-/// 
+///
 /// Can be called from both atomic and kernel context.
 /// You have make sure that task is not already scheduled.
 pub fn enqueueTask(self: *Self, task: *Task) void {
     lib.debug.assert(
         intr.isEnabledForCpu() and task.stats.sleep.raw == .awake and
-        !task.stats.lock.isLocked(),
+            !task.stats.sched_lock.isLocked(),
         @src(),
     );
 
-    task.stats.updateBonus();
-    task.stats.updateTimeSlice();
+    updateTaskStatsAtomic(task);
 
     if (self.tryPreempt(task)) return;
 
@@ -132,7 +132,7 @@ pub fn enqueueTask(self: *Self, task: *Task) void {
     self.expired_queue.prepend(task);
 }
 
-pub fn dequeueTask(self: *Self,  task: *Task) void {
+pub fn dequeueTask(self: *Self, task: *Task) void {
     lib.debug.assert(task.stats.sleep.raw != .sleep, @src());
 
     self.task_lock.lockIntr();
@@ -146,7 +146,7 @@ pub fn yield(self: *Self) void {
     const task = self.current_task.?;
     lib.debug.assert(task.stats.sleep.raw == .awake, @src());
 
-    const locked = task.stats.lock.tryLockAtomic();
+    const locked = task.stats.sched_lock.tryLockAtomic();
     lib.debug.assert(locked, @src());
 
     task.stats.yieldTime();
@@ -167,9 +167,9 @@ pub fn tryPreempt(self: *Self, task: *Task) bool {
     if (!self.isOnCurrentCpu()) return false;
 
     if (self.current_task) |current| {
-        if (self.wantSleep() or !current.stats.lock.tryLockAtomic()) return false;
+        if (self.wantSleep() or !current.stats.sched_lock.tryLockAtomic()) return false;
         if (current.stats.getPriority() <= task.stats.getPriority()) {
-            current.stats.lock.unlockAtomic();
+            current.stats.sched_lock.unlockAtomic();
             return false;
         }
 
@@ -258,7 +258,7 @@ pub fn initWait(self: *Self) WaitQueue.Entry {
 
     return WaitQueue.Entry.init(
         task,
-        sys.time.getFastTimestamp()
+        sys.time.getUpTimeNs(),
     );
 }
 
@@ -269,8 +269,10 @@ pub fn wait(self: *Self) void {
     self.disablePreemption();
 
     if (task.stats.sleep.cmpxchgStrong(
-        .needs_wakeup, .awake,
-        .release, .monotonic
+        .needs_wakeup,
+        .awake,
+        .release,
+        .monotonic,
     ) == null) {
         @branchHint(.unlikely);
         self.flags.want_sleep = false;
@@ -295,16 +297,15 @@ pub fn wait(self: *Self) void {
 pub fn waitTimeout(self: *Self, ns: u64) error{Timeout}!void {
     lib.debug.assert(self.isOnCurrentCpu(), @src());
 
-    // TODO: Implement high-percision sleep.
-    if (ns < sys.time.getNsPerTick()) return error.Timeout;
-
     self.prepareToSleep();
     self.disablePreemption();
 
     const task = self.current_task.?;
     if (task.stats.sleep.cmpxchgStrong(
-        .needs_wakeup, .awake,
-        .release, .monotonic
+        .needs_wakeup,
+        .awake,
+        .release,
+        .monotonic,
     ) == null) {
         @branchHint(.unlikely);
         self.flags.want_sleep = false;
@@ -313,16 +314,18 @@ pub fn waitTimeout(self: *Self, ns: u64) error{Timeout}!void {
     }
 
     lib.debug.assert(task.stats.sleep.raw != .awake, @src());
+    const time_ns = sys.time.getUpTimeNs();
     var entry: SleepQueue.Entry = .{
-        .delta_ns = ns,
-        .wait_entry = .init(task, sys.time.getFastTimestamp()),
+        .deadline_ns = time_ns + ns,
+        .wait_entry = .init(task, time_ns),
     };
 
     {
-        if (self.sleep_lock.tryLockAtomic() == false) unreachable;
-        defer self.sleep_lock.unlockAtomic();
+        if (self.sleep_lock.tryLockIntr() == false) unreachable;
+        defer self.sleep_lock.unlockIntr();
 
         self.sleep_queue.push(&entry);
+        self.updateTimerEventDeadline(time_ns, entry.deadline_ns);
     }
 
     self.rescheduleAtomic();
@@ -335,50 +338,53 @@ pub fn waitTimeout(self: *Self, ns: u64) error{Timeout}!void {
         self.sleep_queue.removeWeak(&entry);
     }
 
-    if (entry.delta_ns == 0) return error.Timeout;
+    if (entry.deadline_ns == 0) return error.Timeout;
 }
 
 pub fn sleepFor(self: *Self, ns: u64) void {
     lib.debug.assert(self.isOnCurrentCpu(), @src());
 
-    // TODO: Implement high-percision sleep.
-    if (ns < sys.time.getNsPerTick()) return;
-
     self.prepareToSleep();
     self.disablePreemption();
 
     var entry: SleepQueue.Entry = .{
-        .delta_ns = ns,
-        .wait_entry = initWait(self),
+        .deadline_ns = undefined,
+        .wait_entry = self.initWait(),
     };
 
+    const time_ns = entry.wait_entry.timestamp;
+    entry.deadline_ns = time_ns + ns;
+
     {
-        if (self.sleep_lock.tryLockAtomic() == false) unreachable;
-        defer self.sleep_lock.unlockAtomic();
+        if (self.sleep_lock.tryLockIntr() == false) unreachable;
+        defer self.sleep_lock.unlockIntr();
 
         self.sleep_queue.push(&entry);
+        self.updateTimerEventDeadline(time_ns, entry.deadline_ns);
     }
 
     self.rescheduleAtomic();
 }
 
-pub fn timerEvent(self: *Self, elapsed_ns: u64) void {
+pub fn timerInterrupt(self: *Self) void {
+    self.event_deadline_ns = std.math.maxInt(u64);
+}
+
+pub fn timerEvent(self: *Self, time_ns: u64) void {
     lib.debug.assert(self.getCpuLocal().isInInterrupt(), @src());
     @setRuntimeSafety(false);
 
-    self.processSleeping(elapsed_ns);
+    self.max_event_deadline_ns = time_ns + sys.time.getMaxTimerEventDelayNs();
 
-    // When converting to ticks, roundup on a half of tick.
-    const ns_per_tick = sys.time.getNsPerTick();
-    const ticks = (elapsed_ns + (ns_per_tick / 2)) / ns_per_tick;
-    if (ticks == 0) return;
+    const sleep_deadline_ns = self.processSleepingTasks(time_ns);
+    const task_deadline_ns = self.processCurrentTask(time_ns);
 
-    self.processTicks(@truncate(ticks));
+    self.updateTimerEventDeadline(time_ns, @min(sleep_deadline_ns, task_deadline_ns));
 }
 
 /// Scheduler main function. Switches to next task from queue,
 /// or fall into sleep if no tasks are scheduled.
-/// 
+///
 /// **Call this function only in kernel context!**
 pub inline fn reschedule(self: *Self) void {
     lib.debug.assert(self.isPreemptive(), @src());
@@ -397,14 +403,16 @@ pub fn rescheduleAtomic(self: *Self) void {
             self.fallIntoSleep();
             return;
         };
+
         if (next_task == self.current_task) {
             @branchHint(.unlikely);
-            lib.debug.assert(next_task.stats.lock.isLocked(), @src());
+            lib.debug.assert(next_task.stats.sched_lock.isLocked(), @src());
 
             updateTaskStatsAtomic(next_task);
             self.completeSwitch(next_task);
             return;
         }
+
         break :blk next_task;
     };
 
@@ -418,7 +426,7 @@ pub fn rescheduleAtomic(self: *Self) void {
 
 pub noinline fn postSwitch(self: *Self, new_ctx: *arch.Context) callconv(.c) void {
     if (self.current_task) |task| blk: {
-        if (!task.stats.lock.tryLockAtomic()) {
+        if (!task.stats.sched_lock.tryLockAtomic()) {
             @branchHint(.likely);
 
             if (self.flags.terminate) {
@@ -435,15 +443,19 @@ pub noinline fn postSwitch(self: *Self, new_ctx: *arch.Context) callconv(.c) voi
             break :blk;
         }
 
+        // Disable interrupts to prevent any wakeup of current task from
+        // current CPU before the sched_lock would be released.
+        // This is fix deadlock issue as any awake waits until sched_lock is released.
+        // Don't enable interrupts again, it's safe
+        intr.disableForCpu();
+
         const sleep = task.stats.sleep.cmpxchgStrong(
             .falling_asleep, .sleep,
             .release, .monotonic
         ) orelse break :blk;
 
         switch (sleep) {
-            .awake,
-            .sleep,
-            .falling_asleep => unreachable,
+            .awake, .sleep, .falling_asleep => unreachable,
             .needs_wakeup => {
                 updateTaskStatsAtomic(task);
                 task.stats.sleep.store(.awake, .release);
@@ -465,7 +477,7 @@ pub inline fn completeSwitch(self: *Self, new_task: ?*Task) void {
     const old_task = self.current_task;
     // Why do we need this???
     //
-    // This code adds a bug: 
+    // This code adds a bug:
     // 1. Task was `falling_into_sleep`;
     // 2. Someone awake it (sleep state is set to `needs_wakeup`);
     // 3. Timer event preempt this task (equeue it to resume later);
@@ -492,7 +504,12 @@ pub inline fn completeSwitch(self: *Self, new_task: ?*Task) void {
     self.flags = .{};
     self.current_task = new_task;
 
-    if (old_task) |task| task.stats.lock.unlockAtomic();
+    if (old_task) |task| task.stats.sched_lock.unlockAtomic();
+    if (new_task) |task| {
+        self.updateCurrentTaskDeadline(task.stats.time_slice_ns);
+    } else {
+        self.updateCurrentTaskDeadline(sys.time.getMaxTimerEventDelayNs());
+    }
 
     self.enablePreemptionRaw();
     self.getCpuLocal().tryExitInterrupt(1);
@@ -528,6 +545,7 @@ fn sleepTask() callconv(.c) noreturn {
 
     while (true) {
         if (self.active_queue.size > 0 or self.expired_queue.size > 0) self.reschedule();
+
         lib.arch.halt();
     }
 }
@@ -548,16 +566,12 @@ inline fn updateTaskStatsAtomic(task: *Task) void {
     task.stats.updateTimeSlice();
 }
 
-fn processSleeping(self: *Self, elapsed_ns: u64) void {
-    self.sleep_elapsed_ns += elapsed_ns;
+fn processSleepingTasks(self: *Self, time_ns: u64) u64 {
     if (self.sleep_lock.tryLockAtomic()) {
         @branchHint(.likely);
         defer self.sleep_lock.unlockAtomic();
 
-        const sleep_elapsed = self.sleep_elapsed_ns;
-        self.sleep_elapsed_ns = 0;
-
-        var entry = self.sleep_queue.process(sleep_elapsed);
+        var entry = self.sleep_queue.process(time_ns);
         while (entry) |e| {
             const task = e.wait_entry.task;
             if (task.tryWakeup()) self.enqueueTask(task);
@@ -565,22 +579,21 @@ fn processSleeping(self: *Self, elapsed_ns: u64) void {
             entry = if (e.wait_entry.node.next) |n| SleepQueue.Entry.fromNode(n) else null;
         }
     }
+
+    return self.sleep_queue.getEarliestDeadline();
 }
 
-fn processTicks(self: *Self, ticks: sched.Ticks) void {
-    const task = self.current_task orelse return;
-    task.stats.cpu_time +|= ticks;
+fn processCurrentTask(self: *Self, time_ns: u64) u64 {
+    const task = self.current_task orelse return sched.no_deadline;
+    const elapsed_time_ns = @min(time_ns - self.last_task_time_ns, std.math.maxInt(u32));
 
-    // Don't handle task time slice in nested interrupt context.
-    if (self.getCpuLocal().force_immediate_intrs) {
-        @branchHint(.unlikely);
-        return;
-    }
+    self.last_task_time_ns = time_ns;
+    task.stats.cpu_time_ns +|= elapsed_time_ns;
 
-    if (self.wantSleep() or !task.stats.lock.tryLockAtomic()) return;
-    task.stats.time_slice -|= ticks;
+    if (self.wantSleep() or !task.stats.sched_lock.tryLockAtomic()) return sched.no_deadline;
+    task.stats.time_slice_ns -|= elapsed_time_ns;
 
-    if (task.stats.time_slice == 0) {
+    if (task.stats.time_slice_ns == 0) {
         @branchHint(.unlikely);
         // Don't release stats.lock, it's used to say that nobody can
         // scheduled this task again, because it's already scheduled
@@ -591,8 +604,32 @@ fn processTicks(self: *Self, ticks: sched.Ticks) void {
         defer self.task_lock.unlockAtomic();
 
         self.expired_queue.push(task);
-        return;
+        return sched.no_deadline;
     }
 
-    task.stats.lock.unlockAtomic();
+    task.stats.sched_lock.unlockAtomic();
+    return time_ns + task.stats.time_slice_ns;
+}
+
+fn updateCurrentTaskDeadline(self: *Self, after_ns: u64) void {
+    const time_ns = sys.time.getUpTimeNs();
+    self.last_task_time_ns = time_ns;
+
+    const sleep_deadline_ns = self.sleep_queue.getEarliestDeadline();
+    const task_deadline_ns = time_ns + after_ns;
+
+    self.updateTimerEventDeadline(time_ns, @min(sleep_deadline_ns, task_deadline_ns));
+}
+
+fn updateTimerEventDeadline(self: *Self, time_ns: u64, deadline_ns: u64) void {
+    const safe_deadline_ns = @min(self.max_event_deadline_ns, deadline_ns);
+    if (safe_deadline_ns >= self.event_deadline_ns) return;
+
+    self.event_deadline_ns = safe_deadline_ns;
+
+    const event_source = sys.time.getEventSource();
+    const ns = @max(safe_deadline_ns -| time_ns, std.time.ns_per_us / 2);
+    const ticks = (ns * lib.fp_scale) / event_source.ns_per_tick_fp;
+
+    event_source.setEventDeadline(ticks) catch unreachable;
 }

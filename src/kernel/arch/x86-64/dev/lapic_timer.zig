@@ -4,42 +4,28 @@
 
 const std = @import("std");
 
+const arch = @import("../arch.zig");
 const Clock = dev.classes.Clock;
 const dev = @import("../../../dev.zig");
 const intr = @import("../intr.zig");
 const lapic = @import("../intr/lapic.zig");
-const lib = @import("../../../lib.zig");
 const log = std.log.scoped(.@"lapic.timer");
 const rtc_cmos = @import("../dev/rtc_cmos.zig");
-const sched = @import("../../../sched.zig");
 const smp = @import("../../../smp.zig");
 const Timer = dev.classes.Timer;
+const vm = @import("../../../vm.zig");
 
 const device_name = "lapic_timer";
-const clock_freq_div_rank = 12;
 
-const DivisorConfig = struct {
-    conf: u32,
-    divisor: u32
-};
-
-const accur_config = struct {
-    const milliseconds: DivisorConfig = .{ .conf = 0b1000, .divisor = 16 }; // divide by 16
-    const microseconds: DivisorConfig = .{ .conf = 0b0010, .divisor =  8 }; // divide by 8
-    const nanoseconds:  DivisorConfig = .{ .conf = 0b1011, .divisor =  1 }; // divide by 1
-
-    var ns_per_tick: u32 = 0;
-};
-
-const vtable: Timer.VTable = .{
-    .getCounter = getCounterCallback,
-    .setFrequency = setFrequencyCallback
+const ops: Timer.Operations = .{
+    .readCounter = timerReadCounter,
+    .setEvent = timerSetEvent,
+    .setDeadline = timerSetDeadline,
 };
 
 var device: dev.Device = .init(.init(device_name), null);
 var timer: *Timer = undefined;
-
-var eval_lock: lib.sync.Spinlock = .init(.unlocked);
+var irq_vectors: []u16 = &.{};
 
 pub fn init() !void {
     dev.getKernelDriver().attachDevice(&device);
@@ -47,93 +33,81 @@ pub fn init() !void {
     timer = try dev.obj.new(Timer);
     errdefer dev.obj.free(Timer, timer);
 
-    timer.* = .init(&device, &vtable, 0, .system_high, .both, .once);
+    timer.* = .init(&device, &ops, null, .{
+        .per_cpu = true,
+        .count_down = true,
+        .event_source = true,
+    });
+    timer.mask = std.math.maxInt(u32);
 
-    try evalTimerFrequency();
+    const clock = rtc_cmos.getObject();
+    var eval: Clock.EvaluateFrequency = .{ .timer = timer, .ref_timer = dev.acpi.timer.getObject().? };
+
+    lapic.set(.timer_div_conf, 0b1011);
+    lapic.set(.timer_init_count, std.math.maxInt(u32));
+
+    try clock.evaluateTimerFrequency(&eval);
+    timer.initFrequency(eval.frequency_hz);
+
+    irq_vectors = vm.gpa.allocMany(u16, smp.getNum()) orelse return error.NoMemory;
+    @memset(irq_vectors, 0);
+
     try dev.obj.add(Timer, timer);
 
-    log.info("frequency: {} MHz, ns per tick: {}", .{timer.base_frequency / 1000_000, accur_config.ns_per_tick});
-}
-
-pub fn initPerCpu(isr: intr.isr.Fn) !void {
-    const cpu_idx = smp.getIdx();
-    const intr_vec = dev.intr.allocVector(cpu_idx) orelse return error.NoIntrVector;
-
-    const lvt_timer: lapic.LvtTimer = .{
-        .delv_status = .relaxed,
-        .timer_mode = .periodic,
-        .mask = 1,
-        .vector = @truncate(intr_vec.vec)
-    };
-
-    intr.setupIsr(intr_vec, isr, .self, intr.intr_gate_flags);
-    lapic.set(.lvt_timer, @bitCast(lvt_timer));
+    log.info("frequency: {} MHz, ns per tick fp: {}", .{timer.frequency_hz / 1000_000, timer.ns_per_tick_fp});
 }
 
 pub inline fn getObject() *Timer {
     return timer;
 }
 
-fn evalTimerFrequency() !void {
-    const clock: *Clock = rtc_cmos.getObject();
-
-    try clock.configIrq(clock_freq_div_rank, clockIntrCallback);
-    clock.maskIrq(false);
-
-    eval_lock.wait(.locked_no_intr);
-    eval_lock.wait(.unlocked);
-
-    clock.maskIrq(true);
-
-    accur_config.ns_per_tick = @truncate(@as(u64, std.time.ns_per_s) / timer.base_frequency);
-    if (accur_config.ns_per_tick == 0) accur_config.ns_per_tick = 1;
+fn irqHandler(_: u32) void {
+    timer.event.process(timer);
 }
 
-fn clockIntrCallback(clock: *Clock) void {
-    const Static = opaque {
-        var started = false;
-        var begin_ticks: u32 = 0;
-    };
-
-    if (Static.started) {
-        const end_ticks = lapic.get(.timer_curr_count);
-        const ticks = Static.begin_ticks -% end_ticks;
-        timer.base_frequency = ticks * clock.calcFrequency(clock_freq_div_rank);
-
-        eval_lock.unlockAtomic();
-        Static.started = false;
-
-        return;
-    }
-
-    eval_lock.lockAtomic();
-
-    // Set divider to 1.
-    lapic.set(.timer_div_conf, 0b1011);
-    lapic.set(.timer_init_count, std.math.maxInt(u32));
-
-    Static.begin_ticks = lapic.get(.timer_curr_count);
-    Static.started = true;
-}
-
-fn getCounterCallback(_: *const Timer) usize {
+fn timerReadCounter(_: *const Timer) usize {
     return lapic.get(.timer_curr_count);
 }
 
-fn setFrequencyCallback(_: *Timer, freq: u32, accuracy: Timer.Accuracy) Timer.Error!void {
-    const div_conf = accuracyToDivConf(accuracy);
-    const init_count = (timer.base_frequency / freq) / div_conf.divisor;
+fn timerSetEvent(self: *Timer, event: Timer.Event) Timer.Error!void {
+    const cpu_idx = smp.getIdx();
+    if ((!self.event.isSet() or irq_vectors[cpu_idx] == 0) and event.isSet()) {
+        const intr_vec = dev.intr.allocVector(cpu_idx) orelse return error.NoVector;
+        irq_vectors[cpu_idx] = intr_vec.vec;
 
-    if (smp.getIdx() == smp.boot_cpu) log.debug("init count: {}", .{init_count});
+        const lvt_timer: lapic.LvtTimer = .{
+            .delv_status = .relaxed,
+            .timer_mode = if (comptime arch.time.use_tsc_deadline_mode) .tsc_deadline else .once,
+            .mask = 0,
+            .vector = @truncate(intr_vec.vec)
+        };
 
-    lapic.set(.timer_div_conf, div_conf.conf);
-    lapic.set(.timer_init_count, init_count);
+        comptime {
+            const low_level_handler = dev.intr.makeLowLevelHandler(irqHandler);
+            @export(low_level_handler, .{ .name = "lapicIrqHandler" });
+        }
+
+        const isr = intr.isr.makeIrqHandler("lapic", "lapicIrqHandler", null);
+        intr.setupIsr(intr_vec, isr, .self, intr.intr_gate_flags);
+
+        // Set divider to 1
+        lapic.set(.timer_div_conf, 0b1011);
+        // Disable interrupts until deadline is set
+        lapic.set(.timer_init_count, 0);
+        lapic.set(.lvt_timer, @bitCast(lvt_timer));
+    } else if ((self.event.isSet() or irq_vectors[cpu_idx] != 0) and !event.isSet()) {
+        var lvt_timer: lapic.LvtTimer = @bitCast(lapic.get(.lvt_timer));
+        lvt_timer.mask = 1;
+
+        lapic.set(.timer_init_count, 0);
+        lapic.set(.lvt_timer, @bitCast(lvt_timer));
+
+        dev.intr.freeVector(.{ .cpu = cpu_idx, .vec = irq_vectors[cpu_idx] });
+
+        irq_vectors[cpu_idx] = 0;
+    }
 }
 
-fn accuracyToDivConf(accuracy: Timer.Accuracy) DivisorConfig {
-    return switch (accuracy) {
-        .milliseconds => accur_config.milliseconds,
-        .microseconds => accur_config.microseconds,
-        .nanoseconds => accur_config.nanoseconds
-    };
+fn timerSetDeadline(_: *Timer, deadline_ticks: u64) void {
+    lapic.set(.timer_init_count, @truncate(deadline_ticks));
 }
