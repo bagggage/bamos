@@ -8,7 +8,7 @@ const builtin = @import("builtin");
 pub const is_debug = (builtin.mode == .Debug or builtin.mode == .ReleaseSafe);
 
 /// Fixed-point scale.
-pub const fp_scale = 32;
+pub const fp_scale = 128;
 
 pub const byte_size = 8;
 pub const byte_shift = 3;
