@@ -45,9 +45,9 @@ pub fn lock(self: *Self) void {
 }
 
 pub fn lockTimeout(self: *Self, time_us: usize) error{Timeout}!void {
-    const end = sys.time.getUpTime().toNs() +| (time_us * std.time.ns_per_us);
+    const end = sys.time.getUpTimeNs() +| (time_us * std.time.ns_per_us);
     while (!self.tryLock()) {
-        if (sys.time.getUpTime().toNs() >= end) return error.Timeout;
+        if (sys.time.getUpTimeNs() >= end) return error.Timeout;
     }
 }
 

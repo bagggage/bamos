@@ -21,9 +21,6 @@ pub const max_cpus = 2048;
 
 pub const LocalData = struct {
     idx: u16 = 0,
-
-    /// Used by timer IRQ to calculate elapsed time.
-    sys_timer_delta: u64 = 0,
     scheduler: sched.Scheduler = .{},
 
     nested_intr: u8 = 0,

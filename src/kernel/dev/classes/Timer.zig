@@ -3,113 +3,130 @@
 const std = @import("std");
 
 const dev = @import("../../dev.zig");
+const lib = @import("../../lib.zig");
 const log = std.log.scoped(.Timer);
+const sys = @import("../../sys.zig");
 
 const Self = @This();
 
-const SupportedModes = enum(u8) {
-    once = 1,
-    periodic = 2,
-    both = 3
-};
+pub const Event = sys.time.Event;
 
-pub const Error = error {
+pub const Error = dev.io.Error || dev.intr.Error || error {
     BadOperation,
-    BadFrequency,
-    BadCounterValue,
-    UnsupportedMode,
 };
 
-pub const Kind = enum(u8) {
-    system_low,
-    system_high,
-    embedded
+pub const Operations = struct {
+    pub const ReadCounterFn = *const fn (*const Self) u64;
+    pub const SetCounterFn = *const fn (*Self, u64) void;
+    pub const SetEventFn = *const fn (*Self, Event) Error!void;
+    pub const SetDeadlineFn = *const fn (*Self, u64) void;
+
+    readCounter: ReadCounterFn,
+    setCounter: ?SetCounterFn = null,
+
+    /// Timer interrupt management and event configuration interface.
+    setEvent: SetEventFn = undefined,
+    setDeadline: SetDeadlineFn = undefined,
 };
 
-pub const Mode = enum(u8) {
-    once = 1,
-    periodic = 2
-};
-
-pub const VTable = struct {
-    pub const GetCounterFn = *const fn(obj: *const Self) usize;
-    pub const SetInitCounterFn = *const fn(obj: *Self, val: usize) Error!void;
-    pub const SetFrequencyFn = *const fn(obj: *Self, freq: u32, acc: Accuracy) Error!void;
-    pub const SetModeFn = *const fn(obj: *Self, mode: Mode) void;
-
-    getCounter: GetCounterFn,
-    setInitCounter: ?SetInitCounterFn = null,
-    setFrequency: ?SetFrequencyFn = null,
-    setMode: ?SetModeFn = null,
-};
-
-pub const Flags = packed struct {
-    per_cpu: bool = false,
-};
-
-pub const Accuracy = enum(u2) {
-    milliseconds = 0,
-    microseconds = 1,
-    nanoseconds = 2
+pub const Flags = packed struct(u8) {
+    per_cpu: bool,
+    count_down: bool,
+    event_source: bool = false,
+    time_source: bool = false,
+    unstable: bool = false,
+    _rsvd: u3 = 0,
 };
 
 device: *const dev.Device,
-vtable: *const VTable,
+ops: *const Operations,
 
-/// Frequency in Hz.
-base_frequency: u32,
-/// Timer kind, used by kernel to choose system timer.
-kind: Kind,
-//flags: Flags, TODO: FIXME!!!
 mask: u64 = std.math.maxInt(u64),
+frequency_hz: u32,
+ns_per_tick_fp: u64,
 
-supported_modes: SupportedModes,
-mode: Mode,
+lock: lib.sync.Spinlock = .{},
+event: sys.time.Event = .{},
+flags: Flags,
 
 pub fn init(
     device: *const dev.Device,
-    vt: *const VTable, base_frequency: u32,
-    kind: Kind, supported_modes: SupportedModes,
-    mode: Mode
+    ops: *const Operations,
+    base_frequency: ?u32,
+    flags: Flags,
 ) Self {
+    const hz = if (base_frequency) |freq| freq else undefined;
+    const ns_per_tick_fp = if (base_frequency) |freq| calculateNsPerTick(freq) else undefined;
+
     return .{
-        .vtable = vt,
+        .ops = ops,
         .device = device,
-        .base_frequency = base_frequency,
-        .kind = kind,
-        .supported_modes = supported_modes,
-        .mode = mode
+        .frequency_hz = hz,
+        .ns_per_tick_fp = ns_per_tick_fp,
+        .flags = flags,
     };
 }
 
-pub inline fn getCounter(self: *const Self) usize {
-    return self.vtable.getCounter(self);
+pub fn initFrequency(self: *Self, hz: u32) void {
+    self.frequency_hz = hz;
+    self.ns_per_tick_fp = calculateNsPerTick(hz);
 }
 
-pub inline fn setInitCounter(self: *Self, value: usize) Error!void {
-    return self.vtable.setInitCounter.?(self, value & self.mask);
+pub inline fn readCounter(self: *const Self) u64 {
+    return self.ops.readCounter(self);
 }
 
-pub inline fn setFrequency(self: *Self, frequency: u32, accuracy: Accuracy) Error!void {
-    return self.vtable.setFrequency.?(self, frequency, accuracy);
+pub inline fn setCounter(self: *Self, value: u64) error{BadOperation}!void {
+    const func = self.ops.setCounter orelse return error.BadOperation;
+    func(self, value & self.mask);
 }
 
-pub fn getSupportedModes(self: *const Self) []const Mode {
-    return switch (self.supported_modes) {
-        .once => &.{ .once },
-        .periodic => &.{ .periodic },
-        .both => &.{ .once, .periodic },
-    };
+pub fn deltaTicks(self: *const Self, start: u64, end: u64) u64 {
+    const raw_ticks =
+        if (self.flags.count_down)
+            start -% end
+        else
+            end -% start;
+
+    return raw_ticks & self.mask;
 }
 
-pub fn setMode(self: *Self, mode: Mode) Error!void {
-    if (self.mode == mode) return;
-    if (self.isModeSupported(mode) == false) return Error.UnsupportedMode;
-
-    self.vtable.setMode.?(self, mode);
-    self.mode = mode;
+pub inline fn deltaNs(self: *const Self, start: u64, end: u64) u64 {
+    return (self.deltaTicks(start, end) * self.ns_per_tick_fp) / lib.fp_scale;
 }
 
-pub inline fn isModeSupported(self: *const Self, mode: Mode) bool {
-    return (@intFromEnum(mode) & @intFromEnum(self.supported_modes)) != 0;
+pub fn setEvent(self: *Self, event: Event) Error!void {
+    if (!self.isEventSource()) return error.BadOperation;
+
+    self.lock.lockSaveIntr();
+    defer self.lock.unlockRestoreIntr();
+
+    try self.ops.setEvent(self, event);
+    self.event = event;
+}
+
+pub fn setEventDeadline(self: *Self, deadline_ticks: u64) error{BadOperation}!void {
+    if (!self.isEventSource()) return error.BadOperation;
+
+    if (self.flags.per_cpu) {
+        @branchHint(.likely);
+        self.ops.setDeadline(self, deadline_ticks);
+    } else {
+        self.lock.lockSaveIntr();
+        defer self.lock.unlockRestoreIntr();
+
+        self.ops.setDeadline(self, deadline_ticks);
+    }
+}
+
+pub inline fn isEventSource(self: *Self) bool {
+    return self.flags.event_source;
+}
+
+pub inline fn isTimeSource(self: *Self) bool {
+    return self.flags.time_source;
+}
+
+inline fn calculateNsPerTick(hz: u32) u64 {
+    return @as(u64, std.time.ns_per_s * lib.fp_scale) / hz;
 }

@@ -65,6 +65,8 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     var cpu_feat_sub: std.Target.Cpu.Feature.Set = .empty;
     switch (arch) {
         .x86_64 => {
+            cpu_feat_add.addFeature(@intFromEnum(std.Target.x86.Feature.cx16));
+
             if (enable_avx) {
                 cpu_feat_add.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
             } else {

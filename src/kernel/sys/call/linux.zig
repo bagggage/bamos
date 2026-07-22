@@ -400,7 +400,7 @@ fn clockGetTime(clock: linux.clockid_t, time_ptr: ?*linux.timespec) isize {
             time_dest.nsec = uptime.ns;
         },
         .MONOTONIC_COARSE => {
-            const cached = sys.time.getCachedUpTime();
+            const cached = sys.time.getUpTime();
             time_dest.sec = @intCast(cached.sec);
             time_dest.nsec = cached.ns;
         },
@@ -411,20 +411,20 @@ fn clockGetTime(clock: linux.clockid_t, time_ptr: ?*linux.timespec) isize {
             time_dest.nsec = real.ns;
         },
         .REALTIME_COARSE => {
-            const cached = sys.time.getCachedTime();
+            const cached = sys.time.getTime();
             time_dest.sec = @intCast(cached.sec);
             time_dest.nsec = cached.ns;
         },
         .THREAD_CPUTIME_ID => {
             const task = sched.getCurrentTask();
-            const cpu_time = sys.time.Time.fromTicks(task.stats.cpu_time);
+            const cpu_time = sys.time.Time.fromNs(task.stats.sys_time_ns +% task.stats.user_time_ns);
 
             time_dest.sec = @intCast(cpu_time.sec);
             time_dest.nsec = cpu_time.ns;
         },
         .PROCESS_CPUTIME_ID => {
             const task = sys.Process.getCurrent().getMainTask().?;
-            const cpu_time = sys.time.Time.fromTicks(task.stats.cpu_time);
+            const cpu_time = sys.time.Time.fromNs(task.stats.sys_time_ns +% task.stats.user_time_ns);
 
             time_dest.sec = @intCast(cpu_time.sec);
             time_dest.nsec = cpu_time.ns;
@@ -457,7 +457,7 @@ fn clockNanoSleep(
     const ns_to_wait = (@as(u64, @intCast(request.sec)) * std.time.ns_per_s) + @as(u64, @intCast(request.nsec));
     const start_time_ns = if (flags.ABSTIME) switch (clock) {
             .REALTIME => sys.time.getTime(),
-            .BOOTTIME,
+            .BOOTTIME => sys.time.getBootTime(),
             .MONOTONIC => sys.time.getUpTime(),
             else => return errorFromE(.INVAL),
     }.toNs() else 0;
@@ -482,6 +482,8 @@ fn nanoSleep(request: *const linux.timespec, remain: ?*linux.timespec) isize {
     if (remain != null) validateMemoryArgs(@intFromPtr(remain), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
 
     const wait_time_ns = (@as(u64, @intCast(request.sec)) * std.time.ns_per_s) + @as(u64, @intCast(request.nsec));
+
+    //@import("../../dev/drivers/uart/8250.zig").print("nanosleep: {}...\n\r", .{wait_time_ns});
     sched.sleepFor(wait_time_ns);
 
     if (remain) |r| {
@@ -1141,7 +1143,7 @@ fn getRandom(buffer: [*]u8, len: usize, flags: u32) isize {
     validateMemoryArgs(@intFromPtr(buffer), len) catch return errorFromE(.FAULT);
 
     // TODO: Implement real /dev/random and /dev/urandom devices
-    const seed = sys.time.getCachedTime().toNs() ^ @intFromPtr(buffer);
+    const seed = sys.time.getTime().toNs() ^ @intFromPtr(buffer);
     var rand = std.Random.Xoroshiro128.init(seed);
     rand.fill(buffer[0..len]);
 
@@ -1518,7 +1520,7 @@ fn poll(fds: [*c]linux.pollfd, len: usize, timeout: i32) isize {
         if (timeout < 0)
             std.math.maxInt(u64)
         else
-            sys.time.getUpTime().toNs() + (@as(u64, @intCast(timeout)) * std.time.ns_per_ms);
+            sys.time.getUpTimeNs() + (@as(u64, @intCast(timeout)) * std.time.ns_per_ms);
 
     for (fds[0..len]) |*fd| fd.revents = 0;
 
@@ -1543,7 +1545,7 @@ fn poll(fds: [*c]linux.pollfd, len: usize, timeout: i32) isize {
         }
 
         if (n != 0) return n;
-        if (time_end <= sys.time.getUpTime().toNs()) break;
+        if (time_end <= sys.time.getUpTimeNs()) break;
 
         sched.yield();
     }
@@ -1958,7 +1960,7 @@ fn selectImpl(
     const res_exp: [*]usize = buffer[n * 2..].ptr;
 
     const end_time = if (timeout) |t| (
-        sys.time.getUpTime().toNs() +|
+        sys.time.getUpTimeNs() +|
         (@as(u64, @intCast(t.sec)) * std.time.ns_per_s) +|
         (@as(u64, @intCast(t.usec)) * std.time.ns_per_us)
     ) else std.math.maxInt(u64);
@@ -2002,7 +2004,7 @@ fn selectImpl(
             }
         }
 
-        last_time = sys.time.getUpTime().toNs();
+        last_time = sys.time.getUpTimeNs();
 
         if (fds > 0) break;
         if (last_time >= end_time) break;
