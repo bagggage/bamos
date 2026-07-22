@@ -23,6 +23,13 @@ pub fn build(b: *std.Build) void {
     const docs_step = b.step("docs", "Generate documentation");
 
     const arch = b.option(std.Target.Cpu.Arch, "arch", "The target CPU architecture") orelse .x86_64;
+    switch (arch) {
+        .x86_64 => {},
+        else => {
+            std.log.err("Unsupported CPU architecture: {t}", .{arch});
+            return;
+        },
+    }
 
     bootboot = b.dependency("bootboot", .{}); 
 
@@ -54,14 +61,26 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
     const debug_pci = b.option(bool, "debug-pci", "Enable debug logs for PCI bus driver (default: false)") orelse false;
     const debug_uacpi = b.option(bool, "debug-uacpi", "Enable debug logs for uACPI integration (default: false)") orelse false;
 
-    var cpu_feat: std.Target.Cpu.Feature.Set = .empty;
-    if (enable_avx and arch == .x86_64) cpu_feat.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
+    var cpu_feat_add: std.Target.Cpu.Feature.Set = .empty;
+    var cpu_feat_sub: std.Target.Cpu.Feature.Set = .empty;
+    switch (arch) {
+        .x86_64 => {
+            if (enable_avx) {
+                cpu_feat_add.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
+            } else {
+                cpu_feat_sub.addFeature(@intFromEnum(std.Target.x86.Feature.avx));
+                cpu_feat_sub.addFeature(@intFromEnum(std.Target.x86.Feature.avx2));
+            }
+        },
+        else => unreachable,
+    }
 
     const target = b.resolveTargetQuery(.{
         .os_tag = .freestanding,
         .cpu_arch = arch,
-        .cpu_features_add = cpu_feat,
-        .ofmt = .elf
+        .cpu_features_add = cpu_feat_add,
+        .cpu_features_sub = cpu_feat_sub,
+        .ofmt = .elf,
     });
 
     const dbg_module = b.createModule(.{
@@ -81,9 +100,9 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
             .target = target,
             .code_model = .kernel,
             .error_tracing = false,
-            .pic = true
+            .pic = true,
         }),
-        .use_llvm = true
+        .use_llvm = true,
     });
 
     const uacpi,
@@ -135,9 +154,9 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
             .code_model = .kernel,
             .optimize = optimize,
             .target = target,
-            .pic = true
+            .pic = true,
         }),
-        .use_llvm = true
+        .use_llvm = true,
     });
     dbg_obj.root_module.addImport("dbg-info", dbg_module);
 
@@ -150,9 +169,9 @@ fn makeKernel(b: *std.Build, arch: std.Target.Cpu.Arch) *std.Build.Step.InstallA
             .target = target,
             .code_model = .kernel,
             .strip = false,
-            .pic = true
+            .pic = true,
         }),
-        .use_llvm = true
+        .use_llvm = true,
     });
     kernel_exe.addObject(kernel_obj);
     kernel_exe.addObject(uacpi_obj);
@@ -285,6 +304,7 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     const no_gui = b.option(bool, "qemu-nogui", "Disable graphical output") orelse false;
     const no_uefi = b.option(bool, "qemu-noefi", "Legacy BIOS firmware") orelse false;
     const usb_devs = b.option(bool, "qemu-usb", "Enable USB device support (default: false)") orelse false;
+    const ahci_drives = b.option(bool, "qemu-ahci", "Use AHCI and SATA drives instead of NVMe (default: false)") orelse false;
 
     const qemu_name = switch (arch) {
         .x86,
@@ -331,10 +351,11 @@ fn runQemu(b: *std.Build, arch: std.Target.Cpu.Arch, image: *std.Build.Step.Inst
     qemu_run.step.dependOn(&image.step);
 
     // Add additional drives as NVMe devices
+    const blk_ctrl = if (ahci_drives) "ahci" else "nvme";
     for (drives, 0..) |drive, i| {
         qemu_run.addArgs(&.{
             "-drive", b.fmt("file={s},format=raw,if=none,id=drv{}", .{drive, i}),
-            "-device", b.fmt("nvme,serial=QEMU-DRIVE-{},drive=drv{}", .{i, i})
+            "-device", b.fmt("{s},serial=QEMU-DRIVE-{},drive=drv{}", .{blk_ctrl, i, i}),
         });
     }
 
