@@ -69,28 +69,22 @@ fn read(tty: *Teletype, buffer: []u8) Teletype.Error!usize {
 }
 
 fn canonicalRead(tty: *Teletype, buffer: []u8) Teletype.Error!usize {
-    tty.in_lock.lock();
-    defer tty.in_lock.unlock();
+    tty.in_lock.lockSaveIntr();
+    defer tty.in_lock.unlockRestoreIntr();
 
-    while (tty.inputEmpty()) {
-        tty.in_lock.unlock();
-        defer tty.in_lock.lock();
-
-        tty.waitForInput();
-    }
-
+    tty.waitForInputAtomic();
     return tty.readInputAtomic(buffer);
 }
 
 fn receive(tty: *Teletype, buffer: []const u8) Teletype.Error!void {
-    tty.in_lock.lock();
-    defer tty.in_lock.unlock();
+    tty.in_lock.lockAtomic();
+    defer tty.in_lock.unlockAtomic();
 
     if (tty.in_buffer.len == 0) return;
     if (tty.config.lflag.ICANON) return canonicalReceive(tty, buffer);
 
     _ = tty.bufferInputAtomic(buffer);
-    tty.notifyInputReceived();
+    tty.notifyInputReceivedAtomic();
 }
 
 fn canonicalReceive(tty: *Teletype, buffer: []const u8) void {
@@ -129,7 +123,7 @@ fn canonicalReceive(tty: *Teletype, buffer: []const u8) void {
         } else if (c == quit) {
             sendControlSignal(tty, quit, .QUIT);
         } else if (c == eof) {
-            tty.notifyInputReceived();
+            tty.notifyInputReceivedAtomic();
             echoControl(tty, eof);
             return;
         } else if (c == lnext) {
@@ -196,7 +190,7 @@ fn putByte(tty: *Teletype, byte: u8) void {
         }
     }
 
-    if (byte == control_code.lf) tty.notifyInputReceived(); 
+    if (byte == control_code.lf) tty.notifyInputReceivedAtomic(); 
 }
 
 fn sendControlSignal(tty: *Teletype, code: u8, comptime ctrl: Teletype.V) void {
