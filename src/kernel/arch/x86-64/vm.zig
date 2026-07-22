@@ -473,10 +473,10 @@ pub fn init() vm.Error!void {
 
 pub fn setupCpu() void {
     // Init PAT per each CPU core
-    var pat: PageAttributeTable = @bitCast(regs.getMsr(regs.MSR_PAT));
+    var pat: PageAttributeTable = @bitCast(regs.readMsr(.pat));
     pat.pa3 = .write_combining;
 
-    regs.setMsr(regs.MSR_PAT, @bitCast(pat));
+    regs.writeMsr(.pat, @bitCast(pat));
 }
 
 pub inline fn lmaEnd() usize {
