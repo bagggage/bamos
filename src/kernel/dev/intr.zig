@@ -86,6 +86,8 @@ pub const TriggerMode = enum(u2) {
     level_low
 };
 
+pub const LowLevelHandler = *const fn (u32) callconv(.c) void;
+
 pub const Handler = struct {
     const List = std.DoublyLinkedList;
     const Node = List.Node;
@@ -247,6 +249,10 @@ pub const Msi = struct {
     vector: Vector,
     handler: Handler,
     message: Message,
+
+    pub inline fn handle(self: *const Msi) bool {
+        return self.handler.func(self.handler.device);
+    }
 };
 
 pub const Vector = struct {
@@ -519,30 +525,32 @@ fn handleImmediates(local: *smp.LocalData) void {
     }
 }
 
-export fn handleIrq(pin: u8) void {
-    @setRuntimeSafety(false);
-    const local = smp.getLocalData();
+comptime {
+    const Impl = opaque {
+        fn handleIrq(pin: u32) void { _ = irqs[pin].handle(); } 
+        fn handleMsi(idx: u32) void { _ = msis[idx].handle(); }
+        fn handleStub(vec: u32) callconv(.c) void {
+            log.warn("No IRQ handler for vector: {} on CPU {}", .{vec, smp.getIdx()});
+        }
+    };
 
-    handlerEnter(local);
-    defer handlerExit(local);
-
-    _ = irqs[pin].handle();
+    @export(makeLowLevelHandler(Impl.handleIrq), .{ .name = "handleIrq" });
+    @export(makeLowLevelHandler(Impl.handleMsi), .{ .name = "handleMsi" });
+    @export(&Impl.handleStub, .{ .name = "handleStubIrq" });
 }
 
-export fn handleStubIrq(pin: u8) void {
-    @setRuntimeSafety(false);
-    log.warn("No IRQ handler for vector: {} on CPU {}", .{pin, smp.getIdx()});
-}
+pub fn makeLowLevelHandler(comptime body: fn (u32) void) LowLevelHandler {
+    return opaque {
+        fn handler(arg: u32) callconv(.c) void {
+            @setRuntimeSafety(false);
+            const local = smp.getLocalData();
 
-export fn handleMsi(idx: u8) void {
-    @setRuntimeSafety(false);
-    const local = smp.getLocalData();
+            handlerEnter(local);
+            defer handlerExit(local);
 
-    handlerEnter(local);
-    defer handlerExit(local);
-
-    const handler = &msis[idx].handler;
-    _ = handler.func(handler.device);
+            body(arg);
+        }
+    }.handler;
 }
 
 pub inline fn requestMsi(
