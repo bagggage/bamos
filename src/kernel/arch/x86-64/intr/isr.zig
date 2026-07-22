@@ -62,73 +62,58 @@ export fn interruptExit() callconv(.naked) noreturn {
     arch.intr.iret();
 }
 
-pub fn stubIrqHandler(comptime vec: u8) *const fn () callconv(.naked) noreturn {
-    const Static = opaque {
+pub fn makeIrqHandler(
+    comptime name: []const u8,
+    comptime call_name: []const u8,
+    comptime arg: ?u32,
+) Fn {
+    const isr_name =
+        if (arg) |value|
+            std.fmt.comptimePrint("isr_"++name++"_{x}", .{value})
+        else
+            "isr_"++name;
+
+    return opaque {
         fn isr() callconv(.naked) noreturn {
-            asm volatile (
-                \\ call interruptEntry
-                \\ mov %[vec], %edi
-                \\ call handleStubIrq
-                \\ jmp interruptExit
-                :
-                : [vec] "i" (vec),
-            );
+            if (comptime arg) |value| {
+                asm volatile(
+                    "call interruptEntry\n" ++
+                    "mov %[arg], %edi\n" ++
+                    "call " ++ call_name ++ "\n" ++
+                    "jmp interruptExit\n"
+                    :: [arg] "i" (value)
+                );
+            } else {
+                asm volatile(
+                    "call interruptEntry\n" ++
+                    "call " ++ call_name ++ "\n" ++
+                    "jmp interruptExit\n"
+                );
+            }
 
             comptime {
-                @export(&isr, .{ .name = std.fmt.comptimePrint("isr{x}_stub", .{vec}) });
+                @export(&isr, .{ .name = isr_name });
             }
         }
-    };
-
-    return &Static.isr;
+    }.isr;
 }
 
-pub fn irqHandler(idx: u8, comptime kind: enum { irq, msi }, comptime max_num: comptime_int) *const fn () callconv(.naked) noreturn {
-    const Static = opaque {
-        fn getIsr(comptime n: comptime_int) *const fn () callconv(.naked) noreturn {
-            return opaque {
-                fn isr() callconv(.naked) noreturn {
-                    switch (comptime kind) {
-                        .irq => asm volatile (
-                            \\ call interruptEntry
-                            \\ mov %[idx], %edi
-                            \\ call handleIrq
-                            \\ jmp interruptExit
-                            :
-                            : [idx] "i" (n),
-                        ),
-                        .msi => asm volatile (
-                            \\ call interruptEntry
-                            \\ mov %[idx], %edi
-                            \\ call handleMsi
-                            \\ jmp interruptExit
-                            :
-                            : [idx] "i" (n),
-                        ),
-                    }
-                }
+pub fn stubIrqHandler(comptime vec: u8) Fn {
+    return makeIrqHandler("stub", "handleStubIrq", vec);
+}
 
-                comptime {
-                    @export(&isr, .{
-                        .name = std.fmt.comptimePrint(
-                            "isr{x}_{s}",
-                            .{n, @tagName(kind)}
-                        )
-                    });
-                }
-            }.isr;
-        }
+pub fn irqHandler(idx: u8, comptime kind: enum { irq, msi }, comptime max_num: comptime_int) Fn {
+    @setEvalBranchQuota(28000);
 
-        pub const table = blk: {
-            var result: []const *const fn () callconv(.naked) noreturn = &.{};
+    const name = comptime @tagName(kind);
+    const call_name = if (comptime kind == .irq) "handleIrq" else "handleMsi";
 
-            for (0..max_num) |i| {
-                result = result ++ .{getIsr(i)};
-            }
+    const table: [max_num]Fn = comptime blk: {
+        var result: [max_num]Fn = undefined;
+        for (0..max_num) |i| result[i] = makeIrqHandler(name, call_name, i);
 
-            break :blk result;
-        };
+        break :blk result;
     };
 
-    return Static.table[idx];
+    return table[idx];
 }
