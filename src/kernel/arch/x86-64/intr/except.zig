@@ -165,7 +165,7 @@ pub fn commonHandler(frame: *Frame, state: *regs.State) callconv(.c) void {
         @branchHint(.likely);
 
         arch.intr.enableForCpu();
-        if (sched.isInitialized()) sched.pause();
+        if (sched.isInitialized()) sched.terminate();
     }
 }
 
