@@ -202,13 +202,20 @@ pub inline fn insertInput(self: *Self, buffer: []const u8) Error!void {
 pub fn bufferInput(self: *Self, input: []const u8) usize {
     if (input.len == 0) return 0;
 
-    self.in_lock.lock();
-    defer self.in_lock.unlock();
+    const buffered = blk: {
+        self.in_lock.lockSaveIntr();
+        defer self.in_lock.unlockRestoreIntr();
 
-    if (self.in_buffer.len == 0) return 0;
+        if (self.in_buffer.len == 0) return 0;
+        break :blk self.bufferInputAtomic(input);
+    };
 
-    const buffered = self.bufferInputAtomic(input);
-    if (buffered > 0) sched.awakeAll(&self.in_wait);
+    if (buffered > 0) {
+        self.in_lock.lock();
+        defer self.in_lock.unlock();
+
+        sched.awakeAll(&self.in_wait);
+    }
 
     return buffered;
 }
@@ -275,8 +282,8 @@ pub fn eraseInputLineAtomic(self: *Self) void {
 }
 
 pub fn readInput(self: *Self, buffer: []u8) usize {
-    self.in_lock.lock();
-    defer self.in_lock.unlock();
+    self.in_lock.lockSaveIntr();
+    defer self.in_lock.unlockRestoreIntr();
 
     if (self.inputEmpty()) return 0;
     return self.readInputAtomic(buffer);
@@ -299,27 +306,27 @@ pub fn readInputAtomic(self: *Self, buffer: []u8) usize {
 }
 
 pub fn readAllWaitInput(self: *Self, buffer: []u8) Error!void {
-    self.in_lock.lock();
-    defer self.in_lock.unlock();
+    self.in_lock.lockSaveIntr();
+    defer self.in_lock.unlockRestoreIntr();
 
     var readed: usize = 0;
     while (readed < buffer.len) {
-        while (self.inputEmpty()) {
-            sched.waitUnlock(&self.in_wait, &self.in_lock);
-            self.in_lock.lock();
-        }
-
+        self.waitForInputAtomic();
         readed += self.readInputAtomic(buffer[readed..]);
     }
 }
 
 pub fn waitForInput(self: *Self) void {
-    self.in_lock.lock();
-    defer self.in_lock.unlock();
+    self.in_lock.lockSaveIntr();
+    defer self.in_lock.unlockRestoreIntr();
 
+    self.waitForInputAtomic();
+}
+
+pub fn waitForInputAtomic(self: *Self) void {
     while (self.inputEmpty()) {
-        sched.waitUnlock(&self.in_wait, &self.in_lock);
-        self.in_lock.lock();
+        sched.waitUnlockIntr(&self.in_wait, &self.in_lock);
+        self.in_lock.lockSaveIntr();
     }
 }
 
@@ -384,8 +391,8 @@ pub fn discardOutput(self: *Self) void {
 }
 
 pub fn discardInput(self: *Self) void {
-    self.in_lock.lock();
-    defer self.in_lock.unlock();
+    self.in_lock.lockSaveIntr();
+    defer self.in_lock.unlockRestoreIntr();
 
     self.in_seek = 0;
     self.in_buffer.reset();
@@ -415,7 +422,7 @@ pub inline fn outputFull(self: *const Self) bool {
     return self.out_buffer.pos >= (self.out_buffer.len -| 1);
 }
 
-pub inline fn notifyInputReceived(self: *Self) void {
+pub inline fn notifyInputReceivedAtomic(self: *Self) void {
     if (self.inputEmpty()) return;
     sched.awakeAll(&self.in_wait);
 }
@@ -602,8 +609,8 @@ fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
             }
         },
         T.FIONREAD => {
-            tty.in_lock.lock();
-            defer tty.in_lock.unlock();
+            tty.in_lock.lockSaveIntr();
+            defer tty.in_lock.unlockRestoreIntr();
 
             const mask = tty.in_buffer.len - 1;
             const avail = (tty.in_buffer.pos -% tty.in_seek) & mask;
@@ -708,7 +715,6 @@ fn filePoll(file: *vfs.File) vfs.Error!vfs.File.Poll {
     const tty = fromFile(file);
     return .{
         .read_avail = blk: {
-            tty.in_lock.lock(); defer tty.in_lock.unlock();
             break :blk !tty.inputEmpty();
         },
         .may_write = blk: {
