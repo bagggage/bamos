@@ -262,6 +262,13 @@ pub fn write(buffer: []const u8) void {
     Port.writeRaw(regs, buffer);
 }
 
+pub fn print(comptime fmt: []const u8, args: anytype) void {
+    var buffer: [48]u8 = undefined;
+    const printed = std.fmt.bufPrint(&buffer, fmt, args) catch return;
+
+    write(printed);
+}
+
 fn irqHandler(device: *dev.Device) bool {
     const port = Port.fromDevice(device);
 
