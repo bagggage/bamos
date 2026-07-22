@@ -107,8 +107,8 @@ pub fn init() void {
         .user_segment_sel = @as(u16, @bitCast(gdt.user_ss_sel)) - 8
     };
 
-    regs.setMsr(regs.MSR_STAR, @bitCast(star));
-    regs.setMsr(regs.MSR_SFMASK, rflags_mask);
+    regs.writeMsr(.star, @bitCast(star));
+    regs.writeMsr(.sfmask, rflags_mask);
 }
 
 pub fn setupTaskAbi(task: *sched.Task, abi: sys.call.Abi) void {
@@ -122,7 +122,7 @@ pub fn setupTaskAbi(task: *sched.Task, abi: sys.call.Abi) void {
         }
     };
 
-    regs.setMsr(regs.MSR_LSTAR, @intFromPtr(syscall_handler));
+    regs.writeMsr(.lstar, @intFromPtr(syscall_handler));
 }
 
 pub fn startThread(_: sys.call.Abi, task: *sched.Task, run_ctx: sys.exe.RunContext) void {
@@ -215,14 +215,14 @@ pub fn linuxArchPrCtl(op: c_int, addr: ?*usize) !void {
     switch (op) {
         ARCH_SET_GS => {
             abi_data.arch_specific.gs_base = @intFromPtr(addr);
-            regs.setMsr(regs.MSR_SWAPGS_BASE, @intFromPtr(addr));
+            regs.writeMsr(.swapgs_base, @intFromPtr(addr));
         },
         ARCH_SET_FS => {
             abi_data.arch_specific.fs_base = @intFromPtr(addr);
-            regs.setMsr(regs.MSR_FS_BASE, @intFromPtr(addr));
+            regs.writeMsr(.fs_base, @intFromPtr(addr));
         },
-        ARCH_GET_FS => addr.?.* = regs.getMsr(regs.MSR_FS_BASE),
-        ARCH_GET_GS => addr.?.* = regs.getMsr(regs.MSR_SWAPGS_BASE),
+        ARCH_GET_FS => addr.?.* = regs.readMsr(.fs_base),
+        ARCH_GET_GS => addr.?.* = regs.readMsr(.swapgs_base),
         ARCH_GET_CPUID,
         ARCH_SET_CPUID,
         ARCH_GET_XCOMP_SUPP,
@@ -306,8 +306,8 @@ fn linuxSetupAbi(task: *sched.Task) void {
         @atomicStore(u32, &rseq.cpu_id, smp.getIdx(), .release);
     }
 
-    regs.setMsr(regs.MSR_SWAPGS_BASE, abi_data.arch_specific.gs_base);
-    regs.setMsr(regs.MSR_FS_BASE, abi_data.arch_specific.fs_base);
+    regs.writeMsr(.swapgs_base, abi_data.arch_specific.gs_base);
+    regs.writeMsr(.fs_base, abi_data.arch_specific.fs_base);
 }
 
 fn linuxHandler() callconv(.naked) noreturn {

@@ -139,7 +139,7 @@ pub inline fn setCpuLocalData(local_data: *smp.LocalData) void {
     local_data.arch_specific.apic_id = @truncate(cpuid(cpuid_features, undefined, undefined, undefined).b >> 24);
 
     regs.setGs(0);
-    regs.setMsr(regs.MSR_GS_BASE, @intFromPtr(local_data));
+    regs.writeMsr(.gs_base, @intFromPtr(local_data));
 }
 
 pub inline fn getCpuLocalData() *smp.LocalData {

@@ -11,19 +11,24 @@ const arch = @import("arch.zig");
 const intr = arch.intr;
 const smp = @import("../../smp.zig");
 
-// Model-Specific Register (MSR) addresses.
-pub const MSR_PAT = 0x277;
-pub const MSR_EFER = 0xC0000080;
-pub const MSR_STAR = 0xC0000081;
-pub const MSR_LSTAR = 0xC0000082;
-pub const MSR_CSTAR = 0xC0000083;
-pub const MSR_SFMASK = 0xC0000084;
-pub const MSR_FS_BASE = 0xC0000100;
-pub const MSR_GS_BASE = 0xC0000101;
-pub const MSR_SWAPGS_BASE = 0xC0000102;
-pub const MSR_APIC_BASE = 0x1B;
-
 const gs_tss_offset = @offsetOf(smp.LocalData, "arch_specific") + @offsetOf(arch.CpuLocalData, "tss");
+
+// Model-Specific Register (MSR) addresses.
+pub const Msr = enum(u32) {
+    time_stamp_counter = 0x10,
+    apic_base = 0x1B,
+    tsc_adjust = 0x3B,
+    pat = 0x277,
+    tsc_deadline = 0x6E0,
+    efer = 0xC0000080,
+    star = 0xC0000081,
+    lstar = 0xC0000082,
+    cstar = 0xC0000083,
+    sfmask = 0xC0000084,
+    fs_base = 0xC0000100,
+    gs_base = 0xC0000101,
+    swapgs_base = 0xC0000102,
+};
 
 pub const call_clobers: std.builtin.assembly.Clobbers = .{
     .rax = true, .rcx = true, .rdx = true,
@@ -137,39 +142,33 @@ pub const LowLevelIntrState = extern struct {
 };
 
 /// Read Model-Specific Register.
-///
-/// - `msr_addr`: The address of the MSR to read.
-/// - Returns: The value of the MSR.
-pub inline fn getMsr(msr_addr: u32) u64 {
+pub inline fn readMsr(msr: Msr) u64 {
     var value_l: u32 = undefined;
     var value_h: u32 = undefined;
 
     asm volatile ("rdmsr"
         : [ret] "={eax}" (value_l),
           [ret_2] "={edx}" (value_h),
-        : [msr_addr] "{ecx}" (msr_addr),
+        : [msr_addr] "{ecx}" (@intFromEnum(msr)),
     );
 
     return value_l | (@as(u64, value_h) >> 32);
 }
 
 /// Write Model-Specific Register.
-///
-/// - `msr_addr`: The address of the MSR to write.
-/// - `value`: The value to write to the MSR.
-pub inline fn setMsr(msr_addr: u32, value: u64) void {
+pub inline fn writeMsr(msr: Msr, value: u64) void {
     const ptr: [*]const u32 = @ptrCast(&value);
 
     asm volatile ("wrmsr"
         :
         : [in_1] "{eax}" (ptr[0]),
           [in_2] "{edx}" (ptr[1]),
-          [msr_addr] "{ecx}" (msr_addr),
+          [msr_addr] "{ecx}" (@intFromEnum(msr)),
     );
 }
 
 pub inline fn getEfer() EFER {
-    const efer = getMsr(MSR_EFER);
+    const efer = readMsr(.efer);
     const efer_ptr: *const EFER = @ptrCast(&efer);
 
     return efer_ptr.*;
@@ -178,7 +177,7 @@ pub inline fn getEfer() EFER {
 pub inline fn setEfer(efer: EFER) void {
     const efer_ptr: *const u64 = @ptrCast(&efer);
 
-    setMsr(MSR_EFER, efer_ptr.*);
+    writeMsr(.efer, efer_ptr.*);
 }
 
 pub inline fn getGdtr() GDTR {
