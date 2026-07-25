@@ -33,7 +33,7 @@ pub fn init(stack_ptr: usize, ip: usize) Self {
 
     ctx_regs.* = .{
         .callee = .{ .rbp = ptr + @offsetOf(regs.CalleeRegs, "rbp") },
-        .ret_ptr = ip
+        .ret_ptr = ip,
     };
 
     return .{ .stack_ptr = .{ .ptr = @ptrFromInt(ptr) } };
@@ -45,7 +45,7 @@ pub fn initUnaligned(stack_ptr: usize, ip: usize) Self {
 
     ctx_regs.* = .{
         .callee = .{ .rbp = ptr + @offsetOf(regs.CalleeRegs, "rbp") },
-        .ret_ptr = ip
+        .ret_ptr = ip,
     };
 
     return .{ .stack_ptr = .{ .ptr = @ptrFromInt(ptr) } };
@@ -157,4 +157,3 @@ inline fn save(self: *Self) void {
 inline fn restore(_: *Self) void {
     regs.restoreCallerRegs();
 }
-

@@ -84,6 +84,7 @@ flags: Flags = .{},
 sleep_queue: SleepQueue = .{},
 sleep_lock: lib.sync.Spinlock = .{},
 
+uptime_cache: u64 = 0,
 event_deadline_ns: u64 = std.math.maxInt(u64),
 max_event_deadline_ns: u64 = std.time.ns_per_s,
 last_task_time_ns: u64 = 0,
@@ -396,6 +397,7 @@ pub fn rescheduleAtomic(self: *Self) void {
     lib.debug.assert(intr.isEnabledForCpu(), @src());
     lib.debug.assert(self.preemption == 1 and self.getCpuLocal().nested_intr < 2, @src());
 
+    self.uptime_cache = sys.time.getUpTimeNs();
     const next_task = self.nextTask() orelse blk: {
         self.schedule();
 
@@ -419,7 +421,7 @@ pub fn rescheduleAtomic(self: *Self) void {
     if (self.current_task) |task| {
         task.context.switchTo(&next_task.context);
     } else {
-        next_task.onSwitch();
+        next_task.onSwitchTo();
         next_task.context.jumpInto(next_task);
     }
 }
@@ -466,7 +468,7 @@ pub noinline fn postSwitch(self: *Self, new_ctx: *arch.Context) callconv(.c) voi
 
     const new_task: ?*Task = if (new_ctx != &self.sleep_ctx) blk: {
         const task: *Task = @fieldParentPtr("context", new_ctx);
-        task.onSwitch();
+        task.onSwitchTo();
         break :blk task;
     } else null;
 
@@ -504,8 +506,13 @@ pub inline fn completeSwitch(self: *Self, new_task: ?*Task) void {
     self.flags = .{};
     self.current_task = new_task;
 
-    if (old_task) |task| task.stats.sched_lock.unlockAtomic();
+    if (old_task) |task| {
+        task.stats.sched_lock.unlockAtomic();
+        task.stats.stopSystemTime(self.uptime_cache);
+    }
+
     if (new_task) |task| {
+        task.stats.startSystemTime(self.uptime_cache);
         self.updateCurrentTaskDeadline(task.stats.time_slice_ns);
     } else {
         self.updateCurrentTaskDeadline(sys.time.getMaxTimerEventDelayNs());
@@ -612,7 +619,7 @@ fn processCurrentTask(self: *Self, time_ns: u64) u64 {
 }
 
 fn updateCurrentTaskDeadline(self: *Self, after_ns: u64) void {
-    const time_ns = sys.time.getUpTimeNs();
+    const time_ns = self.uptime_cache;
     self.last_task_time_ns = time_ns;
 
     const sleep_deadline_ns = self.sleep_queue.getEarliestDeadline();

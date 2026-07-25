@@ -5,12 +5,30 @@
 const std = @import("std");
 
 const arch = @import("../arch.zig");
+const gdt = @import("../gdt.zig");
 const log = std.log.scoped(.isr);
 const logger = @import("../../../logger.zig");
 const regs = @import("../regs.zig");
+const sched = @import("../../../sched.zig");
 const smp = @import("../../../smp.zig");
 
 pub const Fn = *const fn () callconv(.naked) noreturn;
+
+export fn _tryEnterSystemTime(frame: *regs.LowLevelIntrState) callconv(.c) void {
+    if ((frame.intr.cs & 3) == 0) return;
+
+    const task = sched.getCurrentTask();
+    task.stats.enterSystemTime();
+}
+
+export fn _tryExitSystemTime(frame: *regs.LowLevelIntrState) callconv(.c) void {
+    if ((frame.intr.cs & 3) == 0) return;
+
+    const task = sched.getCurrentTask();
+
+    arch.intr.disableForCpu();
+    task.stats.exitSystemTime();
+}
 
 /// Enter into interrupt context.
 export fn interruptEntry() callconv(.naked) void {
@@ -31,6 +49,11 @@ export fn interruptEntry() callconv(.naked) void {
     regs.alignStackSafe();
     regs.saveFpuRegs();
 
+    asm volatile (
+        \\ lea 0x08(%rbp), %rdi
+        \\ call _tryEnterSystemTime
+    );
+
     // Do return using `jmp` to return address.
     asm volatile (std.fmt.comptimePrint(
         \\ jmp *{}(%rbp)
@@ -39,6 +62,11 @@ export fn interruptEntry() callconv(.naked) void {
 }
 
 export fn interruptExit() callconv(.naked) noreturn {
+    asm volatile (
+        \\ lea 0x08(%rbp), %rdi
+        \\ call _tryExitSystemTime
+    );
+
     regs.restoreFpuRegs();
     regs.restoreStackSafe();
     regs.restoreScratchRegs();
