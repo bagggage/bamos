@@ -117,6 +117,7 @@ pub const table: [table_len]SyscallFn = blk: {
     //result[@intFromEnum(linux.SYS.waitid)]          = @ptrCast(&waitId);
     result[@intFromEnum(linux.SYS.write)]           = @ptrCast(&write);
     result[@intFromEnum(linux.SYS.writev)]          = @ptrCast(&writev);
+    result[@intFromEnum(linux.SYS.vfork)]           = @ptrCast(arch.syscall.contextCall(vfork, "vfork"));
 
     break :blk result;
 };
@@ -563,6 +564,30 @@ fn fork(ctx: *arch.syscall.Context) callconv(.c) isize {
     return new_proc.id.value;
 }
 
+fn vfork(ctx: *arch.syscall.Context) callconv(.c) isize {
+    trace.info("vfork()", .{});
+    // TODO: Implement a real vfork, not just this stub
+
+    const proc = sys.Process.getCurrent();
+    const new_proc = cloneImpl(ctx) catch |err| return errorFromZig(err);
+    const new_task = new_proc.getMainTask().?;
+    const child_id = new_proc.id;
+
+    sched.enqueue(new_task);
+
+    proc.id.lock.lock();
+    defer proc.id.lock.unlock();
+
+    while (!child_id.isZombie()) {
+        defer proc.id.lock.lock();
+
+        const id = proc.id.waitForEventAtomic();
+        id.deref();
+    }
+
+    return child_id.value;
+}
+
 fn close(fd: linux.fd_t) isize {
     const proc = sys.Process.getCurrent();
 
@@ -716,9 +741,6 @@ fn execve(path: [*c]const u8, args: ?[*:null][*c]const u8, envs: ?[*:null][*c]co
         log.warn("execve failed: {t}, kill: {f}", .{ret_error, proc});
 
         proc.terminate(1);
-        proc.delete();
-
-        sched.terminate();
     }
 
     log.debug("loaded process: {f}", .{proc});
@@ -733,9 +755,6 @@ fn exit(status: i32) void {
     const short_status: u8 = @truncate(@as(u32, @intCast(status)));
 
     proc.terminate(short_status);
-    proc.delete();
-
-    sched.terminate();
 }
 
 fn exitGroup(status: i32) void {
@@ -746,9 +765,6 @@ fn exitGroup(status: i32) void {
     const short_status: u8 = @truncate(@as(u32, @intCast(status)));
 
     proc.terminate(short_status);
-    proc.delete();
-
-    sched.terminate();
 }
 
 fn fcntl(fd: linux.fd_t, cmd: u32, arg: usize) isize {
@@ -1109,11 +1125,16 @@ fn getParentPid() usize {
     trace.info("getppid()", .{});
 
     const proc = sys.Process.getCurrent();
-    if (proc.parent == proc) {
+
+    proc.ctrl.lock.lock();
+    defer proc.ctrl.lock.unlock();
+
+    if (proc.parent == proc.id) {
         @branchHint(.unlikely);
         return 0;
     }
-    return proc.parent.id.value;
+
+    return proc.parent.value;
 }
 
 fn getProcGroup() isize {
@@ -2349,35 +2370,37 @@ fn waitPid(pid: linux.pid_t, status: ?*i32, options: u32, usage: ?*linux.rusage)
     validateMemoryArgs(@intFromPtr(status), @sizeOf(i32)) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(usage), @sizeOf(linux.rusage)) catch return errorFromE(.FAULT);
 
-    // TODO: Make some kind of ref-counter to prevent freeing struct while in use.
     const proc = sys.Process.getCurrent();
     const nowait = (options & linux.W.NOHANG) != 0;
-    const exit_status = if (pid == -1) blk: {
-        const id = proc.waitChildExit(nowait) orelse {
-            // TODO: Fix it.
+    const id = if (pid == -1) proc.waitAnyChildExit(nowait) orelse {
+            // TODO: Fix it: check if there is no child for nowait
             return if (nowait) errorFromE(.AGAIN) else errorFromE(.CHILD);
-        };
+    } else if (pid > 0) blk: {
+        const id = sys.Process.Id.lookup(@intCast(pid)) orelse return errorFromE(.CHILD);
+        if (!proc.waitChildExit(id)) return errorFromE(.CHILD);
 
-        defer id.deref();
-        break :blk id.status;
-    } else {
-        return errorFromE(.NOSYS);
-    };
+        break :blk id;
+    } else return errorFromE(.CHILD);
+    defer id.deref();
 
-    if (status) |s| s.* = exit_status;
+    const stats = id.owner.stats.?;
+    if (status) |s| s.* = (@as(u16, stats.exit_status) << @bitSizeOf(u8)) | @intFromEnum(stats.fault_signal);
     if (usage) |u| {
         log.warn("'rusage' argument is not implemented", .{});
-        u.* = std.mem.zeroes(linux.rusage);
+        const rusage_size = @sizeOf(linux.rusage) - @sizeOf(@TypeOf(u.__reserved));
+        @memset(std.mem.asBytes(u)[0..rusage_size], 0);
+
+        const sys_time_sec: u31 = @truncate(stats.sys_time_ns / std.time.ns_per_s);
+        const sys_time_us: u31 = @truncate((stats.sys_time_ns % std.time.ns_per_s) / std.time.ns_per_us);
+        const user_time_sec: u31 = @truncate(stats.user_time_ns / std.time.ns_per_s);
+        const user_time_us: u31 = @truncate((stats.user_time_ns % std.time.ns_per_s) / std.time.ns_per_us);
+
+        u.stime = .{ .sec = sys_time_sec, .usec = sys_time_us };
+        u.utime = .{ .sec = user_time_sec, .usec = user_time_us };
     }
 
-    log.debug("wait4: status: 0x{x}", .{exit_status});
-    return 0;
+    return id.value;
 }
-
-//fn waitId(pid: linux.pid_t, ) isize {
-//    trace.info("waitid({})", args: anytype)
-//    return 0;
-//}
 
 fn write(fd: linux.fd_t, buf: [*]const u8, len: usize) isize {
     trace.info("write({}, 0x{x}, {})", .{fd, @intFromPtr(buf), len});

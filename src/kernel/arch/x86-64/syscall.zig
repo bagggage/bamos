@@ -58,11 +58,25 @@ pub const Context = extern struct {
             \\ push %rdx
             \\ push %rsi
             \\ push %rdi
-            \\
-            \\ mov %r10, %rcx
         );
 
         regs.saveFpuRegs();
+
+        asm volatile ("push %rax");
+        regs.stackAlloc(1);
+    }
+
+    inline fn preload() void {
+        regs.stackFree(1);
+        asm volatile (
+            \\ pop %rax
+            \\ mov 0x200(%rsp), %rdi
+            \\ mov 0x208(%rsp), %rsi
+            \\ mov 0x210(%rsp), %rdx
+            \\ mov 0x228(%rsp), %r8
+            \\ mov 0x230(%rsp), %r9
+            \\ mov 0x238(%rsp), %rcx
+        );
     }
 
     inline fn restore() void {
@@ -248,6 +262,14 @@ pub fn linuxArchPrCtl(op: c_int, addr: ?*usize) !void {
     }
 }
 
+export fn _enterSystemTime() callconv(.c) void {
+    sched.getCurrentTask().stats.enterSystemTime();
+}
+
+export fn _exitSystemTime() callconv(.c) void {
+    sched.getCurrentTask().stats.exitSystemTime();
+}
+
 export fn linuxRunProcess() noreturn {
     const entry_ptr = asm volatile ("": [_] "={r12}" (-> usize));
     const stack_ptr = asm volatile ("": [_] "={r13}" (-> usize));
@@ -261,6 +283,8 @@ export fn linuxRunProcess() noreturn {
     };
 
     arch.intr.disableForCpu();
+    task.stats.exitSystemTime();
+
     local.arch_specific.tss.rsps[0] = lib.misc.alignDown(usize, task.getKernelStackTop(), 16);
 
     asm volatile (
@@ -318,9 +342,18 @@ fn linuxHandler() callconv(.naked) noreturn {
     regs.swapStackToKernel();
 
     Context.save();
+    asm volatile("call _enterSystemTime");
+    Context.preload();
 
     defer {
-        asm volatile("linuxSyscallReturn:");
+        arch.intr.disableForCpu();
+
+        asm volatile (
+            \\ linuxSyscallReturn:
+            \\ mov %rax, %rbp
+            \\ call _exitSystemTime
+            \\ mov %rbp, %rax
+        );
 
         Context.restore();
 
