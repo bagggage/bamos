@@ -46,8 +46,9 @@ pub fn lock(self: *Self) void {
 
 pub fn lockTimeout(self: *Self, time_us: usize) error{Timeout}!void {
     const end = sys.time.getUpTimeNs() +| (time_us * std.time.ns_per_us);
-    while (!self.tryLock()) {
+    while (!self.tryLockWeak()) {
         if (sys.time.getUpTimeNs() >= end) return error.Timeout;
+        std.atomic.spinLoopHint();
     }
 }
 
@@ -130,6 +131,21 @@ pub fn tryLock(self: *Self) bool {
     return false;
 }
 
+pub fn tryLockWeak(self: *Self) bool {
+    if (self.exclusion.load(.acquire) != .unlocked) return false;
+
+    const scheduler = sched.getCurrent();
+    scheduler.disablePreemption();
+
+    if (self.exclusion.cmpxchgWeak(
+        .unlocked, .locked_no_intr,
+        .release, .monotonic
+    ) == null) return true;
+
+    scheduler.enablePreemption();
+    return false;
+}
+
 pub inline fn tryLockIntr(self: *Self) bool {
     std.debug.assert(intr.isEnabledForCpu());
 
@@ -141,7 +157,6 @@ pub inline fn tryLockIntr(self: *Self) bool {
     intr.enableForCpu();
     return false;
 }
-
 
 pub fn tryLockSaveIntr(self: *Self) bool {
     const state: State = if (intr.saveAndDisableForCpu()) .locked_intr else .locked_no_intr;
@@ -160,11 +175,22 @@ pub inline fn tryLockAtomic(self: *Self) bool {
     ) == null;
 }
 
-inline fn rawLock(self: *Self, lock_state: State) void {
-    while (self.exclusion.cmpxchgWeak(
-        .unlocked, lock_state,
+pub inline fn tryLockWeakAtomic(self: *Self) bool {
+    if (self.exclusion.load(.acquire) != .unlocked) return false;
+
+    return self.exclusion.cmpxchgStrong(
+        .unlocked, .locked_no_intr,
         .release, .monotonic
-    ) != null) {
-        std.atomic.spinLoopHint();
+    ) == null;
+}
+
+inline fn rawLock(self: *Self, lock_state: State) void {
+    while (true) {
+        while (self.exclusion.load(.acquire) != .unlocked) std.atomic.spinLoopHint();
+
+        if (self.exclusion.cmpxchgWeak(
+            .unlocked, lock_state,
+            .release, .monotonic
+        ) == null) break;
     }
 }
