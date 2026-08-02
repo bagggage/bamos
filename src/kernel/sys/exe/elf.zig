@@ -32,13 +32,15 @@ pub fn load(bin: *exe.Binary, args: []const [*:0]const u8, envs: []const [*:0]co
     errdefer bin.proc.detachExecutable();
 
     // Load executable itself
+    const phdrs_size = @as(usize, elf_hdr.phnum) * @sizeOf(elf.Phdr);
     const elf_phdrs: []elf.Phdr = blk: {
-        const size = @as(usize, elf_hdr.phnum) * @sizeOf(elf.Phdr);
-        const buffer = try bin.args.allocateBuffer(size);
+        const phys = vm.PageAllocator.alloc(vm.bytesToRank(phdrs_size)) orelse return error.NoMemory;
+        const buffer = @as([*]u8, @ptrFromInt(vm.getVirtLma(phys)))[0..phdrs_size];
 
         try bin.readExeCached(elf_hdr.phoff, buffer);
         break :blk @ptrCast(@alignCast(buffer));
     };
+    defer vm.PageAllocator.free(vm.getPhysLma(@intFromPtr(elf_phdrs.ptr)), vm.bytesToRank(phdrs_size));
 
     var interp_phdr: ?*elf.Phdr = null;
     var elf_phdrs_virt: usize = bin.virt_base;
@@ -235,9 +237,16 @@ fn openInterpreter(bin: *exe.Binary, pt_interp: *const elf.Phdr) exe.Error!*vfs.
 }
 
 fn buildArgsAndEnvs(bin: *exe.Binary, args: []const [*:0]const u8, envs: []const [*:0]const u8) exe.Error!void {
-    std.debug.assert(bin.args.entries.len == 0);
+    const args_num_ptr: *usize = if (bin.args.entries.len == 0) try bin.args.entries.addOne() else blk: {
+        @branchHint(.unlikely);
+        try bin.args.entries.append(undefined);
 
-    const args_num_ptr: *usize = try bin.args.entries.addOne();
+        const ptrs = bin.args.entries.slice();
+        @memmove(ptrs[1..], ptrs[0..ptrs.len - 1]);
+
+        break :blk &ptrs[0];
+    };
+
     for (args) |arg| try bin.args.printArgument("{s}", .{arg});
 
     args_num_ptr.* = bin.args.entries.len - 1;
