@@ -7,9 +7,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const dbg = @import("dbg-info");
 
+const dev = @import("dev.zig");
 const lib = @import("lib.zig");
 const logger = @import("logger.zig");
+const serial = @import("dev/drivers/uart/8250.zig");
+const sched = @import("sched.zig");
 const smp = @import("smp.zig");
+const sys = @import("sys.zig");
 const text_output = video.text_output;
 const video = @import("video.zig");
 const vm = @import("vm.zig");
@@ -83,7 +87,7 @@ extern fn getDebugSyms() *const dbg.Header;
 /// This function is marked as `noreturn` and will halt the system.
 pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     @branchHint(.cold);
-    defer lib.sync.halt();
+    defer exitNormal();
 
     lock.lockAtomic();
     defer lock.unlockAtomic();
@@ -95,6 +99,60 @@ pub fn panic(msg: []const u8, _: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     if (it.next() != null) trace(&it, &text_writer);
 
     flush();
+}
+
+pub fn exitNormal() noreturn {
+    @branchHint(.cold);
+    @setRuntimeSafety(false);
+
+    if (!sched.isInitialized()) exitCritical();
+
+    const local = smp.getLocalData();
+    const task = local.scheduler.current_task orelse exitCritical();
+
+    if (!local.scheduler.isPreemptive()) {
+        logger.panicLog("exit: preemption is disabled, some locks might be held, force reschedule"++logger.new_line);
+
+        task.stats.sched_lock.exclusion.store(.locked_no_intr, .release);
+        local.scheduler.preemption = 1;
+
+        dev.intr.enableForCpu();
+        local.scheduler.rescheduleAtomic();
+        unreachable;
+    }
+
+    dev.intr.enableForCpu();
+
+    if (task.spec == .user) {
+        task.spec.user.process.sendSignalAtomic(.SegFault);
+        switch (local.nested_intr) {
+            0 => {},
+            1 => local.exitInterrupt(),
+            else => exitCritical(),
+        }
+
+        logger.panicLog("exit: terminate user thread"++logger.new_line);
+
+        const proc = task.spec.user.process;
+
+        proc.stats.fault_signal = .SegFault;
+        _ = task.spec.user.process.terminateThread(task, 0);
+
+        unreachable;
+    } else {
+        if (local.isInInterrupt()) exitCritical();
+
+        logger.panicLog("exit: terminate kernel thread"++logger.new_line);
+        sched.terminate();
+    }
+}
+
+pub fn exitCritical() noreturn {
+    @branchHint(.cold);
+    @setRuntimeSafety(false);
+
+    logger.panicLog("exit: it's not possible to return from panic"++logger.new_line);
+    lib.sync.halt();
 }
 
 /// Handles exception by printing message.
