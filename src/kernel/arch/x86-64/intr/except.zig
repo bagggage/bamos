@@ -10,8 +10,6 @@ const gdt = @import("../gdt.zig");
 const log = std.log.scoped(.@"intr.except");
 const panic = @import("../../../panic.zig");
 const regs = @import("../regs.zig");
-const sched = @import("../../../sched.zig");
-const smp = @import("../../../smp.zig");
 const vm = @import("../../../vm.zig");
 
 pub const Fn = *const fn (frame: *Frame, state: *regs.State) callconv(.c) void;
@@ -159,14 +157,12 @@ pub fn handler(vec: comptime_int) type {
 
 pub fn commonHandler(frame: *Frame, state: *regs.State) callconv(.c) void {
     traceException(frame, state);
-    defer arch.halt();
-
-    if (frame.vector != Vector.double_fault.toInt()) {
-        @branchHint(.likely);
-
-        arch.intr.enableForCpu();
-        if (sched.isInitialized()) sched.terminate();
+    if (frame.vector == Vector.double_fault.toInt()) {
+        @branchHint(.unlikely);
+        panic.exitCritical();
     }
+
+    panic.exitNormal();
 }
 
 pub fn pageFaultHandler(frame: *Frame, state: *regs.State) callconv(.c) void {
