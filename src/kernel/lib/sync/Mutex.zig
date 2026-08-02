@@ -23,31 +23,50 @@ pub fn lock(self: *Self) void {
     while (true) {
         sched.getCurrent().disablePreemption();
 
-        if (self.spinlock.tryLockAtomic()) return;
-        if (self.wait_lock.tryLockAtomic()) sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+        for (0..8) |_| if (self.spinlock.tryLockWeakAtomic()) return;
+        if (self.wait_lock.tryLockAtomic()) {
+            sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+        } else {
+            sched.getCurrent().enablePreemption();
+        }
     }
 }
 
 pub fn lockSaveIntr(self: *Self) void {
-    defer sched.getCurrent().enablePreemption();
+    defer sched.getCurrent().enablePreemptionRaw();
 
     while (true) {
         sched.getCurrent().disablePreemption();
+        const intr_enabled = intr.saveAndDisableForCpu();
 
-        if (self.spinlock.tryLockSaveIntr()) return;
-        if (self.wait_lock.tryLockAtomic()) sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+        for (0..8) |_| if (self.spinlock.tryLockWeakAtomic()) {
+            self.spinlock.exclusion.raw = if (intr_enabled) .locked_intr else .locked_no_intr;
+            return;
+        };
+
+        intr.restoreForCpu(intr_enabled);
+
+        if (self.wait_lock.tryLockAtomic()) {
+            sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+        } else {
+            sched.getCurrent().enablePreemption();
+        }
     }
 }
 
 /// Acquire the lock, disable local interrupts.
 pub fn lockIntr(self: *Self) void {
-    defer sched.getCurrent().enablePreemption();
+    defer sched.getCurrent().enablePreemptionRaw();
 
     while (true) {
         sched.getCurrent().disablePreemption();
 
         if (self.spinlock.tryLockIntr()) return;
-        if (self.wait_lock.tryLockAtomic()) sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+        if (self.wait_lock.tryLockAtomic()) {
+            sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+        } else {
+            sched.getCurrent().enablePreemption();
+        }
     }
 }
 
