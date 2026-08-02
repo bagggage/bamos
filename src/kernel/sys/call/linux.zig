@@ -573,15 +573,17 @@ fn vfork(ctx: *arch.syscall.Context) callconv(.c) isize {
     const new_task = new_proc.getMainTask().?;
     const child_id = new_proc.id;
 
-    child_id.ref();
-    defer child_id.deref();
-
     sched.enqueue(new_task);
 
-    proc.prepareWaitForEvent();
-    defer proc.cancleWaitForEvent();
+    proc.id.lock.lock();
+    defer proc.id.lock.unlock();
 
-    while (!child_id.isZombie()) proc.doWaitForEvent();
+    while (!child_id.isZombie()) {
+        defer proc.id.lock.lock();
+
+        const id = proc.id.waitForEventAtomic();
+        id.deref();
+    }
 
     return child_id.value;
 }
@@ -739,9 +741,6 @@ fn execve(path: [*c]const u8, args: ?[*:null][*c]const u8, envs: ?[*:null][*c]co
         log.warn("execve failed: {t}, kill: {f}", .{ret_error, proc});
 
         proc.terminate(1);
-        proc.delete();
-
-        sched.terminate();
     }
 
     log.debug("loaded process: {f}", .{proc});
@@ -756,9 +755,6 @@ fn exit(status: i32) void {
     const short_status: u8 = @truncate(@as(u32, @intCast(status)));
 
     proc.terminate(short_status);
-    proc.delete();
-
-    sched.terminate();
 }
 
 fn exitGroup(status: i32) void {
@@ -769,9 +765,6 @@ fn exitGroup(status: i32) void {
     const short_status: u8 = @truncate(@as(u32, @intCast(status)));
 
     proc.terminate(short_status);
-    proc.delete();
-
-    sched.terminate();
 }
 
 fn fcntl(fd: linux.fd_t, cmd: u32, arg: usize) isize {
@@ -1132,11 +1125,16 @@ fn getParentPid() usize {
     trace.info("getppid()", .{});
 
     const proc = sys.Process.getCurrent();
-    if (proc.parent == proc) {
+
+    proc.ctrl.lock.lock();
+    defer proc.ctrl.lock.unlock();
+
+    if (proc.parent == proc.id) {
         @branchHint(.unlikely);
         return 0;
     }
-    return proc.parent.id.value;
+
+    return proc.parent.value;
 }
 
 fn getProcGroup() isize {
@@ -2372,7 +2370,6 @@ fn waitPid(pid: linux.pid_t, status: ?*i32, options: u32, usage: ?*linux.rusage)
     validateMemoryArgs(@intFromPtr(status), @sizeOf(i32)) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(usage), @sizeOf(linux.rusage)) catch return errorFromE(.FAULT);
 
-    // TODO: Make some kind of ref-counter to prevent freeing struct while in use.
     const proc = sys.Process.getCurrent();
     const nowait = (options & linux.W.NOHANG) != 0;
     const id = if (pid == -1) proc.waitAnyChildExit(nowait) orelse {
@@ -2387,7 +2384,7 @@ fn waitPid(pid: linux.pid_t, status: ?*i32, options: u32, usage: ?*linux.rusage)
     defer id.deref();
 
     const stats = id.owner.stats.?;
-    if (status) |s| s.* = stats.exit_status;
+    if (status) |s| s.* = (@as(u16, stats.exit_status) << @bitSizeOf(u8)) | @intFromEnum(stats.fault_signal);
     if (usage) |u| {
         log.warn("'rusage' argument is not implemented", .{});
         const rusage_size = @sizeOf(linux.rusage) - @sizeOf(@TypeOf(u.__reserved));
@@ -2402,14 +2399,8 @@ fn waitPid(pid: linux.pid_t, status: ?*i32, options: u32, usage: ?*linux.rusage)
         u.utime = .{ .sec = user_time_sec, .usec = user_time_us };
     }
 
-    log.debug("wait4: status: 0x{x}", .{stats.exit_status});
     return id.value;
 }
-
-//fn waitId(pid: linux.pid_t, ) isize {
-//    trace.info("waitid({})", args: anytype)
-//    return 0;
-//}
 
 fn write(fd: linux.fd_t, buf: [*]const u8, len: usize) isize {
     trace.info("write({}, 0x{x}, {})", .{fd, @intFromPtr(buf), len});

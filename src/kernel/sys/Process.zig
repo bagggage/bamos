@@ -61,6 +61,7 @@ pub const Signal = enum(u8) {
         break :blk max + 1;
     };
 
+    None            = 0,
     Abort           = linux.SIG.ABRT,
     Alarm           = linux.SIG.ALRM,
     BadSyscall      = linux.SIG.SYS,
@@ -69,7 +70,7 @@ pub const Signal = enum(u8) {
     Child           = linux.SIG.CHLD,
     Continue        = linux.SIG.CONT,
     CpuTimeout      = linux.SIG.XCPU,
-    EmulatorTrap    = if (@hasDecl(linux.SIG, "EMT")) linux.SIG.EMT else 0,
+    EmulatorTrap    = if (@hasDecl(linux.SIG, "EMT")) linux.SIG.EMT else 33,
     FileSizeLimit   = linux.SIG.XFSZ,
     Hangup          = linux.SIG.HUP,
     IllegalInstr    = linux.SIG.ILL,
@@ -387,16 +388,45 @@ pub const Id = struct {
         return self.zombie;
     }
 
-    pub fn waitForGroupEvent(group: *Id) *Id {
+    pub fn waitForEvent(self: *Id) *Id {
         var waiter: Waiter = .init();
         {
-            group.lock.lock();
-            defer group.lock.unlock();
-            group.wait_queue.push(&waiter.entry);
+            self.lock.lock();
+            defer self.lock.unlock();
+            self.wait_queue.push(&waiter.entry);
         }
 
         sched.getCurrent().wait();
         return waiter.notifier.?;
+    }
+
+    pub fn waitForEventAtomic(self: *Id) *Id {
+        var waiter: Waiter = .init();
+        self.wait_queue.push(&waiter.entry);
+
+        self.lock.unlock();
+        sched.getCurrent().wait();
+
+        return waiter.notifier.?;
+    }
+
+    pub inline fn notifyEvent(self: *Id, notifier: *Self) void {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        self.notifyEventAtomic(notifier);
+    }
+
+    pub fn notifyEventAtomic(self: *Id, notifier: *Self) void {
+        var node = self.wait_queue.list.first.raw;
+        while (node) |n| : (node = n.next) {
+            const waiter = Id.Waiter.fromNode(n);
+
+            waiter.notifier = notifier.id;
+            notifier.id.ref();
+        }
+
+        sched.awakeAll(&self.wait_queue);
     }
 
     fn compare(left: *lib.rb.Node, right: *lib.rb.Node, _: ?*lib.rb.Node) std.math.Order {
@@ -431,25 +461,6 @@ pub const Id = struct {
         return if (leader.isZombie()) null else leader.owner.process;
     }
 
-    inline fn notifyGroup(group: *Id, notifier: *Self) void {
-        group.lock.lock();
-        defer group.lock.unlock();
-
-        group.notifyGroupAtomic(notifier);
-    }
-
-    fn notifyGroupAtomic(group: *Id, notifier: *Self) void {
-        var node = group.wait_queue.list.first.raw;
-        while (node) |n| : (node = n.next) {
-            const waiter = Id.Waiter.fromNode(n);
-
-            waiter.notifier = notifier.id;
-            notifier.id.ref();
-        }
-
-        sched.awakeAll(&group.wait_queue);
-    }
-
     fn processAttach(self: *Id, process: *Self) void {
         std.debug.assert(process.id == self and self.users.count() == 0 and self.owner.stats == null);
 
@@ -467,10 +478,10 @@ pub const Id = struct {
         self.zombie = true;
 
         if (self != proc.group) {
-            proc.group.notifyGroup(proc);
+            proc.group.notifyEvent(proc);
             proc.group.removeProcessFromGroup(proc);
         } else if (proc.group.isSessionOwner()) {
-            proc.group.notifyGroupAtomic(proc);
+            proc.group.notifyEventAtomic(proc);
             proc.group.session.leaderExit();
         } else if (self.p_node.next == null) {
             // This process is the group owner and there is no other process in group.
@@ -510,6 +521,7 @@ pub const Stats = struct {
     sys_time_ns: u64 = 0,
     user_time_ns: u64 = 0,
     exit_status: u8 = 0,
+    fault_signal: Signal = .None,
 
     inline fn new() ?*Stats {
         const stats = vm.auto.alloc(Stats) orelse return null;
@@ -526,6 +538,7 @@ pub const Stats = struct {
 const Control = struct {
     const SignalSet = std.bit_set.IntegerBitSet(Signal.num);
 
+    sig_pending: SignalSet = .initEmpty(),
     sig_mask: SignalSet = .initEmpty(),
     sig_handlers: [Signal.num]Signal.Handler = .{ Signal.Handler{} } ** Signal.num,
 
@@ -559,7 +572,7 @@ work_dir: *vfs.Dentry,
 exe_file: ?*vfs.File = null,
 interp_file: ?*vfs.File = null,
 
-parent: *Self,
+parent: *Id,
 childs: List = .{},
 
 /// All tasks related to this process.
@@ -602,9 +615,9 @@ pub fn create(stack_size: usize, root_dir: *vfs.Dentry, work_dir: *vfs.Dentry) !
     errdefer vm.auto.free(Self, self);
 
     self.* = try .init(stack_size, root_dir, work_dir);
-    self.parent = self;
     errdefer self.deinit();
 
+    self.parent = self.id;
     self.id.processAttach(self);
 
     const task = try sched.Task.create(.{ .user = .{ .process = self } }, undefined);
@@ -644,7 +657,7 @@ pub fn clone(self: *Self) !*Self {
         .stats = stats,
         .root_dir = self.root_dir,
         .work_dir = self.work_dir,
-        .parent = self,
+        .parent = self.id,
         .exe_file = self.exe_file,
         .interp_file = self.interp_file,
         .addr_space = addr_space,
@@ -662,8 +675,18 @@ pub fn clone(self: *Self) !*Self {
 }
 
 pub fn clear(self: *Self) *sched.Task {
-    const task = self.terminateThreads().?;
+    std.debug.assert(self.childs.first == null);
 
+    const node = self.tasks.first.?;
+    const main_task = sched.Task.Specific.User.fromNode(node).toTask();
+
+    var next = node.next;
+    while (next) |n| : (next = n.next) {
+        const task = sched.Task.Specific.User.fromNode(n).toTask();
+        task.delete();
+    }
+
+    self.tasks = .{};
     self.addr_space.clear();
     self.files.closeOnExecute();
 
@@ -671,7 +694,7 @@ pub fn clear(self: *Self) *sched.Task {
     self.detachExecutable();
     self.flags = .{};
 
-    return task;
+    return main_task;
 }
 
 pub fn deinit(self: *Self) void {
@@ -685,13 +708,9 @@ pub fn deinit(self: *Self) void {
         task.delete();
     }
 
-    // Release pid only if we don't have a parent
-    // else process should become a zombie.
-    if (self.parent == self) {
-        @branchHint(.unlikely);
-        self.id.deref();
-    }
+    if (self.parent != self.id) self.parent.deref();
 
+    self.id.deref();
     self.tasks.first = null;
     self.root_dir.deref();
     self.work_dir.deref();
@@ -763,31 +782,45 @@ pub fn addChild(self: *Self, child: *Self) void {
     self.list_lock.writeLock();
     defer self.list_lock.writeUnlock();
 
-    child.parent = self;
+    child.id.ref();
+    self.id.ref();
+
+    child.parent = self.id;
     self.childs.append(&child.id.c_node);
 }
 
 pub fn detachAllChilds(self: *Self) void {
-    if (self == init_proc) init_proc = null;
+    // No internal locks are needed, as this is
+    // called from the `terminate`.
+    lib.debug.assert(
+        self.flags.terminate and self.tasks.first == null, @src()
+    );
 
-    self.list_lock.writeLock();
-    defer self.list_lock.writeUnlock();
+    if (self == init_proc) init_proc = null;
     defer self.childs.first = null;
 
     var node = self.childs.first;
     while (node) |n| : (node = n.next) {
         const id = Id.fromCNode(n);
 
-        id.lock.lockAtomic();
-        defer id.lock.unlockAtomic();
+        id.lock.lock();
+        defer id.deref();
+        defer id.lock.unlock();
 
         const child = if (!id.isZombie()) id.owner.process else continue;
-        child.parent = init_proc orelse blk: {
-            @branchHint(.cold);
 
-            init_proc = child; // TODO: check race-condition on setting init!
-            break :blk child;
-        };
+        child.ctrl.lock.lockAtomic();
+        defer child.ctrl.lock.unlockAtomic();
+
+        self.id.deref();
+
+        if (init_proc) |p| {
+            p.addChild(child);
+        } else {
+            @branchHint(.cold);
+            init_proc = child;
+            child.parent = child.id;
+        }
     }
 }
 
@@ -809,11 +842,22 @@ pub fn pushTask(self: *Self, task: *sched.Task) void {
     self.tasks.prepend(&task.spec.user.node);
 }
 
-pub fn detachTask(self: *Self, task: *sched.Task) void {
+pub fn detachTask(self: *Self, task: *sched.Task) bool {
     self.list_lock.writeLock();
     defer self.list_lock.writeUnlock();
 
-    self.tasks.remove(&task.spec.user.node);
+    const node = &task.spec.user.node;
+    if (node.next == node) {
+        // Thread was already terminated.
+        @branchHint(.cold);
+        return false;
+    }
+
+    self.tasks.remove(node);
+    // Set next pointer to self to mark thread as terminated.
+    node.next = node;
+
+    return true;
 }
 
 pub fn attachControlTerminal(self: *Self, tty: *Teletype) vfs.Error!void {
@@ -873,43 +917,50 @@ pub fn spawnSession(self: *Self) void {
     self.group.session.setup();
 }
 
-pub fn terminateThreads(self: *Self) ?*sched.Task {
+pub fn terminateThread(self: *Self, task: *sched.Task, status: u8) bool {
+    const proc_exit = blk: {
+        self.ctrl.lock.lock();
+        defer self.ctrl.lock.unlock();
+
+        if (self.flags.terminate) return false;
+        if (!self.detachTask(task)) return true;
+
+        if (self.tasks.first == null) {
+            self.flags.terminate = true;
+            break :blk true;
+        }
+
+        break :blk false;
+    };
+
+    sys.call.stopThread(self.abi, task);
+
+    if (proc_exit) self.terminateComplete(status);
+    if (task == sched.getCurrent().current_task) sched.terminate();
+
+    return true;
+}
+
+/// Terminate process: kill all threads, detach childs to init, set exit status.
+pub fn terminate(self: *Self, status: u8) noreturn {
+    std.debug.assert(getCurrent() == self);
+
+    const task = sched.getCurrentTask();
+
     {
         self.ctrl.lock.lock();
         defer self.ctrl.lock.unlock();
 
-        // TODO: Handle this case.
-        if (self.flags.terminate) @panic("remote termination is not implemented");
+        if (self.flags.terminate or self.tasks.len() > 1) @panic("remote/multi-thread termination is not implemented");
         self.flags.terminate = true;
     }
 
-    // TODO: Remote termination from other process or kernel thread!
-    const task = sched.getCurrentTask();
-    const proc = if (task.spec == .user) task.spec.user.process else null;
-    if (proc != self) {
-        self.flags.terminate = false;
-        @panic("remote termination is not implemented");
-    }
+    if (!self.detachTask(task)) @panic("remote/multi-thread termination is not implemented");
 
-    self.detachTask(task);
-    if (self.tasks.first != null) @panic("remote termination is not implemented");
+    sys.call.stopThread(self.abi, task);
+    self.terminateComplete(status);
 
-    return task;
-}
-
-/// Terminate process: kill all threads, detach childs to init, set exit status.
-pub fn terminate(self: *Self, status: u8) void {
-    std.debug.assert(getCurrent() == self);
-
-    const task = self.terminateThreads();
-    if (task) |t| sys.call.stopThread(self.abi, t);
-
-    self.stats.exit_status = status;
-
-    self.detachAllChilds();
-    self.id.processExit();
-
-    if (self.parent != self) self.parent.notifyEvent();
+    sched.terminate();
 }
 
 /// Returns `false` if `id` is not a child of the process
@@ -917,10 +968,15 @@ pub fn terminate(self: *Self, status: u8) void {
 pub fn waitChildExit(self: *Self, id: *Id) bool {
     // FIXME: Check if id is a child of this process.
     {
-        self.prepareWaitForEvent();
-        defer self.cancleWaitForEvent();
+        self.id.lock.lock();
+        defer self.id.lock.unlock();
 
-        while (!id.isZombie()) self.doWaitForEvent();
+        while (!id.isZombie()) {
+            defer self.id.lock.lock();
+
+            const waited_id = self.id.waitForEventAtomic();
+            waited_id.deref();
+        }
     }
 
     self.list_lock.writeLock();
@@ -929,7 +985,7 @@ pub fn waitChildExit(self: *Self, id: *Id) bool {
     // Check if child is not removed from the list.
     if (id.c_node.next != &id.c_node) {
         self.childs.remove(&id.c_node);
-        // Id should be refereced from the caller, so it safe
+        // Id should be refereced from the caller, so it's safe
         // and needed to dereference it here.
         lib.debug.assert(id.users.value.raw > 1, @src());
         id.users.dec();
@@ -939,7 +995,7 @@ pub fn waitChildExit(self: *Self, id: *Id) bool {
 }
 
 pub fn waitAnyChildExit(self: *Self, nowait: bool) ?*Id {
-    self.prepareWaitForEvent();
+    self.id.lock.lock();
 
     while (true) {
         {
@@ -947,7 +1003,7 @@ pub fn waitAnyChildExit(self: *Self, nowait: bool) ?*Id {
             defer self.list_lock.writeUnlock();
 
             if (self.childs.first == null) {
-                self.cancleWaitForEvent();
+                self.id.lock.unlock();
                 return null;
             }
 
@@ -955,7 +1011,7 @@ pub fn waitAnyChildExit(self: *Self, nowait: bool) ?*Id {
             while (node) |n| : (node = n.next) {
                 const id = Id.fromCNode(n);
                 if (id.isZombie()) {
-                    self.cancleWaitForEvent();
+                    self.id.lock.unlock();
                     self.childs.remove(&id.c_node);
                     // Set next pointer to self to tell
                     // that child was remove from the list.
@@ -968,40 +1024,44 @@ pub fn waitAnyChildExit(self: *Self, nowait: bool) ?*Id {
 
         if (nowait) {
             @branchHint(.unlikely);
-            self.cancleWaitForEvent();
+            self.id.lock.unlock();
             return null;
         }
 
-        self.doWaitForEvent();
+        const id = self.id.waitForEventAtomic();
+        id.deref();
+
+        self.id.lock.lock();
     }
 }
 
-pub inline fn prepareWaitForEvent(self: *Self) void {
-    self.id.lock.lock();
-}
-
-pub inline fn cancleWaitForEvent(self: *Self) void {
-    self.id.lock.unlock();
-}
-
-pub fn doWaitForEvent(self: *Self) void {
-    sched.waitUnlock(&self.id.wait_queue, &self.id.lock);
-    self.id.lock.lock();
-}
-
-pub fn notifyEvent(self: *Self) void {
-    self.id.lock.lock();
-    defer self.id.lock.unlock();
-
-    sched.awakeAll(&self.id.wait_queue);
-}
-
 pub fn sendSignal(self: *Self, signal: Signal) void {
+    // TODO: Replace `sendSignalAtomic` with `sendSignal` ?
     self.sendSignalAtomic(signal);
-    sched.pause();
 }
 
 pub fn sendSignalAtomic(self: *Self, signal: Signal) void {
     // TODO: implement signals!
     log.warn("unhandled signal: {s} -> {f}", .{@tagName(signal), self});
+    self.ctrl.sig_pending.set(@intFromEnum(signal));
+}
+
+fn processSignal(self: *Self) void {
+    std.debug.assert(getCurrent() == self);
+}
+
+fn terminateComplete(self: *Self, status: u8) void {
+    std.debug.assert(self.tasks.first == null);
+    self.stats.exit_status = status;
+
+    self.detachAllChilds();
+
+    // Process exit notifies the group if we are not in the same group
+    const group = self.group;
+    self.id.processExit();
+
+    // Parent is also might be our group owner
+    if (self.parent != self.id and self.parent != group) self.parent.notifyEvent(self);
+
+    self.delete();
 }
