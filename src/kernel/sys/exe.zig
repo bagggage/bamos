@@ -117,15 +117,18 @@ pub const Binary = struct {
     pub fn load(self: *Binary, args: []const [*:0]const u8, envs: []const [*:0]const u8) Error!void {
         try self.readExe();
 
+        var shifted_args = args;
         const prelude: *Prelude = std.mem.bytesAsValue(Prelude, self.buffer);
         while (prelude.getType() == .script) {
             try self.loadScriptInterpreter();
             try self.readExe();
+
+            if (shifted_args.len > 0) shifted_args = shifted_args[1..];
         }
 
         self.type = prelude.getType();
         switch (self.type) {
-            .elf => try elf.load(self, args, envs),
+            .elf => try elf.load(self, shifted_args, envs),
             else => return error.BadFormat,
         }
     }
@@ -157,13 +160,21 @@ pub const Binary = struct {
     }
 
     fn loadScriptInterpreter(self: *Binary) Error!void {
-        try self.args.printArgument("{f}", .{self.file.dentry.path()});
-
         const content = self.buffer[Prelude.sb_sign.len..];
-        const path_len = std.mem.indexOfAny(u8, content, "\x00\n\r") orelse return error.BadInterpreter;
-        if (path_len == 0) return error.BadInterpreter;
+        const len = std.mem.indexOfAny(u8, content, "\x00\n\r") orelse return error.BadInterpreter;
 
-        const interp_path = content[0..path_len];
+        const whitespaces = " \t";
+        const shebang = std.mem.trim(u8, content[0..len], whitespaces);
+        if (shebang.len == 0) return error.BadInterpreter;
+
+        var shebang_iter = std.mem.splitAny(u8,  shebang, " \t");
+        const interp_path = shebang_iter.first();
+
+        try self.args.printArgument("{s}", .{interp_path});
+        while (shebang_iter.next()) |arg| try self.args.printArgument("{s}", .{arg});
+
+        try self.args.printArgument("{f}", .{self.file.dentry.relativePath(self.proc.root_dir)});
+
         const interp_dent = vfs.lookup(
             self.proc.root_dir, self.proc.work_dir, interp_path
         ) catch |err| switch (err) {
@@ -317,9 +328,10 @@ const Arguments = struct {
                 self.writer.buffer = self.getBuffer();
                 self.writer.end = 0;
             } else {
-                @memcpy(self.writer.buffer[self.writer.end..], slice[0..]);
-                self.writer.end += slice.len;
+                const buffer_end = self.writer.end + slice.len;
+                @memcpy(self.writer.buffer[self.writer.end..buffer_end], slice[0..]);
 
+                self.writer.end = buffer_end;
                 return;
             }
         }
