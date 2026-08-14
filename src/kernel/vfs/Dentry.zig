@@ -547,7 +547,6 @@ pub fn deref(self: *Dentry) void {
         return;
     }
 
-    log.debug("move to lru: {} / {s}", .{self.inode.links_num, self.name.str()});
     self.moveToLru();
 }
 

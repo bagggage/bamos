@@ -949,7 +949,6 @@ fn dentryReadLink(dentry: *const vfs.Dentry, buffer: []u8) vfs.Error!usize {
         @memcpy(buffer[0..len], path[0..len]);
     }
 
-    log.debug("link: '{s}'", .{buffer[0..len]});
     return if (size <= buffer.len) len else error.MaxSize;
 }
 
