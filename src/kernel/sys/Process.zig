@@ -405,7 +405,7 @@ pub const Id = struct {
         self.wait_queue.push(&waiter.entry);
 
         self.lock.unlock();
-        sched.getCurrent().wait();
+        sched.getCurrent().doWait(false) catch unreachable;
 
         return waiter.notifier.?;
     }

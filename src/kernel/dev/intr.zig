@@ -321,7 +321,7 @@ const SoftTask = struct {
             }
 
             self.pause_lock.unlockAtomic();
-            sched.pauseUnlockIntr(&self.sched_lock);
+            sched.pauseUnlockIntr(&self.sched_lock) catch unreachable;
         }
     }
 
@@ -344,7 +344,7 @@ const SoftTask = struct {
             return;
         }
 
-        sched.resumeTask(self.task);
+        sched.resumePausedTask(self.task);
     }
 
     inline fn prependHandler(self: *SoftTask, intr: *SoftHandler) bool {
@@ -477,7 +477,7 @@ pub fn deinit() void {
     cpus.shrinkRetainingCapacity(0);
     cpus_order.shrinkRetainingCapacity(0);
 
-    vm.free(pool);
+    vm.gpa.free(pool);
 
     for (irqs) |*irq| {
         if (irq.in_use) {
@@ -486,8 +486,8 @@ pub fn deinit() void {
         }
     }
 
-    for (soft_tasks) |*soft_task| sched.freeTask(soft_task.task);
-    vm.free(soft_tasks.ptr);
+    for (soft_tasks) |*soft_task| soft_task.task.delete();
+    vm.gpa.free(soft_tasks.ptr);
 }
 
 pub inline fn requestIrq(pin: u8, device: *dev.Device, handler: Handler.Fn, tigger_mode: TriggerMode, shared: bool) Error!void {
@@ -705,7 +705,7 @@ fn reserveVectors(cpu_idx: u16, vec_base: u16, num: u8) void {
     defer cpus_lock.unlock();
 
     const raw_base = vec_base - arch.intr.reserved_vectors;
-    const cpu = &cpus.buffer[cpu_idx];
+    const cpu = &cpus.items[cpu_idx];
 
     for (0..num) |i| {
         const vec = raw_base + i;

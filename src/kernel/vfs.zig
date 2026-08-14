@@ -35,6 +35,7 @@ pub const Error = vm.Error || parts.Error || error {
     BadSuperblock,
     Busy,
     Exists,
+    Interrupted,
     InvalidArgs,
     IoFailed,
     NameTooLong,
@@ -476,7 +477,6 @@ pub inline fn lookup(root: ?*Dentry, dir: ?*Dentry, path: []const u8) Error!*Den
 
 pub fn lookupRaw(root: ?*Dentry, dir: ?*Dentry, path: []const u8, follow_links: bool) Error!*Dentry {
     if (path.len == 0) return error.InvalidArgs;
-    log.debug("lookup for: \"{s}\"", .{path});
 
     const root_dent = root orelse root_dentry;
     const start_dent = if (path[0] == '/') root_dent else dir orelse root_dent;

@@ -137,7 +137,12 @@ fn fileRead(file: *const File, _: usize, buffer: []u8) Error!usize {
         const len = @min(remain_len, pipe.buffer.itemsToRead());
         if (len == 0) {
             pipe.tryWaitUnlock(pipe.writers.raw, &pipe.read_wait, &pipe.write_wait)
-                catch if (readed > 0) { return readed; } else return error.BadPipe;
+                catch |err| {
+                    if (err == error.Interrupted) return err;
+                    if (readed > 0) return readed;
+                    
+                    return error.BadPipe;
+                };
             continue;
         }
 
@@ -180,7 +185,12 @@ fn fileWrite(file: *File, _: usize, buffer: []const u8) Error!usize {
         const len = @min(remain_len, pipe.buffer.writeCapacity());
         if (len == 0) {
             pipe.tryWaitUnlock(pipe.readers.raw, &pipe.write_wait, &pipe.read_wait)
-                catch if (writen > 0) { return writen; } else return error.BadPipe;
+                catch |err| {
+                    if (err == error.Interrupted) return err;
+                    if (writen > 0) return writen;
+
+                    return error.BadPipe;
+                };
             continue;
         }
 
@@ -246,5 +256,5 @@ fn tryWaitUnlock(self: *Self, others: u16, wait_queue: *sched.WaitQueue, awake_q
     self.mutex.unlock();
 
     sched.awakeAll(awake_queue);
-    sched.waitUnlock(wait_queue,&self.wait_lock);
+    try sched.waitUnlock(wait_queue,&self.wait_lock, true);
 }

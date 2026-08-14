@@ -281,15 +281,34 @@ pub inline fn isWaiting(self: *const Self) bool {
     return self.stats.sleep.load(.acquire) == .sleep;
 }
 
-pub inline fn tryWakeup(self: *Self) bool {
-    if (self.stats.sleep.cmpxchgStrong(
+pub inline fn prepareForSleep(self: *Self) void {
+    self.stats.sleep.raw = .falling_asleep;
+}
+
+pub inline fn canclePrepareForSleep(self: *Self) void {
+    self.stats.sleep.store(.awake, .release);
+}
+
+pub fn tryWakeup(self: *Self) bool {
+    // Prefetch to prevent cache line drop
+    if (self.stats.sleep.load(.acquire) != .sleep) {
+        if (self.stats.sleep.cmpxchgStrong(
             .falling_asleep, .needs_wakeup,
             .release, .monotonic
-    ) == null) return false;
+        ) == null) return false;
+    }
 
-    std.debug.assert(self.stats.sleep.raw == .sleep);
-    self.stats.sleep.store(.awake, .release);
-    return true;
+    if (self.stats.sleep.load(.acquire) == .sleep) {
+        if (self.stats.sleep.cmpxchgStrong(
+            .sleep, .awake,
+            .release, .monotonic
+        ) == null) {
+            @branchHint(.likely);
+            return true;
+        }
+    }
+
+    return false;
 }
 
 pub fn onSwitchTo(self: *Self) void {

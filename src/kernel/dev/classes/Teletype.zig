@@ -29,6 +29,7 @@ pub const LineDiscipline = @import("Teletype/LineDiscipline.zig");
 
 pub const Error = vm.Error || error {
     BadOperation,
+    Interrupted,
     IoFailed
 };
 
@@ -311,22 +312,22 @@ pub fn readAllWaitInput(self: *Self, buffer: []u8) Error!void {
 
     var readed: usize = 0;
     while (readed < buffer.len) {
-        self.waitForInputAtomic();
+        try self.waitForInputAtomic();
         readed += self.readInputAtomic(buffer[readed..]);
     }
 }
 
-pub fn waitForInput(self: *Self) void {
+pub fn waitForInput(self: *Self) error{Interrupted}!void {
     self.in_lock.lockSaveIntr();
     defer self.in_lock.unlockRestoreIntr();
 
-    self.waitForInputAtomic();
+    try self.waitForInputAtomic();
 }
 
-pub fn waitForInputAtomic(self: *Self) void {
+pub fn waitForInputAtomic(self: *Self) error{Interrupted}!void {
     while (self.inputEmpty()) {
-        sched.waitUnlockIntr(&self.in_wait, &self.in_lock);
-        self.in_lock.lockSaveIntr();
+        defer self.in_lock.lockSaveIntr();
+        try sched.waitUnlockIntr(&self.in_wait, &self.in_lock, true);
     }
 }
 
