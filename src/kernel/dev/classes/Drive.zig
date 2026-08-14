@@ -93,7 +93,7 @@ pub const io = opaque {
                 }
 
                 self.lock.lockIntr();
-                sched.waitUnlockIntr(&self.wait_queue, &self.lock);
+                sched.waitUnlockIntr(&self.wait_queue, &self.lock, false) catch unreachable;
             }
         }
 
@@ -110,7 +110,7 @@ pub const io = opaque {
                     return preinitRequest(&self.requests[idx], idx);
                 }
 
-                sched.waitUnlockIntr(&self.wait_queue, &self.lock);
+                sched.waitUnlockIntr(&self.wait_queue, &self.lock, false) catch unreachable;
             }
         }
 
@@ -478,7 +478,7 @@ fn submitRequestAndWait(self: *Self, request: *io.Request) void {
     if (self.submitRequest(request) == false) {
         log.warn("request: {} is cached", .{request.id});
     }
-    scheduler.wait();
+    scheduler.doWait(false) catch unreachable;
 }
 
 fn calcPartitionRegion(self: *const Self, part: *const vfs.Partition, offset: usize, len: usize) [2]usize {
@@ -500,7 +500,7 @@ fn cacheWorker(arg: usize) noreturn {
             log.warn("{s}: cache write back failed", .{drive.getName().str()});
         }
 
-        sched.sleepFor(delay_sec * std.time.ns_per_s);   
+        sched.sleepFor(delay_sec * std.time.ns_per_s) catch unreachable;   
     }
 }
 

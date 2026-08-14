@@ -372,7 +372,7 @@ fn stall(usec: u8) callconv(.c) void {
 
 /// Sleep for N milliseconds.
 fn sleep(msec: u64) callconv(.c) void {
-    sched.sleepFor(msec * std.time.ns_per_ms);
+    sched.sleepFor(msec * std.time.ns_per_ms) catch {};
 }
 
 /// Create/free an opaque non-recursive kernel mutex object.
@@ -483,7 +483,7 @@ fn waitForEvent(handle: c.uacpi_handle, _: u16) callconv(.c) bool {
     defer sem.lock.unlock();
 
     while (sem.readers == 0) {
-        sched.waitUnlock(&sem.wait_queue, &sem.lock);
+        sched.waitUnlock(&sem.wait_queue, &sem.lock, false) catch unreachable;
         sem.lock.lock();
     }
 

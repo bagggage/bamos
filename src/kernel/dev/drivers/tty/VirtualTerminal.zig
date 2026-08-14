@@ -395,7 +395,7 @@ fn virtualTerminalControl(tty: *Teletype, cmd: IoCtl, arg: lib.AnyData) vfs.Erro
 
 fn cursorTask() noreturn {
     while (true) {
-        sched.getCurrent().sleepFor(std.time.ns_per_ms * 350);
+        sched.getCurrent().sleepFor(std.time.ns_per_ms * 350) catch unreachable;
         if (active) |tty| if (tty.kbd_mode == .translate and cursor_enable) {
             video.terminal.blinkCursor();
         };

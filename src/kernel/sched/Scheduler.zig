@@ -70,8 +70,6 @@ const TaskQueue = struct {
 task_lock: lib.sync.Spinlock = .init(.unlocked),
 task_queues: [2]TaskQueue = .{TaskQueue{}} ** 2,
 
-pause_queue: sched.WaitQueue = .{},
-
 active_queue: *TaskQueue = undefined,
 expired_queue: *TaskQueue = undefined,
 
@@ -119,7 +117,7 @@ pub fn start(self: *Self) noreturn {
 pub fn enqueueTask(self: *Self, task: *Task) void {
     lib.debug.assert(
         intr.isEnabledForCpu() and task.stats.sleep.raw == .awake and
-            !task.stats.sched_lock.isLocked(),
+        !task.stats.sched_lock.isLocked(),
         @src(),
     );
 
@@ -168,7 +166,7 @@ pub fn tryPreempt(self: *Self, task: *Task) bool {
     if (!self.isOnCurrentCpu()) return false;
 
     if (self.current_task) |current| {
-        if (self.wantSleep() or !current.stats.sched_lock.tryLockAtomic()) return false;
+        if (self.flags.want_sleep or !current.stats.sched_lock.tryLockAtomic()) return false;
         if (current.stats.getPriority() <= task.stats.getPriority()) {
             current.stats.sched_lock.unlockAtomic();
             return false;
@@ -204,17 +202,8 @@ pub inline fn planRescheduling(self: *Self) void {
     self.flags.need_resched = true;
 }
 
-pub inline fn prepareToSleep(self: *Self) void {
-    lib.debug.assert(self.isPreemptive(), @src());
-    self.flags.want_sleep = true;
-}
-
 pub inline fn needRescheduling(self: *const Self) bool {
     return self.flags.need_resched;
-}
-
-pub inline fn wantSleep(self: *const Self) bool {
-    return self.flags.want_sleep;
 }
 
 pub inline fn isPreemptive(self: *const Self) bool {
@@ -255,83 +244,38 @@ pub fn initWait(self: *Self) WaitQueue.Entry {
     const task = self.current_task.?;
 
     lib.debug.assert(task.stats.sleep.raw == .awake, @src());
-    task.stats.sleep.raw = .falling_asleep;
+    task.prepareForSleep();
 
-    return WaitQueue.Entry.init(
-        task,
-        sys.time.getUpTimeNs(),
-    );
+    return .{ .task = task, .timestamp = sys.time.getUpTimeNs() };
 }
 
-pub fn wait(self: *Self) void {
+pub inline fn doWait(self: *Self, comptime interruptible: bool) error{Interrupted}!void {
     const task = self.current_task.?;
 
-    self.prepareToSleep();
-    self.disablePreemption();
-
-    if (task.stats.sleep.cmpxchgStrong(
-        .needs_wakeup,
-        .awake,
-        .release,
-        .monotonic,
-    ) == null) {
-        @branchHint(.unlikely);
-        self.flags.want_sleep = false;
-        self.enablePreemption();
-        return;
-    }
-
-    if (task.stats.sleep.raw == .awake) {
-        @branchHint(.cold);
-        log.err("task is not ready to wait!", .{});
-        return;
-    }
-
-    self.rescheduleAtomic();
-
-    if (task.stats.sleep.raw != .awake and lib.is_debug) {
-        @branchHint(.cold);
-        log.err("no awake after wait!: {t}", .{task.stats.sleep.raw});
+    self.enterWaitCriticalSection(task) catch return;
+    if (comptime interruptible) {
+        try self.doInterruptibleWaitFromCriticalSection(task);
+    } else {
+        self.doWaitFromCriticalSection(task);
     }
 }
 
-pub fn waitTimeout(self: *Self, ns: u64) error{Timeout}!void {
+pub fn doWaitTimeout(self: *Self, ns: u64) error{Timeout}!void {
     lib.debug.assert(self.isOnCurrentCpu(), @src());
 
-    self.prepareToSleep();
-    self.disablePreemption();
-
     const task = self.current_task.?;
-    if (task.stats.sleep.cmpxchgStrong(
-        .needs_wakeup,
-        .awake,
-        .release,
-        .monotonic,
-    ) == null) {
-        @branchHint(.unlikely);
-        self.flags.want_sleep = false;
-        self.enablePreemption();
-        return;
-    }
+    self.enterWaitCriticalSection(task) catch return;
 
-    lib.debug.assert(task.stats.sleep.raw != .awake, @src());
     const time_ns = sys.time.getUpTimeNs();
     var entry: SleepQueue.Entry = .{
         .deadline_ns = time_ns + ns,
-        .wait_entry = .init(task, time_ns),
+        .wait_entry = .{ .task = task, .timestamp = time_ns },
     };
 
-    {
-        if (self.sleep_lock.tryLockIntr() == false) unreachable;
-        defer self.sleep_lock.unlockIntr();
+    self.pushSleepEntry(&entry, time_ns);
+    self.doWaitFromCriticalSection(task);
 
-        self.sleep_queue.push(&entry);
-        self.updateTimerEventDeadline(time_ns, entry.deadline_ns);
-    }
-
-    self.rescheduleAtomic();
-    lib.debug.assert(task.stats.sleep.raw == .awake, @src());
-
+    const timeout = entry.deadline_ns == 0;
     {
         self.sleep_lock.lockIntr();
         defer self.sleep_lock.unlockIntr();
@@ -339,14 +283,65 @@ pub fn waitTimeout(self: *Self, ns: u64) error{Timeout}!void {
         self.sleep_queue.removeWeak(&entry);
     }
 
-    if (entry.deadline_ns == 0) return error.Timeout;
+    if (timeout) return error.Timeout;
 }
 
-pub fn sleepFor(self: *Self, ns: u64) void {
+pub fn enterWaitCriticalSection(self: *Self, task: *Task) error{ShouldAwake}!void {
+    self.enterWaitCriticalSectionWeak();
+    errdefer self.exitWaitCriticalSection();
+
+    if (task.stats.sleep.load(.acquire) == .needs_wakeup) {
+        @branchHint(.unlikely);
+
+        if (task.stats.sleep.cmpxchgStrong(
+            .needs_wakeup,
+            .awake,
+            .release,
+            .monotonic,
+        ) == null) {
+            @branchHint(.unlikely);
+            return error.ShouldAwake;
+        }
+    }
+
+    lib.debug.assert(task.stats.sleep.raw != .awake, @src());
+}
+
+pub inline fn enterWaitCriticalSectionWeak(self: *Self) void {
+    self.flags.want_sleep = true;
+    self.disablePreemption();
+}
+
+pub inline fn exitWaitCriticalSection(self: *Self) void {
+    self.flags.want_sleep = false;
+    self.enablePreemption();
+}
+
+pub inline fn doWaitFromCriticalSection(self: *Self, task: *Task) void {
+    self.rescheduleAtomic();
+    lib.debug.assert(task.stats.sleep.raw == .awake, @src());
+}
+
+pub fn doInterruptibleWaitFromCriticalSection(self: *Self, task: *Task) error{Interrupted}!void {
+    const user = &task.spec.user;
+
+    user.sig_wait.store(true, .release);
+    defer user.sig_wait.store(false, .release);
+
+    if (user.pendingSignals().mask != 0) {
+        self.exitWaitCriticalSection();
+        return error.Interrupted;
+    }
+
+    self.doWaitFromCriticalSection(task);
+
+    if (user.pendingSignals().mask != 0) return error.Interrupted;
+}
+
+pub fn sleepFor(self: *Self, ns: u64) error{Interrupted}!void {
     lib.debug.assert(self.isOnCurrentCpu(), @src());
 
-    self.prepareToSleep();
-    self.disablePreemption();
+    self.enterWaitCriticalSectionWeak();
 
     var entry: SleepQueue.Entry = .{
         .deadline_ns = undefined,
@@ -356,15 +351,12 @@ pub fn sleepFor(self: *Self, ns: u64) void {
     const time_ns = entry.wait_entry.timestamp;
     entry.deadline_ns = time_ns + ns;
 
-    {
-        if (self.sleep_lock.tryLockIntr() == false) unreachable;
-        defer self.sleep_lock.unlockIntr();
-
-        self.sleep_queue.push(&entry);
-        self.updateTimerEventDeadline(time_ns, entry.deadline_ns);
+    self.pushSleepEntry(&entry, time_ns);
+    if (entry.wait_entry.task.spec == .user) {
+        try self.doInterruptibleWaitFromCriticalSection(entry.wait_entry.task);
+    } else {
+        self.doWaitFromCriticalSection(entry.wait_entry.task);
     }
-
-    self.rescheduleAtomic();
 }
 
 pub fn timerInterrupt(self: *Self) void {
@@ -573,6 +565,14 @@ inline fn updateTaskStatsAtomic(task: *Task) void {
     task.stats.updateTimeSlice();
 }
 
+fn pushSleepEntry(self: *Self, entry: *SleepQueue.Entry, time_ns: u64) void {
+    if (self.sleep_lock.tryLockIntr() == false) unreachable;
+    defer self.sleep_lock.unlockIntr();
+
+    self.sleep_queue.push(entry);
+    self.updateTimerEventDeadline(time_ns, entry.deadline_ns);
+}
+
 fn processSleepingTasks(self: *Self, time_ns: u64) u64 {
     if (self.sleep_lock.tryLockAtomic()) {
         @branchHint(.likely);
@@ -597,7 +597,7 @@ fn processCurrentTask(self: *Self, time_ns: u64) u64 {
     self.last_task_time_ns = time_ns;
     task.stats.cpu_time_ns +|= elapsed_time_ns;
 
-    if (self.wantSleep() or !task.stats.sched_lock.tryLockAtomic()) return sched.no_deadline;
+    if (self.flags.want_sleep or !task.stats.sched_lock.tryLockAtomic()) return sched.no_deadline;
     task.stats.time_slice_ns -|= elapsed_time_ns;
 
     if (task.stats.time_slice_ns == 0) {

@@ -317,7 +317,7 @@ const TransferRing = struct {
         doorbell.ringEndpoint(ep);
         self.lock.unlock();
 
-        scheduler.wait();
+        scheduler.doWait(false) catch unreachable;
         return sync_ctx.complete_trb;
     }
 
@@ -390,7 +390,7 @@ const EventRing = struct {
 const SyncRequest = struct {
     wait: sched.WaitQueue.Entry,
     complete_trb: TRB = .{ .control = .{
-        .cycle = 0, .@"type" = @enumFromInt(0) 
+        .cycle = 0, .@"type" = @enumFromInt(0)
     }},
 };
 
@@ -898,8 +898,9 @@ const Controller = struct {
         const Operational = packed struct {
             const Group = dev.regs.Group(
                 IoMechanism,
-                null, null,
-                dev.regs.from(Operational)  
+                null,
+                null,
+                dev.regs.from(Operational),
             );
 
             usb_cmd: UsbCommand,
@@ -1169,7 +1170,7 @@ const Controller = struct {
             inline for (ring.table[0..]) |*seg| {
                 const seg_rank = vm.bytesToRank(seg.size * @sizeOf(TRB));
                 vm.PageAllocator.free(seg.base_addr, seg_rank);
-            } 
+            }
         }
 
         vm.gpa.free(self.event_rings);
@@ -1203,7 +1204,7 @@ const Controller = struct {
         errdefer vm.gpa.free(dev_ctx_ptrs.ptr);
 
         std.debug.assert(std.mem.isAligned(@intFromPtr(dev_ctx_ptrs.ptr), 64));
-    
+
         @memset(dev_ctx_ptrs, 0);
         self.dev_ctx_ptrs = dev_ctx_ptrs.ptr;
 
@@ -1508,7 +1509,7 @@ const Controller = struct {
                 @branchHint(.cold);
                 break;
             } else if (!self.flags.ports_update) {
-                sched.waitUnlock(&self.event_wait, &self.event_lock);
+                sched.waitUnlock(&self.event_wait, &self.event_lock, false) catch unreachable;
                 continue;
             }
 
@@ -1540,7 +1541,7 @@ const Controller = struct {
             while (regs.readBits(.cap, .bios_owned_sem) == 1) {
                 if (timeout >= 1000) break;
 
-                sched.sleepFor(std.time.ns_per_ms * 10);
+                sched.sleepFor(std.time.ns_per_ms * 10) catch {};
                 timeout += 10;
             }
 
@@ -1642,7 +1643,7 @@ const Controller = struct {
             self.ringDoorbell();
         }
 
-        scheduler.wait();
+        scheduler.doWait(false) catch unreachable;
         return sync_ctx.complete_trb;
     }
 

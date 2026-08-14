@@ -39,7 +39,7 @@ pub fn writeLock(self: *Self) void {
     self.writing = true;
 
     while (@atomicLoad(u32, &self.readers, .acquire) > 0) {
-        sched.waitUnlock(&self.wait_queue, &self.lock);
+        sched.waitUnlock(&self.wait_queue, &self.lock, false) catch unreachable;
         self.lock.lock();
     }
 }
@@ -65,7 +65,7 @@ pub fn writeToReadLock(self: *Self) void {
 inline fn waitUntilWriting(self: *Self) void {
     self.lock.lock();
     while (self.writing) {
-        sched.waitUnlock(&self.wait_queue, &self.lock);
+        sched.waitUnlock(&self.wait_queue, &self.lock, false) catch unreachable;
         self.lock.lock();
     }
 }

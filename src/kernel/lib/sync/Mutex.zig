@@ -25,7 +25,7 @@ pub fn lock(self: *Self) void {
 
         for (0..8) |_| if (self.spinlock.tryLockWeakAtomic()) return;
         if (self.wait_lock.tryLockAtomic()) {
-            sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+            sched.waitUnlock(&self.wait_queue, &self.wait_lock, false) catch unreachable;
         } else {
             sched.getCurrent().enablePreemption();
         }
@@ -47,7 +47,7 @@ pub fn lockSaveIntr(self: *Self) void {
         intr.restoreForCpu(intr_enabled);
 
         if (self.wait_lock.tryLockAtomic()) {
-            sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+            sched.waitUnlock(&self.wait_queue, &self.wait_lock, false) catch unreachable;
         } else {
             sched.getCurrent().enablePreemption();
         }
@@ -63,7 +63,7 @@ pub fn lockIntr(self: *Self) void {
 
         if (self.spinlock.tryLockIntr()) return;
         if (self.wait_lock.tryLockAtomic()) {
-            sched.waitUnlock(&self.wait_queue, &self.wait_lock);
+            sched.waitUnlock(&self.wait_queue, &self.wait_lock, false) catch unreachable;
         } else {
             sched.getCurrent().enablePreemption();
         }

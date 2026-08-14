@@ -39,7 +39,7 @@ fn setup(tty: *Teletype) Teletype.Error!void {
         .ECHOKE = true,
         .ECHOCTL = true,
         .ICANON = true,
-        .ISIG = true
+        .ISIG = true,
     };
 
     tty.config.cc[@intFromEnum(Teletype.V.ERASE)] = control_code.del;
@@ -72,7 +72,7 @@ fn canonicalRead(tty: *Teletype, buffer: []u8) Teletype.Error!usize {
     tty.in_lock.lockSaveIntr();
     defer tty.in_lock.unlockRestoreIntr();
 
-    tty.waitForInputAtomic();
+    try tty.waitForInputAtomic();
     return tty.readInputAtomic(buffer);
 }
 
@@ -82,8 +82,26 @@ fn receive(tty: *Teletype, buffer: []const u8) Teletype.Error!void {
 
     if (tty.in_buffer.len == 0) return;
     if (tty.config.lflag.ICANON) return canonicalReceive(tty, buffer);
+    if (tty.config.lflag.ISIG) {
+        const intr = tty.config.cc[@intFromEnum(Teletype.V.INTR)];
+        const susp = tty.config.cc[@intFromEnum(Teletype.V.SUSP)];
+        const quit = tty.config.cc[@intFromEnum(Teletype.V.QUIT)];
 
-    _ = tty.bufferInputAtomic(buffer);
+        for (buffer) |c| {
+            if (c == intr) {
+                sendControlSignal(tty, intr, .INTR);
+            } else if (c == susp) {
+                sendControlSignal(tty, susp, .SUSP);
+            } else if (c == quit) {
+                sendControlSignal(tty, quit, .QUIT);
+            } else {
+                _ = tty.bufferInputByteAtomic(c);
+            }
+        }
+    } else {
+        _ = tty.bufferInputAtomic(buffer);
+    }
+
     tty.notifyInputReceivedAtomic();
 }
 
@@ -209,7 +227,7 @@ fn sendControlSignal(tty: *Teletype, code: u8, comptime ctrl: Teletype.V) void {
 }
 
 fn echoControl(tty: *Teletype, code: u8) void {
-    if (!tty.config.lflag.ECHOCTL) return;
+    if (!(tty.config.lflag.ECHO and tty.config.lflag.ECHOCTL)) return;
     tty.flushRaw(&.{'^', code + 0x40}) catch {};
 }
 

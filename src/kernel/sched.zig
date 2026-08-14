@@ -134,10 +134,6 @@ pub const WaitQueue = struct {
         timestamp: u64 = 0,
         node: QNode = .{},
 
-        pub inline fn init(task: *Task, timestamp: u64) Entry {
-            return .{ .task = task, .timestamp = timestamp };
-        }
-
         inline fn updateSleepTime(self: *Entry) void {
             const sleep_time_ns = sys.time.getFastTimestamp() -| self.timestamp;
             self.task.stats.sleep_time_ns +|= @truncate(sleep_time_ns);
@@ -162,7 +158,20 @@ pub const WaitQueue = struct {
         return entry;
     }
 
-    pub fn remove(self: *WaitQueue, task: *Task) ?*Entry {
+    pub fn remove(self: *WaitQueue, entry: *Entry) void {
+        var parent: ?*QNode = null;
+        var node = self.list.first.raw;
+        while (node) |n| : ({ parent = n; node = n.next; }) {
+            if (n != &entry.node) continue;
+            if (parent) |p| {
+                _ = p.removeNext();
+            } else {
+                self.list.first.raw = null;
+            }
+        }
+    }
+
+    pub fn removeTask(self: *WaitQueue, task: *Task) ?*Entry {
         var node = self.list.first.load(.acquire);
         const entry = blk: {
             while (node) |n| : (node = n.next) {
@@ -225,7 +234,6 @@ pub inline fn waitStartup() noreturn {
 }
 
 pub inline fn enqueue(task: *Task) void {
-    std.debug.assert(dev.intr.isEnabledForCpu());
     // TODO: CPU balancing.
     getCurrent().enqueueTask(task);
 }
@@ -238,9 +246,11 @@ pub inline fn yield() void {
     scheduler.yield();
 }
 
-pub inline fn sleepFor(ns: u64) void {
+pub inline fn sleepFor(ns: u64) error{Interrupted}!void {
     const scheduler = getCurrent();
-    scheduler.sleepFor(ns);
+    std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
+
+    try scheduler.sleepFor(ns);
 }
 
 pub fn terminate() noreturn {
@@ -257,52 +267,43 @@ pub fn terminate() noreturn {
     unreachable;
 }
 
-pub inline fn pause() void {
+pub fn pause() error{Interrupted}!void {
     const scheduler = getCurrent();
-    std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
+    const task = scheduler.current_task.?;
+    lib.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt(), @src());
 
-    waitRaw(scheduler, &scheduler.pause_queue);
+    if (!task.stats.sched_lock.tryLockAtomic()) unreachable;
+
+    task.prepareForSleep();
+    try scheduler.doWait(task.spec == .user);
 }
 
-pub fn pauseUnlock(lock: *lib.sync.Spinlock) void {
-    std.debug.assert(lock.exclusion.raw == .locked_no_intr);
+pub fn pauseUnlockIntr(lock: *lib.sync.Spinlock) error{Interrupted}!void {
+    lib.debug.assert(lock.exclusion.raw != .unlocked, @src());
 
     const scheduler = getCurrent();
-    std.debug.assert(!scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
+    const task = scheduler.current_task.?;
+    lib.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt(), @src());
 
-    var entry = scheduler.initWait();
-    scheduler.pause_queue.push(&entry);
-    lock.unlock();
+    if (!task.stats.sched_lock.tryLockAtomic()) unreachable;
 
-    scheduler.prepareToSleep();
-    scheduler.reschedule();
-}
-
-pub fn pauseUnlockIntr(lock: *lib.sync.Spinlock) void {
-    std.debug.assert(lock.exclusion.raw != .unlocked);
-
-    const scheduler = getCurrent();
-    std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
-
-    var entry = scheduler.initWait();
-
-    scheduler.prepareToSleep();
-    scheduler.disablePreemption();
-
-    scheduler.pause_queue.push(&entry);
+    task.prepareForSleep();
+    scheduler.enterWaitCriticalSectionWeak();
 
     lock.unlockRestoreIntr();
-    scheduler.rescheduleAtomic();
+
+    if (task.spec == .user) {
+        try scheduler.doInterruptibleWaitFromCriticalSection(task);
+    } else {
+        scheduler.doWaitFromCriticalSection(task);
+    }
 }
 
-pub inline fn wait(queue: *WaitQueue) void {
-    const scheduler = getCurrent();
-    std.debug.assert(scheduler.isPreemptive() and !scheduler.getCpuLocal().isInInterrupt());
-
-    waitRaw(scheduler, queue);
-}
-
-pub fn waitUnlock(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
+pub fn waitUnlock(
+    queue: *WaitQueue,
+    lock: *lib.sync.Spinlock,
+    comptime interruptible: bool,
+) error{Interrupted}!void {
     std.debug.assert(lock.exclusion.raw == .locked_no_intr);
 
     const scheduler = getCurrent();
@@ -312,11 +313,21 @@ pub fn waitUnlock(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
     queue.push(&entry);
     lock.unlock();
 
-    scheduler.prepareToSleep();
-    scheduler.reschedule();
+    errdefer if (comptime interruptible) {
+        lock.lock();
+        defer lock.unlock();
+
+        queue.remove(&entry);
+    };
+
+    try scheduler.doWait(interruptible);
 }
 
-pub fn waitUnlockIntr(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
+pub fn waitUnlockIntr(
+    queue: *WaitQueue,
+    lock: *lib.sync.Spinlock,
+    comptime interruptible: bool,
+) error{Interrupted}!void {
     const scheduler = getCurrent();
     std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
 
@@ -324,11 +335,17 @@ pub fn waitUnlockIntr(queue: *WaitQueue, lock: *lib.sync.Spinlock) void {
     queue.push(&entry);
     lock.unlockRestoreIntr();
 
-    scheduler.prepareToSleep();
-    scheduler.reschedule();
+    errdefer if (comptime interruptible) {
+        lock.lockSaveIntr();
+        defer lock.unlockRestoreIntr();
+
+        queue.remove(&entry);
+    };
+
+    try scheduler.doWait(interruptible);
 }
 
-pub fn waitEnableIntr(queue: *WaitQueue) void {
+pub fn waitEnableIntr(queue: *WaitQueue, comptime interruptible: bool) error{Interrupted}!void {
     const scheduler = getCurrent();
     std.debug.assert(!scheduler.getCpuLocal().isInInterrupt());
 
@@ -336,26 +353,24 @@ pub fn waitEnableIntr(queue: *WaitQueue) void {
     queue.push(&entry);
     dev.intr.enableForCpu();
 
-    scheduler.prepareToSleep();
-    scheduler.reschedule();
+    errdefer if (comptime interruptible) {
+        dev.intr.disableForCpu();
+        defer dev.intr.enableForCpu();
+
+        queue.remove(&entry);
+    };
+
+    try scheduler.doWait(interruptible);
 }
 
-pub fn resumeTask(task: *Task) void {
+pub fn resumePausedTask(task: *Task) void {
     std.debug.assert(dev.intr.isEnabledForCpu());
 
-    // TODO: Make sure this code is correct!
     const scheduler = getCurrent();
-    const entry = scheduler.pause_queue.remove(task) orelse @panic("Trying to resume non-paused task");
+    const resumed = task.tryWakeup();
+    lib.debug.assert(resumed, @src());
 
-    if (!task.tryWakeup()) {
-        log.warn("cannot resume task", .{});
-        return;
-    }
-
-    const sleep_time_ns = sys.time.getFastTimestamp() - entry.timestamp;
-    entry.task.stats.sleep_time_ns +|= @truncate(sleep_time_ns);
-
-    scheduler.enqueueTask(entry.task);
+    scheduler.enqueueTask(task);
 }
 
 /// Awake one task from wait queue.
@@ -388,6 +403,17 @@ pub fn awakeEntry(entry: *WaitQueue.Entry) bool {
     return true;
 }
 
+pub fn awakeTask(task: *Task) bool {
+    if (!task.tryWakeup()) return false;
+
+    const scheduler = getCurrent();
+
+    task.stats.sched_lock.wait(.unlocked);
+    scheduler.enqueueTask(task);
+
+    return true;
+}
+
 /// Awake all tasks in wait queue.
 pub fn awakeAll(queue: *WaitQueue) void {
     std.debug.assert(dev.intr.isEnabledForCpu());
@@ -402,14 +428,4 @@ pub fn awakeAll(queue: *WaitQueue) void {
         entry.task.stats.sched_lock.wait(.unlocked);
         scheduler.enqueueTask(entry.task);
     }
-}
-
-fn waitRaw(scheduler: *Scheduler, queue: *WaitQueue) void {
-    var entry = scheduler.initWait();
-
-    scheduler.prepareToSleep();
-    scheduler.disablePreemption();
-    queue.push(&entry);
-
-    scheduler.rescheduleAtomic();
 }

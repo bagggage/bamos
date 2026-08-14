@@ -169,6 +169,8 @@ pub fn init() !void {
 
 pub fn initWorker() !void {
     const worker = try sched.Task.createWorker("logger", &flushWorker, .{});
+    worker.stats.static_prior += 2;
+
     sched.enqueue(worker);
 
     stage = .normal;
@@ -176,7 +178,7 @@ pub fn initWorker() !void {
 
 pub fn waitMessage() void {
     wait_lock.lock();
-    sched.waitUnlock(&wait_queue, &wait_lock);
+    sched.waitUnlock(&wait_queue, &wait_lock, false) catch unreachable;
 }
 
 pub fn defaultLog(
