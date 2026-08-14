@@ -5,6 +5,7 @@
 const std = @import("std");
 
 const arch = @import("arch.zig");
+const boot = @import("../../boot.zig");
 const gdt = @import("gdt.zig");
 const lib = @import("../../lib.zig");
 const log = std.log.scoped(.@"arch.x86-64.syscall");
@@ -14,7 +15,36 @@ const smp = @import("../../smp.zig");
 const sys = @import("../../sys.zig");
 const vm = @import("../../vm.zig");
 
+const Signal = sys.Process.Signal;
+
 pub const Context = extern struct {
+    pub const Signal = extern struct {
+        ptr: extern union {
+            syscall: *Context,
+            interrupt: *regs.IntrState,
+        },
+
+        result: isize = undefined,
+        is_interrupt: bool = false,
+    };
+
+    const SignalReturn = extern struct {
+        /// Syscall return value (used if signal is handled on syscall return)
+        result: isize,
+        signal: u32,
+        /// Is signal processed on return from interrupt or syscall
+        is_interrupt: bool,
+
+        ctx: extern union {
+            syscall: Context,
+            interrupt: regs.IntrState,
+        },
+
+        comptime {
+            std.debug.assert(std.mem.isAligned(@sizeOf(SignalReturn), @sizeOf(usize) * 2));
+        }
+    };
+
     /// Used with clone/fork
     const Extra = extern struct {
         callee: regs.CalleeRegs,
@@ -169,6 +199,61 @@ pub fn cloneThread(_: sys.call.Abi, _: *sched.Task, dest: *sched.Task, ctx: *Con
     dest.context = .initUnaligned(@intFromPtr(dest_ext), @intFromPtr(&linuxCloneReturn));
 }
 
+pub fn handleSignal(signal: Signal, handler: *const Signal.Handler, abi: sys.call.Abi, ctx: lib.AnyData) void {
+    const ctx_ptr = ctx.asPtr(Context.Signal).?;
+    const rflags: regs.Flags = .{
+        .cpuid = true,
+        .intr_enable = true,
+    };
+
+    if (ctx_ptr.is_interrupt) {
+        // TODO: Implement signals handling when returning from interrupt
+    } else {
+        const syscall_ctx = ctx_ptr.ptr.syscall;
+        const aligned_rsp = std.mem.alignBackward(usize, syscall_ctx.rsp, @alignOf(usize) * 2);
+
+        const signal_ret_ctx: *Context.SignalReturn = @ptrFromInt(aligned_rsp - @sizeOf(Context.SignalReturn));
+        signal_ret_ctx.* = .{
+            .result = ctx_ptr.result,
+            .signal = @intFromEnum(signal),
+            .is_interrupt = false,
+            .ctx = .{ .syscall = syscall_ctx.* },
+        };
+
+        const trampoline_offset = boot.getTrampolinePageAddress() - switch (abi) {
+            .linux_sysv => @intFromPtr(&linuxSignalTrampoline),
+        };
+
+        syscall_ctx.rdi = @intFromEnum(signal);
+        syscall_ctx.rsi = 0;
+        syscall_ctx.rdx = 0;
+        syscall_ctx.rsp = @intFromPtr(signal_ret_ctx) - 0x8;
+        syscall_ctx.rcx = handler.func_ptr;
+        syscall_ctx.r11 = @as(u32, @bitCast(rflags));
+
+        log.debug("handler: 0x{x}, trampoline: 0x{x}", .{
+            handler.func_ptr,
+            sys.exe.start_trampoline_addr + trampoline_offset,
+        });
+
+        // Set trampoline address
+        @as(*usize, @ptrFromInt(syscall_ctx.rsp)).* = sys.exe.start_trampoline_addr + trampoline_offset;
+    }
+}
+
+pub fn signalReturn(ctx: *Context, stack: usize) isize {
+    const signal_ret_ctx: *Context.SignalReturn = @ptrFromInt(stack + @sizeOf(usize));
+    const signal: Signal = @enumFromInt(signal_ret_ctx.signal);
+
+    log.info("return ctx: signal {t}, interrupt: {}", .{signal, signal_ret_ctx.is_interrupt});
+    if (signal_ret_ctx.is_interrupt) {
+    } else {
+        ctx.* = signal_ret_ctx.ctx.syscall;
+    }
+
+    return signal_ret_ctx.result;
+}
+
 pub fn contextCall(
     comptime call: anytype,
     comptime name: []const u8
@@ -262,12 +347,21 @@ pub fn linuxArchPrCtl(op: c_int, addr: ?*usize) !void {
     }
 }
 
-export fn _enterSystemTime() callconv(.c) void {
+fn onEnter() callconv(.c) void {
     sched.getCurrentTask().stats.enterSystemTime();
 }
 
-export fn _exitSystemTime() callconv(.c) void {
-    sched.getCurrentTask().stats.exitSystemTime();
+fn onExit(result: isize, ctx: *Context) callconv(.c) void {
+    const task = sched.getCurrentTask();
+    var signal_ctx: Context.Signal = .{
+        .result = result,
+        .ptr = .{ .syscall = ctx },
+    };
+
+    task.spec.user.processSignals(.fromPtr(&signal_ctx));
+
+    arch.intr.disableForCpu();
+    task.stats.exitSystemTime();
 }
 
 export fn linuxRunProcess() noreturn {
@@ -335,6 +429,9 @@ fn linuxSetupAbi(task: *sched.Task) void {
 }
 
 fn linuxHandler() callconv(.naked) noreturn {
+    comptime @export(&onEnter, .{ .name = "_onSyscallEnter" });
+    comptime @export(&onExit, .{ .name = "_onSyscallExit" });
+
     @setRuntimeSafety(false);
 
     // Save context
@@ -342,16 +439,16 @@ fn linuxHandler() callconv(.naked) noreturn {
     regs.swapStackToKernel();
 
     Context.save();
-    asm volatile("call _enterSystemTime");
+    asm volatile("call _onSyscallEnter");
     Context.preload();
 
     defer {
-        arch.intr.disableForCpu();
-
         asm volatile (
             \\ linuxSyscallReturn:
             \\ mov %rax, %rbp
-            \\ call _exitSystemTime
+            \\ mov %rax, %rdi
+            \\ mov %rsp, %rsi
+            \\ call _onSyscallExit
             \\ mov %rbp, %rax
         );
 
@@ -386,6 +483,21 @@ fn linuxHandler() callconv(.naked) noreturn {
         :
         : [table] "{r10}" (&sys.call.linux.table),
         : .{ .memory = true }
+    );
+}
+
+fn linuxSignalTrampoline() linksection(".trampoline") callconv(.c) void {
+    comptime @export(&linuxSignalTrampoline, .{
+        .section = ".trampoline",
+        .name = "linuxSignalTrampoline",
+    });
+
+    asm volatile (
+        \\ syscall
+        \\ ud2
+        :
+        : [sigret] "{rax}" (std.os.linux.SYS.rt_sigreturn),
+          [arg1] "{rsi}" (regs.getStack())
     );
 }
 

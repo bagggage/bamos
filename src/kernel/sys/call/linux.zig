@@ -92,8 +92,9 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.readv)]           = @ptrCast(&readv);
     result[@intFromEnum(linux.SYS.rseq)]            = @ptrCast(&rseq);
     result[@intFromEnum(linux.SYS.rmdir)]           = @ptrCast(&rmdir);
-    //result[@intFromEnum(linux.SYS.rt_sigaction)]    = @ptrCast(&sigAction);
-    //result[@intFromEnum(linux.SYS.rt_sigprocmask)]  = @ptrCast(&sigProcMask);
+    result[@intFromEnum(linux.SYS.rt_sigaction)]    = @ptrCast(&sigAction);
+    result[@intFromEnum(linux.SYS.rt_sigprocmask)]  = @ptrCast(&sigProcMask);
+    result[@intFromEnum(linux.SYS.rt_sigreturn)]    = @ptrCast(arch.syscall.contextCall(sigReturn, "sigReturn"));
     result[@intFromEnum(linux.SYS.rt_sigsuspend)]   = @ptrCast(&sigSuspend);
     result[@intFromEnum(linux.SYS.select)]          = @ptrCast(&select);
     result[@intFromEnum(linux.SYS.set_robust_list)] = @ptrCast(&setRobustList);
@@ -104,7 +105,7 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.symlink)]         = @ptrCast(&symlink);
     result[@intFromEnum(linux.SYS.symlinkat)]       = @ptrCast(&symlinkAt);
     //result[@intFromEnum(linux.SYS.tgkill)]          = @ptrCast(&tgkill);
-    //result[@intFromEnum(linux.SYS.tkill)]           = @ptrCast(&tkill);
+    result[@intFromEnum(linux.SYS.tkill)]           = @ptrCast(&tkill);
     result[@intFromEnum(linux.SYS.time)]            = @ptrCast(&time);
     result[@intFromEnum(linux.SYS.truncate)]        = @ptrCast(&truncate);
     result[@intFromEnum(linux.SYS.uname)]           = @ptrCast(&uname);
@@ -132,7 +133,7 @@ pub const AbiData = struct {
 
     robust_list: ?*RobustList.Head = null,
     rseq: ?*RestartableSequence = null,
-    rseq_sig: u32 = 0
+    rseq_sig: u32 = 0,
 };
 
 /// Source: https://elixir.bootlin.com/linux/v6.18.6/source/include/uapi/linux/futex.h#L117
@@ -265,6 +266,7 @@ fn errorFromZig(e: sys.exe.Error) isize {
         error.DevMajorLimit     => errorFromE(.BUSY),
         error.DevMinorLimit     => errorFromE(.BUSY),
         error.Exists            => errorFromE(.EXIST),
+        error.Interrupted       => errorFromE(.INTR),
         error.InvalidArgs       => errorFromE(.INVAL),
         error.IoFailed          => errorFromE(.IO),
         error.MaxSize           => errorFromE(.FBIG),
@@ -456,22 +458,21 @@ fn clockNanoSleep(
     ) return errorFromE(.INVAL);
 
     const ns_to_wait = (@as(u64, @intCast(request.sec)) * std.time.ns_per_s) + @as(u64, @intCast(request.nsec));
-    const start_time_ns = if (flags.ABSTIME) switch (clock) {
+    const start_time_ns = sys.time.getUpTimeNs();
+    const abs_start_time_ns = if (flags.ABSTIME) switch (clock) {
             .REALTIME => sys.time.getTime(),
             .BOOTTIME => sys.time.getBootTime(),
             .MONOTONIC => sys.time.getUpTime(),
             else => return errorFromE(.INVAL),
     }.toNs() else 0;
 
-    if (start_time_ns >= ns_to_wait) return 0;
+    if (abs_start_time_ns >= ns_to_wait) return 0;
 
-    const wait_time_ns = ns_to_wait -% start_time_ns;
-    sched.sleepFor(wait_time_ns);
-
-    if (remain) |r| {
-        r.sec = 0;
-        r.nsec = 0;
-    }
+    const wait_time_ns = ns_to_wait -| start_time_ns;
+    sched.sleepFor(wait_time_ns) catch {
+        setRemainTime(remain, start_time_ns, wait_time_ns);
+        return errorFromE(.INTR);
+    };
 
     return 0;
 }
@@ -482,17 +483,24 @@ fn nanoSleep(request: *const linux.timespec, remain: ?*linux.timespec) isize {
     validateMemoryArgs(@intFromPtr(request), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
     if (remain != null) validateMemoryArgs(@intFromPtr(remain), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
 
+    const start_time_ns = sys.time.getUpTimeNs();
     const wait_time_ns = (@as(u64, @intCast(request.sec)) * std.time.ns_per_s) + @as(u64, @intCast(request.nsec));
 
-    //@import("../../dev/drivers/uart/8250.zig").print("nanosleep: {}...\n\r", .{wait_time_ns});
-    sched.sleepFor(wait_time_ns);
-
-    if (remain) |r| {
-        r.sec = 0;
-        r.nsec = 0;
-    }
+    sched.sleepFor(wait_time_ns) catch {
+        setRemainTime(remain, start_time_ns, wait_time_ns);
+        return errorFromE(.INTR);
+    };
 
     return 0;
+}
+
+fn setRemainTime(remain: ?*linux.timespec, start_time_ns: u64, wait_time_ns: u64) void {
+    const r = remain orelse return;
+    const end_time_ns = start_time_ns +| wait_time_ns;
+    const remain_ns = end_time_ns -| sys.time.getUpTimeNs();
+
+    r.sec = @intCast(remain_ns / std.time.ns_per_s);
+    r.nsec = @intCast(remain_ns % std.time.ns_per_s);
 }
 
 fn clone(
@@ -581,7 +589,7 @@ fn vfork(ctx: *arch.syscall.Context) callconv(.c) isize {
     while (!child_id.isZombie()) {
         defer proc.id.lock.lock();
 
-        const id = proc.id.waitForEventAtomic();
+        const id = proc.id.waitForEventAtomic() catch continue;
         id.deref();
     }
 
@@ -1536,7 +1544,8 @@ fn poll(fds: [*c]linux.pollfd, len: usize, timeout: i32) isize {
         @intFromPtr(fds), @sizeOf(linux.pollfd) * len
     ) catch return errorFromE(.FAULT);
 
-    const proc = sys.Process.getCurrent();
+    const task = sched.getCurrentTask();
+    const proc = task.spec.user.process;
     const time_end =
         if (timeout < 0)
             std.math.maxInt(u64)
@@ -1567,6 +1576,7 @@ fn poll(fds: [*c]linux.pollfd, len: usize, timeout: i32) isize {
 
         if (n != 0) return n;
         if (time_end <= sys.time.getUpTimeNs()) break;
+        if (task.spec.user.pendingSignals().count() > 0) return errorFromE(.INTR);
 
         sched.yield();
     }
@@ -1914,6 +1924,7 @@ fn setProcGroup(pid: linux.pid_t, pgid: linux.pid_t) isize {
         sid.session.addGroup(proc.id);
     } else {
         // TODO: Implement ability to find requested process group.
+        log.warn("cannot set process group", .{});
         return errorFromE(.PERM);
     }
 
@@ -1986,7 +1997,8 @@ fn selectImpl(
         (@as(u64, @intCast(t.usec)) * std.time.ns_per_us)
     ) else std.math.maxInt(u64);
 
-    const proc = sys.Process.getCurrent();
+    const task = sched.getCurrentTask();
+    const proc = task.spec.user.process;
 
     var last_time: u64 = 0;
     var fds: u32 = 0;
@@ -2029,6 +2041,7 @@ fn selectImpl(
 
         if (fds > 0) break;
         if (last_time >= end_time) break;
+        if (task.spec.user.pendingSignals().count() > 0) return errorFromE(.INTR);
 
         sched.yield();
     }
@@ -2090,8 +2103,31 @@ fn setHostName(name: [*:0]const u8, len: usize) isize {
 
 fn sigAction(sig: u32, action: ?*const linux.k_sigaction, old_action: ?*linux.k_sigaction) isize {
     trace.info("rt_sigaction({}, 0x{x}, 0x{x})", .{sig, @intFromPtr(action), @intFromPtr(old_action)});
+
+    if (sig >= sys.Process.Signal.num) return errorFromE(.INVAL);
+
     validateMemoryArgs(@intFromPtr(action), @sizeOf(linux.k_sigaction)) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(old_action), @sizeOf(linux.k_sigaction)) catch return errorFromE(.FAULT);
+
+    const proc = sys.Process.getCurrent();
+
+    proc.ctrl.lock.lock();
+    defer proc.ctrl.lock.unlock();
+
+    if (old_action) |old| {
+        old.flags = 0;
+        old.handler = @ptrFromInt(proc.ctrl.sig_handlers[sig].func_ptr);
+        old.mask[0] = proc.ctrl.sig_mask.mask;
+    }
+
+    if (action) |act| {
+        if ((act.flags & linux.SA.SIGINFO) != 0) {
+            log.warn("SA_SIGINFO is not supported", .{});
+            //return errorFromE(.INVAL);
+        }
+
+        proc.ctrl.sig_handlers[sig].func_ptr = @intFromPtr(act.handler);
+    }
 
     return 0;
 }
@@ -2101,7 +2137,32 @@ fn sigProcMask(how: u32, new_set: ?*const linux.sigset_t, old_set: ?*linux.sigse
     validateMemoryArgs(@intFromPtr(new_set), @sizeOf(linux.sigset_t)) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(old_set), @sizeOf(linux.sigset_t)) catch return errorFromE(.FAULT);
 
+    const proc = sys.Process.getCurrent();
+
+    proc.ctrl.lock.lock();
+    defer proc.ctrl.lock.unlock();
+
+    if (old_set) |old| old[0] = ~proc.ctrl.sig_mask.mask;
+    if (new_set) |new| {
+        const new_mask = switch (how) {
+            linux.SIG.BLOCK => proc.ctrl.sig_mask.mask & ~new[0],
+            linux.SIG.UNBLOCK => proc.ctrl.sig_mask.mask | new[0],
+            linux.SIG.SETMASK => ~new[0],
+            else => return errorFromE(.INVAL),
+        };
+
+        proc.ctrl.sig_mask.mask = @truncate(sys.Process.Signal.non_maskable_signals.mask | new_mask);
+        proc.deliverPendingSignalsAtomic();
+    }
+
     return 0;
+}
+
+fn sigReturn(ctx: *arch.syscall.Context, stack: usize) callconv(.c) isize {
+    trace.info("rt_sigreturn(0x{x})", .{stack});
+
+    log.info("sigreturn: 0x{x}, 0x{x}", .{@intFromPtr(ctx), stack});
+    return sys.call.signalReturn(ctx, stack);
 }
 
 fn sigSuspend(new_set: ?*const linux.sigset_t) isize {
@@ -2111,13 +2172,41 @@ fn sigSuspend(new_set: ?*const linux.sigset_t) isize {
     return errorFromE(.INTR);
 }
 
+fn kill(pid: i32, sig: u32) isize {
+    trace.info("kill({}, {})", .{pid, sig});
+
+    if (sig >= sys.Process.Signal.num) return errorFromE(.INVAL);
+    if (sig == 0) return 0;
+
+    if (pid > 0) {
+        const target = sys.Process.findById(@intCast(pid)) orelse return errorFromE(.SRCH);
+        target.sendSignal(@enumFromInt(sig));
+    } else if (pid == 0) {
+        const proc = sys.Process.getCurrent();
+        proc.group.sendSignalToGroup(@enumFromInt(sig));
+    } else if (pid == -1) {
+        // FIXME: Implement send signal to every process in the system
+        // (to which caller have permissions to send signals)
+        return errorFromE(.NOSYS);
+    } else {
+        const group = sys.Process.Id.lookup(@intCast(-pid)) orelse return errorFromE(.SRCH);
+        defer group.deref();
+
+        group.sendSignalToGroup(@intFromEnum(sig));
+    }
+
+    return 0;
+}
+
 fn tkill(tid: u32, sig: u32) isize {
     trace.info("tkill({}, {t})", .{tid, @as(sys.Process.Signal, @enumFromInt(sig))});
-    return 0;
+    // FIXME: Implement tkill
+    return errorFromE(.NOSYS);
 }
 
 fn tgkill(tgid: u32, tid: u32, sig: u32) isize {
     trace.info("tgkill({}, {}, {t})", .{tgid, tid, @as(sys.Process.Signal, @enumFromInt(sig))});
+    // FIXME: Implement tgkill
     return errorFromE(.NOSYS);
 }
 
@@ -2372,12 +2461,15 @@ fn waitPid(pid: linux.pid_t, status: ?*i32, options: u32, usage: ?*linux.rusage)
 
     const proc = sys.Process.getCurrent();
     const nowait = (options & linux.W.NOHANG) != 0;
-    const id = if (pid == -1) proc.waitAnyChildExit(nowait) orelse {
+    const id = if (pid == -1) blk: {
+        break :blk proc.waitAnyChildExit(nowait) catch return errorFromE(.INTR);
+    } orelse {
             // TODO: Fix it: check if there is no child for nowait
             return if (nowait) errorFromE(.AGAIN) else errorFromE(.CHILD);
     } else if (pid > 0) blk: {
         const id = sys.Process.Id.lookup(@intCast(pid)) orelse return errorFromE(.CHILD);
-        if (!proc.waitChildExit(id)) return errorFromE(.CHILD);
+        const success = proc.waitChildExit(id) catch return errorFromE(.INTR);
+        if (!success) return errorFromE(.CHILD);
 
         break :blk id;
     } else return errorFromE(.CHILD);

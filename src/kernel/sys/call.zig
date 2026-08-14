@@ -19,6 +19,9 @@ pub const Abi = enum(u8) {
 
 pub const Handler = *const fn() callconv(.naked) noreturn;
 
+pub const handleSignal = arch.syscall.handleSignal;
+pub const signalReturn = arch.syscall.signalReturn;
+
 pub fn startThread(abi: Abi, task: *sched.Task, run_ctx: sys.exe.RunContext) !void {
     const abi_data = switch (abi) {
         .linux_sysv => blk: {
@@ -37,6 +40,8 @@ pub inline fn jumpThread(abi: Abi, run_ctx: sys.exe.RunContext) noreturn {
 }
 
 pub fn cloneThread(abi: Abi, src: *sched.Task, dest: *sched.Task, ctx: *arch.syscall.Context) !void {
+    dest.spec.user.sig_mask = src.spec.user.sig_mask;
+
     switch (abi) {
         .linux_sysv => {
             const data = vm.auto.alloc(linux.AbiData) orelse return error.NoMemory;
