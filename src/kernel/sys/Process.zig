@@ -46,20 +46,67 @@ pub const Flags = packed struct(u8) {
 };
 
 pub const Signal = enum(u8) {
+    pub const Set = std.bit_set.IntegerBitSet(Signal.num);
+
     pub const Handler = struct {
         func_ptr:   usize = 0,
         resume_ptr: usize = 0,
-    };
 
-    pub const num = blk: {
-        var max = 0;
-        for (std.enums.values(Signal)) |v| {
-            const int = @intFromEnum(v);
-            if (int > max) max = int;
+        pub fn process(self: *const Handler, signal: Signal, abi: sys.call.Abi, ctx: lib.AnyData) void {
+            if (!self.isNull()) {
+                sys.call.handleSignal(signal, self, abi, ctx);
+            } else {
+                defaultAction(signal);
+            }
         }
 
-        break :blk max + 1;
+        pub fn defaultAction(signal: Signal) void {
+            const task = sched.getCurrentTask();
+            const proc = task.spec.user.process;
+
+            switch (signal) {
+                .Child,
+                .Urgent,
+                .WindowResize => {}, // Ignore
+                .Continue => { // Continue
+                    // TODO: Implement
+                    log.warn("TODO: implement SIGCONT handling", .{});
+                },
+                .Stop,
+                .TerminalInput,
+                .TerminalOutput,
+                .TerminalStop => { // Stop
+                    //defer sched.pause();
+                    // FIXME: Pause the process
+
+                    proc.list_lock.readLock();
+                    defer proc.list_lock.readUnlock();
+
+                    var node = proc.tasks.first;
+                    while (node) |n| : (node = n.next) {
+                        const user_spec = sched.Task.Specific.User.fromNode(n);
+                        if (user_spec == &task.spec.user) {
+                            @branchHint(.unlikely);
+                            continue;
+                        }
+
+                        user_spec.sendSignal(signal);
+                    }
+                },
+                else => { // Terminate
+                    proc.stats.fault_signal = signal;
+                    proc.terminate(0);
+                },
+            }
+        }
+
+        inline fn isNull(self: *const Handler) bool {
+            return self.func_ptr == 0;
+        }
     };
+
+    pub const num = 32;
+    pub const non_maskable_signals: Set = .{ .mask = @intFromEnum(Signal.Kill) & @intFromEnum(Signal.Stop) };
 
     None            = 0,
     Abort           = linux.SIG.ABRT,
@@ -388,7 +435,7 @@ pub const Id = struct {
         return self.zombie;
     }
 
-    pub fn waitForEvent(self: *Id) *Id {
+    pub fn waitForEvent(self: *Id) error{Interrupted}!*Id {
         var waiter: Waiter = .init();
         {
             self.lock.lock();
@@ -396,16 +443,30 @@ pub const Id = struct {
             self.wait_queue.push(&waiter.entry);
         }
 
-        sched.getCurrent().wait();
+        errdefer {
+            self.lock.lock();
+            defer self.lock.unlock();
+
+            _ = self.wait_queue.removeTask(&waiter.entry);
+        }
+
+        try sched.getCurrent().doWait(true);
         return waiter.notifier.?;
     }
 
-    pub fn waitForEventAtomic(self: *Id) *Id {
+    pub fn waitForEventAtomic(self: *Id) error{Interrupted}!*Id {
         var waiter: Waiter = .init();
         self.wait_queue.push(&waiter.entry);
 
+        errdefer {
+            self.lock.lock();
+            defer self.lock.unlock();
+
+            self.wait_queue.remove(&waiter.entry);
+        }
+
         self.lock.unlock();
-        sched.getCurrent().wait();
+        try sched.getCurrent().doWait(true);
 
         return waiter.notifier.?;
     }
@@ -536,10 +597,8 @@ pub const Stats = struct {
 };
 
 const Control = struct {
-    const SignalSet = std.bit_set.IntegerBitSet(Signal.num);
-
-    sig_pending: SignalSet = .initEmpty(),
-    sig_mask: SignalSet = .initEmpty(),
+    sig_pending: Signal.Set = .initEmpty(),
+    sig_mask: Signal.Set = .initFull(),
     sig_handlers: [Signal.num]Signal.Handler = .{ Signal.Handler{} } ** Signal.num,
 
     lock: lib.sync.Spinlock = .{},
@@ -891,7 +950,6 @@ pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) bool {
         @errorName(err), address, cause, self.addr_space
     });
 
-    self.sendSignalAtomic(.SegFault);
     return false;
 }
 
@@ -965,7 +1023,7 @@ pub fn terminate(self: *Self, status: u8) noreturn {
 
 /// Returns `false` if `id` is not a child of the process
 /// or was waited by other thread.
-pub fn waitChildExit(self: *Self, id: *Id) bool {
+pub fn waitChildExit(self: *Self, id: *Id) error{Interrupted}!bool {
     // FIXME: Check if id is a child of this process.
     {
         self.id.lock.lock();
@@ -974,7 +1032,7 @@ pub fn waitChildExit(self: *Self, id: *Id) bool {
         while (!id.isZombie()) {
             defer self.id.lock.lock();
 
-            const waited_id = self.id.waitForEventAtomic();
+            const waited_id = try self.id.waitForEventAtomic();
             waited_id.deref();
         }
     }
@@ -994,7 +1052,7 @@ pub fn waitChildExit(self: *Self, id: *Id) bool {
     return true;
 }
 
-pub fn waitAnyChildExit(self: *Self, nowait: bool) ?*Id {
+pub fn waitAnyChildExit(self: *Self, nowait: bool) error{Interrupted}!?*Id {
     self.id.lock.lock();
 
     while (true) {
@@ -1028,7 +1086,7 @@ pub fn waitAnyChildExit(self: *Self, nowait: bool) ?*Id {
             return null;
         }
 
-        const id = self.id.waitForEventAtomic();
+        const id = try self.id.waitForEventAtomic();
         id.deref();
 
         self.id.lock.lock();
@@ -1036,22 +1094,70 @@ pub fn waitAnyChildExit(self: *Self, nowait: bool) ?*Id {
 }
 
 pub fn sendSignal(self: *Self, signal: Signal) void {
-    // TODO: Replace `sendSignalAtomic` with `sendSignal` ?
-    self.sendSignalAtomic(signal);
+    const sig = @intFromEnum(signal);
+
+    self.ctrl.lock.lock();
+    defer self.ctrl.lock.unlock();
+
+    if (!self.ctrl.sig_mask.isSet(sig)) {
+        self.ctrl.sig_pending.set(@intFromEnum(signal));
+        return;
+    }
+
+    {
+        self.list_lock.readLock();
+        defer self.list_lock.readUnlock();
+
+        var node = self.tasks.first;
+        while (node) |n| : (node = n.next) {
+            const user = sched.Task.Specific.User.fromNode(n);
+            if (!user.sig_mask.isSet(@intFromEnum(signal))) continue;
+
+            user.sendSignal(signal);
+            return;
+        }
+    }
+
+    self.ctrl.sig_pending.set(@intFromEnum(signal));
 }
 
 pub fn sendSignalAtomic(self: *Self, signal: Signal) void {
     // TODO: implement signals!
     log.warn("unhandled signal: {s} -> {f}", .{@tagName(signal), self});
-    self.ctrl.sig_pending.set(@intFromEnum(signal));
+    self.sendSignal(signal);
 }
 
-fn processSignal(self: *Self) void {
-    std.debug.assert(getCurrent() == self);
+pub fn deliverPendingSignals(self: *Self) void {
+    self.ctrl.lock.lock();
+    defer self.ctrl.lock.unlock();
+
+    self.deliverPendingSignalsAtomic();
+}
+
+pub fn deliverPendingSignalsAtomic(self: *Self) void {
+    var signals = self.ctrl.sig_pending.intersectWith(self.ctrl.sig_mask);
+    if (signals.mask == 0) return;
+
+    self.list_lock.readLock();
+    defer self.list_lock.readUnlock();
+
+    var node = self.tasks.first;
+    while (node) |n| : (node = n.next) {
+        const user = sched.Task.Specific.User.fromNode(n);
+        const to_send = signals.intersectWith(user.sig_mask);
+        if (to_send.mask == 0) continue;
+
+        user.sendSignals(to_send);
+
+        self.ctrl.sig_pending.toggleSet(to_send);
+        signals.toggleSet(self.ctrl.sig_mask);
+
+        if (signals.mask == 0) break;
+    }
 }
 
 fn terminateComplete(self: *Self, status: u8) void {
-    std.debug.assert(self.tasks.first == null);
+    lib.debug.assert(self.tasks.first == null, @src());
     self.stats.exit_status = status;
 
     self.detachAllChilds();

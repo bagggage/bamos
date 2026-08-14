@@ -186,6 +186,11 @@ pub const Specific = union(enum) {
         process: *sys.Process,
         abi_data: lib.AnyData = .{},
 
+        sig_pending: sys.Process.Signal.Set = .initEmpty(),
+        sig_mask: sys.Process.Signal.Set = .initFull(),
+        /// Interruptible sleep flag
+        sig_wait: std.atomic.Value(bool) = .init(false),
+
         /// Used by `sys.Process` to put task in list.
         node: UNode = .{},
 
@@ -196,6 +201,43 @@ pub const Specific = union(enum) {
         pub inline fn toTask(self: *User) *sched.Task {
             const spec: *Specific = @fieldParentPtr("user", self);
             return @fieldParentPtr("spec", spec);
+        }
+
+        pub inline fn sendSignal(self: *User, signal: sys.Process.Signal) void {
+            self.sig_pending.set(@intFromEnum(signal));
+            self.tryInterruptBySignal();
+        }
+
+        pub inline fn sendSignals(self: *User, signals: sys.Process.Signal.Set) void {
+            self.sig_pending.setUnion(signals);
+            self.tryInterruptBySignal();
+        }
+
+        pub inline fn pendingSignals(self: *User) sys.Process.Signal.Set {
+            return self.sig_pending.intersectWith(self.sig_mask);
+        }
+
+        pub fn processSignals(self: *User, abi_ctx: lib.AnyData) void {
+            const sig = self.pendingSignals().findFirstSet() orelse return;
+            self.sig_pending.unset(sig);
+
+            const proc = self.process;
+            const handler = blk: {
+                proc.ctrl.lock.lock();
+                defer proc.ctrl.lock.unlock();
+
+                break :blk proc.ctrl.sig_handlers[sig];
+            };
+
+            handler.process(@enumFromInt(sig), proc.abi, abi_ctx);
+        }
+
+        fn tryInterruptBySignal(self: *User) void {
+            if (self.pendingSignals().mask == 0) return;
+            if (!self.sig_wait.load(.acquire)) return;
+
+            const task = self.toTask();
+            _ = sched.awakeTask(task);
         }
     };
 
@@ -281,13 +323,21 @@ pub inline fn isWaiting(self: *const Self) bool {
     return self.stats.sleep.load(.acquire) == .sleep;
 }
 
-pub inline fn tryWakeup(self: *Self) bool {
-    if (self.stats.sleep.cmpxchgStrong(
+pub inline fn prepareForSleep(self: *Self) void {
+    self.stats.sleep.raw = .falling_asleep;
+}
+
+pub fn tryWakeup(self: *Self) bool {
+    // Prefetch to prevent cache line drop
+    if (self.stats.sleep.load(.acquire) != .sleep) {
+        if (self.stats.sleep.cmpxchgStrong(
             .falling_asleep, .needs_wakeup,
             .release, .monotonic
-    ) == null) return false;
+        ) == null) return false;
 
-    std.debug.assert(self.stats.sleep.raw == .sleep);
+        std.debug.assert(self.stats.sleep.raw == .sleep);
+    }
+
     self.stats.sleep.store(.awake, .release);
     return true;
 }
