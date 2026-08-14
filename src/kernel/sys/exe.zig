@@ -6,6 +6,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const coff = std.coff;
 
+const boot = @import("../boot.zig");
 const lib = @import("../lib.zig");
 const sys = @import("../sys.zig");
 const Process = @import("Process.zig");
@@ -14,7 +15,8 @@ const vm = @import("../vm.zig");
 
 const elf = @import("exe/elf.zig");
 
-pub const start_args_addr = vm.max_userspace_addr - sys.limits.max_args_size + 1;
+pub const start_trampoline_addr = vm.max_userspace_addr - vm.page_size + 1;
+pub const start_args_addr = start_trampoline_addr - sys.limits.max_args_size;
 pub const start_stack_addr = start_args_addr - sys.limits.max_stack_size;
 
 pub const default_virt_base = lib.misc.alignDown(usize, (start_stack_addr / 3) * 2, vm.page_size);
@@ -131,6 +133,8 @@ pub const Binary = struct {
             .elf => try elf.load(self, shifted_args, envs),
             else => return error.BadFormat,
         }
+
+        try self.loadTrampolineSection();
     }
 
     pub inline fn readExe(self: *Binary) Error!void {
@@ -189,6 +193,23 @@ pub const Binary = struct {
 
         self.file.deref();
         self.file = interp_file;
+    }
+
+    fn loadTrampolineSection(self: *Binary) Error!void {
+        const trampoline_page = vm.Page.new(0, 0) orelse return error.NoMemory;
+        errdefer trampoline_page.delete();
+
+        const src: [*]const u8 = @ptrFromInt(boot.getTrampolinePageAddress());
+        const dst: [*]u8 = @ptrFromInt(vm.getVirtLma(trampoline_page.getPhysBase()));
+
+        @memcpy(dst[0..vm.page_size], src[0..vm.page_size]);
+
+        const region: vm.VirtualRegion = .{
+            .base = start_trampoline_addr,
+            .page_list = .{ .first = &trampoline_page.node },
+        };
+
+        try self.proc.addr_space.mapRegion(&region, .{ .map = .{ .exec = true, .user = true } });
     }
 };
 

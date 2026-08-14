@@ -36,6 +36,7 @@ const boot_stack: [boot_stack_pages * vm.page_size]u8 align(vm.page_size) = unde
 // Defined at `config/linker.ld`
 extern "C" var bootboot: c.BOOTBOOT;
 extern "C" const mmio: u32;
+extern "C" const trampoline_page: u32;
 
 pub extern "C" var fb: u32;
 pub extern "C" const environment: [4096]u8;
@@ -248,6 +249,10 @@ pub inline fn getEnvironment() [*:0]const u8 {
 
 pub inline fn getInitStackSize() usize {
     return @intFromPtr(&initstack);
+}
+
+pub inline fn getTrampolinePageAddress() usize {
+    return @intFromPtr(&trampoline_page);
 }
 
 fn ArchDataType() type {

@@ -24,8 +24,15 @@ SECTIONS
         *(.data .data.*)
     } :boot
 
+    . = ALIGN(4096);
+    trampoline_page = .;
+
+    .trampoline : {
+        KEEP(*(.trampoline .trampoline.*))
+    } :boot
+
+    . = ALIGN(4096);
     .bss (NOLOAD) : {
-        . = ALIGN(16);
         *(.bss .bss.*)
         *(COMMON)
     } :boot

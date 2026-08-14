@@ -4,6 +4,7 @@
 
 const std = @import("std");
 
+const sys = @import("../sys.zig");
 const lib = @import("../lib.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
@@ -508,9 +509,21 @@ pub fn format(self: *Self, writer: *std.Io.Writer) !void {
     self.map_lock.readLock();
     defer self.map_lock.readUnlock();
 
+    const trampoline = blk: {
+        const map_unit = self.lookupMapUnit(
+            sys.exe.start_trampoline_addr,
+            sys.exe.start_trampoline_addr + vm.page_size
+        ) orelse break :blk null;
+        break :blk if (
+            map_unit.isAnonymous() and map_unit.flags.map.exec and !map_unit.flags.map.write
+        ) map_unit else null;
+    };
     const stack = blk: {
-        const last_unit = MapUnit.fromRbNode(self.rb_tree.last() orelse return);
-        break :blk if (last_unit.flags.grow_down) last_unit else null;
+        const map_unit = self.lookupMapUnit(
+            sys.exe.start_stack_addr,
+            sys.exe.start_args_addr
+        ) orelse break :blk null;
+        break :blk if (map_unit.flags.grow_down) map_unit else null;
     };
 
     var node = self.rb_tree.first();
@@ -524,6 +537,8 @@ pub fn format(self: *Self, writer: *std.Io.Writer) !void {
             try writer.writeAll("[heap]\n")
         else if (map_unit == stack)
             try writer.writeAll("[stack]\n")
+        else if (map_unit == trampoline)
+            try writer.writeAll("[trampoline]\n")
         else
             try writer.writeByte('\n');
     }
