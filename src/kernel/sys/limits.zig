@@ -17,7 +17,7 @@ var host_name_buffer: [std.os.linux.HOST_NAME_MAX:0]u8 = blk: {
 pub const default_stack_size = 2 * lib.mb_size;
 pub const default_max_open_files = 1024;
 pub const default_max_threads = 8192;
-pub const default_max_process = 65565;
+pub const default_max_process = 65535;
 
 pub const max_stack_size = lib.mb_size * 32;
 pub const max_args_size = lib.mb_size * 8;
@@ -27,6 +27,8 @@ pub const max_links = 32;
 
 pub var max_threads: u32 = default_max_threads;
 pub var max_process: u32 = default_max_process;
+
+pub const max_poll_fds = 65535;
 
 pub var host_lock: lib.sync.Spinlock = .{};
 pub var host_name: std.ArrayListUnmanaged(u8) = .{

@@ -712,8 +712,29 @@ fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
     }
 }
 
-fn filePoll(file: *vfs.File) vfs.Error!vfs.File.Poll {
+fn filePoll(
+    file: *vfs.File,
+    entry: *vfs.File.Poll.WaitEntry,
+    action: vfs.File.Poll.WaitAction,
+) Error!vfs.File.Poll {
     const tty = fromFile(file);
+    switch (action) {
+        .none => {},
+        .enqueue,
+        .remove => {
+            // TODO: Fix it when PTY whould be implemented, e.g. writing also 
+            // should be waitible (as in pipes), not only reading.
+            tty.in_lock.lockSaveIntr();
+            defer tty.in_lock.unlockRestoreIntr();
+
+            if (action == .enqueue) {
+                tty.in_wait.push(entry);
+            } else {
+                tty.in_wait.removeWeak(entry);
+            }
+        },
+    }
+
     return .{
         .read_avail = blk: {
             break :blk !tty.inputEmpty();

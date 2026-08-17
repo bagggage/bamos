@@ -107,10 +107,10 @@ fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
     return error.BadOperation;
 }
 
-fn filePoll(file: *vfs.File) vfs.Error!vfs.File.Poll {
+fn filePoll(file: *vfs.File, entry: *vfs.File.Poll.WaitEntry, action: vfs.File.Poll.WaitAction) vfs.Error!vfs.File.Poll {
     if (instance.active_tty) |tty| {
         @branchHint(.likely);
-        return tty.dev_file.ops.fops.poll(file);
+        return tty.dev_file.ops.fops.poll(file, entry, action);
     }
 
     return .{};

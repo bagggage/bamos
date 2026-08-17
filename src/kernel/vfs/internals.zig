@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const lib = @import("../lib.zig");
+const sched = @import("../sched.zig");
 const sys = @import("../sys.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
@@ -355,11 +356,15 @@ pub const file = opaque {
             return error.BadOperation;
         }
 
-        pub fn poll(self: *File) Error!File.Poll {
+        pub fn poll(self: *File, _: *File.Poll.WaitEntry, _: File.Poll.WaitAction) Error!File.Poll {
             return switch (self.dentry.inode.type) {
                 .directory,
                 .symbolic_link,
-                .regular_file => .{ .read_avail = true, .may_write = true },
+                .regular_file => .{
+                    .read_avail = true,
+                    .may_write = true,
+                    .no_wait = true,
+                },
                 else => error.BadOperation
             };
         }

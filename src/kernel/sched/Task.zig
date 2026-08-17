@@ -9,6 +9,7 @@ const arch = lib.arch;
 const lib = @import("../lib.zig");
 const sched = @import("../sched.zig");
 const sys = @import("../sys.zig");
+const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
 
 pub const Self = @This();
@@ -191,8 +192,15 @@ pub const Specific = union(enum) {
         /// Interruptible sleep flag
         sig_wait: std.atomic.Value(bool) = .init(false),
 
+        poll_cache: [*]vfs.File.Poll.Cache = undefined,
+        poll_cache_len: u32 = 0,
+
         /// Used by `sys.Process` to put task in list.
         node: UNode = .{},
+
+        pub inline fn deinit(self: *User) void {
+            vfs.File.Poll.Cache.deinitPool(self);
+        }
 
         pub inline fn fromNode(node: *UNode) *User {
             return @fieldParentPtr("node", node);

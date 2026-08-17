@@ -10,6 +10,7 @@ const Dentry = vfs.Dentry;
 const Error = vfs.Error;
 const lib = @import("../lib.zig");
 const Pipe = vfs.Pipe;
+const sched = @import("../sched.zig");
 const sys = @import("../sys.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
@@ -17,7 +18,7 @@ const vm = @import("../vm.zig");
 pub const Type = enum(u8) {
     file   = 0,
     pipe   = 1,
-    socket = 2
+    socket = 2,
 };
 
 pub const Operations = struct {
@@ -27,7 +28,7 @@ pub const Operations = struct {
     pub const WriteFn = *const fn(*File, usize, []const u8) Error!usize;
     pub const MmapPrepareFn = *const fn(*const File, *sys.AddressSpace.MapUnit) Error!void;
     pub const IoctlFn = *const fn(*File, c_uint, usize) Error!void;
-    pub const PollFn = *const fn(*File) Error!Poll;
+    pub const PollFn = *const fn(*File, *Poll.WaitEntry, Poll.WaitAction) Error!Poll;
 
     read: ReadFn = &default.read,
     write: WriteFn = &default.write,
@@ -37,6 +38,70 @@ pub const Operations = struct {
 };
 
 pub const Poll = packed struct {
+    pub const WaitEntry = sched.WaitQueue.Entry;
+
+    pub const WaitAction = enum(u8) {
+        none = 0,
+        enqueue = 1,
+        remove = 2,
+    };
+
+    pub const Cache = struct {
+        file: ?*File = null,
+        entry: WaitEntry,
+
+        fn setup(self: *Cache, task: *sched.Task) void {
+            self.* = .{ .entry = .{ .task = task, .timestamp = std.math.maxInt(u64) }};
+            self.entry.markAsRemovedFromQueue();
+        }
+
+        fn createPool(user: *sched.Task.Specific.User, len: u32) vm.Error!void {
+            const caches = vm.gpa.allocMany(Cache, len) orelse return error.NoMemory;
+            const task = user.toTask();
+
+            for (caches) |*c| c.setup(task);
+
+            user.poll_cache = caches.ptr;
+            user.poll_cache_len = len;
+        }
+
+        pub fn deinitPool(user: *sched.Task.Specific.User) void {
+            if (user.poll_cache_len == 0) {
+                @branchHint(.likely);
+                return;
+            }
+
+            user.poll_cache_len = 0;
+            vm.gpa.free(user.poll_cache);
+        }
+
+        pub fn getPool(user: *sched.Task.Specific.User, len: u32) vm.Error![]Cache {
+            const requested_size = len * @sizeOf(Cache);
+            const current_size = user.poll_cache_len * @sizeOf(Cache);
+
+            if (user.poll_cache_len == 0) {
+                @branchHint(.unlikely);
+                try createPool(user, len);
+            } else if (user.poll_cache_len < len or current_size - requested_size >= lib.mb_size) {
+                @branchHint(.unlikely);
+                deinitPool(user);
+                try createPool(user, len);
+            }
+
+            return user.poll_cache[0..len];
+        }
+
+        pub fn closePool(pool: []Cache) void {
+            for (pool) |*c| {
+                const file = c.file orelse continue;
+                if (!c.entry.isRemovedFromQueue()) _ = file.poll(&c.entry, .remove) catch {};
+
+                c.file = null;
+                file.deref();
+            }
+        }
+    };
+
     read_avail: bool = false,
     read_prior: bool = false,
     read_urgent: bool = false,
@@ -44,6 +109,7 @@ pub const Poll = packed struct {
     may_write_prior: bool = false,
     hung_up: bool = false,
     hung_up_read: bool = false,
+    no_wait: bool = false,
 
     pub fn fromLinux(in: i16) Poll {
         const POLL = std.os.linux.POLL;
@@ -158,6 +224,6 @@ pub inline fn ioctl(self: *File, cmd: c_uint, arg: usize) Error!void {
     return self.ops.ioctl(self, cmd, arg);
 }
 
-pub inline fn poll(self: *File) Error!Poll {
-    return self.ops.poll(self);
+pub inline fn poll(self: *File, entry: *Poll.WaitEntry, action: Poll.WaitAction) Error!Poll {
+    return self.ops.poll(self, entry, action);
 }

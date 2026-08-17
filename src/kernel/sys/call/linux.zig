@@ -1540,45 +1540,72 @@ fn createAndOpenFile(
 
 fn poll(fds: [*c]linux.pollfd, len: usize, timeout: i32) isize {
     trace.info("poll(0x{x}, {}, {})", .{@intFromPtr(fds), len, timeout});
+    if (len > sys.limits.max_poll_fds) return errorFromE(.INVAL);
+
     validateMemoryArgs(
         @intFromPtr(fds), @sizeOf(linux.pollfd) * len
     ) catch return errorFromE(.FAULT);
 
     const task = sched.getCurrentTask();
     const proc = task.spec.user.process;
-    const time_end =
+
+    // Initialize poll caches
+    const caches = vfs.File.Poll.Cache.getPool(&task.spec.user, @truncate(len)) catch return errorFromE(.NOMEM);
+    var invalid: u32 = 0;
+
+    for (caches, fds) |*cache, *fd| {
+        fd.revents = 0;
+        cache.file = proc.files.get(@intCast(fd.fd)) orelse {
+            @branchHint(.unlikely);
+
+            invalid += 1;
+            fd.revents = linux.POLL.NVAL;
+
+            continue;
+        };
+    }
+
+    if (invalid == len) return 0;
+    defer vfs.File.Poll.Cache.closePool(caches);
+
+    // Timeout
+    const end_time_ns =
         if (timeout < 0)
             std.math.maxInt(u64)
         else
-            sys.time.getUpTimeNs() + (@as(u64, @intCast(timeout)) * std.time.ns_per_ms);
+            sys.time.getUpTimeNs() +| @as(u64, @intCast(timeout)) * std.time.ns_per_ms;
 
-    for (fds[0..len]) |*fd| fd.revents = 0;
-
+    // Polling
+    var n: u32 = 0;
     while (true) {
-        var n: u32 = 0;
-        for (fds[0..len]) |*fd| {
-            if (fd.events == 0 or fd.revents != 0 or fd.fd < 0) continue;
-            const file = proc.files.get(@intCast(fd.fd)) orelse {
-                fd.revents = linux.POLL.NVAL;
+        task.prepareForSleep();
+
+        for (fds[0..len], caches[0..len]) |*fd, *cache| {
+            const file = cache.file orelse continue;
+            if (fd.events == 0 or fd.revents != 0) continue;
+
+            const action: vfs.File.Poll.WaitAction = if (n == 0 and cache.entry.isRemovedFromQueue()) .enqueue else .none;
+            const result = file.poll(&cache.entry, action) catch {
+                fd.revents = linux.POLL.ERR;
+                n += 1;
+
                 continue;
             };
-            defer file.deref();
 
             const mask = fd.events | linux.POLL.ERR | linux.POLL.HUP;
-            const result = file.poll() catch {
-                fd.revents = linux.POLL.ERR; n += 1;
-                continue;
-            };
-
             fd.revents = result.toLinux() & mask;
             if (fd.revents != 0) n += 1;
         }
 
-        if (n != 0) return n;
-        if (time_end <= sys.time.getUpTimeNs()) break;
-        if (task.spec.user.pendingSignals().count() > 0) return errorFromE(.INTR);
+        if (n != 0) {
+            task.canclePrepareForSleep();
+            return n;
+        }
 
-        sched.yield();
+        const timeout_ns = end_time_ns -| sys.time.getUpTimeNs();
+        sched.getCurrent().doWaitTimeout(timeout_ns, true) catch |err| {
+            return if (err == error.Interrupted) errorFromE(.INTR) else 0;
+        };
     }
 
     return 0;
@@ -1977,6 +2004,7 @@ fn selectImpl(
     validateMemoryArgs(@intFromPtr(write_fds), @sizeOf(FdSet)) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(except_fds), @sizeOf(FdSet)) catch return errorFromE(.FAULT);
 
+    // Initialize kernel-side bit sets
     const n = std.math.divCeil(u32, num, @bitSizeOf(usize)) catch unreachable;
     const buffer = vm.gpa.allocMany(usize, n * 3) orelse return errorFromE(.NOMEM);
     defer vm.gpa.free(buffer.ptr);
@@ -1991,75 +2019,81 @@ fn selectImpl(
     const res_out: [*]usize = buffer[n..n * 2].ptr;
     const res_exp: [*]usize = buffer[n * 2..].ptr;
 
-    const end_time = if (timeout) |t| (
+    const task = sched.getCurrentTask();
+    const proc = task.spec.user.process;
+
+    // Initialize poll caches
+    const caches = vfs.File.Poll.Cache.getPool(&task.spec.user, num) catch return errorFromE(.NOMEM);
+    defer vfs.File.Poll.Cache.closePool(caches);
+
+    for (caches, 0..) |*cache, fd| {
+        const i = fd / @bitSizeOf(usize);
+        const mask: usize = @as(usize, 1) << @truncate(fd % @bitSizeOf(usize));
+
+        const all_bits = in_set[i] | out_set[i] | exp_set[i];
+        if ((all_bits & mask) == 0) continue;
+
+        cache.file = proc.files.get(@truncate(fd)) orelse {
+            @branchHint(.cold);
+            continue;
+        };
+    }
+
+    // Timeout
+    const end_time_ns = if (timeout) |t| (
         sys.time.getUpTimeNs() +|
         (@as(u64, @intCast(t.sec)) * std.time.ns_per_s) +|
         (@as(u64, @intCast(t.usec)) * std.time.ns_per_us)
     ) else std.math.maxInt(u64);
 
-    const task = sched.getCurrentTask();
-    const proc = task.spec.user.process;
-
-    var last_time: u64 = 0;
-    var fds: u32 = 0;
-    while (true) {
-        var fd: u32 = 0;
-        for (0..n) |i| {
-            const all_bits = in_set[i] | out_set[i] | exp_set[i];
-            if (all_bits == 0) {
-                fd += @bitSizeOf(usize);
-                continue;
-            }
-
-            var mask: usize = 1;
-            for (0..@bitSizeOf(usize)) |_| {
-                defer mask <<= 1;
-                defer fd += 1;
-
-                if ((all_bits & mask) == 0) continue;
-
-                const file = proc.files.get(fd) orelse continue;
-                defer file.deref();
-
-                const result = file.poll() catch {
-                    if ((exp_set[i] & mask) != 0) {
-                        res_exp[i] |= mask; fds += 1;
-                    }
-                    continue;
-                };
-
-                if (result.read_avail and (in_set[i] & mask) != 0) {
-                    res_in[i] |= mask; fds += 1;
-                }
-                if (result.may_write and (out_set[i] & mask) != 0) {
-                    res_out[i] |= mask; fds += 1;
-                }
-            }
-        }
-
-        last_time = sys.time.getUpTimeNs();
-
-        if (fds > 0) break;
-        if (last_time >= end_time) break;
-        if (task.spec.user.pendingSignals().count() > 0) return errorFromE(.INTR);
-
-        sched.yield();
-    }
-
-    if (timeout) |t| {
-        const remain_ns = end_time -| last_time;
+    defer if (timeout) |t| {
+        const remain_ns = end_time_ns -| sys.time.getUpTimeNs();
         const remain_sec = remain_ns / std.time.ns_per_s;
         const remain_us = (remain_ns % std.time.ns_per_s) / std.time.ns_per_us;
 
         t.sec = @truncate(@as(i64, @intCast(remain_sec)));
         t.usec = @truncate(@as(i64, @intCast(remain_us)));
-    }
+    };
 
-    if (fds > 0) {
-        if (read_fds != null) @memcpy(in_set[0..n], res_in[0..n]);
-        if (write_fds != null) @memcpy(out_set[0..n], res_out[0..n]);
-        if (except_fds != null) @memcpy(exp_set[0..n], res_exp[0..n]);
-        return fds;
+    // Polling
+    var fds: u32 = 0;
+    while (true) {
+        task.prepareForSleep();
+
+        for (caches, 0..) |*cache, fd| {
+            const file = cache.file orelse continue;
+            const i = fd / @bitSizeOf(usize);
+            const mask: usize = @as(usize, 1) << @truncate(fd % @bitSizeOf(usize));
+
+            const action: vfs.File.Poll.WaitAction = if (fds == 0 and cache.entry.isRemovedFromQueue()) .enqueue else .none;
+            const result = file.poll(&cache.entry, action) catch {
+                if ((exp_set[i] & mask) != 0) {
+                    res_exp[i] |= mask; fds += 1;
+                }
+                continue;
+            };
+
+            if (result.read_avail and (in_set[i] & mask) != 0) {
+                res_in[i] |= mask; fds += 1;
+            }
+            if (result.may_write and (out_set[i] & mask) != 0) {
+                res_out[i] |= mask; fds += 1;
+            }
+        }
+
+        if (fds > 0) {
+            task.canclePrepareForSleep();
+
+            if (read_fds != null) @memcpy(in_set[0..n], res_in[0..n]);
+            if (write_fds != null) @memcpy(out_set[0..n], res_out[0..n]);
+            if (except_fds != null) @memcpy(exp_set[0..n], res_exp[0..n]);
+            return fds;
+        }
+
+        const timeout_ns = end_time_ns -| sys.time.getUpTimeNs();
+        sched.getCurrent().doWaitTimeout(timeout_ns, true) catch |err| {
+            return if (err == error.Interrupted) errorFromE(.INTR) else 0;
+        };
     }
 
     return 0;

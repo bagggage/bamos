@@ -224,16 +224,21 @@ fn fileIoctl(file: *File, cmd: c_uint, arg: usize) vfs.Error!void {
     return error.BadOperation;
 }
 
-fn filePoll(file: *File) Error!File.Poll {
+fn filePoll(file: *File, entry: *File.Poll.WaitEntry, action: File.Poll.WaitAction) Error!File.Poll {
     const pipe = file.data.asPtr(Self).?;
 
     pipe.mutex.lock();
     defer pipe.mutex.unlock();
 
-    return .{
-        .read_avail = pipe.buffer.itemsToRead() > 0,
-        .may_write = pipe.buffer.writeCapacity() > 0
-    };
+    if (file.perm.checkAccess(.w)) {
+        // Writer
+        try pipe.tryPollWait(pipe.readers.raw, &pipe.write_wait, entry, action);
+        return .{ .read_avail = pipe.buffer.writeCapacity() > 0 };
+    } else {
+        // Reader
+        try pipe.tryPollWait(pipe.writers.raw, &pipe.read_wait, entry, action);
+        return .{ .read_avail = pipe.buffer.itemsToRead() > 0 };
+    }
 }
 
 fn awakeUnlock(self: *Self, queue: *sched.WaitQueue) void {
@@ -257,4 +262,24 @@ fn tryWaitUnlock(self: *Self, others: u16, wait_queue: *sched.WaitQueue, awake_q
 
     sched.awakeAll(awake_queue);
     try sched.waitUnlock(wait_queue,&self.wait_lock, true);
+}
+
+fn tryPollWait(
+    self: *Self,
+    others: u16,
+    wait_queue: *sched.WaitQueue,
+    entry: *File.Poll.WaitEntry,
+    action: File.Poll.WaitAction,
+) Error!void {
+    if (others == 0) return error.BadPipe;
+    if (action == .none) return;
+
+    self.wait_lock.lock();
+    defer self.wait_lock.unlock();
+
+    if (action == .enqueue) {
+        wait_queue.push(entry);
+    } else {
+        wait_queue.removeWeak(entry);
+    }
 }

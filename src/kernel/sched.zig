@@ -233,6 +233,7 @@ pub fn startup(cpu_idx: u16, taskHandler: *const fn () noreturn) !void {
 
 pub fn rebornAsKernelTask(task: *Task, name: []const u8) void {
     std.debug.assert(task.spec == .user);
+    task.spec.user.deinit();
 
     const scheduler = getCurrent();
     if (scheduler.current_task == task) {
