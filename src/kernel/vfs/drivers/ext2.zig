@@ -1026,14 +1026,14 @@ fn dentryDeinitInode(inode: *const vfs.Inode) void {
 
     var freed: u32 = 0;
     for (0..blocks_num) |i| {
-        const block_idx = iter.next(null) catch |err| {
+        const block_num = iter.next(null) catch |err| {
             log.err("inode {}: failed to complete deleting: read block: {t}", .{inode.index, err});
             return;
         };
 
-        freeBlockPartially(super, block_idx, &cursor) catch |err| {
+        freeBlockPartially(super, block_num, &cursor) catch |err| {
             log.err("inode {}: failed to free block {} ({} from {}): {t}", .{
-                inode.index, block_idx, i + 1, blocks_num, err,
+                inode.index, block_num, i + 1, blocks_num, err,
             });
             break;
         };
@@ -1048,7 +1048,7 @@ fn dentryDeinitInode(inode: *const vfs.Inode) void {
 
             freeBlockPartially(super, iter.indir_blk, &cursor) catch |err| {
                 log.err("inode {}: failed to free block {} ({} from {}): {t}", .{
-                    inode.index, block_idx, i + 1, blocks_num, err,
+                    inode.index, block_num, i + 1, blocks_num, err,
                 });
                 break;
             };
@@ -1267,7 +1267,7 @@ fn allocBlockFromGroups(super: *const vfs.Superblock, preferred_group: u32, curs
             calcBlocksInGroup(ext_super, group),
             cursor,
         );
-        const idx = group * ext_super.blocks_per_group + local_idx;
+        const num = group * ext_super.blocks_per_group + ext_super.sb_block + local_idx;
 
         const super_offset_abs = super.part_offset + superblock_disk_offset;
         try cursor.ensureCache(.write, super_offset_abs);
@@ -1275,7 +1275,7 @@ fn allocBlockFromGroups(super: *const vfs.Superblock, preferred_group: u32, curs
         cursor.asObject(Superblock).free_blocks -%= 1;
         cursor.setDirty(@sizeOf(Superblock));
 
-        return idx;
+        return num;
     }
 
     return error.NoSpace;
@@ -1647,8 +1647,9 @@ fn freeInode(
     }
 }
 
-fn freeBlockPartially(super: *const vfs.Superblock, block_idx: u32, cursor: *cache.Cursor) vfs.Error!void {
+fn freeBlockPartially(super: *const vfs.Superblock, block_num: u32, cursor: *cache.Cursor) vfs.Error!void {
     const ext_super = super.fs_data.asPtr(Superblock).?;
+    const block_idx = block_num - ext_super.sb_block;
     const group = block_idx / ext_super.blocks_per_group;
     const inner_idx = block_idx % ext_super.blocks_per_group;
 
@@ -1731,7 +1732,12 @@ fn bitmapFree(
     const mask = @as(u8, 1) << bit_idx;
 
     const bitmap = try cursor.ensureAs(u8, .write, bitmap_offset + byte_idx);
-    if ((bitmap.* & mask) == 0) return error.BadSuperblock;
+    if ((bitmap.* & mask) == 0) {
+        log.warn("bit is already unset: 0b{b}, mask: 0b{b} (bit {})", .{
+            bitmap.*, mask, bit_idx
+        });
+        return error.BadSuperblock;
+    }
 
     bitmap.* &= ~mask;
     cursor.setDirty(1);
