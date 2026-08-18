@@ -844,7 +844,13 @@ fn dentryLink(dentry: *vfs.Dentry, inode: *vfs.Inode) vfs.Error!void {
             inode.size = content.len;
         },
         else => {},
-    };
+    } else {
+        const ext_inode = try readInode(super, inode_idx, .write, &cursor);
+        ext_inode.links_num += 1;
+        ext_inode.access_time = time;
+        ext_inode.modify_time = time;
+        cursor.setDirty(@sizeOf(Inode));
+    }
 
     inode.index = inode_idx;
     inode.fs_data.setPtr(super);
