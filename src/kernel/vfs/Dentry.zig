@@ -111,7 +111,7 @@ pub const Name = struct {
 
 pub const Meta = packed struct {
     fs: Context.Tag = .none,
-    dangling: bool = false,
+    unlinked: bool = false,
 };
 
 /// Dentries iterator, used as an interface between the kernel
@@ -228,7 +228,7 @@ pub fn deinit(self: *Dentry) void {
     _ = lookup_cache.uncache(self);
 
     if (self.parent != self) {
-        if (!self.inode.isRemoved()) {
+        if (!self.meta.unlinked) {
             @branchHint(.likely);
             self.parent.removeChild(self);
         } else {
@@ -404,6 +404,7 @@ pub fn unlink(self: *Dentry) Error!void {
         inode.access_time_ns = time.ns;
 
         try self.ops.unlink(self);
+        self.meta.unlinked = true;
 
         inode.links_num -= 1;
         inode.modify_time_sec = time.sec;
@@ -542,7 +543,7 @@ pub fn tryRef(self: *Dentry) bool {
 
 pub fn deref(self: *Dentry) void {
     if (!self.ref_count.put()) return;
-    if (self.inode.isRemoved()) {
+    if (self.meta.unlinked) {
         self.delete();
         return;
     }
