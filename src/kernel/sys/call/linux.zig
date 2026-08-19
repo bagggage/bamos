@@ -67,6 +67,8 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.gettimeofday)]    = @ptrCast(&getTimeOfDay);
     result[@intFromEnum(linux.SYS.getuid)]          = @ptrCast(&getUid);
     result[@intFromEnum(linux.SYS.ioctl)]           = @ptrCast(&ioctl);
+    result[@intFromEnum(linux.SYS.link)]            = @ptrCast(&link);
+    result[@intFromEnum(linux.SYS.linkat)]          = @ptrCast(&linkAt);
     result[@intFromEnum(linux.SYS.lseek)]           = @ptrCast(&seek);
     result[@intFromEnum(linux.SYS.lstat)]           = @ptrCast(&lstat);
     result[@intFromEnum(linux.SYS.mkdir)]           = @ptrCast(&mkdir);
@@ -115,7 +117,6 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.unlink)]          = @ptrCast(&unlink);
     result[@intFromEnum(linux.SYS.unlinkat)]        = @ptrCast(&unlinkAt);
     result[@intFromEnum(linux.SYS.wait4)]           = @ptrCast(&waitPid);
-    //result[@intFromEnum(linux.SYS.waitid)]          = @ptrCast(&waitId);
     result[@intFromEnum(linux.SYS.write)]           = @ptrCast(&write);
     result[@intFromEnum(linux.SYS.writev)]          = @ptrCast(&writev);
     result[@intFromEnum(linux.SYS.vfork)]           = @ptrCast(arch.syscall.contextCall(vfork, "vfork"));
@@ -177,6 +178,11 @@ const RestartableSequence = extern struct {
 
     cs: ?*CriticalSection,
     flags: CriticalSection.Flags,
+};
+
+const CreateFilePath = struct {
+    dir: *vfs.Dentry,
+    name: []const u8,
 };
 
 const DirectoryIterator = struct {
@@ -1009,6 +1015,86 @@ fn statImpl(dentry: *vfs.Dentry, stats: *linux.Stat) isize {
     return 0;
 }
 
+fn link(old_path: [*:0]const u8, new_path: [*:0]const u8) isize {
+    trace.info("link(0x{x}, 0x{x})", .{@intFromPtr(old_path), @intFromPtr(new_path)});
+
+    return linkImpl(null, old_path, null, new_path, linux.AT.SYMLINK_FOLLOW);
+}
+
+fn linkAt(
+    old_dir_fd: linux.fd_t,
+    old_path: [*:0]const u8,
+    new_dir_fd: linux.fd_t,
+    new_path: [*:0]const u8,
+    flags: u32,
+) isize {
+    trace.info("linkat(0x{x}, 0x{x})", .{@intFromPtr(old_path), @intFromPtr(new_path)});
+
+    const proc = sys.Process.getCurrent();
+    const old_dir = if (old_path[0] != '/') (fdAtGet(proc, old_dir_fd) orelse return errorFromE(.BADF)) else null;
+    defer if (old_dir) |d| d.deref();
+
+    const new_dir = if (new_path[0] != '/') (fdAtGet(proc, new_dir_fd) orelse return errorFromE(.BADF)) else null;
+    defer if (new_dir) |d| d.deref();
+
+    return linkImpl(old_dir, old_path, new_dir, new_path, flags);
+}
+
+fn linkImpl(
+    old_dir: ?*vfs.Dentry,
+    old_path: [*:0]const u8,
+    new_dir: ?*vfs.Dentry,
+    new_path: [*:0]const u8,
+    flags: u32,
+) isize {
+    validateMemoryArgs(@intFromPtr(old_path), sys.limits.max_path) catch return errorFromE(.FAULT);
+    validateMemoryArgs(@intFromPtr(new_path), sys.limits.max_path) catch return errorFromE(.FAULT);
+
+    const proc = sys.Process.getCurrent();
+    const at_old_dir = if (old_dir) |d| d else proc.work_dir;
+    const at_new_dir = if (new_dir) |d| d else proc.work_dir;
+
+    const target = if (
+        (flags & linux.AT.EMPTY_PATH) != 0 and
+        (@intFromPtr(old_path) == 0 or old_path[0] == 0)
+    ) blk: {
+        lib.debug.assert(new_dir != null, @src());
+        at_old_dir.ref();
+        break :blk at_old_dir;
+    } else if ((flags & linux.AT.SYMLINK_FOLLOW) == 0) blk: {
+        break :blk lookupSymLink(
+            proc.root_dir, at_old_dir, std.mem.span(old_path)
+        ) catch |err| return errorFromZig(err);
+    } else vfs.lookup(
+        proc.root_dir, at_old_dir, std.mem.span(old_path)
+    ) catch |err| return errorFromZig(err);
+    defer target.deref();
+
+    if (target.inode.type == .directory) return errorFromE(.ISDIR);
+
+    const create_path = createFileGetPath(
+        proc, at_new_dir, std.mem.span(new_path)
+    ) catch |err| return errorFromZig(err);
+    defer create_path.dir.deref();
+
+    log.debug("create hard link: {f}/{s} (inode {}, original: {f})", .{
+        create_path.dir.relativePath(proc.root_dir),
+        create_path.name,
+        target.inode.index,
+        target.relativePath(proc.root_dir),
+    });
+
+    const hard_link = create_path.dir.createLink(
+        create_path.name, target.inode
+    ) catch |err| return errorFromZig(err);
+    defer hard_link.deref();
+
+    std.debug.assert(hard_link.inode == target.inode);
+    log.debug("links: {}, refs: {}", .{hard_link.inode.links_num, hard_link.inode.ref_count.count()});
+
+    return 0;
+}
+
 fn symlink(target: [*:0]const u8, link_path: [*:0]const u8) isize {
     trace.info("symlink(0x{x}, 0x{x})", .{@intFromPtr(target), @intFromPtr(link_path)});
     const proc = sys.Process.getCurrent();
@@ -1481,14 +1567,11 @@ fn openImpl(proc: *sys.Process, dir: *vfs.Dentry, path: [*c]const u8, flags: lin
     return desc.idx;
 }
 
-fn createAnyFile(
+fn createFileGetPath(
     proc: *sys.Process,
     dir: *vfs.Dentry,
     path: []const u8,
-    @"type": vfs.Inode.Type,
-    mode: linux.mode_t,
-    fs_data: lib.AnyData,
-) vfs.Error!*vfs.Dentry {
+) vfs.Error!CreateFilePath {
     const index = std.mem.lastIndexOfScalar(u8, path, '/');
     const name = if (index) |i| path[i + 1..] else path;
 
@@ -1503,13 +1586,28 @@ fn createAnyFile(
         dir.ref();
         break :blk dir;
     };
-    defer target_dir.deref();
 
     const role = target_dir.inode.getRole(proc.uid, proc.gid);
     if (!target_dir.inode.checkAccess(.w, role)) return error.NoAccess;
 
-    log.debug("create file: {s}, perm: 0o{o}", .{name, mode});
-    return target_dir.createFileRaw(name, @"type", .{
+    return .{ .dir = target_dir, .name = name };
+}
+
+fn createAnyFile(
+    proc: *sys.Process,
+    dir: *vfs.Dentry,
+    path: []const u8,
+    @"type": vfs.Inode.Type,
+    mode: linux.mode_t,
+    fs_data: lib.AnyData,
+) vfs.Error!*vfs.Dentry {
+    const create_path = try createFileGetPath(proc, dir, path);
+    defer create_path.dir.deref();
+
+    log.debug("create file: {f}/{s}, {t}, perm: 0o{o}", .{
+        create_path.dir.relativePath(proc.root_dir), create_path.name, @"type", mode
+    });
+    return create_path.dir.createFileRaw(create_path.name, @"type", .{
         .uid = proc.uid,
         .gid = proc.gid,
         .perm = @truncate(mode)
