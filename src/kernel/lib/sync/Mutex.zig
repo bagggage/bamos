@@ -32,6 +32,19 @@ pub fn lock(self: *Self) void {
     }
 }
 
+pub inline fn lockKeepPreemption(self: *Self) void {
+    self.lock();
+    sched.getCurrent().enablePreemption();
+}
+
+pub fn unlockKeepPreemption(self: *Self) void {
+    self.wait_lock.lock();
+    defer self.wait_lock.unlock();
+
+    self.spinlock.unlockAtomic();
+    sched.awakeAll(&self.wait_queue);
+}
+
 pub fn lockSaveIntr(self: *Self) void {
     defer sched.getCurrent().enablePreemptionRaw();
 
