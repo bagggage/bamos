@@ -19,6 +19,7 @@ pub const Type = enum(u8) {
     file   = 0,
     pipe   = 1,
     socket = 2,
+    epoll  = 3,
 };
 
 pub const Operations = struct {
@@ -111,7 +112,7 @@ pub const Poll = packed struct {
     hung_up_read: bool = false,
     no_wait: bool = false,
 
-    pub fn fromLinux(in: i16) Poll {
+    pub fn fromLinux(in: u32) Poll {
         const POLL = std.os.linux.POLL;
         return .{
             .read_avail = (in & POLL.IN) != 0,
@@ -122,9 +123,9 @@ pub const Poll = packed struct {
         };
     }
 
-    pub fn toLinux(self: Poll) i16 {
+    pub fn toLinux(self: Poll) u16 {
         const POLL = std.os.linux.POLL;
-        var result: i16 = 0;
+        var result: u16 = 0;
         if (self.read_avail)      result |= POLL.IN | POLL.RDNORM;
         if (self.read_prior)      result |= POLL.IN | POLL.RDBAND;
         if (self.read_urgent)     result |= POLL.IN | POLL.PRI;
@@ -134,6 +135,18 @@ pub const Poll = packed struct {
         if (self.hung_up_read)    result |= POLL.HUP | 0x2000;
 
         return result;
+    }
+
+    pub inline fn mask(self: Poll, other: Poll) Poll {
+        return @bitCast(self.toInt() & other.toInt());
+    }
+
+    pub inline fn isAnySet(self: Poll) bool {
+        return self.toInt() != 0;
+    }
+
+    pub inline fn toInt(self: Poll) u8 {
+        return @bitCast(self);
     }
 };
 
@@ -172,7 +185,7 @@ pub fn deref(self: *File) void {
             const pipe = self.data.asPtr(Pipe).?;
             if (self.perm == .w) pipe.deref(.writer) else pipe.deref(.reader);
         },
-        .socket => std.log.err("vfs.File: close not implemented for socket object", .{}),
+        else => std.log.err("vfs.File: close not implemented for {t} object", .{self.type}),
     };
 }
 

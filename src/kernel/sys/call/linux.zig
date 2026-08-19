@@ -40,6 +40,12 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.dup)]             = @ptrCast(&dup);
     result[@intFromEnum(linux.SYS.dup2)]            = @ptrCast(&dup2);
     result[@intFromEnum(linux.SYS.dup3)]            = @ptrCast(&dup3);
+    result[@intFromEnum(linux.SYS.epoll_create)]    = @ptrCast(&epollCreate);
+    result[@intFromEnum(linux.SYS.epoll_create1)]   = @ptrCast(&epollCreate1);
+    result[@intFromEnum(linux.SYS.epoll_ctl)]       = @ptrCast(&epollControl);
+    result[@intFromEnum(linux.SYS.epoll_pwait)]     = @ptrCast(&epollPwait);
+    result[@intFromEnum(linux.SYS.epoll_pwait2)]    = @ptrCast(&epollPwait2);
+    result[@intFromEnum(linux.SYS.epoll_wait)]      = @ptrCast(&epollWait);
     result[@intFromEnum(linux.SYS.execve)]          = @ptrCast(&execve);
     result[@intFromEnum(linux.SYS.exit)]            = @ptrCast(&exit);
     result[@intFromEnum(linux.SYS.exit_group)]      = @ptrCast(&exitGroup);
@@ -68,7 +74,6 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.getuid)]          = @ptrCast(&getUid);
     result[@intFromEnum(linux.SYS.ioctl)]           = @ptrCast(&ioctl);
     result[@intFromEnum(linux.SYS.link)]            = @ptrCast(&link);
-    result[@intFromEnum(linux.SYS.linkat)]          = @ptrCast(&linkAt);
     result[@intFromEnum(linux.SYS.lseek)]           = @ptrCast(&seek);
     result[@intFromEnum(linux.SYS.lstat)]           = @ptrCast(&lstat);
     result[@intFromEnum(linux.SYS.mkdir)]           = @ptrCast(&mkdir);
@@ -1691,7 +1696,7 @@ fn poll(fds: [*c]linux.pollfd, len: usize, timeout: i32) isize {
             };
 
             const mask = fd.events | linux.POLL.ERR | linux.POLL.HUP;
-            fd.revents = result.toLinux() & mask;
+            fd.revents = @as(i16, @bitCast(result.toLinux())) & mask;
             if (fd.revents != 0) n += 1;
         }
 
@@ -1707,6 +1712,157 @@ fn poll(fds: [*c]linux.pollfd, len: usize, timeout: i32) isize {
     }
 
     return 0;
+}
+
+fn epollCreate(size: i32) isize {
+    trace.info("epoll_create({})", .{size});
+
+    if (size <= 0) return errorFromE(.INVAL);
+
+    return epollCreateImpl(0);
+}
+
+fn epollCreate1(flags: u32) isize {
+    trace.info("epoll_create1({})", .{flags});
+
+    return epollCreateImpl(flags);
+}
+
+fn epollCreateImpl(flags: u32) isize {
+    if ((flags | linux.EPOLL.CLOEXEC) != linux.EPOLL.CLOEXEC) return errorFromE(.INVAL);
+
+    const proc = sys.Process.getCurrent();
+    const epoll = vfs.Epoll.new() catch return errorFromE(.NOMEM);
+    defer epoll.deref();
+
+    const desc = proc.files.newDescriptor(epoll) catch |err| return errorFromZig(err);
+    if ((flags & linux.EPOLL.CLOEXEC) != 0) _ = proc.files.setCloseOnExec(desc.idx, true);
+
+    return desc.idx;
+}
+
+fn epollControl(epfd: linux.fd_t, op: u32, fd: linux.fd_t, event: ?*linux.epoll_event) isize {
+    trace.info("epoll_ctl({}, {}, {}, 0x{x})", .{epfd, op, fd, @intFromPtr(event)});
+
+    if (epfd < 0 or fd < 0) return errorFromE(.BADF);
+    if (epfd == fd) return errorFromE(.INVAL);
+
+    const proc = sys.Process.getCurrent();
+    const epoll_file = proc.files.get(@intCast(epfd)) orelse return errorFromE(.BADF);
+    defer epoll_file.deref();
+
+    if (epoll_file.type != .epoll) return errorFromE(.INVAL);
+    const epoll = vfs.Epoll.fromFile(epoll_file);
+
+    const file = proc.files.get(@intCast(fd)) orelse return errorFromE(.BADF);
+    defer file.deref();
+
+    if (
+        file == epoll_file or
+        file.dentry.inode.type == .directory or
+        file.dentry.inode.type == .regular_file
+    ) return errorFromE(.INVAL);
+
+    switch (op) {
+        linux.EPOLL.CTL_ADD => {
+            const e = event orelse return errorFromE(.INVAL);
+            const mask: vfs.File.Poll = .fromLinux(e.events);
+            epoll.addEntry(file, mask, e.data.ptr) catch |err| return errorFromZig(err);
+        },
+        linux.EPOLL.CTL_DEL => epoll.removeEntry(file) catch return errorFromE(.NOENT),
+        linux.EPOLL.CTL_MOD => {
+            const e = event orelse return errorFromE(.INVAL);
+            const mask: vfs.File.Poll = .fromLinux(e.events);
+            epoll.modifyEntry(file, mask, e.data.ptr) catch return errorFromE(.NOENT);
+        },
+        else => return errorFromE(.INVAL),
+    }
+
+    return 0;
+}
+
+fn epollWait(
+    epfd: linux.fd_t, events: [*]linux.epoll_event,
+    len: i32, timeout: i32,
+) isize {
+    trace.info("epoll_pwait2({}, 0x{x}, {}, {})", .{epfd, @intFromPtr(events), len, timeout});
+
+    const timeout_ns: u64 = if (timeout < 0) std.math.maxInt(u64) else @intCast(timeout * std.time.ns_per_ms);
+    return epollWaitImpl(epfd, events, len, timeout_ns, null);
+}
+
+fn epollPwait(
+    epfd: linux.fd_t,
+    events: [*]linux.epoll_event,
+    len: i32,
+    timeout: i32,
+    sigmask: ?*const linux.sigset_t,
+) isize {
+    trace.info("epoll_pwait2({}, 0x{x}, {}, {}, 0x{x})", .{
+        epfd, @intFromPtr(events), len, timeout, @intFromPtr(sigmask)
+    });
+
+    const timeout_ns: u64 = if (timeout < 0) std.math.maxInt(u64) else @intCast(timeout * std.time.ns_per_ms);
+    return epollWaitImpl(epfd, events, len, timeout_ns, sigmask);
+}
+
+fn epollPwait2(
+    epfd: linux.fd_t,
+    events: [*]linux.epoll_event,
+    len: i32,
+    timeout: ?*const linux.timespec,
+    sigmask: ?*const linux.sigset_t,
+) isize {
+    trace.info("epoll_pwait2({}, 0x{x}, {}, 0x{x}, 0x{x})", .{
+        epfd, @intFromPtr(events), len, @intFromPtr(timeout), @intFromPtr(sigmask)
+    });
+
+    const timeout_ns: u64 = if (timeout) |t| blk: {
+        validateMemoryArgs(@intFromPtr(t), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
+        if (t.sec < 0 or t.nsec < 0 or t.nsec >= std.time.ns_per_s) return errorFromE(.INVAL);
+
+        break :blk @intCast((t.sec * std.time.ns_per_s) + t.nsec);
+    } else std.math.maxInt(u64);
+
+    return epollWaitImpl(epfd, events, len, timeout_ns, sigmask);
+}
+
+fn epollWaitImpl(
+    epfd: linux.fd_t,
+    events: [*]linux.epoll_event,
+    len: i32,
+    timeout_ns: u64,
+    sigmask: ?*const linux.sigset_t,
+) isize {
+    if (epfd < 0) return errorFromE(.BADF);
+    if (len <= 0) return errorFromE(.INVAL);
+
+    const num: u32 = @intCast(len);
+    validateFileMemoryArgs(epfd, @intFromPtr(events), num * @sizeOf(linux.epoll_event)) catch return errorFromE(.FAULT);
+
+    const task = sched.getCurrentTask();
+    const proc = task.spec.user.process;
+
+    const file = proc.files.get(@intCast(epfd)) orelse return errorFromE(.BADF);
+    const epoll = if (file.type == .epoll) vfs.Epoll.fromFile(file) else return errorFromE(.BADF);
+
+    // Set sigmask
+    const old_sigmask = if (sigmask) |s| blk: {
+        validateMemoryArgs(@intFromPtr(s), @sizeOf(linux.sigset_t)) catch return errorFromE(.FAULT);
+        const old_sigmask = task.spec.user.sig_mask;
+        task.spec.user.sig_mask.mask = @truncate(s[0]);
+
+        break :blk old_sigmask;
+    } else undefined;
+    defer if (sigmask != null) {
+        task.spec.user.sig_mask = old_sigmask;
+        proc.deliverPendingSignals();
+    };
+
+    return epoll.wait(task, events[0..num], timeout_ns) catch |err| {
+        if (err == error.Interrupted) return errorFromE(.INTR);
+        return 0;
+    };
 }
 
 fn pipe(fds: *[2]linux.fd_t) isize {

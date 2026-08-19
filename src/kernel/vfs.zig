@@ -22,6 +22,7 @@ pub const tmpfs = @import("vfs/drivers/tmpfs.zig");
 
 pub const Dentry = @import("vfs/Dentry.zig");
 pub const Drive = dev.classes.Drive;
+pub const Epoll = @import("vfs/Epoll.zig");
 pub const File = @import("vfs/File.zig");
 pub const Inode = @import("vfs/Inode.zig");
 pub const Partition = parts.Partition;
