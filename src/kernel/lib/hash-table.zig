@@ -10,28 +10,11 @@
 //! allowed to resize, or resizing is very specific due to
 //! optimization of memory reallocation.
 
-// Copyright (C) 2024 Konstantin Pigulevskiy (bagggage@github)
+// Copyright (C) 2024-2026 Konstantin Pigulevskiy (bagggage@github)
 
 const std = @import("std");
 
 const vm = @import("../vm.zig");
-
-pub fn AutoContext(K: type) type {
-    return opaque {
-        pub fn hash(key: K) u64 {
-            return std.hash.Wyhash.hash(0, std.mem.asBytes(&key));
-        }
-
-        pub fn eql(a: K, b: K) bool {
-            return std.meta.eql(a, b);
-        }
-    };
-}
-
-pub const StringContext = opaque {
-    pub const hash = std.hash_map.hashString;
-    pub const eql = std.hash_map.eqlString;
-};
 
 pub const Bucket = struct {
     pub const Entry = struct {
@@ -48,9 +31,17 @@ pub const Bucket = struct {
 
     list: Entry.List = .{},
 
-    fn get(self: Bucket, hash: u64) ?*Entry {
-        var node = self.list.first;
-        while (node) |n| : (node = n.next) {
+    inline fn get(self: Bucket, hash: u64) ?*Entry {
+        return find(self.list.first, hash);
+    }
+
+    inline fn next(_: Bucket, entry: *Entry, hash: u64) ?*Entry {
+        return find(entry.node.next, hash);
+    }
+
+    fn find(node: ?*Entry.Node, hash: u64) ?*Entry {
+        var curr = node;
+        while (curr) |n| : (curr = n.next) {
             const entry = Entry.fromNode(n);
             if (entry.hash == hash) return entry;
         }
@@ -71,82 +62,103 @@ pub fn HashTable(K: type, Context: type) type {
 
         pub const Entry = Bucket.Entry;
 
-        buckets: []Bucket = &.{},
-        len: usize = 0,
+        buckets: [*]Bucket = &.{},
+        buckets_len: u32 = 0,
+        len: u32 = 0,
 
         pub fn init(capacity: u32) !Self {
             std.debug.assert(capacity > 0);
 
-            const pages = std.math.divCeil(u32, capacity, vm.page_size) catch unreachable;
-            const rank: u8 = std.math.log2_int_ceil(u32, pages);
-
+            const rank = vm.bytesToRank(capacity);
             const phys = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
-            const virt = vm.getVirtLma(phys);
 
-            var buckets: []Bucket = undefined;
-            buckets.ptr = @ptrFromInt(virt);
-            buckets.len = (pages * vm.page_size) / @sizeOf(Bucket);
+            const buckets: [*]Bucket = @ptrFromInt(vm.getVirtLma(phys));
+            const len = vm.rankToBytes(rank) / @sizeOf(Bucket);
 
-            @memset(buckets, Bucket{});
+            @memset(buckets[0..len], Bucket{});
 
-            return .{ .buckets = buckets, .len = 0 };
+            return .{ .buckets = buckets, .buckets_len = @truncate(len) };
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.buckets.len == 0) return;
+            if (self.buckets_len == 0) return;
 
-            const size: u32 = @truncate(self.buckets.len * @sizeOf(Bucket));
-            const pages = std.math.divCeil(u32, size, vm.page_size) catch unreachable;
-            const rank = std.math.log2_int_ceil(u32, pages);
-
-            const virt = @intFromPtr(self.buckets.ptr);
+            const rank = vm.bytesToRank(self.buckets_len * @sizeOf(Bucket));
+            const virt = @intFromPtr(self.buckets);
             const phys = vm.getPhysLma(virt);
 
-            self.buckets.len = 0;
+            self.buckets_len = 0;
+            self.len = 0;
 
             vm.PageAllocator.free(phys, rank);
         }
 
         pub fn get(self: *const Self, key: K) ?*Entry {
-            const hash = Context.hash(key);
-            const idx = hash % self.buckets.len;
-
-            return self.buckets[idx].get(hash);
+            const hash, const bucket = self.getHashBucket(key);
+            return lookupAt(bucket, hash, key);
         }
 
-        pub fn insert(self: *Self, key: K, entry: *Entry) void {
-            const hash = Context.hash(key);
-            const idx = hash % self.buckets.len;
-
-            const bucket = &self.buckets[idx];
+        pub fn insert(self: *Self, key: K, entry: *Entry) ?*Entry {
+            const hash, const bucket = self.getHashBucket(key);
+            if (lookupAt(bucket, hash, key)) |collision| {
+                @branchHint(.cold);
+                return collision;
+            }
 
             entry.hash = hash;
             bucket.list.prepend(&entry.node);
-
             self.len += 1;
+
+            return null;
         }
 
-        pub fn remove(self: *Self, key: K) ?*Entry {
-            const hash = Context.hash(key);
-            const idx = hash % self.buckets.len;
+        pub fn replace(self: *Self, entry: *Entry, new: *Entry) void {
+            std.debug.assert(entry.hash == new.hash);
 
+            const idx = entry.hash % self.buckets_len;
             const bucket = &self.buckets[idx];
-            const entry = bucket.get(hash) orelse return null;
+
+            bucket.list.remove(&entry.node);
+            bucket.list.prepend(&new.node);
+        }
+
+        pub fn removeByKey(self: *Self, key: K) ?*Entry {
+            const hash, const bucket = self.getHashBucket(key);
+            const entry = lookupAt(bucket, hash, key) orelse return null;
 
             bucket.list.remove(&entry.node);
             self.len -= 1;
 
             return entry;
         }
-    };
-}
 
-pub fn AutoHashTable(K: type) type {
-    return HashTable(
-        K,
-        if (K != []const u8)
-            std.hash_map.AutoContext(K)
-        else
-            StringContext
-    );
+        pub fn removeEntry(self: *Self, entry: *Entry) void {
+            const idx = entry.hash % self.buckets_len;
+            const bucket = &self.buckets[idx];
+
+            bucket.list.remove(&entry.node);
+        }
+
+        fn getHashBucket(self: *const Self, key: K) struct{u64,*Bucket} {
+            const hash = Context.hash(key);
+            const idx = hash % self.buckets_len;
+            const bucket = &self.buckets[idx];
+
+            return .{ hash, bucket };
+        }
+
+        fn lookupAt(bucket: *Bucket, hash: u64, key: K) ?*Entry {
+            var entry = bucket.get(hash) orelse return null;
+            if (Context.eql(entry, key)) {
+                @branchHint(.likely);
+                return entry;
+            } else {
+                @branchHint(.cold);
+                while (bucket.next(entry, hash)) |e| : (entry = e) {
+                    if (Context.eql(entry, key)) return e;
+                }
+                return null;
+            }
+        }
+    };
 }

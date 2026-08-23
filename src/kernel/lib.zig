@@ -75,7 +75,6 @@ pub const AnyData = packed struct(usize) {
 };
 
 pub const atomic = @import("lib/atomic.zig");
-pub const AutoHashTable = hash_table.AutoHashTable;
 pub const BinaryTree = @import("lib/binary-tree.zig").BinaryTree;
 pub const Bitmap = bitmap.Bitmap;
 pub const BitmapUnbounded = bitmap.BitmapUnbounded;
