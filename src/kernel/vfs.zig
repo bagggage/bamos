@@ -283,6 +283,15 @@ pub const CreateOptions = struct {
     gid: u16 = 0,
 };
 
+pub const CreatePath = struct {
+    parent_dir: *Dentry,
+    base_name: []const u8,
+
+    pub inline fn deref(self: CreatePath) void {
+        self.parent_dir.deref();
+    }
+};
+
 pub const Permissions = enum(u16) {
     none = 0b000_000_000,
     x    = 0b001_001_001,
@@ -559,6 +568,30 @@ pub fn resolveSymLink(root: ?*Dentry, sym_dent: *Dentry) Error!*Dentry {
     return lookupRaw(root, sym_dent.parent, buffer[0..len], false);
 }
 
+pub fn resolveCreatePath(
+    root: ?*Dentry,
+    dir: ?*Dentry,
+    path: []const u8,
+) Error!CreatePath {
+    const index = std.mem.lastIndexOfScalar(u8, path, '/');
+
+    const base_name = if (index) |i| path[i + 1..] else path;
+    const parent_dir = if (index) |i| blk: {
+        const dentry = try lookup(root, dir, path[0..i]);
+        if (dentry.inode.type != .directory) {
+            dentry.deref();
+            return error.NotDirectory;
+        }
+        break :blk dentry;
+    } else blk: {
+        const at_dir = dir orelse getRootWeak();
+        at_dir.ref();
+        break :blk at_dir;
+    };
+
+    return .{ .base_name = base_name, .parent_dir = parent_dir };
+}
+
 pub fn changeRoot(new: *Dentry) Error!void {
     if (root_dentry == new) return;
 
@@ -570,22 +603,17 @@ pub fn changeRoot(new: *Dentry) Error!void {
     var node = old.child.first;
     while (node) |n| {
         const dentry = Dentry.fromNode(n);
-        const name = dentry.name.str();
         node = n.next;
 
-        if (dentry == new or
-            dentry.inode.type != .directory or
-            name.len != 1 or name[0] != '/'
-        ) continue;
+        if (dentry == new or !dentry.meta.mount_point) continue;
 
-        const mnt = dentry.ctx.virt.getMountPoint();
-        const orig_dentry = mnt.getHiddenDentry();
-
+        const mnt = lookup_cache.getMountPoint(dentry) orelse continue;
         switch (mnt.fs.hash) {
             hashFn(devfs.fs_name) => {},
             else => continue
         }
 
+        const orig_dentry = mnt.getHiddenDentry();
         const mnt_name = orig_dentry.name.str();
         const new_mnt_dentry = lookup(null, new, mnt_name) catch |err| blk: {
             if (err != error.NoEnt) return err;
@@ -599,17 +627,12 @@ pub fn changeRoot(new: *Dentry) Error!void {
         log.debug("move /{s} to new root", .{mnt_name});
 
         // Move mount point
-        dentry.parent = new;
-        old.child.remove(&dentry.node);
-        new.child.prepend(&dentry.node);
+        lookup_cache.removeMountPoint(mnt);
+
         mnt.dentry.deref();
         mnt.dentry = new_mnt_dentry;
 
-        const old_hash = lookup_cache.calcHash(old, mnt_name);
-        _ = lookup_cache.remove(old_hash);
-
-        const new_hash = lookup_cache.calcHash(new, mnt_name);
-        lookup_cache.insert(new_hash, dentry);
+        lookup_cache.insertMountPoint(mnt) catch unreachable;
     }
 
     // TODO: Complete implementation, unmount old root and free resources
@@ -678,16 +701,8 @@ fn mountFs(dentry: *Dentry, fs: *FileSystem, blk_dev: ?*devfs.BlockDev) Error!*D
         .virtual => try mountVirtualFs(fs, dentry, mnt_point),
     };
 
-    // Swap dentries
-    {
-        const parent = dentry.parent;
-        parent.addChild(fs_root);
-
-        const hash = lookup_cache.calcHash(parent, dentry.name.str());
-
-        _ = lookup_cache.remove(hash);
-        lookup_cache.insert(hash, fs_root);
-    }
+    lookup_cache.insertMountPoint(mnt_point) catch unreachable;
+    mount_list.append(&mnt_point.node);
 
     if (blk_dev) |blk| {
         log.info("{s} on {f} is mounted to \"{f}\"", .{
@@ -697,7 +712,6 @@ fn mountFs(dentry: *Dentry, fs: *FileSystem, blk_dev: ?*devfs.BlockDev) Error!*D
         log.info("{s} is mounted to \"{f}\"", .{fs.name, dentry.path()});
     }
 
-    mount_list.append(&mnt_point.node);
     return fs_root;
 }
 

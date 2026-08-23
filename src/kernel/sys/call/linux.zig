@@ -185,11 +185,6 @@ const RestartableSequence = extern struct {
     flags: CriticalSection.Flags,
 };
 
-const CreateFilePath = struct {
-    dir: *vfs.Dentry,
-    name: []const u8,
-};
-
 const DirectoryIterator = struct {
     iter: vfs.Dentry.Iterator,
     buffer: []u8,
@@ -1080,17 +1075,17 @@ fn linkImpl(
     const create_path = createFileGetPath(
         proc, at_new_dir, std.mem.span(new_path)
     ) catch |err| return errorFromZig(err);
-    defer create_path.dir.deref();
+    defer create_path.deref();
 
     log.debug("create hard link: {f}/{s} (inode {}, original: {f})", .{
-        create_path.dir.relativePath(proc.root_dir),
-        create_path.name,
+        create_path.parent_dir.relativePath(proc.root_dir),
+        create_path.base_name,
         target.inode.index,
         target.relativePath(proc.root_dir),
     });
 
-    const hard_link = create_path.dir.createLink(
-        create_path.name, target.inode
+    const hard_link = create_path.parent_dir.createLink(
+        create_path.base_name, target.inode
     ) catch |err| return errorFromZig(err);
     defer hard_link.deref();
 
@@ -1576,26 +1571,15 @@ fn createFileGetPath(
     proc: *sys.Process,
     dir: *vfs.Dentry,
     path: []const u8,
-) vfs.Error!CreateFilePath {
-    const index = std.mem.lastIndexOfScalar(u8, path, '/');
-    const name = if (index) |i| path[i + 1..] else path;
+) vfs.Error!vfs.CreatePath {
+    const create_path = try vfs.resolveCreatePath(proc.root_dir, dir, path);
+    errdefer create_path.deref();
 
-    const target_dir = if (index) |i| blk: {
-        const dentry = try vfs.lookup(proc.root_dir, dir, path[0..i]);
-        if (dentry.inode.type != .directory) {
-            dentry.deref();
-            return error.NotDirectory;
-        }
-        break :blk dentry;
-    } else blk: {
-        dir.ref();
-        break :blk dir;
-    };
+    const parent_dir = create_path.parent_dir;
+    const role = parent_dir.inode.getRole(proc.uid, proc.gid);
+    if (!parent_dir.inode.checkAccess(.w, role)) return error.NoAccess;
 
-    const role = target_dir.inode.getRole(proc.uid, proc.gid);
-    if (!target_dir.inode.checkAccess(.w, role)) return error.NoAccess;
-
-    return .{ .dir = target_dir, .name = name };
+    return create_path;
 }
 
 fn createAnyFile(
@@ -1607,12 +1591,12 @@ fn createAnyFile(
     fs_data: lib.AnyData,
 ) vfs.Error!*vfs.Dentry {
     const create_path = try createFileGetPath(proc, dir, path);
-    defer create_path.dir.deref();
+    defer create_path.deref();
 
     log.debug("create file: {f}/{s}, {t}, perm: 0o{o}", .{
-        create_path.dir.relativePath(proc.root_dir), create_path.name, @"type", mode
+        create_path.parent_dir.relativePath(proc.root_dir), create_path.base_name, @"type", mode
     });
-    return create_path.dir.createFileRaw(create_path.name, @"type", .{
+    return create_path.parent_dir.createFileRaw(create_path.base_name, @"type", .{
         .uid = proc.uid,
         .gid = proc.gid,
         .perm = @truncate(mode)
