@@ -7,10 +7,12 @@ const std = @import("std");
 const File = @This();
 
 const Dentry = vfs.Dentry;
+const Epoll = vfs.Epoll;
 const Error = vfs.Error;
 const lib = @import("../lib.zig");
 const Pipe = vfs.Pipe;
 const sched = @import("../sched.zig");
+const Socket = @import("../net.zig").Socket;
 const sys = @import("../sys.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
@@ -184,6 +186,14 @@ pub fn deref(self: *File) void {
         .pipe => {
             const pipe = self.data.asPtr(Pipe).?;
             if (self.perm == .w) pipe.deref(.writer) else pipe.deref(.reader);
+        },
+        .socket => {
+            const socket = self.data.asPtr(Socket).?;
+            socket.deref();
+        },
+        .epoll => {
+            const epoll = self.data.asPtr(Epoll).?;
+            epoll.delete();
         },
         else => std.log.err("vfs.File: close not implemented for {t} object", .{self.type}),
     };
