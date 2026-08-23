@@ -26,7 +26,16 @@ fn EnumParser(comptime T: type) type {
     };
 }
 
-const Map = lib.AutoHashTable([]const u8);
+const Map = lib.HashTable([]const u8, opaque{
+    pub inline fn hash(key: []const u8) u64 {
+        return std.hash.Wyhash.hash(0, key);
+    }
+
+    pub inline fn eql(_: *Map.Entry, _: []const u8) bool {
+        // No collision by hash is allowed.
+        return true;
+    }
+});
 const Value = struct {
     pub const alloc_config: vm.auto.Config = .{
         .allocator = .oma
@@ -47,7 +56,7 @@ pub fn init() !void {
     const raw_env = boot.getEnvironment();
     env = raw_env[0..std.mem.len(raw_env)];
 
-    map = try .init(vm.page_size * 2);
+    map = try .init(vm.page_size);
     try parseConfig();
 }
 
@@ -262,7 +271,8 @@ fn put(key: []const u8, value: [:0]const u8) !void {
     std.log.debug("config: add '{s}'='{s}'", .{key, value});
 
     const val = vm.auto.alloc(Value) orelse return error.NoMemory;
-    val.* = .{ .string = value };
+    errdefer vm.auto.free(Value, val);
 
-    map.insert(key, &val.map_ent);
+    val.* = .{ .string = value };
+    if (map.insert(key, &val.map_ent) != null) return error.Exists;
 }
