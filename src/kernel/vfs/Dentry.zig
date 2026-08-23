@@ -112,6 +112,7 @@ pub const Name = struct {
 pub const Meta = packed struct {
     fs: Context.Tag = .none,
     unlinked: bool = false,
+    mount_point: bool = false,
 };
 
 /// Dentries iterator, used as an interface between the kernel
@@ -225,7 +226,7 @@ pub fn setup(
 pub fn deinit(self: *Dentry) void {
     std.debug.assert(self.ref_count.count() == 0);
 
-    _ = lookup_cache.uncache(self);
+    _ = lookup_cache.tryRemove(self);
 
     if (self.parent != self) {
         if (!self.meta.unlinked) {
@@ -253,38 +254,26 @@ pub fn delete(self: *Dentry) void {
 pub fn lookup(self: *Dentry, child_name: []const u8) ?*Dentry {
     std.debug.assert(self.inode.type == .directory);
 
-    const hash = lookup_cache.calcHash(self, child_name);
-    const child = lookup_cache.get(hash);
-
+    const child = lookup_cache.get(self, child_name);
     if (child == null) {
         const new_child = self.ops.lookup(self, child_name) orelse return null;
         new_child.ref();
 
         if (new_child.parent != self) self.addChild(new_child);
+        if (lookup_cache.insert(new_child)) |collision| {
+            @branchHint(.cold);
 
-        log.debug("new: {s}: inode: {}", .{new_child.name.str(), new_child.inode.index});
-        lookup_cache.insert(hash, new_child);
+            new_child.ref_count = .{};
+            new_child.deinit();
+
+            return collision;
+        }
+
+        log.debug("{f}: cached '{s}', inode: {}", .{
+            self.path(), new_child.name.str(), new_child.inode.index
+        });
 
         return new_child;
-
-        // WIP: Atomic way
-        //        const result = if (lookup_cache.insert(hash, new_child)) |col| blk: {
-        //            @branchHint(.cold);
-        //
-        //            self.removeChild(new_child);
-        //
-        //            new_child.ref_count = .{};
-        //            new_child.deinit();
-        //
-        //            break :blk col;
-        //        } else blk: {
-        //            log.debug("{f}: cached '{s}', inode: {}", .{
-        //                self.path(), new_child.name.str(), new_child.inode.index
-        //            });
-        //            break :blk new_child;
-        //        };
-        //
-        //        return result;
     }
 
     return child;
@@ -376,8 +365,17 @@ pub fn createLink(self: *Dentry, name: []const u8, inode: *Inode) Error!*Dentry 
     inode.ref();
     self.addChild(dentry);
 
-    // TODO: Make it race-condition free
-    lookup_cache.cache(dentry);
+    if (lookup_cache.insert(dentry)) |collision| {
+        @branchHint(.cold);
+        defer collision.deref();
+
+        // This is should be unreachable as fs driver should prevent duplications.
+        log.err(
+            \\{f}: failed to insert into lookup cache: '{s}' (inode: {}), 
+            \\strange collision with '{s}' (inode: {})
+            , .{ self.path(), name, inode.index, collision.name.str(), collision.inode.index, },
+        );
+    }
 
     return dentry;
 }
@@ -387,9 +385,8 @@ pub fn unlink(self: *Dentry) Error!void {
 
     if (self.parent == self) return error.InvalidArgs;
 
-    // TODO: Make sure there are no race conditions
-    const was_cached = lookup_cache.uncache(self);
-    errdefer if (was_cached) lookup_cache.cache(self);
+    const was_cached = lookup_cache.tryRemove(self);
+    errdefer if (was_cached) { _ = lookup_cache.tryInsert(self); };
 
     {
         const time = vfs.getTime();
@@ -564,8 +561,8 @@ fn createLike(self: *const Dentry, name: []const u8) !*Dentry {
     errdefer dentry.free();
 
     dentry.name = try .init(name);
+    dentry.meta = .{ .fs = self.meta.fs };
     dentry.ctx = self.ctx;
-    dentry.meta = self.meta;
     dentry.ops = self.ops;
 
     return dentry;
