@@ -12,10 +12,14 @@ const vm = @import("vm.zig");
 
 pub const Error = vfs.Error || error {
     AddressInUse,
+    Already,
     Connected,
     ConnectionRefused,
+    InProgress,
     NotConnected,
     NotSocket,
+    ProtocolTypeMissmatch,
+    Timeout,
     UnsupportedFamily,
     UnsupportedProtocol,
     UnsupportedSocketType,
@@ -24,7 +28,7 @@ pub const Error = vfs.Error || error {
 pub const Socket = @import("net/Socket.zig");
 pub const unix = @import("net/unix.zig");
 
-pub const Family = enum(u16) {
+pub const Family = enum(u8) {
     pub const Descriptor = struct {
         pub const CreateSocketFn = *const fn (Socket.Type) Error!*Socket;
 
@@ -57,6 +61,7 @@ pub const Packet = struct {
     data: u32 = 0,
     tail: u32 = 0,
     size: u32 = 0,
+    ref_counter: lib.atomic.RefCount(u32) = .{},
 
     pub fn new(size: u32) vm.Error!*Packet {
         if (size > max_size) {
@@ -92,8 +97,34 @@ pub const Packet = struct {
 
         vm.auto.delete(Packet, self);
     }
+
+    pub inline fn ref(self: *Packet) void {
+        return self.ref_counter.inc();
+    }
+
+    pub inline fn deref(self: *Packet) void {
+        if (self.ref_counter.put()) self.delete();
+    }
 };
 
+pub const IoFlags = packed struct(u16) {
+    out_of_bound: bool = false,
+    peek: bool = false,
+    dont_route: bool = false,
+    ctrl_trucate: bool = false,
+    probe: bool = false,
+    truncate: bool = false,
+    dont_wait: bool = false,
+    end_of_record: bool = false,
+    wait_all: bool = false,
+    finish: bool = false,
+    synchronize: bool = false,
+    confirm: bool = false,
+    reset: bool = false,
+    error_queue: bool = false,
+    no_signal: bool = false,
+    more_data: bool = false,
+};
 
 var families: [Family.max]?*const Family.Descriptor = .{ null } ** Family.max;
 var family_rw_lock: lib.sync.RwLock = .{};
@@ -129,11 +160,13 @@ pub fn unregisterProtocolFamily(family: Family, desc: *const Family.Descriptor) 
 pub fn createSocket(family: Family, @"type": Socket.Type) Error!*Socket {
     if (family == .none or @intFromEnum(family) >= Family.max) return error.UnsupportedFamily;
 
-    family_rw_lock.readLock();
-    defer family_rw_lock.readUnlock();
+    const desc = blk: {
+        family_rw_lock.readLock();
+        defer family_rw_lock.readUnlock();
 
-    const idx = @intFromPtr(family) - 1;
-    const desc = families[idx] orelse return error.UnsupportedFamily;
+        const idx = @intFromPtr(family) - 1;
+        break :blk families[idx] orelse return error.UnsupportedFamily;
+    };
 
     return desc.create_socket(@"type");
 }

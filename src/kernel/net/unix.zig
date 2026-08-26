@@ -54,7 +54,6 @@ const Socket = struct {
     base: net.Socket,
     address: AnyAddress,
     address_type: AddressType = .unnamed,
-    connection: ?*Socket = null,
 
     fn deinit(self: *Socket) void {
         switch (self.address_type) {
@@ -72,10 +71,6 @@ const Socket = struct {
                 dentry.deref();
             },
         }
-    }
-
-    fn connectRequest(self: *Socket, sender: *Socket) void {
-        if (self.base.listen )
     }
 
     inline fn fromBase(socket: *net.Socket) *Socket {
@@ -98,6 +93,10 @@ const protocol_family: net.Family.Descriptor = .{
 const socket_stream_ops: net.Socket.Operations = .{
     .send = &socketStreamSend,
     .receive = &socketStreamReceive,
+    .accept = &socketAccept,
+    .bind = &socketBind,
+    .connect = &socketConnect,
+    .listen = &socketListen,
     .delete = &socketDelete,
 };
 
@@ -106,6 +105,12 @@ const socket_datagram_ops: net.Socket.Operations = .{
 };
 
 const socket_sequential_ops: net.Socket.Operations = .{
+    .send = &socketSequentialSend,
+    .receive = &socketSequentialReceive,
+    .accept = &socketAccept,
+    .bind = &socketBind,
+    .connect = &socketConnect,
+    .listen = &socketListen,
     .delete = &socketDelete,
 };
 
@@ -114,6 +119,7 @@ var path_lock: lib.sync.RwLock = .{};
 
 pub fn init() !void {
     path_table = try .init(AbstractAddress.namespace_capacity);
+    errdefer path_table.deinit();
 
     try net.registerProtocolFamily(.unix, &protocol_family);
 }
@@ -127,9 +133,18 @@ fn createSocket(@"type": net.Socket.Type) net.Error!*net.Socket {
     };
 
     const socket = vm.auto.alloc(Socket) orelse return error.NoMemory;
-    socket.* = .{ .base = .{ .ops = ops } };
+    socket.* = .{ .base = .{
+        .@"type" = @"type",
+        .family = .unix,
+        .ops = ops,
+    }};
 
     return &socket.base;
+}
+
+inline fn validateConnection(socket: *net.Socket, address: ?[]const u8) net.Error!void {
+    if (!socket.isClient() or !socket.isConnected()) return error.NotConnected;
+    if (address != null) return error.Connected;
 }
 
 fn socketBind(self: *net.Socket, address: []const u8) net.Error!void {
@@ -163,6 +178,7 @@ fn socketBind(self: *net.Socket, address: []const u8) net.Error!void {
 
         const root, const dir,
         const gid, const uid = if (task.spec == .user) blk: {
+            @branchHint(.likely);
             const process = task.spec.user.process;
             break :blk .{ process.root_dir, process.work_dir, process.gid, process.uid };
         } else .{ null, null, 0, 0 };
@@ -182,27 +198,36 @@ fn socketBind(self: *net.Socket, address: []const u8) net.Error!void {
     }
 }
 
-fn socketStreamSend(self: *net.Socket, packet: *net.Packet, address: ?[]const u8) net.Error!usize {
+fn socketStreamSend(self: *net.Socket, packet: *net.Packet, address: ?[]const u8, _: net.IoFlags) net.Error!usize {
     const unix = Socket.fromBase(self);
 
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    if (unix.connection == null) return error.NotConnected;
-    if (address != null) return error.Connected;
+    if (self.@"type" != .datagram) {
+        try validateConnection(self, address);
+    } else {
+        const unix_address = address orelse return error.NotConnected;
+        const unix_peer = try findSocketByAddress(unix_address);
+        defer unix_peer.base.deref();
+    }
 
-    _ = packet;
+    const unix_peer = self.role.client.peer.asPtr(Socket).?;
+    const target = &unix_peer.base.role.client;
+
+    // Send packet to the target
+    target.recv_queue.prepend(&packet.node);
+
     return 0;
 }
 
-fn socketStreamReceive(self: *net.Socket, buffer: []u8, address: ?[]const u8) net.Error!usize {
+fn socketStreamReceive(self: *net.Socket, buffer: []u8, address: ?[]const u8, _: net.IoFlags) net.Error!usize {
     const unix = Socket.fromBase(self);
 
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    if (unix.connection == null) return error.NotConnected;
-    if (address != null) return error.Connected;
+    try validateConnection(self, address);
 
     _ = buffer;
     return 0;
@@ -214,8 +239,7 @@ fn socketSequentialSend(self: *net.Socket, packet: *net.Packet, address: ?[]cons
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    if (unix.connection == null) return error.NotConnected;
-    if (address != null) return error.Connected;
+    try validateConnection(self, address);
 
     _ = packet;
     return 0;
@@ -227,24 +251,121 @@ fn socketSequentialReceive(self: *net.Socket, buffer: []u8, address: ?[]const u8
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    if (unix.connection == null) return error.NotConnected;
-    if (address != null) return error.Connected;
+    try validateConnection(self, address);
 
     return 0;
+}
+
+fn socketAccept(self: *net.Socket, out_address: ?[]u8) net.Error!*net.Socket {
+    const listener = &self.role.listener;
+    _ = out_address;
+
+    const unix_client = blk: {
+        try listener.waitNotEmptyLock();
+        defer listener.unlock();
+
+        break :blk listener.popAtomic(*Socket);
+    };
+
+    const client = &unix_client.base;
+    errdefer client.deref();
+
+    const new_socket = try createSocket(self.@"type");
+    new_socket.ref();
+    errdefer new_socket.deref();
+
+    const new_unix = Socket.fromBase(new_socket);
+
+    connectionLock(unix_client, new_unix);
+    defer connectionUnlock(unix_client, new_unix);
+
+    if (!client.flags.connection_pending) return error.ConnectionRefused;
+
+    new_socket.role.client.peer = .fromPtr(unix_client);
+    client.role.client.peer = .fromPtr(new_socket);
+
+    client.flags.connection_pending = false;
+    new_socket.ref();
+
+    return new_socket;
 }
 
 fn socketConnect(self: *net.Socket, address: []const u8) net.Error!void {
     if (address.len == 0 or address.len > max_path_length) return error.InvalidArgs;
 
     const unix = Socket.fromBase(self);
+    const listener = blk: {
+        self.mutex.lockKeepPreemption();
+        defer self.mutex.unlockKeepPreemption();
+
+        if (self.isConnected()) return error.Connected;
+        if (self.flags.connection_pending) return error.Already;
+
+        const target = try findSocketByAddress(address);
+        defer target.base.deref();
+
+        if (self.@"type" != target.base.@"type") return error.ProtocolTypeMissmatch;
+
+        const listener = inner_blk: {
+            target.base.mutex.lock();
+            defer target.base.mutex.unlock();
+
+            if (!target.base.isListener()) return error.ConnectionRefused;
+            break :inner_blk &target.base.role.listener;
+        };
+
+        if (!listener.tryAddRequestLock()) return error.ConnectionRefused;
+
+        self.flags.connection_pending = true;
+        self.ref();
+
+        listener.pushAtomic(*Socket, unix);
+        listener.notifyAtomic();
+        listener.unlock();
+
+        break :blk listener;
+    };
+
+    listener.waitClientPending() catch |err| {
+        if (err != error.InProgress) {
+            self.mutex.lockKeepPreemption();
+            defer self.mutex.unlockKeepPreemption();
+
+            // Check if still not connected.
+            if (self.role.client.peer.asPtr(Socket) == null) {
+                // Remove from pending queue.
+                @branchHint(.likely);
+                self.flags.connection_pending = false;
+
+                listener.lock.lock();
+                defer listener.lock.unlock();
+
+                if (listener.removeWeakAtomic(*Socket, unix)) self.deref();
+                return err;
+            }
+
+            return;
+        }
+
+        return err;
+    };
+
+    if (!self.isConnected()) return error.ConnectionRefused;
+}
+
+fn socketListen(self: *net.Socket, pending_limit: u32) net.Error!void {
+    const unix = Socket.fromBase(self);
 
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    if (unix.connection != null) return error.Connected;
+    if (
+        self.isListener() or self.isConnected() or
+        self.flags.connection_pending or unix.address_type == .unnamed
+    ) return error.InvalidArgs;
 
-    const other = try findSocketByAddress(address);
-    try other.connectRequest(self);
+    self.role.listener = .create(*Socket, pending_limit);
+    self.flags.listener = true;
 }
 
 fn socketDelete(self: *net.Socket) void {
@@ -265,6 +386,7 @@ fn findSocketByAddress(address: []const u8) net.Error!*Socket {
     const task = sched.getCurrentTask();
     const root, const dir,
     const gid, const uid = if (task.spec == .user) blk: {
+        @branchHint(.likely);
         const process = task.spec.user.process;
         break :blk .{ process.root_dir, process.work_dir, process.gid, process.uid };
     } else .{ null, null, 0, 0 };
@@ -281,4 +403,51 @@ fn findSocketByAddress(address: []const u8) net.Error!*Socket {
     if (!dentry.inode.checkAccess(.rw, role)) return error.NoAccess;
 
     return socket;
+}
+
+fn connectionLock(self: *Socket, peer: *Socket) void {
+    if (@intFromPtr(self) < @intFromPtr(peer)) {
+        self.base.mutex.lockKeepPreemption();
+        peer.base.mutex.lock();
+    } else {
+        peer.base.mutex.lockKeepPreemption();
+        self.base.mutex.lock();
+    }
+}
+
+fn connectionUnlock(self: *Socket, peer: *Socket) void {
+    if (@intFromPtr(self) < @intFromPtr(peer)) {
+        peer.base.mutex.unlockKeepPreemption();
+        self.base.mutex.unlock();
+    } else {
+        self.base.mutex.unlockKeepPreemption();
+        peer.base.mutex.unlock();
+    }
+}
+
+fn disconnectSocket(self: *Socket) void {
+    std.debug.assert(self.base.mutex.isLocked());
+
+    // Return immediatly if not connected.
+    const peer = self.base.role.client.peer.asPtr(Socket) orelse return;
+    if (!peer.base.tryRef()) {
+        @branchHint(.cold);
+        return;
+    }
+    defer peer.base.deref();
+
+    connectionLock(self, peer);
+    defer connectionUnlock(self, peer);
+
+    // Already disconnected or connection is changed.
+    if (self.base.role.client.peer != peer) {
+        @branchHint(.unlikely);
+        return;
+    }
+
+    self.base.role.client.peer.setPtr(null);
+    peer.base.role.client.peer.setPtr(null);
+
+    self.base.deref();
+    peer.base.deref();
 }
