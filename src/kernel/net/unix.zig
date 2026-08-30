@@ -18,7 +18,7 @@ const AbstractAddress = struct {
         }
 
         pub fn eql(entry: *const Table.Entry, key: []const u8) bool {
-            const address = fromEntry(entry);
+            const address = fromEntry(@constCast(entry));
             for (key, address.path) |l, r| if (l != r) return false;
 
             return true;
@@ -27,8 +27,8 @@ const AbstractAddress = struct {
 
     const namespace_capacity = 2048;
 
-    path: [*:0]const u8,
-    entry: Table.Entry,
+    path: [*:0]u8,
+    entry: Table.Entry = .{},
 
     inline fn fromEntry(entry: *Table.Entry) *AbstractAddress {
         return @fieldParentPtr("entry", entry);
@@ -44,7 +44,7 @@ const Socket = struct {
         pathname,
     };
 
-    const AnyAddress = extern union {
+    const AnyAddress = union {
         abstract: AbstractAddress,
         dentry: *vfs.Dentry,
     };
@@ -52,7 +52,7 @@ const Socket = struct {
     pub const alloc_config: vm.auto.Config = .{ .allocator = .oma };
 
     base: net.Socket,
-    address: AnyAddress,
+    address: AnyAddress = undefined,
     address_type: AddressType = .unnamed,
 
     fn deinit(self: *Socket) void {
@@ -63,7 +63,7 @@ const Socket = struct {
                 defer path_lock.writeUnlock();
                 
                 path_table.removeEntry(&self.address.abstract.entry);
-                vm.gpa.free(self.address.abstract.path);
+                vm.gpa.free(@ptrCast(self.address.abstract.path));
             },
             .pathname => {
                 const dentry = self.address.dentry;
@@ -78,7 +78,7 @@ const Socket = struct {
     }
 
     inline fn fromEntry(entry: *AbstractAddress.Table.Entry) *Socket {
-        const any_address: *AnyAddress = @ptrCast(AbstractAddress.fromEntry(entry));
+        const any_address: *AnyAddress = @fieldParentPtr("abstract", AbstractAddress.fromEntry(entry));
         return  @fieldParentPtr("address", any_address);
     }
 };
@@ -125,6 +125,7 @@ pub fn init() !void {
 }
 
 fn createSocket(@"type": net.Socket.Type) net.Error!*net.Socket {
+    log.debug("create unix socket: {t}", .{@"type"});
     const ops = switch (@"type") {
         .stream => &socket_stream_ops,
         .datagram => &socket_datagram_ops,
@@ -148,6 +149,7 @@ inline fn validateConnection(socket: *net.Socket, address: ?[]const u8) net.Erro
 }
 
 fn socketBind(self: *net.Socket, address: []const u8) net.Error!void {
+    log.debug("unix socket bind: '{s}'", .{address});
     if (address.len == 0 or address.len > max_path_length) return error.InvalidArgs;
 
     const unix = Socket.fromBase(self);
@@ -164,7 +166,7 @@ fn socketBind(self: *net.Socket, address: []const u8) net.Error!void {
         @memcpy(path, address[1..]);
         buffer[address.len] = 0;
 
-        unix.address.abstract.* = .{ .path = path };
+        unix.address = .{ .abstract = .{ .path = @ptrCast(path.ptr) } };
         unix.address_type = .abstract;
 
         path_lock.writeLock();
@@ -193,67 +195,104 @@ fn socketBind(self: *net.Socket, address: []const u8) net.Error!void {
             .fromPtr(self),
         );
 
-        unix.address.dentry = dentry;
+        unix.address = .{ .dentry = dentry };
         unix.address_type = .pathname;
     }
 }
 
-fn socketStreamSend(self: *net.Socket, packet: *net.Packet, address: ?[]const u8, _: net.IoFlags) net.Error!usize {
-    const unix = Socket.fromBase(self);
-
+fn socketStreamSend(
+    self: *net.Socket, packet: *net.Packet,
+    address: ?[]const u8, flags: net.IoFlags,
+) net.Error!usize {
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    if (self.@"type" != .datagram) {
-        try validateConnection(self, address);
-    } else {
-        const unix_address = address orelse return error.NotConnected;
-        const unix_peer = try findSocketByAddress(unix_address);
-        defer unix_peer.base.deref();
-    }
+    try validateConnection(self, address);
 
     const unix_peer = self.role.client.peer.asPtr(Socket).?;
     const target = &unix_peer.base.role.client;
 
-    // Send packet to the target
-    target.recv_queue.prepend(&packet.node);
+    const size = packet.getDataSize();
+    const timeout_ns = if (flags.dont_wait) 0 else self.getSendTimeoutNs();
+    try target.recv_queue.pushWait(packet, timeout_ns);
 
-    return 0;
+    return size;
 }
 
-fn socketStreamReceive(self: *net.Socket, buffer: []u8, address: ?[]const u8, _: net.IoFlags) net.Error!usize {
-    const unix = Socket.fromBase(self);
+fn socketStreamReceive(
+    self: *net.Socket, buffer: []u8,
+    _: ?[]u8, flags: net.IoFlags,
+) net.Error!usize {
+    self.mutex.lock();
+    defer self.mutex.unlock();
 
+    try validateConnection(self, null);
+
+    const timeout_ns = self.getReceiveTimeoutNs();
+    return try self.role.client.recv_queue.readStreamWait(buffer, timeout_ns, flags);
+}
+
+fn socketSequentialSend(
+    self: *net.Socket, packet: *net.Packet,
+    address: ?[]const u8, _: net.IoFlags,
+) net.Error!usize {
     self.mutex.lock();
     defer self.mutex.unlock();
 
     try validateConnection(self, address);
 
-    _ = buffer;
-    return 0;
+    const unix_peer = self.role.client.peer.asPtr(Socket).?;
+    const target = &unix_peer.base.role.client;
+
+    const size = packet.getDataSize();
+    try target.recv_queue.push(packet);
+
+    return size;
 }
 
-fn socketSequentialSend(self: *net.Socket, packet: *net.Packet, address: ?[]const u8) net.Error!usize {
-    const unix = Socket.fromBase(self);
-
+fn socketSequentialReceive(
+    self: *net.Socket, buffer: []u8,
+    _: ?[]u8, flags: net.IoFlags,
+) net.Error!usize {
     self.mutex.lock();
     defer self.mutex.unlock();
 
-    try validateConnection(self, address);
+    try validateConnection(self, null);
 
-    _ = packet;
-    return 0;
+    const timeout_ns = self.getReceiveTimeoutNs();
+    return try self.role.client.recv_queue.readDatagramWait(buffer, timeout_ns, flags);
 }
 
-fn socketSequentialReceive(self: *net.Socket, buffer: []u8, address: ?[]const u8) net.Error!usize {
-    const unix = Socket.fromBase(self);
+fn socketDatagramSend(
+    self: *net.Socket, packet: *net.Packet,
+    address: ?[]const u8, _: net.IoFlags,
+) net.Error!usize {
+    self.mutex.lockKeepPreemption();
+    defer self.mutex.unlockKeepPreemption();
 
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    const unix_address = address orelse if (self.role.client.peer) {
+        // FIXME: Implement datagram socket connection.
+        log.err("FIXME: Implement datagram socket connection", .{});
+        unreachable;
+    } else return error.NotConnected;
 
-    try validateConnection(self, address);
+    const unix_peer = try findSocketByAddress(unix_address);
+    defer unix_peer.base.deref();
 
-    return 0;
+    const recv_queue = blk: {
+        unix_peer.base.mutex.lock();
+        defer unix_peer.base.mutex.unlock();
+
+        if (unix_peer.base.@"type" != self.@"type") return error.UnsupportedSocketType;
+        if (unix_peer.base.flags.shutdown_read) return error.ConnectionRefused;
+
+        break :blk &unix_peer.base.role.client.recv_queue;
+    };
+
+    const size = packet.getDataSize();
+    try recv_queue.push(packet);
+
+    return size;
 }
 
 fn socketAccept(self: *net.Socket, out_address: ?[]u8) net.Error!*net.Socket {
@@ -326,7 +365,7 @@ fn socketConnect(self: *net.Socket, address: []const u8) net.Error!void {
         break :blk listener;
     };
 
-    listener.waitClientPending() catch |err| {
+    listener.waitClientPending(self) catch |err| {
         if (err != error.InProgress) {
             self.mutex.lockKeepPreemption();
             defer self.mutex.unlockKeepPreemption();
@@ -364,7 +403,7 @@ fn socketListen(self: *net.Socket, pending_limit: u32) net.Error!void {
         self.flags.connection_pending or unix.address_type == .unnamed
     ) return error.InvalidArgs;
 
-    self.role.listener = .create(*Socket, pending_limit);
+    self.role.listener = try .create(*Socket, pending_limit);
     self.flags.listener = true;
 }
 
@@ -378,7 +417,7 @@ fn socketDelete(self: *net.Socket) void {
 fn findSocketByAddress(address: []const u8) net.Error!*Socket {
     if (address[0] == '\x00') {
         const entry = path_table.get(address[1..]) orelse return error.NoEnt;
-        const socket = Socket.fromEntry(&entry);
+        const socket = Socket.fromEntry(entry);
 
         return if (socket.base.tryRef()) socket else error.NoEnt;
     }

@@ -27,8 +27,8 @@ pub const Type = enum(u8) {
 };
 
 pub const Operations = struct {
-    pub const SendFn = *const fn (*Self, *net.Packet, ?[]const u8) Error!usize;
-    pub const ReceiveFn = *const fn (*Self, usize, ?[]const u8) Error!*net.Packet;
+    pub const SendFn = *const fn (*Self, *net.Packet, ?[]const u8, net.IoFlags) Error!usize;
+    pub const ReceiveFn = *const fn (*Self, []u8, ?[]u8, net.IoFlags) Error!usize;
     pub const BindFn = *const fn (*Self, []const u8) Error!void;
     pub const ListenFn = *const fn (*Self, u32) Error!void;
     pub const AcceptFn = *const fn (*Self, ?[]u8) Error!*Self;
@@ -43,11 +43,11 @@ pub const Operations = struct {
     connect: ConnectFn = &badConnect,
     delete: DeleteFn,
 
-    fn badSend(_: *Self, _: *net.Packet, _: ?[]const u8) Error!usize {
+    fn badSend(_: *Self, _: *net.Packet, _: ?[]const u8, _: net.IoFlags) Error!usize {
         return error.BadOperation;
     }
 
-    fn badReceive(_: *Self, _: usize, _: ?[]const u8) Error!*net.Packet {
+    fn badReceive(_: *Self, _: []u8, _: ?[]u8, _: net.IoFlags) Error!usize {
         return error.BadOperation;
     }
 
@@ -68,12 +68,227 @@ pub const Operations = struct {
     }
 };
 
+const Queue = struct {
+    packets: net.Packet.List = .{},
+    wait_queue: sched.WaitQueue = .{},
+    total_size: u32 = 0,
+    max_pages: u16 = 0,
+    lock: lib.sync.Spinlock = .{},
+
+    pub inline fn maxSize(self: *const Queue) u32 {
+        return @as(u32, self.max_pages) * vm.page_size;
+    }
+
+    pub fn push(self: *Queue, packet: *net.Packet) error{MessageTooBig}!void {
+        const data = packet.getData();
+
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        const new_total = data.len + self.total_size;
+        if (new_total > self.maxSize()) return error.MessageTooBig;
+
+        packet.ref();
+        self.total_size = @truncate(new_total);
+        self.packets.append(&packet.node);
+
+        sched.awakeAll(&self.wait_queue);
+    }
+
+    pub fn pushWait(self: *Queue, packet: *net.Packet, timeout_ns: u64) error{Timeout,Interrupted}!void {
+        const data = packet.getData();
+
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        var curr_timeout_ns = timeout_ns;
+        var new_total = data.len + self.total_size;
+        while (new_total > self.maxSize()) {
+            try doWaitUpdateTimeoutKeepLock(&self.wait_queue, &self.lock, &curr_timeout_ns);
+            new_total = data.len + self.total_size;
+        }
+
+        self.total_size = @truncate(new_total);
+        self.packets.append(&packet.node);
+
+        sched.awakeAll(&self.wait_queue);
+    }
+
+    pub fn pop(self: *Queue) ?*net.Packet {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        const packet = net.Packet.fromNode(self.packets.popFirst() orelse return null);
+        self.total_size -= packet.getDataSize();
+        sched.awakeAll(&self.wait_queue);
+
+        return packet;
+    }
+
+    pub fn popWait(self: *Queue, timeout_ns: u64) error{Timeout,Interrupted}!*net.Packet {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        try self.waitNotEmpty(timeout_ns);
+
+        const packet = net.Packet.fromNode(self.packets.popFirst().?);
+        self.total_size -= packet.getDataSize();
+        sched.awakeAll(&self.wait_queue);
+
+        return packet;
+    }
+
+    pub fn readDatagramWait(
+        self: *Queue, buffer: []u8,
+        timeout_ns: u64, flags: net.IoFlags,
+    ) error{Timeout,Interrupted}!u32 {
+        const real_timeout_ns = if (flags.dont_wait) 0 else timeout_ns;
+        const packet, const data = blk: {
+            self.lock.lock();
+            defer self.lock.unlock();
+
+            try self.waitNotEmpty(real_timeout_ns);
+
+            const packet = net.Packet.fromNode(self.packets.first.?);
+            const data = packet.getData();
+
+            if (flags.peek) {
+                packet.ref();
+            } else {
+                self.total_size -= @truncate(@min(data.len, buffer.len));
+                self.packets.remove(&packet.node);
+
+                sched.awakeAll(&self.wait_queue);
+            }
+
+            break :blk .{ packet, data };
+        };
+
+        const len = @min(data.len, buffer.len);
+        defer packet.deref();
+
+        @memcpy(buffer[0..len], data[0..len]);
+        return if (flags.truncate) packet.size else @truncate(len);
+    }
+
+    pub fn readStreamWait(
+        self: *Queue, buffer: []u8,
+        timeout_ns: u64, flags: net.IoFlags,
+    ) error{Timeout,Interrupted}!u32 {
+        if (buffer.len == 0) return 0;
+
+        const real_timeout_ns = if (flags.dont_wait) 0 else timeout_ns;
+        const first, const last, const last_data_offset = blk: {
+            self.lock.lock();
+            errdefer self.lock.unlock();
+
+            const min_to_read = if (flags.wait_all) buffer.len else 1;
+            var to_read: usize = 0;
+            var curr_last: ?*net.Packet.Node = null;
+
+            while (true) outer: {
+                while (self.packets.last == curr_last) {
+                    try doWaitTimeoutKeepLock(&self.wait_queue, &self.lock, real_timeout_ns);
+                }
+
+                var node = if (curr_last) |n| n.next else self.packets.first;
+                while (node) |n| : (node = n.next) {
+                    const packet = net.Packet.fromNode(n);
+                    to_read += packet.getDataSize();
+                    curr_last = n;
+
+                    if (flags.peek) packet.ref();
+                    if (buffer.len <= to_read) break :outer;
+                }
+
+                if (to_read >= min_to_read) break :outer;
+            }
+
+            const first = net.Packet.fromNode(self.packets.first.?);
+            const last = net.Packet.fromNode(curr_last.?);
+
+            if (flags.peek) {
+                @branchHint(.unlikely);
+                break :blk .{ first, last, last.data };
+            }
+
+            defer {
+                sched.awakeAll(&self.wait_queue);
+                self.lock.unlock();
+            }
+
+            const to_remove, const last_data_offset = if (to_read > buffer.len) rm: {
+                // Cut data in the last packet.
+                const rest_len = to_read - buffer.len;
+                const last_data_offset = last.data;
+                self.total_size -= buffer.len;
+                last.data = last.tail - rest_len;
+                last.ref();
+
+                const prev = last.node.prev orelse break :blk .{ first, last, last_data_offset };
+                break :rm .{ prev, last_data_offset };
+            } else rm: {
+                self.total_size -= to_read;
+                break :rm .{ &last.node, last.data };
+            };
+
+            // Remove packets from queue.
+            if (self.packets.last == to_remove) {
+                self.packets = .{};
+            } else {
+                const ltr = to_remove.?;
+                ltr.next.?.prev = null;
+                self.packets.first = ltr.next;
+            }
+
+            break :blk .{ first, last, last_data_offset };
+        };
+
+        // Copy packets that completely fits into a buffer.
+        var copied: usize = 0;
+        var packet = first;
+        while (packet != last) {
+            const data = packet.getData();
+            const current = packet;
+            defer current.deref();
+
+            @memcpy(buffer[copied..copied + data.len], data);
+            copied += data.len;
+
+            packet = net.Packet.fromNode(packet.next.?);
+        }
+
+        if (flags.peek) self.lock.unlock();
+
+        // Copy the last packet.
+        const last_data = last.buffer[last_data_offset..last.tail];
+        defer last.deref();
+
+        if (copied + last_data.len > buffer.len) {
+            const len = buffer.len - copied;
+            @memcpy(buffer[copied..], last_data[0..len]);
+            copied += len;
+        } else {
+            @memcpy(buffer[copied..copied + last_data.len], last_data);
+            copied += last_data.len;
+        }
+
+        return copied;
+    }
+
+    inline fn waitNotEmpty(self: *Queue, timeout_ns: u64) error{Timeout,Interrupted}!void {
+        while (self.packets.first == null) {
+            try doWaitTimeoutKeepLock(&self.wait_queue, &self.lock, timeout_ns);
+        }
+    }
+};
+
 const Listener = struct {
-    pending_queue: [*]anyopaque,
+    pending_queue: *anyopaque,
     pending_limit: u32 = 0,
     pending_size: u32 = 0,
-    lock: lib.sync.Spinlock = .{},
     wait_queue: sched.WaitQueue = .{},
+    lock: lib.sync.Spinlock = .{},
 
     pub fn create(comptime T: type, limit: u32) vm.Error!Listener {
         const size = @sizeOf(T) * limit;
@@ -90,7 +305,13 @@ const Listener = struct {
     }
 
     pub inline fn toSocket(self: *Listener) *Self {
-        return @fieldParentPtr("role", self);
+        const Union = comptime blk: {
+            const sock: Self = undefined;
+            break :blk @TypeOf(sock.role);
+        };
+
+        const @"union": *Union = @fieldParentPtr("listener", self);
+        return @fieldParentPtr("role", @"union");
     }
 
     pub inline fn getPendingAs(self: *Listener, comptime T: type) []T {
@@ -127,14 +348,16 @@ const Listener = struct {
         return false;
     }
 
-    pub fn waitNotEmptyLock(self: *Listener) void {
+    pub fn waitNotEmptyLock(self: *Listener) error{Timeout,Interrupted}!void {
         self.lock.lock();
         errdefer self.lock.unlock();
 
         const socket = self.toSocket();
         var timeout_ns = if (socket.recv_timeout_ns == 0) std.math.maxInt(u64) else socket.recv_timeout_ns;
 
-        while (self.pending_size == 0) try self.doWaitTimeout(&timeout_ns);
+        while (self.pending_size == 0) {
+            try doWaitUpdateTimeoutKeepLock(&self.wait_queue, &self.lock, &timeout_ns);
+        }
     }
 
     pub fn waitClientPending(self: *Listener, client: *Self) Error!void {
@@ -147,7 +370,9 @@ const Listener = struct {
         const send_timeout_ns = client.role.client.send_timeout_ns;
         var timeout_ns = if (send_timeout_ns == 0) std.math.maxInt(u64) else send_timeout_ns;
 
-        while (client.flags.atomicLoad().connection_pending) try self.doWaitTimeout(&timeout_ns);
+        while (client.flags.atomicLoad().connection_pending) {
+            try doWaitUpdateTimeoutKeepLock(&self.wait_queue, &self.lock, &timeout_ns);
+        }
     }
 
     pub fn tryAddRequestLock(self: *Listener) bool {
@@ -169,25 +394,11 @@ const Listener = struct {
     pub fn notifyAtomic(self: *Listener) void {
         sched.awakeAll(&self.wait_queue);
     }
-
-    fn doWaitTimeout(self: *Listener, timeout_ns: *u64) error{Timeout,Interrupted}!void {
-        const scheduler = sched.getCurrent();
-        var entry = scheduler.initWait();
-
-        self.wait_queue.push(&entry);
-        errdefer self.wait_queue.removeWeak(&entry);
-
-        self.lock.unlock();
-        defer self.lock.lock();
-
-        try scheduler.doWaitTimeout(timeout_ns.*, true);
-        timeout_ns.* -|= sys.time.getUpTimeNs() -| entry.timestamp;
-    }
 };
 
 const Client = struct {
-    recv_queue: net.Packet.List = .{},
-    send_queue: net.Packet.List = .{},
+    recv_queue: Queue = .{},
+    send_queue: Queue = .{},
     send_timeout_ns: u64 = 0,
     peer: lib.AnyData = .{},
 };
@@ -197,7 +408,9 @@ const Flags = packed struct(u8) {
     listener: bool = false,
     non_block: bool = false,
     connection_pending: bool = false,
-    _: u5 = 0,
+    shutdown_read: bool = false,
+    shutdown_write: bool = false,
+    _: u3 = 0,
 
     pub inline fn atomicLoad(self: *Flags) Flags {
         return @atomicLoad(Flags, self, .acquire);
@@ -234,7 +447,7 @@ const socket_dentry: Dentry = .{
 const socket_file_ops: File.Operations = .{};
 
 ops: *const Operations,
-role: extern union {
+role: union {
     listener: Listener,
     client: Client,
 } = .{ .client = .{} },
@@ -258,7 +471,7 @@ pub fn create(family: net.Family, @"type": Type) Error!*File {
     file.* = .{
         .type = .socket,
         .perm = .rw,
-        .dentry = &socket_dentry,
+        .dentry = @constCast(&socket_dentry),
         .ops = &socket_file_ops,
         .data = .fromPtr(socket),
     };
@@ -294,14 +507,22 @@ pub inline fn isConnected(self: *Self) bool {
     return self.role.client.peer.ptr != null;
 }
 
+pub inline fn getSendTimeoutNs(self: *const Self) u64 {
+    return if (self.flags.non_block) 0 else self.role.client.send_timeout_ns;
+}
+
+pub inline fn getReceiveTimeoutNs(self: *const Self) u64 {
+    return if (self.flags.non_block) 0 else self.recv_timeout_ns;
+}
+
 pub inline fn send(self: *Self, packet: *net.Packet, address: ?[]const u8, flags: net.IoFlags) Error!usize {
     if (!self.isClient()) return error.BadOperation;
-    return self.ops.send(self, packet, address);
+    return self.ops.send(self, packet, address, flags);
 }
 
 pub inline fn receive(self: *Self, buffer: []u8, address: ?[]const u8, flags: net.IoFlags) Error!*net.Packet {
     if (!self.isClient()) return error.BadOperation;
-    return self.ops.receive(self, buffer, address);
+    return self.ops.receive(self, buffer, address, flags);
 }
 
 pub inline fn bind(self: *Self, address: ?[]const u8) Error!void {
@@ -342,4 +563,39 @@ pub fn acceptAsFileDescriptor(self: *Self, out_address: ?[]u8) Error!*File {
 pub inline fn connect(self: *Self, address: []const u8) Error!void {
     if (self.isListener()) return error.BadOperation;
     return self.ops.connect(self, address);
+}
+
+fn doWaitUpdateTimeoutKeepLock(
+    wait_queue: *sched.WaitQueue,
+    lock: *lib.sync.Spinlock,
+    timeout_ns: *u64,
+) error{Timeout,Interrupted}!void {
+    const scheduler = sched.getCurrent();
+    var entry = scheduler.initWait();
+
+    wait_queue.push(&entry);
+    errdefer wait_queue.removeWeak(&entry);
+
+    lock.unlock();
+    defer lock.lock();
+
+    try scheduler.doWaitTimeout(timeout_ns.*, true);
+    timeout_ns.* -|= sys.time.getUpTimeNs() -| entry.timestamp;
+}
+
+fn doWaitTimeoutKeepLock(
+    wait_queue: *sched.WaitQueue,
+    lock: *lib.sync.Spinlock,
+    timeout_ns: u64,
+) error{Timeout,Interrupted}!void {
+    const scheduler = sched.getCurrent();
+    var entry = scheduler.initWait();
+
+    wait_queue.push(&entry);
+    errdefer wait_queue.removeWeak(&entry);
+
+    lock.unlock();
+    defer lock.lock();
+
+    try scheduler.doWaitTimeout(timeout_ns, true);
 }

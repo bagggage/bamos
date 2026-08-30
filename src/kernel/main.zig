@@ -13,6 +13,7 @@ const dev = @import("dev.zig");
 const lib = @import("lib.zig");
 const logger = @import("logger.zig");
 const log = std.log;
+const net = @import("net.zig");
 const sched = @import("sched.zig");
 const smp = @import("smp.zig");
 const sys = @import("sys.zig");
@@ -104,6 +105,7 @@ fn kernelStartupTask() noreturn {
     logger.initWorker() catch @panic("failed to start logger worker");
 
     init(vfs);
+    init(net);
     init(dev);
 
     const allocated = @as(usize, vm.PageAllocator.getAllocatedPages()) * vm.page_size;

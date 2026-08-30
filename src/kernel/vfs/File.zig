@@ -195,7 +195,7 @@ pub fn deref(self: *File) void {
             const epoll = self.data.asPtr(Epoll).?;
             epoll.delete();
         },
-        else => std.log.err("vfs.File: close not implemented for {t} object", .{self.type}),
+        // else => std.log.err("vfs.File: close not implemented for {t} object", .{self.type}),
     };
 }
 

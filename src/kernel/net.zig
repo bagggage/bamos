@@ -7,6 +7,7 @@ const std = @import("std");
 const lib = @import("lib.zig");
 const log = std.log.scoped(.net);
 const linux = std.os.linux;
+const sched = @import("sched.zig");
 const vfs = @import("vfs.zig");
 const vm = @import("vm.zig");
 
@@ -16,6 +17,7 @@ pub const Error = vfs.Error || error {
     Connected,
     ConnectionRefused,
     InProgress,
+    MessageTooBig,
     NotConnected,
     NotSocket,
     ProtocolTypeMissmatch,
@@ -48,7 +50,7 @@ pub const Packet = struct {
     pub const max_size = vm.PageAllocator.max_alloc_pages * vm.page_size;
     pub const max_small_size = vm.page_size / 2;
 
-    pub const List = lib.atomic.SinglyLinkedList;
+    pub const List = std.DoublyLinkedList;
     pub const Node = List.Node;
 
     pub const alloc_config: vm.auto.Config = .{
@@ -95,7 +97,7 @@ pub const Packet = struct {
             vm.PageAllocator.free(vm.getPhysLma(self.buffer), vm.bytesToRank(self.size));
         }
 
-        vm.auto.delete(Packet, self);
+        vm.auto.free(Packet, self);
     }
 
     pub inline fn ref(self: *Packet) void {
@@ -104,6 +106,30 @@ pub const Packet = struct {
 
     pub inline fn deref(self: *Packet) void {
         if (self.ref_counter.put()) self.delete();
+    }
+
+    pub inline fn fromNode(self: *Node) *Packet {
+        return @fieldParentPtr("node", self);
+    }
+
+    pub inline fn getDataSize(self: *const Packet) u32 {
+        return self.tail - self.data;
+    }
+
+    pub inline fn getTailSize(self: *const Packet) u32 {
+        return self.size - self.tail;
+    }
+
+    pub inline fn getHeaderAs(self: *Packet, comptime T: type) *T {
+        return @ptrCast(self.buffer);
+    }
+
+    pub inline fn getData(self: *Packet) []u8 {
+        return self.buffer[self.data..self.tail];
+    }
+
+    pub inline fn getTail(self: *Packet) []u8 {
+        return self.buffer[self.tail..self.size];
     }
 };
 
@@ -139,7 +165,7 @@ pub fn registerProtocolFamily(family: Family, desc: *const Family.Descriptor) er
     family_rw_lock.writeLock();
     defer family_rw_lock.writeUnlock();
 
-    const idx = @intFromPtr(family) - 1;
+    const idx = @intFromEnum(family) - 1;
     if (families[idx] != null) return error.Exists;
 
     families[idx] = desc;
@@ -164,7 +190,7 @@ pub fn createSocket(family: Family, @"type": Socket.Type) Error!*Socket {
         family_rw_lock.readLock();
         defer family_rw_lock.readUnlock();
 
-        const idx = @intFromPtr(family) - 1;
+        const idx = @intFromEnum(family) - 1;
         break :blk families[idx] orelse return error.UnsupportedFamily;
     };
 
