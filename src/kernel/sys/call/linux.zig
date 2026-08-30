@@ -10,6 +10,7 @@ const arch = lib.arch;
 const lib = @import("../../lib.zig");
 const linux = std.os.linux;
 const log = std.log.scoped(.@"sys.call.linux");
+const net = @import("../../net.zig");
 const posix = std.posix;
 const sched = @import("../../sched.zig");
 const smp = @import("../../smp.zig");
@@ -17,6 +18,8 @@ const sys = @import("../../sys.zig");
 const trace = std.log.scoped(.@"sys.call.trace");
 const vfs = @import("../../vfs.zig");
 const vm = @import("../../vm.zig");
+
+const Error = sys.exe.Error || net.Error;
 
 const SyscallFn = ?*const fn () callconv(.c) isize;
 
@@ -29,8 +32,12 @@ pub const table: [table_len]SyscallFn = blk: {
         result[@intFromEnum(linux.SYS.arch_prctl)] = @ptrCast(&archPrCtl);
     }
 
+    result[@intFromEnum(linux.SYS.accept)]          = @ptrCast(&accept);
+    result[@intFromEnum(linux.SYS.accept4)]         = @ptrCast(&accept4);
     result[@intFromEnum(linux.SYS.access)]          = @ptrCast(&access);
+    result[@intFromEnum(linux.SYS.bind)]            = @ptrCast(&bind);
     result[@intFromEnum(linux.SYS.brk)]             = @ptrCast(&brk);
+    result[@intFromEnum(linux.SYS.connect)]         = @ptrCast(&connect);
     result[@intFromEnum(linux.SYS.clock_gettime)]   = @ptrCast(&clockGetTime);
     result[@intFromEnum(linux.SYS.clock_nanosleep)] = @ptrCast(&clockNanoSleep);
     result[@intFromEnum(linux.SYS.clone)]           = @ptrCast(arch.syscall.contextCall(clone, "clone"));
@@ -74,6 +81,7 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.getuid)]          = @ptrCast(&getUid);
     result[@intFromEnum(linux.SYS.ioctl)]           = @ptrCast(&ioctl);
     result[@intFromEnum(linux.SYS.link)]            = @ptrCast(&link);
+    result[@intFromEnum(linux.SYS.listen)]          = @ptrCast(&listen);
     result[@intFromEnum(linux.SYS.lseek)]           = @ptrCast(&seek);
     result[@intFromEnum(linux.SYS.lstat)]           = @ptrCast(&lstat);
     result[@intFromEnum(linux.SYS.mkdir)]           = @ptrCast(&mkdir);
@@ -85,18 +93,20 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.nanosleep)]       = @ptrCast(&nanoSleep);
     result[@intFromEnum(linux.SYS.open)]            = @ptrCast(&open);
     result[@intFromEnum(linux.SYS.openat)]          = @ptrCast(&openAt);
-    result[@intFromEnum(linux.SYS.pwritev)]         = @ptrCast(&pwritev);
-    result[@intFromEnum(linux.SYS.pwrite64)]        = @ptrCast(&pwrite);
-    result[@intFromEnum(linux.SYS.pselect6)]        = @ptrCast(&pselect);
-    result[@intFromEnum(linux.SYS.prlimit64)]       = @ptrCast(&prlimit64);
-    result[@intFromEnum(linux.SYS.preadv)]          = @ptrCast(&preadv);
-    result[@intFromEnum(linux.SYS.pread64)]         = @ptrCast(&pread);
-    result[@intFromEnum(linux.SYS.poll)]            = @ptrCast(&poll);
     result[@intFromEnum(linux.SYS.pipe)]            = @ptrCast(&pipe);
+    result[@intFromEnum(linux.SYS.poll)]            = @ptrCast(&poll);
+    result[@intFromEnum(linux.SYS.pread64)]         = @ptrCast(&pread);
+    result[@intFromEnum(linux.SYS.preadv)]          = @ptrCast(&preadv);
+    result[@intFromEnum(linux.SYS.prlimit64)]       = @ptrCast(&prlimit64);
+    result[@intFromEnum(linux.SYS.pselect6)]        = @ptrCast(&pselect);
+    result[@intFromEnum(linux.SYS.pwrite64)]        = @ptrCast(&pwrite);
+    result[@intFromEnum(linux.SYS.pwritev)]         = @ptrCast(&pwritev);
     result[@intFromEnum(linux.SYS.read)]            = @ptrCast(&read);
     result[@intFromEnum(linux.SYS.readlink)]        = @ptrCast(&readLink);
     result[@intFromEnum(linux.SYS.readlinkat)]      = @ptrCast(&readLinkAt);
     result[@intFromEnum(linux.SYS.readv)]           = @ptrCast(&readv);
+    result[@intFromEnum(linux.SYS.recvfrom)]        = @ptrCast(&receiveFrom);
+    result[@intFromEnum(linux.SYS.recvmsg)]         = @ptrCast(&receiveMessage);
     result[@intFromEnum(linux.SYS.rseq)]            = @ptrCast(&rseq);
     result[@intFromEnum(linux.SYS.rmdir)]           = @ptrCast(&rmdir);
     result[@intFromEnum(linux.SYS.rt_sigaction)]    = @ptrCast(&sigAction);
@@ -104,10 +114,13 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.rt_sigreturn)]    = @ptrCast(arch.syscall.contextCall(sigReturn, "sigReturn"));
     result[@intFromEnum(linux.SYS.rt_sigsuspend)]   = @ptrCast(&sigSuspend);
     result[@intFromEnum(linux.SYS.select)]          = @ptrCast(&select);
+    result[@intFromEnum(linux.SYS.sendmsg)]         = @ptrCast(&sendMessage);
+    result[@intFromEnum(linux.SYS.sendto)]          = @ptrCast(&sendTo);
     result[@intFromEnum(linux.SYS.set_robust_list)] = @ptrCast(&setRobustList);
     result[@intFromEnum(linux.SYS.set_tid_address)] = @ptrCast(&setTidAddress);
     result[@intFromEnum(linux.SYS.sethostname)]     = @ptrCast(&setHostName);
     result[@intFromEnum(linux.SYS.setpgid)]         = @ptrCast(&setProcGroup);
+    result[@intFromEnum(linux.SYS.socket)]          = @ptrCast(&socket);
     result[@intFromEnum(linux.SYS.stat)]            = @ptrCast(&stat);
     result[@intFromEnum(linux.SYS.symlink)]         = @ptrCast(&symlink);
     result[@intFromEnum(linux.SYS.symlinkat)]       = @ptrCast(&symlinkAt);
@@ -257,7 +270,7 @@ inline fn errorFromE(comptime e: linux.E) isize {
     return -code;
 }
 
-fn errorFromZig(e: sys.exe.Error) isize {
+fn errorFromZig(e: Error) isize {
     return switch (e) {
         error.BadAbi,
         error.BadFormat         => errorFromE(.NOEXEC),
@@ -289,6 +302,20 @@ fn errorFromZig(e: sys.exe.Error) isize {
         error.NoFs,
         error.TooManyLinks      => errorFromE(.LOOP),
         error.Uninitialized     => errorFromE(.NODEV),
+        // Network specific errors.
+        error.AddressInUse      => errorFromE(.ADDRINUSE),
+        error.Already           => errorFromE(.ALREADY),
+        error.Connected         => errorFromE(.ISCONN),
+        error.ConnectionRefused => errorFromE(.CONNREFUSED),
+        error.InProgress => errorFromE(.INPROGRESS),
+        error.MessageTooBig => errorFromE(.MSGSIZE),
+        error.NotConnected      => errorFromE(.NOTCONN),
+        error.NotSocket => errorFromE(.NOTSOCK),
+        error.ProtocolTypeMissmatch => errorFromE(.PROTOTYPE),
+        error.Timeout => errorFromE(.TIMEDOUT),
+        error.UnsupportedFamily => errorFromE(.AFNOSUPPORT),
+        error.UnsupportedProtocol => errorFromE(.PROTONOSUPPORT),
+        error.UnsupportedSocketType => errorFromE(.SOCKTNOSUPPORT),
     };
 }
 
@@ -370,6 +397,176 @@ fn accessImpl(fd: linux.fd_t, path: [*c]const u8, mode: u16, flags: u32) isize {
 
     if (!dentry.inode.checkAccess(@enumFromInt(perm), role)) return errorFromE(.ACCES);
     return 0;
+}
+
+fn getSocketByFd(fd: linux.fd_t) Error!struct{ *vfs.File, *net.Socket } {
+    if (fd < 0) return error.BadFileDescriptor;
+
+    const proc = sys.Process.getCurrent();
+    const file = proc.files.get(@intCast(fd)) orelse return error.BadFileDescriptor;
+    errdefer file.deref();
+
+    if (file.type != .socket) return error.NotSocket;
+
+    return .{ file, net.Socket.fromFile(file) };
+}
+
+fn getNetAddressData(
+    sock: *net.Socket,
+    address: *const linux.sockaddr,
+    len: linux.socklen_t,
+) Error![]const u8 {
+    const data_offset = @offsetOf(linux.sockaddr, "data");
+    if (len < data_offset) return error.InvalidArgs;
+
+    try validateMemoryArgs(@intFromPtr(address), @sizeOf(linux.sockaddr));
+
+    if (address.family != @intFromEnum(sock.family)) return error.InvalidArgs;
+    const data_ptr: [*]const u8 = @ptrCast(&address.data[0]);
+    const data_len = @as(u32, @intCast(len)) - data_offset;
+
+    return data_ptr[0..data_len];
+}
+
+fn accept(fd: linux.fd_t, address: ?*linux.sockaddr, len: ?*linux.socklen_t) isize {
+    trace.info("accept({}, 0x{x}, 0x{x})", .{fd, @intFromPtr(address), @intFromPtr(len)});
+
+    return acceptImpl(fd, address, len, 0);
+}
+
+fn accept4(fd: linux.fd_t, address: ?*linux.sockaddr, len: ?*linux.socklen_t, flags: u32) isize {
+    trace.info("accept4({}, 0x{x}, 0x{x}, 0x{x})", .{
+        fd, @intFromPtr(address), @intFromPtr(len), flags
+    });
+
+    return acceptImpl(fd, address, len, flags);
+}
+
+fn acceptImpl(fd: linux.fd_t, address: ?*linux.sockaddr, len: ?*linux.socklen_t, flags: u32) isize {
+    const file,
+    const sock = getSocketByFd(fd) catch |err| return errorFromZig(err);
+    defer file.deref();
+
+    var out_address: []u8 = &.{};
+    const out_ptr = if (address) |addr| blk: {
+        const len_ptr = len orelse return errorFromE(.FAULT);
+        validateMemoryArgs(@intFromPtr(len), @sizeOf(linux.socklen_t)) catch return errorFromE(.FAULT);
+
+        const data = getNetAddressData(
+            sock, addr, len_ptr.*
+        ) catch |err| return errorFromZig(err);
+
+        out_address = @constCast(data);
+        break :blk &out_address;
+    } else null;
+
+    const proc = sys.Process.getCurrent();
+    const new_fd = sock.acceptAsFileDescriptor(out_ptr) catch |err| return errorFromZig(err);
+    const new_sock = net.Socket.fromFile(new_fd);
+    const desc = proc.files.newDescriptor(new_fd) catch |err| {
+        new_fd.deref();
+        return errorFromZig(err);
+    };
+
+    if (out_ptr != null) len.?.* = @truncate(out_address.len);
+    if ((flags & linux.SOCK.NONBLOCK) != 0) new_sock.flags.non_block = true;
+    if ((flags & linux.SOCK.CLOEXEC) != 0) _ = proc.files.setCloseOnExec(desc.idx, true);
+
+    return desc.idx;
+}
+
+fn bind(fd: linux.fd_t, address: *const linux.sockaddr, len: linux.socklen_t) isize {
+    trace.info("bind({}, 0x{x}, {})", .{fd, @intFromPtr(address), len});
+
+    const file,
+    const sock = getSocketByFd(fd) catch |err| return errorFromZig(err);
+    defer file.deref();
+
+    const data = getNetAddressData(
+        sock, address, len
+    ) catch |err| return errorFromZig(err);
+
+    sock.bind(data) catch |err| return errorFromZig(err);
+    log.debug("socket binded to address '{s}'", .{data});
+
+    return 0;
+}
+
+fn connect(fd: linux.fd_t, address: *const linux.sockaddr, len: linux.socklen_t) isize {
+    trace.info("connect({}, 0x{x}, {})", .{fd, @intFromPtr(address), len});
+
+    const file,
+    const sock = getSocketByFd(fd) catch |err| return errorFromZig(err);
+    defer file.deref();
+
+    const data = getNetAddressData(
+        sock, address, len
+    ) catch |err| return errorFromZig(err);
+
+    log.debug("connectinig to '{s}'", .{data});
+    sock.connect(data) catch |err| return errorFromZig(err);
+
+    return 0;
+}
+
+fn listen(fd: linux.fd_t, backlog: i32) isize {
+    trace.info("listen({}, {})", .{fd, backlog});
+    if (fd < 0) return errorFromE(.BADF);
+
+    const file,
+    const sock = getSocketByFd(fd) catch |err| return errorFromZig(err);
+    defer file.deref();
+
+    const default_limit = 16;
+    const limit: u32 = if (backlog < 1) default_limit else @intCast(backlog);
+
+    sock.listen(limit) catch |err| return errorFromZig(err);
+
+    return 0;
+}
+
+fn receiveFrom() isize {
+    return 0;
+}
+
+fn receiveMessage() isize {
+    return 0;
+}
+
+fn sendTo() isize {
+    return 0;
+}
+
+fn sendMessage() isize {
+    return 0;
+}
+
+fn socket(domain: u32, @"type": u32, protocol: u32) isize {
+    trace.info("socket({}, {}, {})", .{domain, @"type", protocol});
+
+    if (domain >= net.Family.max) return errorFromE(.AFNOSUPPORT);
+
+    const raw_type = @"type" & ~@as(u32, linux.SOCK.CLOEXEC | linux.SOCK.NONBLOCK);
+    const sock_type = std.enums.fromInt(net.Socket.Type, raw_type) orelse return errorFromE(.INVAL);
+    const file = net.Socket.create(
+        @enumFromInt(domain), sock_type
+    ) catch |err| return errorFromZig(err);
+
+    const sock = net.Socket.fromFile(file);
+    sock.flags.non_block = (@"type" & linux.SOCK.NONBLOCK) != 0;
+
+    const proc = sys.Process.getCurrent();
+    const desc = proc.files.newDescriptor(file) catch |err| {
+        file.deref();
+        return errorFromZig(err);
+    };
+
+    if ((@"type" & linux.SOCK.CLOEXEC) != 0) {
+        _ = proc.files.setCloseOnExec(desc.idx, true);
+    }
+
+    log.debug("socket fd: {}", .{desc.idx});
+    return desc.idx;
 }
 
 fn brk(new_brk: usize) callconv(.c) usize {
@@ -1717,7 +1914,7 @@ fn epollCreateImpl(flags: u32) isize {
 
     const proc = sys.Process.getCurrent();
     const epoll = vfs.Epoll.new() catch return errorFromE(.NOMEM);
-    defer epoll.deref();
+    errdefer epoll.deref();
 
     const desc = proc.files.newDescriptor(epoll) catch |err| return errorFromZig(err);
     if ((flags & linux.EPOLL.CLOEXEC) != 0) _ = proc.files.setCloseOnExec(desc.idx, true);

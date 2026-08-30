@@ -31,7 +31,7 @@ pub const Operations = struct {
     pub const ReceiveFn = *const fn (*Self, []u8, ?[]u8, net.IoFlags) Error!usize;
     pub const BindFn = *const fn (*Self, []const u8) Error!void;
     pub const ListenFn = *const fn (*Self, u32) Error!void;
-    pub const AcceptFn = *const fn (*Self, ?[]u8) Error!*Self;
+    pub const AcceptFn = *const fn (*Self, ?*[]u8) Error!*Self;
     pub const ConnectFn = *const fn (*Self, []const u8) Error!void;
     pub const DeleteFn = *const fn (*Self) void;
 
@@ -59,7 +59,7 @@ pub const Operations = struct {
         return error.BadOperation;
     }
 
-    fn badAccept(_: *Self, _: ?[]u8) Error!*Self {
+    fn badAccept(_: *Self, _: ?*[]u8) Error!*Self {
         return error.BadOperation;
     }
 
@@ -495,6 +495,10 @@ pub fn deref(self: *Self) void {
     }
 }
 
+pub inline fn fromFile(file: *File) *Self {
+    return file.data.asPtr(Self).?;
+}
+
 pub inline fn isListener(self: *Self) bool {
     return self.flags.listener;
 }
@@ -525,7 +529,7 @@ pub inline fn receive(self: *Self, buffer: []u8, address: ?[]const u8, flags: ne
     return self.ops.receive(self, buffer, address, flags);
 }
 
-pub inline fn bind(self: *Self, address: ?[]const u8) Error!void {
+pub inline fn bind(self: *Self, address: []const u8) Error!void {
     return self.ops.bind(self, address);
 }
 
@@ -534,24 +538,23 @@ pub inline fn listen(self: *Self, max_pending_connections: u32) Error!void {
     return self.ops.listen(self, max_pending_connections);
 }
 
-pub inline fn accept(self: *Self, out_address: ?[]u8) Error!*Self {
+pub inline fn accept(self: *Self, out_address: ?*[]u8) Error!*Self {
     if (!self.isListener()) return error.InvalidArgs;
     return self.ops.accept(self, out_address);
 }
 
-pub fn acceptAsFileDescriptor(self: *Self, out_address: ?[]u8) Error!*File {
+pub fn acceptAsFileDescriptor(self: *Self, out_address: ?*[]u8) Error!*File {
     if (!self.isListener()) return error.BadOperation;
-
-    const socket = try self.accept(out_address);
-    errdefer socket.deref();
 
     const file = vm.auto.alloc(File) orelse return error.NoMemory;
     errdefer vm.auto.free(File, file);
 
+    const socket = try self.accept(out_address);
+
     file.* = .{
         .type = .socket,
         .perm = .rw,
-        .dentry = &socket_dentry,
+        .dentry = @constCast(&socket_dentry),
         .ops = &socket_file_ops,
         .data = .fromPtr(socket),
     };
