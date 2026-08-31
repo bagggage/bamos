@@ -28,7 +28,7 @@ pub const Type = enum(u8) {
 
 pub const Operations = struct {
     pub const SendFn = *const fn (*Self, *net.Packet, ?[]const u8, net.IoFlags) Error!usize;
-    pub const ReceiveFn = *const fn (*Self, []u8, ?[]u8, net.IoFlags) Error!usize;
+    pub const ReceiveFn = *const fn (*Self, []u8, ?*[]u8, net.IoFlags) Error!usize;
     pub const BindFn = *const fn (*Self, []const u8) Error!void;
     pub const ListenFn = *const fn (*Self, u32) Error!void;
     pub const AcceptFn = *const fn (*Self, ?*[]u8) Error!*Self;
@@ -47,7 +47,7 @@ pub const Operations = struct {
         return error.BadOperation;
     }
 
-    fn badReceive(_: *Self, _: []u8, _: ?[]u8, _: net.IoFlags) Error!usize {
+    fn badReceive(_: *Self, _: []u8, _: ?*[]u8, _: net.IoFlags) Error!usize {
         return error.BadOperation;
     }
 
@@ -72,7 +72,7 @@ const Queue = struct {
     packets: net.Packet.List = .{},
     wait_queue: sched.WaitQueue = .{},
     total_size: u32 = 0,
-    max_pages: u16 = 0,
+    max_pages: u16 = 1,
     lock: lib.sync.Spinlock = .{},
 
     pub inline fn maxSize(self: *const Queue) u32 {
@@ -104,10 +104,12 @@ const Queue = struct {
         var curr_timeout_ns = timeout_ns;
         var new_total = data.len + self.total_size;
         while (new_total > self.maxSize()) {
+            log.debug("wait to send", .{});
             try doWaitUpdateTimeoutKeepLock(&self.wait_queue, &self.lock, &curr_timeout_ns);
             new_total = data.len + self.total_size;
         }
 
+        log.debug("sending packet", .{});
         self.total_size = @truncate(new_total);
         self.packets.append(&packet.node);
 
@@ -186,24 +188,29 @@ const Queue = struct {
             var to_read: usize = 0;
             var curr_last: ?*net.Packet.Node = null;
 
-            while (true) outer: {
+            outer: while (true) {
                 while (self.packets.last == curr_last) {
+                    log.debug("wait on receive", .{});
                     try doWaitTimeoutKeepLock(&self.wait_queue, &self.lock, real_timeout_ns);
                 }
 
+                log.debug("packets ready", .{});
                 var node = if (curr_last) |n| n.next else self.packets.first;
                 while (node) |n| : (node = n.next) {
                     const packet = net.Packet.fromNode(n);
                     to_read += packet.getDataSize();
                     curr_last = n;
 
+                    log.debug("read packet: {} bytes / min: {}", .{packet.getDataSize(), min_to_read});
                     if (flags.peek) packet.ref();
                     if (buffer.len <= to_read) break :outer;
                 }
 
+                log.debug("check: to read: {} / min: {}", .{to_read, min_to_read});
                 if (to_read >= min_to_read) break :outer;
             }
 
+            log.debug("out of receive loop", .{});
             const first = net.Packet.fromNode(self.packets.first.?);
             const last = net.Packet.fromNode(curr_last.?);
 
@@ -217,18 +224,19 @@ const Queue = struct {
                 self.lock.unlock();
             }
 
+            log.debug("remove packets", .{});
             const to_remove, const last_data_offset = if (to_read > buffer.len) rm: {
                 // Cut data in the last packet.
-                const rest_len = to_read - buffer.len;
+                const rest_len: u32 = @truncate(to_read - buffer.len);
                 const last_data_offset = last.data;
-                self.total_size -= buffer.len;
+                self.total_size -= @truncate(buffer.len);
                 last.data = last.tail - rest_len;
                 last.ref();
 
                 const prev = last.node.prev orelse break :blk .{ first, last, last_data_offset };
                 break :rm .{ prev, last_data_offset };
             } else rm: {
-                self.total_size -= to_read;
+                self.total_size -= @truncate(to_read);
                 break :rm .{ &last.node, last.data };
             };
 
@@ -236,14 +244,14 @@ const Queue = struct {
             if (self.packets.last == to_remove) {
                 self.packets = .{};
             } else {
-                const ltr = to_remove.?;
-                ltr.next.?.prev = null;
-                self.packets.first = ltr.next;
+                to_remove.next.?.prev = null;
+                self.packets.first = to_remove.next;
             }
 
             break :blk .{ first, last, last_data_offset };
         };
 
+        log.debug("copy packets data, queue size: {}", .{self.total_size});
         // Copy packets that completely fits into a buffer.
         var copied: usize = 0;
         var packet = first;
@@ -255,7 +263,7 @@ const Queue = struct {
             @memcpy(buffer[copied..copied + data.len], data);
             copied += data.len;
 
-            packet = net.Packet.fromNode(packet.next.?);
+            packet = net.Packet.fromNode(packet.node.next.?);
         }
 
         if (flags.peek) self.lock.unlock();
@@ -273,7 +281,7 @@ const Queue = struct {
             copied += last_data.len;
         }
 
-        return copied;
+        return @truncate(copied);
     }
 
     inline fn waitNotEmpty(self: *Queue, timeout_ns: u64) error{Timeout,Interrupted}!void {
@@ -399,7 +407,7 @@ const Listener = struct {
 const Client = struct {
     recv_queue: Queue = .{},
     send_queue: Queue = .{},
-    send_timeout_ns: u64 = 0,
+    send_timeout_ns: u64 = std.math.maxInt(u64),
     peer: lib.AnyData = .{},
 };
 
@@ -452,7 +460,7 @@ role: union {
     client: Client,
 } = .{ .client = .{} },
 
-recv_timeout_ns: u64 = 0,
+recv_timeout_ns: u64 = std.math.maxInt(u64),
 
 @"type": Type,
 family: net.Family,
@@ -524,7 +532,7 @@ pub inline fn send(self: *Self, packet: *net.Packet, address: ?[]const u8, flags
     return self.ops.send(self, packet, address, flags);
 }
 
-pub inline fn receive(self: *Self, buffer: []u8, address: ?[]const u8, flags: net.IoFlags) Error!*net.Packet {
+pub inline fn receive(self: *Self, buffer: []u8, address: ?*[]u8, flags: net.IoFlags) Error!usize {
     if (!self.isClient()) return error.BadOperation;
     return self.ops.receive(self, buffer, address, flags);
 }

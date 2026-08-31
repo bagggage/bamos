@@ -525,20 +525,153 @@ fn listen(fd: linux.fd_t, backlog: i32) isize {
     return 0;
 }
 
-fn receiveFrom() isize {
-    return 0;
+fn receiveFrom(
+    fd: linux.fd_t, buffer: [*]u8, len: usize,
+    flags: u32, address: ?*linux.sockaddr, addr_len: ?*linux.socklen_t,
+) isize {
+    trace.info("recvfrom({}, 0x{x}, {}, 0x{x}, 0x{x}, 0x{x})", .{
+        fd, @intFromPtr(buffer), len, flags, @intFromPtr(address), @intFromPtr(addr_len)
+    });
+
+    const addr_buf_len: u32 = if (addr_len) |al| blk: {
+        validateMemoryArgs(@intFromPtr(al), @sizeOf(linux.socklen_t)) catch return errorFromE(.FAULT);
+        break :blk al.*;
+    } else 0;
+
+    var iov: posix.iovec = .{ .base = buffer, .len = len };
+    var msg: linux.msghdr = .{
+        .control = null,
+        .controllen = 0,
+        .flags = 0,
+        .iov = @ptrCast(&iov),
+        .iovlen = 1,
+        .name = address,
+        .namelen = addr_buf_len,
+    };
+
+    const result = receiveImpl(fd, &msg, flags, true);
+    if (result < 0) return result;
+    if (addr_len) |al| al.* = msg.namelen;
+
+    return result;
 }
 
-fn receiveMessage() isize {
-    return 0;
+fn receiveMessage(fd: linux.fd_t, msg: *linux.msghdr, flags: u32) isize {
+    trace.info("recvmsg({}, 0x{x}, {})", .{fd, @intFromPtr(msg), flags});
+    return receiveImpl(fd, msg, flags, false);
 }
 
-fn sendTo() isize {
-    return 0;
+fn receiveImpl(fd: linux.fd_t, msg: *linux.msghdr, flags: u32, kernel: bool) isize {
+    const iovecs = if (!kernel) blk: {
+        const iovecs = msg.iov[0..msg.iovlen];
+        validateMemoryArgs(@intFromPtr(msg), @sizeOf(linux.msghdr)) catch return errorFromE(.FAULT);
+        validateMemoryArgs(@intFromPtr(iovecs.ptr), iovecs.len * @sizeOf(posix.iovec)) catch return errorFromE(.FAULT);
+
+        break :blk iovecs;
+    } else msg.iov[0..msg.iovlen];
+
+    const file,
+    const sock = getSocketByFd(fd) catch |err| return errorFromZig(err);
+    defer file.deref();
+
+    var out_address: []u8 = &.{};
+    const out_ptr = if (msg.name) |addr| blk: {
+        const data = getNetAddressData(
+            sock, addr, msg.namelen
+        ) catch |err| return errorFromZig(err);
+        out_address = @constCast(@ptrCast(data));
+        break :blk &out_address;
+    } else null;
+
+    const io_flags: net.IoFlags = @bitCast(@as(u16, @truncate(flags)));
+    var total_received: usize = 0;
+    for (iovecs) |*io| {
+        const buffer = io.base[0..io.len];
+        validateMemoryArgs(@intFromPtr(buffer.ptr), buffer.len) catch return errorFromE(.FAULT);
+
+        const received = sock.receive(
+            buffer, out_ptr, io_flags
+        ) catch |err| return errorFromZig(err);
+
+        io.len = received;
+        total_received += received;
+    }
+
+    msg.namelen = @truncate(out_address.len);
+
+    return @intCast(total_received);
 }
 
-fn sendMessage() isize {
-    return 0;
+fn sendTo(
+    fd: linux.fd_t, buffer: [*]const u8, len: usize,
+    flags: u32, address: *const linux.sockaddr, addr_len: linux.socklen_t,
+) isize {
+    trace.info("sendto({}, 0x{x}, {}, 0x{x}, 0x{x}, {})", .{
+        fd, @intFromPtr(buffer), len, flags, @intFromPtr(address), addr_len
+    });
+
+    const iov: posix.iovec_const = .{ .base = @constCast(buffer), .len = len };
+    const msg: linux.msghdr_const = .{
+        .control = null,
+        .controllen = 0,
+        .flags = 0,
+        .iov = @ptrCast(&iov),
+        .iovlen = 1,
+        .name = address,
+        .namelen = addr_len,
+    };
+
+    return sendImpl(fd, &msg, flags, true);
+}
+
+fn sendMessage(fd: linux.fd_t, msg: *const linux.msghdr_const, flags: u32) isize {
+    trace.info("sendmsg({}, 0x{x}, {})", .{fd, @intFromPtr(msg), flags});
+    return sendImpl(fd, msg, flags, false);
+}
+
+fn sendImpl(fd: linux.fd_t, msg: *const linux.msghdr_const, flags: u32, kernel: bool) isize {
+    const iovecs = if (!kernel) blk: {
+        const iovecs = msg.iov[0..msg.iovlen];
+        validateMemoryArgs(@intFromPtr(msg), @sizeOf(linux.msghdr)) catch return errorFromE(.FAULT);
+        validateMemoryArgs(@intFromPtr(iovecs.ptr), iovecs.len * @sizeOf(posix.iovec)) catch return errorFromE(.FAULT);
+
+        break :blk iovecs;
+    } else msg.iov[0..msg.iovlen];
+
+    const file,
+    const sock = getSocketByFd(fd) catch |err| return errorFromZig(err);
+    defer file.deref();
+
+    const address = if (msg.name) |addr| blk: {
+        break :blk getNetAddressData(
+            sock, addr, msg.namelen
+        ) catch |err| return errorFromZig(err);
+    } else null;
+
+    var total_size: usize = 0;
+    for (iovecs) |io| {
+        const data = io.base[0..io.len];
+        validateMemoryArgs(@intFromPtr(data.ptr), data.len) catch return errorFromE(.FAULT);
+
+        total_size += io.len;
+    }
+
+    if (total_size > net.Packet.max_size) return errorFromE(.MSGSIZE);
+
+    const packet = net.Packet.new(@truncate(total_size)) catch return errorFromE(.NOMEM);
+    var copied: usize = 0;
+    for (iovecs) |io| {
+        @memcpy(packet.buffer[copied..copied + io.len], io.base[0..io.len]);
+        copied += io.len;
+    }
+
+    const io_flags: net.IoFlags = @bitCast(@as(u16, @truncate(flags)));
+    const sended = sock.send(packet, address, io_flags) catch |err| {
+        packet.delete();
+        return errorFromZig(err);
+    };
+
+    return @intCast(sended);
 }
 
 fn socket(domain: u32, @"type": u32, protocol: u32) isize {

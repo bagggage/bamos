@@ -171,7 +171,7 @@ fn socketBind(self: *net.Socket, address: []const u8) net.Error!void {
         const path = buffer[0..address.len - 1];
 
         @memcpy(path, address[1..]);
-        buffer[address.len] = 0;
+        buffer[buffer.len - 1] = 0;
 
         unix.address = .{ .abstract = @ptrCast(path.ptr) };
         unix.address_type = .abstract;
@@ -214,8 +214,8 @@ fn socketStreamSend(
     self: *net.Socket, packet: *net.Packet,
     address: ?[]const u8, flags: net.IoFlags,
 ) net.Error!usize {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockKeepPreemption();
+    defer self.mutex.unlockKeepPreemption();
 
     try validateConnection(self, address);
 
@@ -231,10 +231,10 @@ fn socketStreamSend(
 
 fn socketStreamReceive(
     self: *net.Socket, buffer: []u8,
-    _: ?[]u8, flags: net.IoFlags,
+    _: ?*[]u8, flags: net.IoFlags,
 ) net.Error!usize {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockKeepPreemption();
+    defer self.mutex.unlockKeepPreemption();
 
     try validateConnection(self, null);
 
@@ -246,8 +246,8 @@ fn socketSequentialSend(
     self: *net.Socket, packet: *net.Packet,
     address: ?[]const u8, _: net.IoFlags,
 ) net.Error!usize {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockKeepPreemption();
+    defer self.mutex.unlockKeepPreemption();
 
     try validateConnection(self, address);
 
@@ -262,10 +262,10 @@ fn socketSequentialSend(
 
 fn socketSequentialReceive(
     self: *net.Socket, buffer: []u8,
-    _: ?[]u8, flags: net.IoFlags,
+    _: ?*[]u8, flags: net.IoFlags,
 ) net.Error!usize {
-    self.mutex.lock();
-    defer self.mutex.unlock();
+    self.mutex.lockKeepPreemption();
+    defer self.mutex.unlockKeepPreemption();
 
     try validateConnection(self, null);
 

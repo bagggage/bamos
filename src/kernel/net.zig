@@ -85,7 +85,11 @@ pub const Packet = struct {
             break :blk .{ vm.getVirtLma(phys), real_size };
         };
 
-        self.* = .{ .buffer = @ptrCast(ptr), .size = @truncate(real_size) };
+        self.* = .{
+            .buffer = @ptrFromInt(ptr),
+            .tail = @truncate(real_size),
+            .size = @truncate(real_size),
+        };
 
         return self;
     }
