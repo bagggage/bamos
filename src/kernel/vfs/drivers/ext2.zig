@@ -290,11 +290,11 @@ const Inode = extern struct {
         }
 
         var idx = begin_idx - Inode.direct_ptrs_num;
-        var shift = ptr_per_blk_shift;
+        var shift: u8 = ptr_per_blk_shift;
         var level: u2 = 1;
 
         while (level < 3) : (level += 1) {
-            const ptrs_per_level = @as(u32, 1) << shift;
+            const ptrs_per_level = @as(u32, 1) << @truncate(shift);
             if (ptrs_per_level > idx) break;
 
             shift += shift;
