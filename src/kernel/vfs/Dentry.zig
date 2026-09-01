@@ -467,6 +467,41 @@ pub fn removeChildAnonymously(self: *Dentry, child: *Dentry) void {
     self.child.remove(&child.node);
 }
 
+pub fn changePermissions(self: *Dentry, perm: vfs.Permissions) Error!void {
+    const inode = self.inode;
+
+    inode.rw_sem.writeLock();
+    defer inode.rw_sem.writeUnlock();
+
+    try self.ops.updateInode(inode, .{
+        .perm = .{
+            .value = perm,
+            .owner_gid = inode.gid,
+            .owner_uid = inode.uid,
+        },
+    });
+
+    inode.perm = @intFromEnum(perm);
+}
+
+pub fn changeOwner(self: *Dentry, uid: u16, gid: u16) Error!void {
+    const inode = self.inode;
+
+    inode.rw_sem.writeLock();
+    defer inode.rw_sem.writeUnlock();
+
+    try self.ops.updateInode(inode, .{
+        .perm = .{
+            .value = @enumFromInt(inode.perm),
+            .owner_gid = gid,
+            .owner_uid = uid,
+        },
+    });
+
+    inode.uid = uid;
+    inode.gid = gid;
+}
+
 pub fn touch(self: *Dentry, access: sys.time.Time, modify: ?sys.time.Time) Error!void {
     const inode = self.inode;
 
