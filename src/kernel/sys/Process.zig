@@ -618,6 +618,7 @@ stats: *Stats,
 uid: u16 = 0,
 /// Group id.
 gid: u16 = 0,
+umask: u16 = 0o022,
 
 abi: sys.call.Abi = .linux_sysv,
 flags: Flags = .{},
@@ -714,6 +715,9 @@ pub fn clone(self: *Self) !*Self {
         .group = id,
         .flags = .{ .clone = true },
         .stats = stats,
+        .uid = self.uid,
+        .gid = self.gid,
+        .umask = self.umask,
         .root_dir = self.root_dir,
         .work_dir = self.work_dir,
         .parent = self.id,
