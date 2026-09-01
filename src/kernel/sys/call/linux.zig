@@ -37,12 +37,14 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.access)]          = @ptrCast(&access);
     result[@intFromEnum(linux.SYS.bind)]            = @ptrCast(&bind);
     result[@intFromEnum(linux.SYS.brk)]             = @ptrCast(&brk);
-    result[@intFromEnum(linux.SYS.connect)]         = @ptrCast(&connect);
+    result[@intFromEnum(linux.SYS.chdir)]           = @ptrCast(&chdir);
+    result[@intFromEnum(linux.SYS.chmod)]           = @ptrCast(&chmod);
+    result[@intFromEnum(linux.SYS.chown)]           = @ptrCast(&chown);
     result[@intFromEnum(linux.SYS.clock_gettime)]   = @ptrCast(&clockGetTime);
     result[@intFromEnum(linux.SYS.clock_nanosleep)] = @ptrCast(&clockNanoSleep);
     result[@intFromEnum(linux.SYS.clone)]           = @ptrCast(arch.syscall.contextCall(clone, "clone"));
     result[@intFromEnum(linux.SYS.close)]           = @ptrCast(&close);
-    result[@intFromEnum(linux.SYS.chdir)]           = @ptrCast(&chdir);
+    result[@intFromEnum(linux.SYS.connect)]         = @ptrCast(&connect);
     result[@intFromEnum(linux.SYS.creat)]           = @ptrCast(&creat);
     result[@intFromEnum(linux.SYS.dup)]             = @ptrCast(&dup);
     result[@intFromEnum(linux.SYS.dup2)]            = @ptrCast(&dup2);
@@ -59,6 +61,11 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.faccessat)]       = @ptrCast(&faccessAt);
     result[@intFromEnum(linux.SYS.faccessat2)]      = @ptrCast(&faccessAt2);
     result[@intFromEnum(linux.SYS.fchdir)]          = @ptrCast(&fchdir);
+    result[@intFromEnum(linux.SYS.fchmod)]          = @ptrCast(&fchmod);
+    result[@intFromEnum(linux.SYS.fchmodat)]        = @ptrCast(&fchmodAt);
+    result[@intFromEnum(linux.SYS.fchmodat2)]       = @ptrCast(&fchmodAt2);
+    result[@intFromEnum(linux.SYS.fchown)]          = @ptrCast(&fchown);
+    result[@intFromEnum(linux.SYS.fchownat)]        = @ptrCast(&fchownAt);
     result[@intFromEnum(linux.SYS.fcntl)]           = @ptrCast(&fcntl);
     result[@intFromEnum(linux.SYS.fork)]            = @ptrCast(arch.syscall.contextCall(fork, "fork"));
     result[@intFromEnum(linux.SYS.fstat)]           = @ptrCast(&fstat);
@@ -80,6 +87,7 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.gettimeofday)]    = @ptrCast(&getTimeOfDay);
     result[@intFromEnum(linux.SYS.getuid)]          = @ptrCast(&getUid);
     result[@intFromEnum(linux.SYS.ioctl)]           = @ptrCast(&ioctl);
+    result[@intFromEnum(linux.SYS.lchown)]          = @ptrCast(&lchown);
     result[@intFromEnum(linux.SYS.link)]            = @ptrCast(&link);
     result[@intFromEnum(linux.SYS.listen)]          = @ptrCast(&listen);
     result[@intFromEnum(linux.SYS.lseek)]           = @ptrCast(&seek);
@@ -128,12 +136,13 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.tkill)]           = @ptrCast(&tkill);
     result[@intFromEnum(linux.SYS.time)]            = @ptrCast(&time);
     result[@intFromEnum(linux.SYS.truncate)]        = @ptrCast(&truncate);
+    result[@intFromEnum(linux.SYS.umask)]           = @ptrCast(&umask);
     result[@intFromEnum(linux.SYS.uname)]           = @ptrCast(&uname);
-    result[@intFromEnum(linux.SYS.utime)]           = @ptrCast(&utime);
-    result[@intFromEnum(linux.SYS.utimes)]          = @ptrCast(&utimes);
-    result[@intFromEnum(linux.SYS.utimensat)]       = @ptrCast(&utimeNsAt);
     result[@intFromEnum(linux.SYS.unlink)]          = @ptrCast(&unlink);
     result[@intFromEnum(linux.SYS.unlinkat)]        = @ptrCast(&unlinkAt);
+    result[@intFromEnum(linux.SYS.utime)]           = @ptrCast(&utime);
+    result[@intFromEnum(linux.SYS.utimensat)]       = @ptrCast(&utimeNsAt);
+    result[@intFromEnum(linux.SYS.utimes)]          = @ptrCast(&utimes);
     result[@intFromEnum(linux.SYS.wait4)]           = @ptrCast(&waitPid);
     result[@intFromEnum(linux.SYS.write)]           = @ptrCast(&write);
     result[@intFromEnum(linux.SYS.writev)]          = @ptrCast(&writev);
@@ -356,35 +365,26 @@ fn archPrCtl(op: c_int, addr: usize) isize {
     return 0;
 }
 
-fn access(path: [*c]const u8, mode: u16) isize {
+fn access(path: [*:0]const u8, mode: u16) isize {
     trace.info("access(0x{x}, 0o{o})", .{@intFromPtr(path), mode});
     return accessImpl(linux.AT.FDCWD, path, mode, 0);
 }
 
-fn faccessAt(fd: linux.fd_t, path: [*c]const u8, mode: u16) isize {
+fn faccessAt(fd: linux.fd_t, path: [*:0]const u8, mode: u16) isize {
     trace.info("faccessat({}, 0x{x}, 0o{o})", .{fd, @intFromPtr(path), mode});
     return accessImpl(fd, path, mode, 0);
 }
 
-fn faccessAt2(fd: linux.fd_t, path: [*c]const u8, mode: u16, flags: u32) isize {
+fn faccessAt2(fd: linux.fd_t, path: [*:0]const u8, mode: u16, flags: u32) isize {
     trace.info("faccessat2({}, 0x{x}, 0o{o}, 0x{x})", .{fd, @intFromPtr(path), mode, flags});
     return accessImpl(fd, path, mode, flags);
 }
 
-fn accessImpl(fd: linux.fd_t, path: [*c]const u8, mode: u16, flags: u32) isize {
+fn accessImpl(fd: linux.fd_t, path: [*:0]const u8, mode: u16, flags: u32) isize {
     const proc = sys.Process.getCurrent();
-    const dir = fdAtGet(proc, fd) orelse return errorFromE(.BADF);
-    defer dir.deref();
-
-    const dentry = if ((flags & linux.AT.EMPTY_PATH) == 0) blk: {
-        @branchHint(.likely);
-        validateMemoryPtr(@intFromPtr(path)) catch return errorFromE(.FAULT);
-        break :blk vfs.lookup(
-            proc.root_dir, dir, std.mem.span(path)
-        ) catch |err| return errorFromZig(err);
-    } else blk: {
-        dir.ref(); break :blk dir;
-    };
+    const dentry = fdAtLookup(
+        proc, fd, path,flags
+    ) catch |err| return errorFromZig(err);
     defer dentry.deref();
 
     if (mode == linux.F_OK) return 0;
@@ -989,13 +989,85 @@ fn chdirImpl(proc: *sys.Process, dentry: *vfs.Dentry) isize {
     return 0;
 }
 
+fn chmod(path: [*:0]const u8, mode: u16) isize {
+    trace.info("chmod(0x{x}, 0o{o})", .{@intFromPtr(path), mode});
+    return chmodImpl(linux.AT.FDCWD, path, mode, 0);
+}
+
+fn fchmod(fd: linux.fd_t, mode: u16) isize {
+    trace.info("fchmod({}, 0o{o})", .{fd, mode});
+    return chmodImpl(fd, undefined, mode, linux.AT.EMPTY_PATH);
+}
+
+fn fchmodAt(dir_fd: linux.fd_t, path: [*:0]const u8, mode: u16) isize {
+    trace.info("fchmodat({}, 0x{x}, 0o{o})", .{dir_fd, @intFromPtr(path), mode});
+    return chmodImpl(dir_fd, path, mode, 0);
+}
+
+fn fchmodAt2(dir_fd: linux.fd_t, path: [*:0]const u8, mode: u16, flags: u32) isize {
+    trace.info("fchmodat2({}, 0x{x}, 0o{o}, 0x{x})", .{
+        dir_fd, @intFromPtr(path), mode, flags
+    });
+    return chmodImpl(dir_fd, path, mode, flags);
+}
+
+fn chmodImpl(dir_fd: linux.fd_t, path: [*:0]const u8, mode: u16, flags: u32) isize {
+    const proc = sys.Process.getCurrent();
+    const dentry = fdAtLookup(
+        proc, dir_fd, path, flags
+    ) catch |err| return errorFromZig(err);
+    defer dentry.deref();
+
+    const role = dentry.inode.getRole(proc.uid, proc.gid);
+    if (role != .user) return errorFromE(.PERM);
+
+    dentry.changePermissions(@enumFromInt(mode)) catch |err| return errorFromZig(err);
+
+    return 0;
+}
+
+fn chown(path: [*:0]const u8, uid: u16, gid: u16) isize {
+    trace.info("chown(0x{x}, {}, {})", .{@intFromPtr(path), uid, gid});
+    return chownImpl(linux.AT.FDCWD, path, uid, gid, 0);
+}
+
+fn lchown(path: [*:0]const u8, uid: u16, gid: u16) isize {
+    trace.info("lchown(0x{x}, {}, {})", .{@intFromPtr(path), uid, gid});
+    return chownImpl(linux.AT.FDCWD, path, uid, gid, linux.AT.SYMLINK_NOFOLLOW);
+}
+
+fn fchown(fd: linux.fd_t, uid: u16, gid: u16) isize {
+    trace.info("fchown({}, {}, {})", .{fd, uid, gid});
+    return chownImpl(fd, undefined, uid, gid, linux.AT.EMPTY_PATH);
+}
+
+fn fchownAt(dir_fd: linux.fd_t, path: [*:0]const u8, uid: u16, gid: u16, flags: u32) isize {
+    trace.info("fchownat({}, 0x{x}, {}, {}, 0x{x})", .{
+        dir_fd, @intFromPtr(path), uid, gid, flags
+    });
+    return chownImpl(dir_fd, path, uid, gid, flags);
+}
+
+fn chownImpl(dir_fd: linux.fd_t, path: [*:0]const u8, uid: u16, gid: u16, flags: u32) isize {
+    const proc = sys.Process.getCurrent();
+    const dentry = fdAtLookup(
+        proc, dir_fd, path, flags
+    ) catch |err| return errorFromZig(err);
+    defer dentry.deref();
+
+    const role = dentry.inode.getRole(proc.uid, proc.gid);
+    if (role != .user) return errorFromE(.PERM);
+
+    dentry.changeOwner(uid, gid) catch |err| return errorFromZig(err);
+
+    return 0;
+}
+
 fn creat(path: [*:0]const u8, mode: linux.mode_t) isize {
     trace.info("creat(0x{x}, 0o{o})", .{@intFromPtr(path), mode});
 
-    const proc = sys.Process.getCurrent();
     const flags: linux.O = .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true };
-
-    return openImpl(proc, proc.work_dir, path, flags, mode);
+    return openImpl(linux.AT.FDCWD, path, flags, mode);
 }
 
 fn dup(fd: linux.fd_t) isize {
@@ -1207,6 +1279,29 @@ fn fdAtGet(proc: *sys.Process, fd: linux.fd_t) ?*vfs.Dentry {
     return file.dentry;
 }
 
+fn fdAtGetIfRelative(proc: *sys.Process, fd: linux.fd_t, path: [*:0]const u8) vfs.Error!?*vfs.Dentry {
+    if (path[0] == '/') return null;
+    return fdAtGet(proc, fd) orelse return error.BadFileDescriptor;
+}
+
+fn fdAtLookup(proc: *sys.Process, dir_fd: linux.fd_t, path: [*:0]const u8, flags: u32) vfs.Error!*vfs.Dentry {
+    if ((flags & linux.AT.EMPTY_PATH) != 0) {
+        return fdAtGet(proc, dir_fd) orelse return error.BadFileDescriptor;
+    }
+
+    try validateMemoryArgs(@intFromPtr(path), sys.limits.max_path);
+
+    const at_dir = try fdAtGetIfRelative(proc, dir_fd, path);
+    defer if (at_dir) |d| d.deref();
+
+    const slice = std.mem.span(path);
+    if ((flags & linux.AT.SYMLINK_NOFOLLOW) != 0) {
+        return lookupSymLink(proc.root_dir, at_dir, slice);
+    }
+
+    return vfs.lookup(proc.root_dir, at_dir, slice);
+}
+
 fn lookupSymLink(root: ?*vfs.Dentry, dir: ?*vfs.Dentry, path: []const u8) vfs.Error!*vfs.Dentry {
     const dir_path = path[0..(std.mem.lastIndexOfScalar(u8, path, '/') orelse 0)];
 
@@ -1219,66 +1314,35 @@ fn lookupSymLink(root: ?*vfs.Dentry, dir: ?*vfs.Dentry, path: []const u8) vfs.Er
     } else try vfs.lookupRaw(root, dir, path, false);
 }
 
-fn stat(path: [*c]const u8, stats: *linux.Stat) isize {
+fn stat(path: [*:0]const u8, stats: *linux.Stat) isize {
     trace.info("stat(0x{x}, 0x{x})", .{@intFromPtr(path), @intFromPtr(stats)});
-
-    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
-
-    const proc = sys.Process.getCurrent();
-    const dentry = vfs.lookup(
-        proc.root_dir, proc.work_dir, std.mem.span(path)
-    ) catch |err| return errorFromZig(err);
-    defer dentry.deref();
-
-    return statImpl(dentry, stats);
+    return statImpl(linux.AT.FDCWD, path, stats, 0);
 }
 
-fn lstat(path: [*c]const u8, stats: *linux.Stat) isize {
+fn lstat(path: [*:0]const u8, stats: *linux.Stat) isize {
     trace.info("lstat(0x{x}, 0x{x})", .{@intFromPtr(path), @intFromPtr(stats)});
-
-    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
-
-    const proc = sys.Process.getCurrent();
-    const slice = std.mem.span(path);
-
-    const dentry = lookupSymLink(
-        proc.root_dir, proc.work_dir, slice
-    ) catch |err| return errorFromZig(err);
-    defer dentry.deref();
-
-    return statImpl(dentry, stats);
+    return statImpl(linux.AT.FDCWD, path, stats, linux.AT.SYMLINK_NOFOLLOW);
 }
 
 fn fstat(fd: linux.fd_t, stats: *linux.Stat) isize {
     trace.info("fstat({}, 0x{x})", .{fd, @intFromPtr(stats)});
+    return statImpl(fd, undefined, stats, linux.AT.EMPTY_PATH);
+}
+
+fn fstatAt(fd: linux.fd_t, path: [*:0]const u8, stats: *linux.Stat, flags: u32) isize {
+    trace.info("fstatat64({}, 0x{x}, 0x{x}, 0x{x})", .{fd, @intFromPtr(path), @intFromPtr(stats), flags});
+    return statImpl(fd, path, stats, flags);
+}
+
+fn statImpl(fd: linux.fd_t, path: [*:0]const u8, stats: *linux.Stat, flags: u32) isize {
+    validateMemoryArgs(@intFromPtr(stats), @sizeOf(linux.Stat)) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
-    const dentry = fdAtGet(proc, fd) orelse return errorFromE(.BADF);
+    const dentry = fdAtLookup(
+        proc, fd, path, flags
+    ) catch |err| return errorFromZig(err);
     defer dentry.deref();
 
-    return statImpl(dentry, stats);
-}
-
-fn fstatAt(fd: linux.fd_t, path: [*c]const u8, stats: *linux.Stat, flags: u32) isize {
-    trace.info("fstatat64({}, 0x{x}, 0x{x}, 0x{x})", .{fd, @intFromPtr(path), @intFromPtr(stats), flags});
-
-    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
-    validateMemoryArgs(@intFromPtr(stats), @sizeOf(linux.Stat)) catch return errorFromE(.FAULT);
-
-    const proc = sys.Process.getCurrent();
-    const dir = fdAtGet(proc, fd) orelse return errorFromE(.BADF);
-    defer dir.deref();
-
-    if (dir.inode.type != .directory) return errorFromE(.NOTDIR);
-    const dentry = vfs.lookup(
-        proc.root_dir, dir, std.mem.span(path)
-    ) catch |err| return errorFromZig(err);
-
-    return statImpl(dentry, stats);
-}
-
-fn statImpl(dentry: *vfs.Dentry, stats: *linux.Stat) isize {
-    validateMemoryArgs(@intFromPtr(stats), @sizeOf(linux.Stat)) catch return errorFromE(.FAULT);
     const inode = dentry.inode;
 
     inode.rw_sem.readLock();
@@ -1347,8 +1411,7 @@ fn statImpl(dentry: *vfs.Dentry, stats: *linux.Stat) isize {
 
 fn link(old_path: [*:0]const u8, new_path: [*:0]const u8) isize {
     trace.info("link(0x{x}, 0x{x})", .{@intFromPtr(old_path), @intFromPtr(new_path)});
-
-    return linkImpl(null, old_path, null, new_path, linux.AT.SYMLINK_FOLLOW);
+    return linkImpl(linux.AT.FDCWD, old_path, linux.AT.FDCWD, new_path, linux.AT.SYMLINK_FOLLOW);
 }
 
 fn linkAt(
@@ -1359,51 +1422,32 @@ fn linkAt(
     flags: u32,
 ) isize {
     trace.info("linkat(0x{x}, 0x{x})", .{@intFromPtr(old_path), @intFromPtr(new_path)});
-
-    const proc = sys.Process.getCurrent();
-    const old_dir = if (old_path[0] != '/') (fdAtGet(proc, old_dir_fd) orelse return errorFromE(.BADF)) else null;
-    defer if (old_dir) |d| d.deref();
-
-    const new_dir = if (new_path[0] != '/') (fdAtGet(proc, new_dir_fd) orelse return errorFromE(.BADF)) else null;
-    defer if (new_dir) |d| d.deref();
-
-    return linkImpl(old_dir, old_path, new_dir, new_path, flags);
+    return linkImpl(old_dir_fd, old_path, new_dir_fd, new_path, flags);
 }
 
 fn linkImpl(
-    old_dir: ?*vfs.Dentry,
+    old_dir_fd: linux.fd_t,
     old_path: [*:0]const u8,
-    new_dir: ?*vfs.Dentry,
+    new_dir_fd: linux.fd_t,
     new_path: [*:0]const u8,
     flags: u32,
 ) isize {
-    validateMemoryArgs(@intFromPtr(old_path), sys.limits.max_path) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(new_path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
-    const at_old_dir = if (old_dir) |d| d else proc.work_dir;
-    const at_new_dir = if (new_dir) |d| d else proc.work_dir;
-
-    const target = if (
-        (flags & linux.AT.EMPTY_PATH) != 0 and
-        (@intFromPtr(old_path) == 0 or old_path[0] == 0)
-    ) blk: {
-        lib.debug.assert(new_dir != null, @src());
-        at_old_dir.ref();
-        break :blk at_old_dir;
-    } else if ((flags & linux.AT.SYMLINK_FOLLOW) == 0) blk: {
-        break :blk lookupSymLink(
-            proc.root_dir, at_old_dir, std.mem.span(old_path)
-        ) catch |err| return errorFromZig(err);
-    } else vfs.lookup(
-        proc.root_dir, at_old_dir, std.mem.span(old_path)
-    ) catch |err| return errorFromZig(err);
+    const tmp_flags = if ((flags & linux.AT.SYMLINK_FOLLOW) != 0) flags else flags | linux.AT.SYMLINK_NOFOLLOW;
+    const target = fdAtLookup(
+        proc, old_dir_fd, old_path, tmp_flags
+    )  catch |err| return errorFromZig(err);
     defer target.deref();
 
     if (target.inode.type == .directory) return errorFromE(.ISDIR);
 
+    const new_dir = fdAtGetIfRelative(proc, new_dir_fd, new_path)  catch return errorFromE(.BADF);
+    defer if (new_dir) |d| d.deref();
+
     const create_path = createFileGetPath(
-        proc, at_new_dir, std.mem.span(new_path)
+        proc, new_dir orelse proc.root_dir, std.mem.span(new_path)
     ) catch |err| return errorFromZig(err);
     defer create_path.deref();
 
@@ -1427,38 +1471,31 @@ fn linkImpl(
 
 fn symlink(target: [*:0]const u8, link_path: [*:0]const u8) isize {
     trace.info("symlink(0x{x}, 0x{x})", .{@intFromPtr(target), @intFromPtr(link_path)});
-    const proc = sys.Process.getCurrent();
-
-    return symlinkImpl(proc, null, target, link_path);
+    return symlinkImpl(linux.AT.FDCWD, target, link_path);
 }
 
 fn symlinkAt(dir_fd: linux.fd_t, target: [*:0]const u8, link_path: [*:0]const u8) isize {
     trace.info("symlinkat({}, 0x{x}, 0x{x})", .{
         dir_fd, @intFromPtr(target), @intFromPtr(link_path)
     });
-
-    const proc = sys.Process.getCurrent();
-    const dir = fdAtGet(proc, dir_fd) orelse return errorFromE(.BADF);
-    defer dir.deref();
-
-    return symlinkImpl(proc, dir, target, link_path);
+    return symlinkImpl(dir_fd, target, link_path);
 }
 
-fn symlinkImpl(
-    proc: *sys.Process,
-    dir: ?*vfs.Dentry,
-    target: [*:0]const u8,
-    link_path: [*:0]const u8,
-) isize {
+fn symlinkImpl(dir_fd: linux.fd_t, target: [*:0]const u8, link_path: [*:0]const u8) isize {
     validateMemoryArgs(@intFromPtr(target), sys.limits.max_path) catch return errorFromE(.FAULT);
     validateMemoryArgs(@intFromPtr(link_path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
-    const at_dir = if (dir) |d| d else proc.work_dir;
+    const proc = sys.Process.getCurrent();
+    const at_dir = fdAtGetIfRelative(
+        proc, dir_fd, link_path
+    ) catch return errorFromE(.BADF);
+    defer if (at_dir) |d| d.deref();
+
     const path = std.mem.span(link_path);
     const content = std.mem.span(target);
 
     const dentry = createAnyFile(
-        proc, at_dir,
+        proc, at_dir orelse proc.root_dir,
         path, .symbolic_link,
         @intFromEnum(vfs.Permissions.rwx),
         .fromPtr(@ptrCast(@constCast(&content))),
@@ -1675,54 +1712,38 @@ fn seek(fd: linux.fd_t, offset: isize, whence: u8) isize {
 
 fn mkdir(path: [*:0]const u8, mode: linux.mode_t) isize {
     trace.info("mkdir(0x{x}, 0o{o})", .{@intFromPtr(path), mode});
-
-    validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
-
-    const proc = sys.Process.getCurrent();
-    return mkdirImpl(proc, proc.work_dir, path, mode);
+    return mkdirImpl(linux.AT.FDCWD, path, mode);
 }
 
 fn mkdirAt(fd: linux.fd_t, path: [*:0]const u8, mode: linux.mode_t) isize {
     trace.info("mkdirat({}, 0x{x}, 0o{o})", .{fd, @intFromPtr(path), mode});
+    return mkdirImpl(fd, path, mode);
+}
+
+fn mkdirImpl(fd: linux.fd_t, path: [*:0]const u8, mode: linux.mode_t) isize {
     validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
-    const at_dir = fdAtGet(proc, fd) orelse return errorFromE(.BADF);
-    defer at_dir.deref();
+    const at_dir = fdAtGetIfRelative(proc, fd, path) catch return errorFromE(.BADF);
+    defer if (at_dir) |d| d.deref();
 
-    return mkdirImpl(proc, at_dir, path, mode);
-}
-
-fn mkdirImpl(proc: *sys.Process, at_dir: *vfs.Dentry, path: [*:0]const u8, mode: linux.mode_t) isize {
     const slice: []const u8 = std.mem.span(path);
+    if (slice.len == 0) return errorFromE(.NOENT);
 
-    var iter = std.mem.splitBackwardsScalar(u8, slice, '/');
-    var item = iter.first();
-    if (item.len == 0) item = iter.next() orelse return errorFromE(.NOENT);
+    const raw_path = if (slice[slice.len - 1] == '/') slice[0..slice.len - 1] else slice;
+    const create_path = createFileGetPath(
+        proc, at_dir orelse proc.root_dir, raw_path
+    ) catch |err| return errorFromZig(err);
+    defer create_path.deref();
 
-    const rest = iter.rest();
-    const parent = if (rest.len > 0) blk: {
-        break :blk vfs.lookup(
-            proc.root_dir, at_dir, rest
-        ) catch |err| return errorFromZig(err);
-    } else blk: {
-        at_dir.ref();
-        break :blk at_dir;
-    };
-    defer parent.deref();
-
-    if (parent.inode.type != .directory) return errorFromE(.NOTDIR);
-
-    const role = parent.inode.getRole(proc.uid, proc.gid);
-    if (parent.inode.checkAccess(.w, role) == false) return errorFromE(.ACCES);
-
-    if (item.len == 0 or
-        (item[0] == '.' and (item.len == 1 or (item.len == 2 and item[1] == '.')))
+    const name = create_path.base_name;
+    if (name.len == 0 or
+        (name[0] == '.' and (name.len == 1 or (name.len == 2 and name[1] == '.')))
     ) return errorFromE(.EXIST);
 
-    log.debug("create dir: '{s}'", .{item});
-    const new_dir = parent.createFile(item, .directory, .{
-        .uid = proc.uid, .gid = proc.gid, .perm = @truncate(mode)
+    log.debug("create dir: '{s}'", .{name});
+    const new_dir = create_path.parent_dir.createFile(name, .directory, .{
+        .uid = proc.uid, .gid = proc.gid, .perm = @truncate(mode & (~proc.umask))
     }) catch |err| return errorFromZig(err);
 
     new_dir.deref();
@@ -1841,26 +1862,20 @@ fn munmap(virt: usize, len: usize) isize {
     return 0;
 }
 
-fn open(path: [*c]const u8, flags: linux.O, mode: linux.mode_t) isize {
+fn open(path: [*:0]const u8, flags: linux.O, mode: linux.mode_t) isize {
     trace.info("open(0x{x}, {any}, 0x{x})", .{@intFromPtr(path), flags, mode});
-
-    const proc = sys.Process.getCurrent();
-    return openImpl(proc, proc.work_dir, path, flags, mode);
+    return openImpl(linux.AT.FDCWD, path, flags, mode);
 }
 
-fn openAt(dir_fd: linux.fd_t, path: [*c]const u8, flags: linux.O, mode: linux.mode_t) isize {
+fn openAt(dir_fd: linux.fd_t, path: [*:0]const u8, flags: linux.O, mode: linux.mode_t) isize {
     trace.info("openAt({}, 0x{x}, {any}, 0x{x})", .{dir_fd, @intFromPtr(path), flags, mode});
-
-    const proc = sys.Process.getCurrent();
-    const dir = fdAtGet(proc, dir_fd) orelse return errorFromE(.BADF);
-    defer dir.deref();
-
-    if (dir.inode.type != .directory) return errorFromE(.NOTDIR);
-    return openImpl(proc, dir, path, flags, mode);
+    return openImpl(dir_fd, path, flags, mode);
 }
 
-fn openImpl(proc: *sys.Process, dir: *vfs.Dentry, path: [*c]const u8, flags: linux.O, mode: linux.mode_t) isize {
+fn openImpl(dir_fd: linux.fd_t, path: [*:0]const u8, flags: linux.O, mode: linux.mode_t) isize {
     validateMemoryPtr(@intFromPtr(path)) catch return @intCast(errorFromE(.FAULT));
+
+    const proc = sys.Process.getCurrent();
     if (proc.files.isFull()) return @intCast(errorFromE(.MFILE));
 
     // Always add execute permission to allow to map file pages with execute permission.
@@ -1869,6 +1884,11 @@ fn openImpl(proc: *sys.Process, dir: *vfs.Dentry, path: [*c]const u8, flags: lin
         .WRONLY => .wx,
         .RDWR   => .rwx,
     };
+
+    const at_dir = fdAtGetIfRelative(proc, dir_fd, path) catch return errorFromE(.BADF);
+    const dir = at_dir orelse proc.root_dir;
+    defer if (at_dir) |d| d.deref();
+
     const path_slice = std.mem.span(path);
     const dentry = vfs.lookup(
         proc.root_dir, dir, path_slice
@@ -1929,7 +1949,7 @@ fn createAnyFile(
     return create_path.parent_dir.createFileRaw(create_path.base_name, @"type", .{
         .uid = proc.uid,
         .gid = proc.gid,
-        .perm = @truncate(mode)
+        .perm = @truncate(mode & (~proc.umask))
     }, fs_data);
 }
 
@@ -2032,13 +2052,11 @@ fn epollCreate(size: i32) isize {
     trace.info("epoll_create({})", .{size});
 
     if (size <= 0) return errorFromE(.INVAL);
-
     return epollCreateImpl(0);
 }
 
 fn epollCreate1(flags: u32) isize {
     trace.info("epoll_create1({})", .{flags});
-
     return epollCreateImpl(flags);
 }
 
@@ -2238,7 +2256,7 @@ fn preadv(fd: linux.fd_t, iov: [*]posix.iovec, num: c_int, off: u64) isize {
     return @intCast(readed);
 }
 
-fn prlimit64(pid: linux.pid_t, res: linux.rlimit_resource, old: ?*linux.rlimit, new: ?*const linux.rlimit) isize {
+fn prlimit64(pid: linux.pid_t, res: linux.rlimit_resource, new: ?*const linux.rlimit, old: ?*linux.rlimit) isize {
     trace.info("prlimit64({}, {}, 0x{x}, 0x{x})", .{pid, @intFromEnum(res), @intFromPtr(old), @intFromPtr(new)});
 
     const proc = sys.Process.getCurrent();
@@ -2887,6 +2905,19 @@ fn truncateImpl(proc: *sys.Process, dentry: *vfs.Dentry, length: i64) isize {
     return 0;
 }
 
+fn umask(mask: u16) isize {
+    trace.info("umask({})", .{mask});
+    const proc = sys.Process.getCurrent();
+
+    proc.ctrl.lock.lock();
+    defer proc.ctrl.lock.unlock();
+
+    const old_mask = proc.umask;
+    proc.umask = mask & 0o777;
+
+    return old_mask;
+}
+
 fn uname(buf: *linux.utsname) isize {
     trace.info("uname(0x{x})", .{@intFromPtr(buf)});
 
@@ -3029,9 +3060,7 @@ fn unlinkAt(dir_fd: linux.fd_t, path: [*:0]const u8, flags: u32) isize {
 
     const slice = std.mem.span(path);
     const dentry = lookupSymLink(
-        proc.root_dir,
-        proc.work_dir,
-        slice,
+        proc.root_dir, dir, slice,
     ) catch |err| return errorFromZig(err);
     defer dentry.deref();
 
