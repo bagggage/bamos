@@ -5,30 +5,46 @@
 const std = @import("std");
 
 const devfs = @import("../../../vfs.zig").devfs;
-const log = std.log.scoped(.@"/dev/tty");
 const lib = @import("../../../lib.zig");
+const log = std.log.scoped(.@"/dev/tty");
 const sched = @import("../../../sched.zig");
 const sys = @import("../../../sys.zig");
+const Teletype = @import("../../classes/Teletype.zig");
 const vfs = @import("../../../vfs.zig");
+const VirtualTerminal = @import("VirtualTerminal.zig");
 const vm = @import("../../../vm.zig");
 
-const devfile_ops: devfs.DevFile.Operations = .{
-    .open = &devOpen,
+const tty_devfile_ops: devfs.DevFile.Operations = .{
+    .open = &devOpenControlTty,
 };
 
-var dev_file: devfs.DevFile = .{
+const tty0_devfile_ops: devfs.DevFile.Operations = .{
+    .open = &devOpenActiveVt
+};
+
+var tty_dev_file: devfs.DevFile = .{
     .name = undefined, // Compiler bug, cannot initialize name at comptime!
     .access = .{ .gid = 0, .perm = @intFromEnum(vfs.Permissions.rw) },
     .num = .{ .major = 5, .minor = 0 },
-    .ops = &devfile_ops,
+    .ops = &tty_devfile_ops,
+};
+
+var tty0_dev_file: devfs.DevFile = .{
+    .name = undefined, // Compiler bug, cannot initialize name at comptime!
+    .access = .{ .gid = 0, .perm = @intFromEnum(vfs.Permissions.rw) },
+    .num = .{ .major = 4, .minor = 0 },
+    .ops = &tty0_devfile_ops,
 };
 
 pub fn init() !void {
-    dev_file.name = .init("tty");
-    try devfs.registerCharDev(&dev_file);
+    tty_dev_file.name = .init("tty");
+    tty0_dev_file.name = .init("tty0");
+
+    try devfs.registerCharDev(&tty_dev_file);
+    try devfs.registerCharDev(&tty0_dev_file);
 }
 
-fn devOpen(_: *devfs.DevFile, file: *vfs.File) vfs.Error!void {
+fn devOpenControlTty(_: *devfs.DevFile, file: *vfs.File) vfs.Error!void {
     const task = sched.getCurrentTask();
     if (task.spec != .user) return error.NoEnt;
 
@@ -40,10 +56,21 @@ fn devOpen(_: *devfs.DevFile, file: *vfs.File) vfs.Error!void {
     defer group.lock.unlock();
 
     const tty = group.getSessionWeak().tty orelse return error.NoEnt;
-    if (!tty.users.get()) return error.NoEnt;
+    try ttyRedirectOpen(tty, file);
+}
 
-    file.data.setPtr(tty);
+fn devOpenActiveVt(_: *devfs.DevFile, file: *vfs.File) vfs.Error!void {
+    const vt = VirtualTerminal.getActive() orelse return error.NoEnt;
+    try ttyRedirectOpen(&vt.tty, file);
+}
+
+fn ttyRedirectOpen(tty: *Teletype, file: *vfs.File) vfs.Error!void {
     file.ops = &tty.dev_file.ops.fops;
 
-    if (tty.dev_file.ops.open) |open| try open(&tty.dev_file, file);
+    if (tty.dev_file.ops.open) |open| {
+        try open(&tty.dev_file, file);
+    } else {
+        if (!tty.users.get()) return error.NoEnt;
+        file.data.setPtr(tty);
+    }
 }

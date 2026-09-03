@@ -116,6 +116,7 @@ const IoCtl = enum(u32) {
             mode: Vt.Mode,
         };
 
+        open_query      = 0x5600,
         get_mode        = 0x5601,
         set_mode        = 0x5602,
         get_state       = 0x5603,
@@ -235,9 +236,16 @@ pub fn init() !void {
         @intFromPtr(&cursorTask)
     );
 
+    // Reserve 4,0 device number for /dev/tty0
+    _ = dev_region.alloc();
+
     for (&vts, 0..) |*vt, i| {
         try vt.setup(i);
     }
+}
+
+pub inline fn getActive() ?*Self {
+    return active;
 }
 
 pub inline fn isEnabled() bool {
@@ -371,6 +379,14 @@ fn virtualTerminalControl(tty: *Teletype, cmd: IoCtl, arg: lib.AnyData) vfs.Erro
         else => {
             const vt_cmd: IoCtl.Vt = @enumFromInt(@intFromEnum(cmd));
             switch (vt_cmd) {
+                .open_query => {
+                    arg.asPtr(i32).?.* = 0;
+                    for (&vts, 1..) |*v, n| {
+                        if (v.tty.users.count() > 0) continue;
+                        arg.asPtr(i32).?.* = @intCast(n);
+                        break;
+                    }
+                },
                 .get_mode => arg.asPtr(IoCtl.Vt.Mode).?.* = .{
                     .mode = .auto,
                     .release_sig = 0,
@@ -381,9 +397,16 @@ fn virtualTerminalControl(tty: *Teletype, cmd: IoCtl, arg: lib.AnyData) vfs.Erro
                     log.info("vt_setmode: {}", .{@intFromEnum(mode.mode)});
                 },
                 .get_state => arg.asPtr(IoCtl.Vt.State).?.* = .{
-                    .active = if (active) |a| @truncate(@intFromPtr(a) - @intFromPtr(&vts) + 1) else 0,
+                    .active = if (active) |a| a.idx + 1 else 0,
                     .signal = 0,
-                    .state = (@as(u16, 1) << max_terminals) -% 1,
+                    .state = blk: {
+                        var mask: u16 = 0;
+                        for (&vts) |*v| {
+                            if (v.tty.users.count() == 0) continue;
+                            mask |= @as(u16, 1) << @truncate(v.idx);
+                        }
+                        break :blk mask;
+                    },
                 },
                 .activate => _ = try select(arg.as(u8) -% 1),
                 .wait_activate => {}, // Do nothing for now?
