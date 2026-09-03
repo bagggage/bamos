@@ -25,12 +25,16 @@ const ops: Framebuffer.Operations = .{
     .mmap = &fbMmap,
     .get_capabilities = &fbGetCapabilities,
     .control = &fbControl,
+    .get_color_map = &fbGetColorMap,
+    .set_color_map = &fbSetColorMap,
 };
 
 const map_unit_ops: sys.AddressSpace.MapUnit.Operations = .{
     .pageFault = &mapUnitPageFault,
     .unmapPage = &mapUnitUnmapPage,
 };
+
+const palette_len = 16;
 
 var fb_0: Framebuffer = undefined;
 
@@ -40,6 +44,11 @@ pub fn init() !void {
 
     const phys = vm.translateVirtToPhys(@intFromPtr(boot_fb.base)) orelse return error.Uninitialized;
     const size = boot_fb.scanline * boot_fb.height;
+
+    const palette = vm.gpa.allocMany(u32, palette_len) orelse return error.NoMemory;
+    errdefer vm.gpa.free(palette.ptr);
+
+    @memset(palette, 0);
 
     try fb_0.setup(
         "linear-fb",
@@ -51,6 +60,7 @@ pub fn init() !void {
         @intFromPtr(boot_fb.base),
         phys,
         size,
+        .fromPtr(palette.ptr),
     );
 }
 
@@ -132,10 +142,7 @@ fn fbImageBlit(self: *Framebuffer, image: *const IoCtl.Image) void {
     }
 }
 
-fn fbBlank(self: *Framebuffer) void {
-    const pix: []u32 = @ptrCast(@alignCast(memoryRegion(self)));
-    @memset(pix, 0);
-}
+fn fbBlank(_: *Framebuffer, _: Framebuffer.IoCtl.BlankMode) void {}
 
 fn fbMmap(_: *Framebuffer, map_unit: *sys.AddressSpace.MapUnit) vfs.Error!void {
     map_unit.ops = &map_unit_ops;
@@ -145,9 +152,52 @@ fn fbGetCapabilities(_: *Framebuffer, info: *Framebuffer.VariableScreenInfo) voi
     info.bits_per_pixel = @bitSizeOf(u32);
 }
 
-fn fbControl(_: *Framebuffer, info: *const Framebuffer.VariableScreenInfo) vfs.Error!void {
-    log.info("set mode: {any}", .{info});
-    return error.BadOperation;
+fn fbControl(self: *Framebuffer, info: *const Framebuffer.VariableScreenInfo) vfs.Error!void {
+    log.info("set mode: {}x{} -> {}/{}x{}/{}", .{
+        info.x_offset, info.y_offset,
+        info.x_res, info.y_res,
+        info.x_res_virt, info.y_res_virt,
+    });
+
+    if (
+        self.width != info.x_res_virt or
+        self.height != info.y_res_virt or
+        info.rotate != 0
+    ) return error.InvalidArgs;
+}
+
+fn fbSetColorMap(self: *Framebuffer, cmap: *const Framebuffer.ColorMap) vfs.Error!void {
+    const end = cmap.start +| cmap.len;
+    if (end > palette_len) return; //error.InvalidArgs;
+
+    const palette = self.palette.asPtr([palette_len]u32).?;
+    for (cmap.start..end) |i| {
+        const red = if (cmap.red) |r| r[i] else 0;
+        const green = if (cmap.green) |g| g[i] else 0;
+        const blue = if (cmap.blue) |b| b[i] else 0;
+        const color: video.Color = .{
+            .r = @truncate(red),
+            .g = @truncate(green),
+            .b = @truncate(blue),
+        };
+
+        palette[i] = color.pack(self.format);
+    }
+}
+
+fn fbGetColorMap(self: *Framebuffer, out_cmap: *Framebuffer.ColorMap) vfs.Error!void {
+    const end = out_cmap.start +| out_cmap.len;
+    if (end > palette_len) return error.InvalidArgs;
+
+    const palette = self.palette.asPtr([palette_len]u32).?;
+    for (out_cmap.start..end) |i| {
+        const color: video.Color = .unpack(self.format, palette[i]);
+
+        if (out_cmap.red) |r| r[i] = color.r;
+        if (out_cmap.green) |g| g[i] = color.g;
+        if (out_cmap.blue) |b| b[i] = color.b;
+        if (out_cmap.transp) |t| t[i] = 0;
+    }
 }
 
 fn mapUnitPageFault(map_unit: *sys.AddressSpace.MapUnit, pt: *vm.PageTable, _: usize, _: vm.FaultCause) vfs.Error!*vm.Page {
