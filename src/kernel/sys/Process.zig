@@ -352,13 +352,16 @@ pub const Id = struct {
     }
 
     pub fn addProcessToGroup(group: *Id, process: *sys.Process) void {
-        std.debug.assert(process.group != group);
+        std.debug.assert(process.group != group and process.id.lock.isLocked());
 
-        group.lock.lock();
-        defer group.lock.unlock();
+        group.lock.lockAtomic();
+        defer group.lock.unlockAtomic();
 
-        process.id.lock.lockAtomic();
-        defer process.id.lock.unlockAtomic();
+        group.addProcessToGroupAtomic(process);
+    }
+
+    pub fn addProcessToGroupAtomic(group: *Id, process: *sys.Process) void {
+        std.debug.assert(process.id.lock.isLocked() and group.lock.isLocked());
 
         if (process.flags.terminate) {
             @branchHint(.cold);
@@ -369,6 +372,23 @@ pub const Id = struct {
         process.group = group;
         group.p_node.insertAfter(&process.id.p_node);
         group.users.inc();
+    }
+
+    pub fn processExitFromGroupAtomic(proc: *sys.Process) void {
+        const pid = proc.id;
+        std.debug.assert(pid.lock.isLocked());
+
+        if (pid != proc.group) {
+            proc.group.notifyEvent(proc);
+            proc.group.removeProcessFromGroup(proc);
+        } else if (proc.group.isSessionOwner()) {
+            proc.group.notifyEventAtomic(proc);
+            proc.group.session.leaderExit();
+        } else if (pid.p_node.next == null) {
+            // This process is the group owner and there is no other process in group.
+            const session = pid.session.getRemoteSession();
+            session.removeGroup(proc.group);
+        }
     }
 
     pub fn removeProcessFromGroup(group: *Id, process: *sys.Process) void {
@@ -538,17 +558,7 @@ pub const Id = struct {
         self.owner = .{ .stats = proc.stats };
         self.zombie = true;
 
-        if (self != proc.group) {
-            proc.group.notifyEvent(proc);
-            proc.group.removeProcessFromGroup(proc);
-        } else if (proc.group.isSessionOwner()) {
-            proc.group.notifyEventAtomic(proc);
-            proc.group.session.leaderExit();
-        } else if (self.p_node.next == null) {
-            // This process is the group owner and there is no other process in group.
-            const session = self.session.getRemoteSession();
-            session.removeGroup(proc.group);
-        }
+        processExitFromGroupAtomic(proc);
     }
 
     inline fn isSessionOwner(self: *const Id) bool {
@@ -731,6 +741,10 @@ pub fn clone(self: *Self) !*Self {
     defer group.deref();
 
     id.processAttach(new);
+
+    new.id.lock.lockAtomic();
+    defer new.id.lock.unlockAtomic();
+
     group.addProcessToGroup(new);
     self.addChild(new);
 

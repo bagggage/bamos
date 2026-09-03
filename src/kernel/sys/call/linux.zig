@@ -2536,9 +2536,13 @@ fn setProcGroup(pid: linux.pid_t, pgid: linux.pid_t) isize {
         defer sid.deref();
         sid.session.addGroup(proc.id);
     } else {
-        // TODO: Implement ability to find requested process group.
-        log.warn("cannot set process group", .{});
-        return errorFromE(.PERM);
+        const group = sys.Process.Id.lookup(real_pgid) orelse return errorFromE(.PERM);
+        defer group.deref();
+
+        if (group.getSessionWeakAtomic() != proc.group.getSessionWeakAtomic()) return errorFromE(.PERM);
+
+        sys.Process.Id.processExitFromGroupAtomic(proc);
+        group.addProcessToGroup(proc);
     }
 
     return 0;
