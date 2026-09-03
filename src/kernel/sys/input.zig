@@ -71,6 +71,8 @@ pub fn unregisterHandler(kind: Input.Kind, handler: *Input.Event.Handler) void {
     _ = handlers[idx].remove(&handler.node);
 
     var node = handler.handles.head.load(.acquire);
+    defer handler.handles = .{};
+
     while (node) |n| {
         node = n.next;
 

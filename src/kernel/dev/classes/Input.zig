@@ -254,9 +254,14 @@ pub const Event = struct {
         handler: *Handler,
 
         node: Node = .{},
+        dev_node: Node = .{},
 
         pub inline fn fromNode(node: *Node) *Handle {
             return @fieldParentPtr("node", node);
+        }
+
+        pub inline fn fromDevNode(dev_node: *Node) *Handle {
+            return @fieldParentPtr("dev_node", dev_node);
         }
 
         inline fn process(self: *Handle, event: Event) bool {
@@ -447,12 +452,12 @@ pub fn createHandle(self: *Self, handler: *Event.Handler) Error!*Event.Handle {
     const handle = vm.auto.alloc(Event.Handle) orelse return error.NoMemory;
     handle.* = .{ .device = self, .handler = handler };
 
-    self.handles.prepend(&handle.node);
+    self.handles.prepend(&handle.dev_node);
     return handle;
 }
 
 pub fn deleteHandle(self: *Self, handle: *Event.Handle) void {
-    _ = self.handles.remove(&handle.node);
+    _ = self.handles.remove(&handle.dev_node);
     vm.auto.free(Event.Handle, handle);
 }
 
@@ -515,7 +520,7 @@ fn processHandles(self: *Self, event: Event) bool {
     var filtered = false;
     var node = self.handles.head.load(.acquire);
     while (node) |n| : (node = n.next) {
-        const handle = Event.Handle.fromNode(n);
+        const handle = Event.Handle.fromDevNode(n);
         filtered = handle.process(event) or filtered;
     }
 
