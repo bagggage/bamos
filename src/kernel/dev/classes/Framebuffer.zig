@@ -47,6 +47,20 @@ pub const IoCtl = enum(u32) {
     };
 
     pub const Vblank = extern struct {
+        pub const Flags = packed struct(u32) {
+            vertical: bool = false,
+            horizontal: bool = false,
+            have_vblank: bool = false,
+            have_hblank: bool = false,
+            have_count: bool = false,
+            have_vcount: bool = false,
+            have_hcount: bool = false,
+            vsyncing: bool = false,
+            have_vsync: bool = false,
+
+            _reserved: u23,
+        };
+
         flags: u32,
         count: u32,
         v_count: u32,
@@ -74,6 +88,15 @@ pub const IoCtl = enum(u32) {
         mask: *const u8,
         hot: Pos,
         image: Image,
+    };
+
+    pub const BlankMode = enum(u8) {
+        unblank = 0,
+        normal = 1,
+        vsync_suspend = 2,
+        hsync_suspend = 3,
+        powerdown = 4,
+        _
     };
 
     get_vscreen_info = 0x4600,
@@ -187,10 +210,10 @@ pub const ColorMap = extern struct {
     start: u32,
     len: u32,
 
-    red: *u16,
-    green: *u16,
-    blue: *u16,
-    transp: *u16,
+    red: ?[*]u16,
+    green: ?[*]u16,
+    blue: ?[*]u16,
+    transp: ?[*]u16,
 };
 
 pub const BitField = extern struct {
@@ -284,9 +307,11 @@ pub const Operations = struct {
     pub const FillRectFn = *const fn (*Self, *const IoCtl.FillRect) void;
     pub const CopyAreaFn = *const fn (*Self, *const IoCtl.CopyArea) void;
     pub const ImageBlitFn = *const fn (*Self, *const IoCtl.Image) void;
-    pub const BlankFn = *const fn (*Self) void;
+    pub const BlankFn = *const fn (*Self, IoCtl.BlankMode) void;
     pub const MmapFn = *const fn (*Self, *sys.AddressSpace.MapUnit) vfs.Error!void;
     pub const GetCapabilitiesFn = *const fn (*Self, *VariableScreenInfo) void;
+    pub const GetColorMapFn = *const fn (*Self, *ColorMap) vfs.Error!void;
+    pub const SetColorMapFn = *const fn (*Self, *const ColorMap) vfs.Error!void;
     pub const ControlFn = *const fn (*Self, *const VariableScreenInfo) vfs.Error!void;
 
     read: ?ReadFn = null,
@@ -300,6 +325,8 @@ pub const Operations = struct {
     mmap: MmapFn,
 
     get_capabilities: GetCapabilitiesFn,
+    get_color_map: GetColorMapFn,
+    set_color_map: SetColorMapFn,
     control: ControlFn,
 };
 
@@ -329,6 +356,8 @@ virt: usize,
 phys: usize,
 size: u32,
 
+palette: lib.AnyData = .{},
+
 pub fn setup(
     self: *Self,
     id: []const u8,
@@ -340,6 +369,7 @@ pub fn setup(
     virt: usize,
     phys: usize,
     size: u32,
+    palette: lib.AnyData,
 ) vfs.Error!void {
     const dev_num = dev_region.alloc() orelse return error.MaxSize;
     errdefer dev_region.free(dev_num);
@@ -363,6 +393,7 @@ pub fn setup(
         .virt = virt,
         .phys = phys,
         .size = size,
+        .palette = palette,
     };
 
     try devfs.registerCharDev(&self.dev_file);
@@ -435,6 +466,9 @@ pub fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
             const info = arg_data.asPtr(VariableScreenInfo).?;
             try fb.ops.control(fb, info);
         },
+        .get_color_map => try fb.ops.get_color_map(fb, arg_data.asPtr(ColorMap).?),
+        .put_color_map => try fb.ops.set_color_map(fb, arg_data.asPtr(ColorMap).?),
+        .blank => fb.ops.blank(fb, @enumFromInt(arg)),
         else => {
             std.log.info("bad ioctl: '{t}'", .{ioctl});
             return error.BadOperation;
