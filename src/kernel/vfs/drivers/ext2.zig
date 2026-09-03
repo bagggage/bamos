@@ -312,8 +312,8 @@ const Inode = extern struct {
         cursor: cache.Cursor,
 
         ptrs: [*]const u32 = undefined,
-        ptr_stack: [2]u32 = .{ 0, 0 },
-        indir_blk: u32 = 0,
+        indir_idxs: [2]u32 = .{ 0, 0 },
+        indir_blks: [3]u32 = .{ 0, 0, 0 },
 
         super: *const vfs.Superblock,
         inode: *const Inode,
@@ -323,16 +323,16 @@ const Inode = extern struct {
             inode: *const Inode, comptime op: ?Operation,
         ) !BlockIter {
             const path = Inode.calcPtrPath(begin_idx, super);
-
             var self: BlockIter = .{
                 .inner_idx = path.inner_idx,
                 .indir_level = path.indir_level,
                 .cursor = .blank(super.drive),
-                .ptr_stack = path.ptr_stack,
+                .indir_idxs = path.ptr_stack,
                 .super = super,
                 .inode = inode,
             };
-            try self.openStartLocation(op);
+
+            if (self.indir_level != 0) try self.readCurrentIndirBlock(op);
 
             return self;
         }
@@ -356,6 +356,7 @@ const Inode = extern struct {
                 self.indir_level = 1;
                 self.inner_idx = 0;
 
+                if (comptime op != .read) self.indir_blks[0] = self.inode.indir_ptrs[0];
                 try self.readPtrBlock(self.inode.indir_ptrs[0], op);
             }
 
@@ -381,15 +382,15 @@ const Inode = extern struct {
             var carry: u1 = 1;
             var n = self.indir_level - 1;
             while (n > 0) : (n -= 1) {
-                const idx = self.ptr_stack[n - 1] +% carry;
+                const idx = self.indir_idxs[n - 1] +% carry;
 
                 if (idx >= Inode.ptrsPerBlock(self.super)) {
                     @branchHint(.unlikely);
 
-                    self.ptr_stack[n - 1] = 0;
+                    self.indir_idxs[n - 1] = 0;
                     carry = 1;
                 } else {
-                    self.ptr_stack[n - 1] = idx;
+                    self.indir_idxs[n - 1] = idx;
                     carry = 0;
                     break;
                 }
@@ -400,20 +401,18 @@ const Inode = extern struct {
                 self.indir_level += 1;
             }
 
-            try self.readPtrBlock(self.inode.indir_ptrs[self.indir_level - 1], op);
-
-            for (0..self.indir_level - 1) |i| {
-                const idx = self.ptr_stack[i];
-                try self.readPtrBlock(try self.getIndirectPtr(idx, op), op);
-            }
+            try self.readCurrentIndirBlock(op);
         }
 
-        fn openStartLocation(self: *BlockIter, comptime op: ?Operation) !void {
-            if (self.indir_level == 0) return;
-
+        fn readCurrentIndirBlock(self: *BlockIter, comptime op: ?Operation) !void {
+            if (comptime op != .read) self.indir_blks[0] = self.inode.indir_ptrs[self.indir_level - 1];
             try self.readPtrBlock(self.inode.indir_ptrs[self.indir_level - 1], op);
+
             for (0..self.indir_level - 1) |i| {
-                try self.readPtrBlock(try self.getIndirectPtr(self.ptr_stack[i], op), op);
+                const blk_idx = try self.getIndirectPtr(self.indir_idxs[i], op);
+                if (comptime op != .read) self.indir_blks[i + 1] = blk_idx;
+
+                try self.readPtrBlock(blk_idx, op);
             }
         }
 
@@ -422,7 +421,6 @@ const Inode = extern struct {
             try self.cursor.ensureCache(op, offset);
 
             self.ptrs = @ptrCast(self.cursor.asObject(u32));
-            if (comptime op != .read) self.indir_blk = block;
         }
 
         fn getIndirectPtr(self: *BlockIter, i: usize, comptime op: ?Operation) !u32 {
@@ -663,7 +661,7 @@ inline fn calcBlockOffset(super: *const vfs.Superblock, block: u32) usize {
 
 fn calcBgdOffset(super: *const vfs.Superblock, group: u32) usize {
     const ext_super = super.fs_data.asPtr(Superblock).?;
-    return super.part_offset + ((ext_super.sb_block + 1) * super.block_size) + (group * @sizeOf(BlockGroupDescriptor));
+    return super.part_offset + (@as(usize, group) * @sizeOf(BlockGroupDescriptor)) + ((ext_super.sb_block + 1) * super.block_size);
 }
 
 fn readInode(
@@ -1021,40 +1019,56 @@ fn dentryDeinitInode(inode: *const vfs.Inode) void {
     };
     defer iter.deinit(null);
 
-    const blocks_num = dump_inode.blocksNum(super);
-    const ptrs_per_block = Inode.ptrsPerBlock(super);
-
+    var blocks_num = dump_inode.blocksNum(super);
+    var indir_stack: [3]u32 = .{ 0, 0, 0 };
     var freed: u32 = 0;
-    for (0..blocks_num) |i| {
+    var i: u32 = 0;
+    while (i < blocks_num) : (i += 1) {
         const block_num = iter.next(null) catch |err| {
             log.err("inode {}: failed to complete deleting: read block: {t}", .{inode.index, err});
-            return;
+            break;
         };
 
+        if (block_num == 0) {
+            @branchHint(.cold);
+            log.err("inode {}: invalid block[{}]", .{inode.index, i});
+            continue;
+        }
+
         freeBlockPartially(super, block_num, &cursor) catch |err| {
-            log.err("inode {}: failed to free block {} ({} from {}): {t}", .{
-                inode.index, block_num, i + 1, blocks_num, err,
-            });
+            log.err("inode {}: failed to free block[{}] {}: {t}", .{inode.index, i, block_num, err});
             break;
         };
         freed += 1;
 
-        // Free indirect pointer block if needed
-        if (
-            iter.indir_level > 0 and
-            (iter.inner_idx == ptrs_per_block - 1 or i == blocks_num - 1)
-        ) {
-            log.debug("inode {}: free indirect pointer block {}", .{inode.index, iter.indir_blk});
+        // Free indirect pointer block if needed.
+        for (0..iter.indir_level) |indir_i| {
+            const indir_blk = iter.indir_blks[indir_i];
+            const tmp_blk = indir_stack[indir_i];
+            indir_stack[indir_i] = indir_blk;
 
-            freeBlockPartially(super, iter.indir_blk, &cursor) catch |err| {
-                log.err("inode {}: failed to free block {} ({} from {}): {t}", .{
-                    inode.index, block_num, i + 1, blocks_num, err,
-                });
-                break;
-            };
-            freed += 1;
+            if (tmp_blk != indir_blk) {
+                @branchHint(.unlikely);
+                blocks_num -= 1;
+
+                // Don't free block when we only start iterating.
+                if (tmp_blk == 0) {
+                    @branchHint(.cold);
+                    continue;
+                }
+
+                tryFreeIndirBlockPartialy(super, inode.index, tmp_blk, &cursor);
+                freed += 1;
+            }
         }
     }
+
+    // Free left indirect blocks.
+    for (indir_stack) |blk| if (blk != 0) {
+        @branchHint(.unlikely);
+        tryFreeIndirBlockPartialy(super, inode.index, blk, &cursor);
+        freed += 1;
+    };
 
     if (freed > 0) {
         const super_offset_abs = super.part_offset + superblock_disk_offset;
@@ -1649,17 +1663,28 @@ fn freeInode(
 
 fn freeBlockPartially(super: *const vfs.Superblock, block_num: u32, cursor: *cache.Cursor) vfs.Error!void {
     const ext_super = super.fs_data.asPtr(Superblock).?;
+    lib.debug.assert(block_num > ext_super.sb_block, @src());
+
     const block_idx = block_num - ext_super.sb_block;
     const group = block_idx / ext_super.blocks_per_group;
     const inner_idx = block_idx % ext_super.blocks_per_group;
 
     const bgd_offset = calcBgdOffset(super, group);
     const bgd = try cursor.ensureAs(BlockGroupDescriptor, .write, bgd_offset);
+    lib.debug.assert(bgd.free_blocks < std.math.maxInt(u16), @src());
+
     try bitmapFree(super, bgd.block_bitmap, inner_idx, cursor);
     try cursor.ensureCache(.write, bgd_offset);
 
     bgd.free_blocks += 1;
     cursor.setDirty(@sizeOf(BlockGroupDescriptor));
+}
+
+fn tryFreeIndirBlockPartialy(super: *const vfs.Superblock, inode_idx: u32, block_num: u32, cursor: *cache.Cursor) void {
+    log.debug("inode {}: free indirect pointer block {}", .{inode_idx, block_num});
+    freeBlockPartially(super, block_num, cursor) catch |err| {
+        log.err("inode {}: failed to free block {}: {t}", .{inode_idx, block_num, err});
+    };
 }
 
 fn freeBlock(super: *const vfs.Superblock, block_idx: u32, cursor: *cache.Cursor) vfs.Error!void {
@@ -1837,7 +1862,7 @@ fn fileWriteBackCache(block: *vm.cache.Block, quants: []const vm.cache.Block.Qua
         const end = block_offset + quant.top;
 
         while (begin < end) {
-            const file_block_idx: u32 = @intCast(begin >> super.block_shift);
+            const file_block_idx: u32 = @intCast(super.offsetToBlock(begin));
             const inner_offset = super.offsetModBlock(begin);
             const chunk_len = @min(end - begin, super.block_size - inner_offset);
 
