@@ -305,11 +305,11 @@ fn handleEscapeSequence(seq: []const u8) u32 {
         },
         'C', 'a' => { // Move right
             const n = std.fmt.parseUnsigned(u16, seq[1..end], 10) catch 1;
-            cursor.col -|= n;
+            cursor.col = @min(cursor.col + n, cols - 1);
         },
         'D' => { // Move left
             const n = std.fmt.parseUnsigned(u16, seq[1..end], 10) catch 1;
-            cursor.col = @min(cursor.col + n, cols - 1);
+            cursor.col -|= n;
         },
         'E' => { // Move down-right
             const n = std.fmt.parseUnsigned(u16, seq[1..end], 10) catch 1;
