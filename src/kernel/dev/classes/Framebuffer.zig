@@ -396,7 +396,7 @@ pub fn setup(
         .palette = palette,
     };
 
-    try devfs.registerCharDev(&self.dev_file);
+    try devfs.registerCharDev(&self.dev_file, null);
 }
 
 pub fn devOpen(dev_file: *devfs.DevFile, file: *vfs.File) vfs.Error!void {

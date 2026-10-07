@@ -40,8 +40,8 @@ pub fn init() !void {
     tty_dev_file.name = .init("tty");
     tty0_dev_file.name = .init("tty0");
 
-    try devfs.registerCharDev(&tty_dev_file);
-    try devfs.registerCharDev(&tty0_dev_file);
+    try devfs.registerCharDev(&tty_dev_file, null);
+    try devfs.registerCharDev(&tty0_dev_file, null);
 }
 
 fn devOpenControlTty(_: *devfs.DevFile, file: *vfs.File) vfs.Error!void {

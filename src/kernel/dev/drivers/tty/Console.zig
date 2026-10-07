@@ -40,7 +40,7 @@ pub fn init() !void {
         .ops = &dev_ops
     };
 
-    try devfs.registerCharDev(&instance.dev_file);
+    try devfs.registerCharDev(&instance.dev_file, null);
 
     const tty = VirtualTerminal.select(0) catch |err| blk: {
         if (err != error.Uninitialized) log.err("failed to enable VT: {t}", .{err});
