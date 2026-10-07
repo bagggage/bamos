@@ -176,7 +176,7 @@ pub fn setup(
     };
     errdefer self.dev_file.name.deinit();
 
-    try devfs.registerCharDev(&self.dev_file);
+    try devfs.registerCharDev(&self.dev_file, null);
 }
 
 pub inline fn fromDevFile(dev_file: *devfs.DevFile) *Self {

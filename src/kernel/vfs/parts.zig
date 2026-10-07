@@ -56,7 +56,7 @@ pub const Partition = struct {
             },
             .ops = ops,
         };
-        try devfs.registerBlockDev(&self.dev_file);
+        try devfs.registerBlockDev(&self.dev_file, null);
     }
 };
 

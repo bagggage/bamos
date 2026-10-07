@@ -23,7 +23,7 @@ var dev_file: devfs.DevFile = .{
 
 pub fn init() !void {
     dev_file.name = .init("null");
-    try devfs.registerCharDev(&dev_file);
+    try devfs.registerCharDev(&dev_file, null);
 }
 
 fn fileWrite(_: *vfs.File, _: usize, buffer: []const u8) vfs.Error!usize {

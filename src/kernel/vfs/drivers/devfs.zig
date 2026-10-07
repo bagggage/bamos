@@ -16,6 +16,7 @@ const max_major = vm.page_size * std.mem.byte_size_in_bits;
 pub const Error = vm.Error || error {
     DevMajorLimit,
     DevMinorLimit,
+    NoEnt,
 };
 
 pub const DevNum = struct {
@@ -199,12 +200,12 @@ pub fn freeMajor(major: u16) void {
     major_bitmap.clear(major);
 }
 
-pub inline fn registerBlockDev(devf: *DevFile) Error!void {
-    _ = try registerDevice(devf, .block_device);
+pub inline fn registerBlockDev(devf: *DevFile, path: ?[]const u8) Error!void {
+    _ = try registerDevice(devf, .block_device, path);
 }
 
-pub inline fn registerCharDev(devf: *DevFile) Error!void {
-    _ = try registerDevice(devf, .char_device);
+pub inline fn registerCharDev(devf: *DevFile, path: ?[]const u8) Error!void {
+    _ = try registerDevice(devf, .char_device, path);
 }
 
 pub fn unregisterDevice(devf: *DevFile) void {
@@ -232,7 +233,10 @@ pub inline fn getRoot() *vfs.Dentry {
     return root;
 }
 
-fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
+fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type, path: ?[]const u8) Error!*vfs.Dentry {
+    const parent = try lookupOrCreateDeviceParent(path, devf.access);
+    defer parent.deref();
+
     const index = context.allocateInodeIndex() orelse return error.NoMemory;
     errdefer context.freeInodeIndex(index);
 
@@ -254,7 +258,39 @@ fn registerDevice(devf: *DevFile, kind: vfs.Inode.Type) Error!*vfs.Dentry {
     );
 
     devf.inode = inode;
-    root.addChild(dentry);
+    parent.addChild(dentry);
+
+    return dentry;
+}
+
+fn lookupOrCreateDeviceParent(path: ?[]const u8, access: DevFile.Access) Error!*vfs.Dentry {
+    root.ref();
+
+    const p = path orelse return root;
+    var dentry: *vfs.Dentry = root;
+    errdefer dentry.deref();
+
+    const trim = std.mem.trimEnd(u8, p, "/");
+    var iter = std.mem.splitScalar(u8, trim, '/');
+    while (iter.next()) |child_name| {
+        if (child_name.len == 0) return error.NoEnt;
+
+        const next_dentry = dentry.lookup(child_name);
+        if (next_dentry) |n| {
+            dentry.deref();
+            dentry = n;
+            continue;
+        }
+
+        const new_dentry = dentry.createFile(
+            child_name,
+            .directory,
+            .{ .gid = access.gid, .perm = access.perm },
+        ) catch return error.NoEnt;
+
+        dentry.deref();
+        dentry = new_dentry;
+    }
 
     return dentry;
 }
