@@ -285,7 +285,7 @@ const Keyboard = struct {
         try dev.intr.requestIrq(irq, &self.device, &interruptHandler, .edge, true);
         errdefer dev.intr.releaseIrq(irq, &self.device);
 
-        try self.input.setup(.keyboard);
+        try self.input.setup(&self.device, .keyboard);
         errdefer self.input.deinit();
 
         self.input.request_op = &inputRequest;

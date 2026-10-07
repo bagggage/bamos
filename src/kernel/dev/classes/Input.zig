@@ -7,6 +7,7 @@ const std = @import("std");
 const dev = @import("../../dev.zig");
 const devfs = @import("../../vfs.zig").devfs;
 const lib = @import("../../lib.zig");
+const log = std.log.scoped(.@"dev.Input");
 const sched = @import("../../sched.zig");
 const sys = @import("../../sys.zig");
 const vfs = @import("../../vfs.zig");
@@ -233,12 +234,16 @@ pub const Scancode = enum(u16) {
 pub const Action = enum(u8) {
     press   = 0,
     release = 1,
-    repeat  = 2
+    repeat  = 2,
 };
 
 pub const Event = struct {
     pub const Type = enum(u8) {
-        key,
+        sync = 0,
+        key = 1,
+        relative = 2,
+        absolute = 3,
+        misc = 4,
     };
 
     pub const Handle = struct {
@@ -313,11 +318,21 @@ pub const Event = struct {
         }
     };
 
+    /// Linux kernel `struct input_event`
+    /// source: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input.h
+    pub const Linux = extern struct {
+        sec: u64 = 0,
+        usec: u64 = 0,
+        @"type": u16,
+        code: u16 = undefined,
+        value: u32 = undefined,
+    };
+
     @"type": Type,
     action: Action,
     code: Scancode,
 
-    timestamp: u32,
+    timestamp_us: u32,
 
     pub inline fn initKey(action: Action, code: Scancode) Event {
         return .initAny(.key, action, code);
@@ -328,7 +343,17 @@ pub const Event = struct {
             .@"type" = @"type",
             .action = action,
             .code = code,
-            .timestamp = sys.time.getShortTimestamp(),
+            .timestamp_us = @truncate(sys.time.getTimestamp() / std.time.ns_per_us),
+        };
+    }
+
+    inline fn toLinux(self: *const Event) Linux {
+        return .{
+            .sec = self.timestamp_us / std.time.us_per_s,
+            .usec = self.timestamp_us % std.time.us_per_s,
+            .@"type" = @intFromEnum(self.@"type"),
+            .code = @intFromEnum(self.code),
+            .value = @intFromEnum(self.action),
         };
     }
 };
@@ -366,11 +391,71 @@ pub const Request = union(Kind) {
 pub const IList = lib.rcu.SinglyLinkedList;
 pub const INode = IList.Node;
 
+const Ioctl = enum(u32) {
+    const IOCTL = std.os.linux.IOCTL;
+
+    const BusType = enum(u16) {
+        pci = 0x1,
+        isa_pnp = 0x2,
+        usb = 0x3,
+        hil = 0x4,
+        bluetooth = 0x5,
+        virtual = 0x6,
+
+        isa = 0x10,
+        i8042 = 0x11,
+        xtkbd = 0x12,
+        rs232 = 0x13,
+        game_port = 0x14,
+        parallel_port = 0x15,
+        amiga = 0x16,
+        adb = 0x17,
+        i2c = 0x18,
+        host = 0x19,
+        gsc = 0x1a,
+        atari = 0x1b,
+        spi = 0x1c,
+        rmi = 0x1d,
+        cec = 0x1e,
+        intel_ishtp = 0x1f,
+        amd_sfh = 0x20,
+        sdw = 0x21,
+    };
+
+    const Id = extern struct {
+        bus_type: BusType,
+        vendor: u16,
+        product: u16,
+        version: u16,
+    };
+
+    get_version = IOCTL.IOR('E', 0x01, u32),
+    get_device_id = IOCTL.IOR('E', 0x02, Id),
+
+    get_name = IOCTL.IOR('E', 0x06, void),
+    grab = IOCTL.IOW('E', 0x90, u32),
+    _,
+
+    inline fn maskSize(self: Ioctl) struct{ Ioctl, u16 } {
+        var req: IOCTL.Request = @bitCast(@intFromEnum(self));
+        const size = req.size;
+        req.size = 0;
+
+        return .{ @enumFromInt(@as(u32, @bitCast(req))), size };
+    }
+};
+
 const Self = @This();
 
 const max_num = 512;
 const dev_ops: devfs.DevFile.Operations = .{
-    .fops = vfs.internals.file.default.ops,
+    .open = devFileOpen,
+    .close = devFileClose,
+    .fops = .{
+        .read = fileRead,
+        .poll = filePoll,
+        .ioctl = fileIoctl,
+    },
 };
 
 var num_map: std.bit_set.ArrayBitSet(usize, max_num) = .{ .masks = undefined };
@@ -379,6 +464,7 @@ var dev_region: devfs.Region = .{ .major = 13 };
 
 idx: u16,
 kind: Kind,
+device: *const dev.Device,
 dev_file: devfs.DevFile,
 
 request_op: ?Request.Fn = null,
@@ -397,7 +483,7 @@ pub inline fn preinit() void {
     @memset(&num_map.masks, std.math.maxInt(usize));
 }
 
-pub fn setup(self: *Self, kind: Kind) Error!void {
+pub fn setup(self: *Self, device: *const dev.Device, kind: Kind) Error!void {
     const num = allocDevNum() orelse return error.MaxSize;
     errdefer freeDevNum(num);
 
@@ -407,6 +493,7 @@ pub fn setup(self: *Self, kind: Kind) Error!void {
     self.* = .{
         .idx = @intCast(idx),
         .kind = kind,
+        .device = device,
         .dev_file = .{
             .name = dev.Name.print("event{}", .{idx}) catch unreachable,
             .num = num,
@@ -421,7 +508,7 @@ pub fn setup(self: *Self, kind: Kind) Error!void {
 
     self.immediate.ctx = self;
 
-    try devfs.registerCharDev(&self.dev_file);
+    try devfs.registerCharDev(&self.dev_file, "input");
     try sys.input.registerDevice(self);
 }
 
@@ -442,6 +529,10 @@ pub fn deinit(self: *Self) void {
 
 pub inline fn fromNode(node: *INode) *Self {
     return @fieldParentPtr("node", node);
+}
+
+pub inline fn fromDevFile(devf: *devfs.DevFile) *Self {
+    return @fieldParentPtr("dev_file", devf);
 }
 
 pub inline fn pushKeyEvent(self: *Self, action: Action, code: Scancode) void {
@@ -472,7 +563,7 @@ pub fn createListener(self: *Self) !*Event.Listener {
 }
 
 pub fn deleteListener(self: *Self, listener: *Event.Listener) void {
-    self.listeners.remove(&listener.node);
+    _ = self.listeners.remove(&listener.node);
 
     listener.deinit();
     vm.auto.free(Event.Listener, listener);
@@ -576,4 +667,113 @@ fn freeIndex(idx: u16) void {
     defer num_lock.unlock();
 
     num_map.set(idx);
+}
+
+fn devFileOpen(devf: *devfs.DevFile, file: *vfs.File) vfs.Error!void {
+    const input = fromDevFile(devf);
+    const listener = try input.createListener();
+
+    file.data.setPtr(listener);
+}
+
+fn devFileClose(devf: *devfs.DevFile, file: *vfs.File) void {
+    const input = fromDevFile(devf);
+    const listener = file.data.asPtr(Event.Listener).?;
+
+    file.data.setPtr(null);
+    input.deleteListener(listener);
+}
+
+fn fileRead(file: *const vfs.File, _: usize, buffer: []u8) vfs.Error!usize {
+    const listener = file.data.asPtr(Event.Listener).?;
+    const input = fromDevFile(devfs.DevFile.fromDentry(file.dentry));
+
+    const events: [*]Event.Linux = @alignCast(@ptrCast(buffer));
+    const len = buffer.len / @sizeOf(Event.Linux);
+    if (len == 0) return 0;
+
+    var i: usize = 0;
+    outer: while (true) {
+        {
+            listener.events.lock.lock();
+            defer listener.events.lock.unlock();
+
+            while (listener.events.pop()) |e| : (i += 1) {
+                events[i] = e.toLinux();
+            }
+
+            if (i > 0) break :outer;
+            input.wait_lock.lock();
+        }
+
+        try sched.waitUnlock(&input.event_wait, &input.wait_lock, true);
+    }
+
+    return i * @sizeOf(Event.Linux);
+}
+
+fn filePoll(
+    file: *vfs.File,
+    wait_entry: *vfs.File.Poll.WaitEntry,
+    action: vfs.File.Poll.WaitAction,
+) vfs.Error!vfs.File.Poll {
+    const listener = file.data.asPtr(Event.Listener).?;
+    const input = fromDevFile(devfs.DevFile.fromDentry(file.dentry));
+
+    switch (action) {
+        .enqueue => {
+            input.wait_lock.lock();
+            defer input.wait_lock.unlock();
+
+            input.event_wait.push(wait_entry);
+        },
+        .remove => {
+            input.wait_lock.lock();
+            defer input.wait_lock.unlock();
+
+            input.event_wait.removeWeak(wait_entry);
+        },
+        .none => {},
+    }
+
+   return .{ .read_avail = listener.events.itemsToRead() > 0 };
+}
+
+fn fileIoctl(file: *vfs.File, cmd: c_uint, arg: usize) vfs.Error!void {
+    const input = fromDevFile(devfs.DevFile.fromDentry(file.dentry));
+    const data: lib.AnyData = .from(arg);
+    const ioctl: Ioctl = @enumFromInt(cmd);
+
+    switch (ioctl) {
+        .get_version => {
+            data.asPtr(c_int).?.* = 1;
+        },
+        .get_device_id => {
+            data.asPtr(Ioctl.Id).?.* = .{
+                .bus_type = .host,
+                .vendor = 0,
+                .product = 0,
+                .version = 0,
+            };
+        },
+        .grab => {
+            // FIXME: Implement
+        },
+        else => {
+            const masked, const size = ioctl.maskSize();
+            switch (masked) {
+                .get_name => {
+                    const dst: [*]u8 = @ptrCast(data.asPtr(u8).?);
+                    const name = input.device.name.str();
+                    const len = @min(name.len, size);
+
+                    @memcpy(dst[0..len], name[0..len]);
+                },
+                else => {
+                    log.debug("unknown ioctl: {}", .{@as(std.os.linux.IOCTL.Request, @bitCast(cmd))});
+                    return error.InvalidArgs;
+                },
+            }
+        },
+    }
 }
