@@ -3,6 +3,7 @@
 .zig-cache
 .vscode
 zig-out
+zig-pkg
 build
 dist
 /docs
