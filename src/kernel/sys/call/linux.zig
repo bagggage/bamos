@@ -1184,8 +1184,7 @@ fn execve(path: [*c]const u8, args: ?[*:null][*c]const u8, envs: ?[*:null][*c]co
     if (run_ctx == null) {
         @branchHint(.cold);
         log.warn("execve failed: {t}, kill: {f}", .{ret_error, proc});
-
-        proc.terminate(1);
+        proc.terminate(0, .Terminate);
     }
 
     if (virtual_fork) {
@@ -1204,7 +1203,7 @@ fn exit(status: i32) void {
     const proc = task.spec.user.process;
     const short_status: u8 = @truncate(@as(u32, @intCast(status)));
 
-    proc.terminate(short_status);
+    proc.terminateThread(task, short_status);
 }
 
 fn exitGroup(status: i32) void {
@@ -1214,7 +1213,7 @@ fn exitGroup(status: i32) void {
     const proc = task.spec.user.process;
     const short_status: u8 = @truncate(@as(u32, @intCast(status)));
 
-    proc.terminate(short_status);
+    proc.terminate(short_status, .None);
 }
 
 fn fcntl(fd: linux.fd_t, cmd: u32, arg: usize) isize {
@@ -1543,6 +1542,7 @@ fn futex(addr: *const anyopaque, op: linux.FUTEX_OP) isize {
     trace.info("futex(0x{x}, {any})", .{@intFromPtr(addr), op});
     validateMemoryArgs(@intFromPtr(addr), @sizeOf(u32)) catch return errorFromE(.FAULT);
 
+    log.warn("futex: fixme: implement", .{});
     return 0;
 }
 

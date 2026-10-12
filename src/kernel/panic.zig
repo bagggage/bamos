@@ -124,19 +124,19 @@ pub fn exitNormal() noreturn {
     dev.intr.enableForCpu();
 
     if (task.spec == .user) {
-        task.spec.user.process.sendSignalAtomic(.SegFault);
+        const proc = task.spec.user.process;
         switch (local.nested_intr) {
             0 => {},
             1 => local.exitInterrupt(),
-            else => exitCritical(),
+            else => {
+                // FIXME: There is no garantee that signal would be deliverred to alive thread.
+                proc.sendSignal(.SegFault);
+                exitCritical();
+            },
         }
 
         logger.panicLog("exit: terminate user thread"++logger.new_line);
-
-        const proc = task.spec.user.process;
-
-        proc.stats.fault_signal = .SegFault;
-        _ = task.spec.user.process.terminateThread(task, 0);
+        proc.terminate(0, .SegFault);
 
         unreachable;
     } else {
