@@ -22,11 +22,7 @@ pub fn load(bin: *exe.Binary, args: []const [*:0]const u8, envs: []const [*:0]co
 
     const elf_hdr = (try loadAndValidateHeader(bin)).*;
     if (elf_hdr.type != .EXEC) bin.virt_base = exe.default_virt_base;
-
-    if (bin.proc.exe_file != null) {
-        const task = try bin.proc.clear();
-        bin.proc.pushTask(task);
-    }
+    if (bin.proc.exe_file != null) _ = try bin.proc.clear();
 
     bin.proc.assignExecutable(bin.file);
     errdefer bin.proc.detachExecutable();
