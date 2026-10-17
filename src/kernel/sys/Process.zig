@@ -28,9 +28,8 @@ pub const AddressSpace = @import("AddressSpace.zig");
 pub const FileTable = @import("FileTable.zig");
 
 pub const Flags = packed struct(u8) {
-    clone: bool = false,
+    virtual_fork: bool = false,
     terminate: bool = false,
-
     unused: u6 = 0,
 
     inline fn atomicSet(self: *Flags, mask: Flags) Flags {
@@ -700,7 +699,7 @@ pub fn create(stack_size: usize, root_dir: *vfs.Dentry, work_dir: *vfs.Dentry) !
     return self;
 }
 
-pub fn clone(self: *Self) !*Self {
+pub fn clone(self: *Self, keep_address_space: bool) !*Self {
     const new = vm.auto.alloc(Self) orelse return error.NoMemory;
     errdefer vm.auto.free(Self, new);
 
@@ -708,8 +707,8 @@ pub fn clone(self: *Self) !*Self {
     errdefer id.delete();
     const stats = Stats.new() orelse return error.NoMemory;
     errdefer stats.delete();
-    const addr_space = try self.addr_space.cloneAndCopy();
-    errdefer addr_space.delete();
+    const addr_space = if (!keep_address_space) try self.addr_space.cloneAndCopy() else self.addr_space;
+    errdefer if (!keep_address_space) addr_space.delete();
     const file_table = try self.files.clone();
     errdefer file_table.deinit();
 
@@ -723,7 +722,7 @@ pub fn clone(self: *Self) !*Self {
     new.* = .{
         .id = id,
         .group = id,
-        .flags = .{ .clone = true },
+        .flags = .{},
         .stats = stats,
         .uid = self.uid,
         .gid = self.gid,
@@ -751,8 +750,19 @@ pub fn clone(self: *Self) !*Self {
     return new;
 }
 
-pub fn clear(self: *Self) *sched.Task {
+pub fn clear(self: *Self) vm.Error!*sched.Task {
     std.debug.assert(self.childs.first == null);
+
+    // Allocate new address space if using shared.
+    const stack_pages = self.addr_space.stack_pages;
+    if (self.addr_space.users.put()) {
+        self.addr_space.clear();
+    } else {
+        log.debug("create separate address space: {f}", .{self});
+
+        errdefer self.addr_space.ref();
+        self.addr_space = try AddressSpace.create(stack_pages);
+    }
 
     const node = self.tasks.first.?;
     const main_task = sched.Task.Specific.User.fromNode(node).toTask();
@@ -764,9 +774,8 @@ pub fn clear(self: *Self) *sched.Task {
     }
 
     self.tasks = .{};
-    self.addr_space.clear();
+    self.addr_space.users = .init(1);
     self.files.closeOnExecute();
-
     self.detachInterpreter();
     self.detachExecutable();
     self.flags = .{};

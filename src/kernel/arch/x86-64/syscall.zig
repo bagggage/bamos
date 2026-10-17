@@ -45,7 +45,7 @@ pub const Context = extern struct {
         }
     };
 
-    /// Used with clone/fork
+    /// Used with clone/fork.
     const Extra = extern struct {
         callee: regs.CalleeRegs,
         ret_ptr: usize,
@@ -188,13 +188,24 @@ pub inline fn jumpThread(_: sys.call.Abi, _: *sched.Task, run_ctx: sys.exe.RunCo
     unreachable;
 }
 
-pub fn cloneThread(_: sys.call.Abi, _: *sched.Task, dest: *sched.Task, ctx: *Context) void {
+pub fn cloneThread(
+    _: sys.call.Abi,
+    ctx: *Context,
+    _: *sched.Task,
+    dest: *sched.Task,
+    stack_ptr: ?usize,
+    tls_ptr: ?usize,
+) void {
     const stack_top = lib.misc.alignDown(usize, dest.getKernelStackTop(), 16);
     const dest_ctx: *Context = @ptrFromInt(stack_top - @sizeOf(Context));
     const dest_ext = dest_ctx.toExtra();
+    const dest_abi = dest.spec.user.abi_data.asPtr(LinuxAbi).?;
 
     dest_ext.* = ctx.toExtra().*;
     dest_ctx.* = ctx.*;
+
+    if (stack_ptr) |sp| dest_ctx.rsp = sp;
+    if (tls_ptr) |tls| dest_abi.fs_base = tls;
 
     dest.context = .initUnaligned(@intFromPtr(dest_ext), @intFromPtr(&linuxCloneReturn));
 }
