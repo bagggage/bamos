@@ -31,11 +31,11 @@ pub const Bucket = struct {
 
     list: Entry.List = .{},
 
-    inline fn get(self: Bucket, hash: u64) ?*Entry {
+    pub inline fn get(self: Bucket, hash: u64) ?*Entry {
         return find(self.list.first, hash);
     }
 
-    inline fn next(_: Bucket, entry: *Entry, hash: u64) ?*Entry {
+    pub inline fn next(_: Bucket, entry: *Entry, hash: u64) ?*Entry {
         return find(entry.node.next, hash);
     }
 
@@ -66,10 +66,10 @@ pub fn HashTable(K: type, Context: type) type {
         buckets_len: u32 = 0,
         len: u32 = 0,
 
-        pub fn init(capacity: u32) !Self {
-            std.debug.assert(capacity > 0);
+        pub fn init(capacity_bytes: u32) !Self {
+            std.debug.assert(capacity_bytes > 0);
 
-            const rank = vm.bytesToRank(capacity);
+            const rank = vm.bytesToRank(capacity_bytes);
             const phys = vm.PageAllocator.alloc(rank) orelse return error.NoMemory;
 
             const buckets: [*]Bucket = @ptrFromInt(vm.getVirtLma(phys));
@@ -139,7 +139,7 @@ pub fn HashTable(K: type, Context: type) type {
             bucket.list.remove(&entry.node);
         }
 
-        fn getHashBucket(self: *const Self, key: K) struct{u64,*Bucket} {
+        pub fn getHashBucket(self: *const Self, key: K) struct{u64,*Bucket} {
             const hash = Context.hash(key);
             const idx = hash % self.buckets_len;
             const bucket = &self.buckets[idx];
@@ -147,7 +147,7 @@ pub fn HashTable(K: type, Context: type) type {
             return .{ hash, bucket };
         }
 
-        fn lookupAt(bucket: *Bucket, hash: u64, key: K) ?*Entry {
+        pub fn lookupAt(bucket: *Bucket, hash: u64, key: K) ?*Entry {
             var entry = bucket.get(hash) orelse return null;
             if (Context.eql(entry, key)) {
                 @branchHint(.likely);
@@ -155,7 +155,7 @@ pub fn HashTable(K: type, Context: type) type {
             } else {
                 @branchHint(.cold);
                 while (bucket.next(entry, hash)) |e| : (entry = e) {
-                    if (Context.eql(entry, key)) return e;
+                    if (Context.eql(e, key)) return e;
                 }
                 return null;
             }
