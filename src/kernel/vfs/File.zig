@@ -7,10 +7,12 @@ const std = @import("std");
 const File = @This();
 
 const Dentry = vfs.Dentry;
+const Epoll = vfs.Epoll;
 const Error = vfs.Error;
 const lib = @import("../lib.zig");
 const Pipe = vfs.Pipe;
 const sched = @import("../sched.zig");
+const Socket = @import("../net.zig").Socket;
 const sys = @import("../sys.zig");
 const vfs = @import("../vfs.zig");
 const vm = @import("../vm.zig");
@@ -185,7 +187,15 @@ pub fn deref(self: *File) void {
             const pipe = self.data.asPtr(Pipe).?;
             if (self.perm == .w) pipe.deref(.writer) else pipe.deref(.reader);
         },
-        else => std.log.err("vfs.File: close not implemented for {t} object", .{self.type}),
+        .socket => {
+            const socket = self.data.asPtr(Socket).?;
+            socket.deref();
+        },
+        .epoll => {
+            const epoll = self.data.asPtr(Epoll).?;
+            epoll.delete();
+        },
+        // else => std.log.err("vfs.File: close not implemented for {t} object", .{self.type}),
     };
 }
 
@@ -194,6 +204,7 @@ pub inline fn validateAccess(self: *const File, access: vfs.Permissions) Error!v
 }
 
 pub fn read(self: *File, buf: []u8) Error!usize {
+    // FIXME: Implement atomic access for `offset`
     const offset = self.offset;
     const readed = try self.ops.read(self, offset, buf);
     self.offset = offset + readed;
@@ -215,6 +226,7 @@ pub fn readAll(self: *File, buf: []u8) Error!void {
 }
 
 pub inline fn write(self: *File, buf: []const u8) Error!usize {
+    // FIXME: Implement atomic access for `offset`
     std.debug.assert(self.dentry.inode.type != .directory);
     const offset = self.offset;
     const size = try self.ops.write(self, offset, buf);
