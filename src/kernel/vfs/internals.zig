@@ -234,11 +234,17 @@ pub const file = opaque {
 
         pub fn read(self: *const File, offset: usize, buffer: []u8) Error!usize {
             const inode = self.dentry.inode;
+            const size = blk: {
+                inode.rw_sem.readLock();
+                defer inode.rw_sem.readUnlock();
 
-            if (inode.type != .regular_file) return error.NotRegularFile;
-            if (offset >= inode.size) return 0;
+                if (inode.type != .regular_file) return error.NotRegularFile;
+                if (offset >= inode.size) return 0;
 
-            var len = @min(inode.size - offset, buffer.len);
+                break :blk inode.size;
+            };
+
+            var len = @min(size - offset, buffer.len);
             var tmp_offset: usize = 0;
             while (len > 0) {
                 const file_offset = tmp_offset + offset;
@@ -283,19 +289,19 @@ pub const file = opaque {
                 defer block.writeUp();
 
                 @memcpy(block.asSlice()[inner_offset..inner_end], buffer[tmp_offset..tmp_offset + inner_len]);
-                log.info("set dirty: {}-{}", .{inner_offset, inner_end});
                 block.setDirtyRange(inner_offset, inner_end);
 
                 tmp_offset +%= inner_len;
                 len -%= inner_len;
             }
 
-            self.dentry.inode.lock.lock();
-            defer self.dentry.inode.lock.unlock();
+            self.dentry.inode.rw_sem.writeLock();
+            defer self.dentry.inode.rw_sem.writeUnlock();
 
             if (offset + tmp_offset > self.dentry.inode.size) {
                 self.dentry.inode.size = offset + tmp_offset;
             }
+
             return tmp_offset;
         }
 
