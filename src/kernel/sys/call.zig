@@ -39,7 +39,11 @@ pub inline fn jumpThread(abi: Abi, run_ctx: sys.exe.RunContext) noreturn {
     arch.syscall.jumpThread(abi, sched.getCurrentTask(), run_ctx);
 }
 
-pub fn cloneThread(abi: Abi, src: *sched.Task, dest: *sched.Task, ctx: *arch.syscall.Context) !void {
+pub fn cloneThread(
+    abi: Abi, ctx: *arch.syscall.Context,
+    src: *sched.Task, dest: *sched.Task,
+    stack_ptr: ?usize, tls_ptr: ?usize,
+) !void {
     dest.spec.user.sig_mask = src.spec.user.sig_mask;
 
     switch (abi) {
@@ -52,7 +56,10 @@ pub fn cloneThread(abi: Abi, src: *sched.Task, dest: *sched.Task, ctx: *arch.sys
         },
     }
 
-    arch.syscall.cloneThread(abi, src, dest, ctx);
+    arch.syscall.cloneThread(
+        abi, ctx, src,
+        dest, stack_ptr, tls_ptr,
+    );
 }
 
 pub fn stopThread(abi: Abi, task: *sched.Task) void {

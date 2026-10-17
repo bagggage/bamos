@@ -476,28 +476,26 @@ pub fn protectRange(self: *Self, base: usize, pages: u32, flags: MapUnit.Flags) 
 }
 
 pub fn pageFault(self: *Self, address: usize, cause: vm.FaultCause) vfs.Error!void {
-    // Page aligned base address.
-    const base = address - (address % vm.page_size);
-    const top = base + vm.page_size;
-
-    const map_unit = blk: {
-        self.map_lock.readLock();
-        defer self.map_lock.readUnlock();
-
-        if (self.lookupMapUnit(base, top)) |map_unit| break :blk map_unit;
-
-        // Lookup grow down unit
-        const max_top = @min(vm.max_userspace_addr + 1, top + @as(usize, self.stack_pages) * vm.page_size);
-        const map_unit = self.lookupMapUnit(top, max_top) orelse return error.NoEnt;
-        const target_size = vm.bytesToPagesExact(map_unit.base() - address) + map_unit.page_capacity;
-
-        break :blk if (map_unit.flags.grow_down and target_size <= self.stack_pages) map_unit else return error.NoEnt;
-    };
+    const map_unit = try self.faultLookupMapUnit(address);
 
     self.map_lock.writeLock();
     defer self.map_lock.writeUnlock();
 
     try map_unit.pageFault(self.page_table, address, cause);
+}
+
+pub fn getPageSafe(self: *Self, address: usize, cause: vm.FaultCause) vfs.Error!struct{*vm.Page,usize} {
+    const map_unit = try self.faultLookupMapUnit(address);
+
+    self.map_lock.writeLock();
+    defer self.map_lock.writeUnlock();
+
+    if (map_unit.base() > address) return error.NoEnt;
+
+    const idx = vm.bytesToPagesExact(address - map_unit.base());
+    const page = try map_unit.getPageSafe(self.page_table, idx, cause);
+
+    return .{ page, address - (map_unit.base() + page.getOffset()) };
 }
 
 pub fn format(self: *Self, writer: *std.Io.Writer) !void {
@@ -553,6 +551,24 @@ pub fn calculateUsedRegion(self: *Self) [2]usize {
     const top = if (self.heap) |h| @max(h.top(), last_top) else last_top;
 
     return .{ base, top };
+}
+
+fn faultLookupMapUnit(self: *Self, address: usize) vfs.Error!*MapUnit {
+    // Page aligned base address.
+    const base = address - (address % vm.page_size);
+    const top = base + vm.page_size;
+
+    self.map_lock.readLock();
+    defer self.map_lock.readUnlock();
+
+    if (self.lookupMapUnit(base, top)) |map_unit| return map_unit;
+
+    // Lookup grow down unit
+    const max_top = @min(vm.max_userspace_addr + 1, top + @as(usize, self.stack_pages) * vm.page_size);
+    const map_unit = self.lookupMapUnit(top, max_top) orelse return error.NoEnt;
+    const target_size = vm.bytesToPagesExact(map_unit.base() - address) + map_unit.page_capacity;
+
+    return if (map_unit.flags.grow_down and target_size <= self.stack_pages) map_unit else error.NoEnt;
 }
 
 fn protectUnit(self: *Self, map_unit: *MapUnit, base: usize, top: usize, flags: MapUnit.Flags) vfs.Error!void {

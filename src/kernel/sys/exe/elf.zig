@@ -24,7 +24,7 @@ pub fn load(bin: *exe.Binary, args: []const [*:0]const u8, envs: []const [*:0]co
     if (elf_hdr.type != .EXEC) bin.virt_base = exe.default_virt_base;
 
     if (bin.proc.exe_file != null) {
-        const task = bin.proc.clear();
+        const task = try bin.proc.clear();
         bin.proc.pushTask(task);
     }
 

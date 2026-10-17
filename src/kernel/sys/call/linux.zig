@@ -87,6 +87,7 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.gettimeofday)]    = @ptrCast(&getTimeOfDay);
     result[@intFromEnum(linux.SYS.getuid)]          = @ptrCast(&getUid);
     result[@intFromEnum(linux.SYS.ioctl)]           = @ptrCast(&ioctl);
+    result[@intFromEnum(linux.SYS.kill)]            = @ptrCast(&kill);
     result[@intFromEnum(linux.SYS.lchown)]          = @ptrCast(&lchown);
     result[@intFromEnum(linux.SYS.link)]            = @ptrCast(&link);
     result[@intFromEnum(linux.SYS.listen)]          = @ptrCast(&listen);
@@ -126,8 +127,10 @@ pub const table: [table_len]SyscallFn = blk: {
     result[@intFromEnum(linux.SYS.sendto)]          = @ptrCast(&sendTo);
     result[@intFromEnum(linux.SYS.set_robust_list)] = @ptrCast(&setRobustList);
     result[@intFromEnum(linux.SYS.set_tid_address)] = @ptrCast(&setTidAddress);
+    result[@intFromEnum(linux.SYS.setgid)]          = @ptrCast(&setGroupId);
     result[@intFromEnum(linux.SYS.sethostname)]     = @ptrCast(&setHostName);
     result[@intFromEnum(linux.SYS.setpgid)]         = @ptrCast(&setProcGroup);
+    result[@intFromEnum(linux.SYS.setuid)]          = @ptrCast(&setUserId);
     result[@intFromEnum(linux.SYS.socket)]          = @ptrCast(&socket);
     result[@intFromEnum(linux.SYS.stat)]            = @ptrCast(&stat);
     result[@intFromEnum(linux.SYS.symlink)]         = @ptrCast(&symlink);
@@ -415,13 +418,14 @@ fn getNetAddressData(
     sock: *net.Socket,
     address: *const linux.sockaddr,
     len: linux.socklen_t,
+    check_family: bool,
 ) Error![]const u8 {
     const data_offset = @offsetOf(linux.sockaddr, "data");
     if (len < data_offset) return error.InvalidArgs;
 
     try validateMemoryArgs(@intFromPtr(address), @sizeOf(linux.sockaddr));
 
-    if (address.family != @intFromEnum(sock.family)) return error.InvalidArgs;
+    if (check_family and address.family != @intFromEnum(sock.family)) return error.InvalidArgs;
     const data_ptr: [*]const u8 = @ptrCast(&address.data[0]);
     const data_len = @as(u32, @intCast(len)) - data_offset;
 
@@ -453,7 +457,7 @@ fn acceptImpl(fd: linux.fd_t, address: ?*linux.sockaddr, len: ?*linux.socklen_t,
         validateMemoryArgs(@intFromPtr(len), @sizeOf(linux.socklen_t)) catch return errorFromE(.FAULT);
 
         const data = getNetAddressData(
-            sock, addr, len_ptr.*
+            sock, addr, len_ptr.*, false
         ) catch |err| return errorFromZig(err);
 
         out_address = @constCast(data);
@@ -468,7 +472,10 @@ fn acceptImpl(fd: linux.fd_t, address: ?*linux.sockaddr, len: ?*linux.socklen_t,
         return errorFromZig(err);
     };
 
-    if (out_ptr != null) len.?.* = @truncate(out_address.len);
+    if (address) |a| {
+        a.family = @intFromEnum(sock.family);
+        len.?.* = @truncate(out_address.len + @sizeOf(linux.sa_family_t));
+    }
     if ((flags & linux.SOCK.NONBLOCK) != 0) new_sock.flags.non_block = true;
     if ((flags & linux.SOCK.CLOEXEC) != 0) _ = proc.files.setCloseOnExec(desc.idx, true);
 
@@ -483,7 +490,7 @@ fn bind(fd: linux.fd_t, address: *const linux.sockaddr, len: linux.socklen_t) is
     defer file.deref();
 
     const data = getNetAddressData(
-        sock, address, len
+        sock, address, len, true
     ) catch |err| return errorFromZig(err);
 
     sock.bind(data) catch |err| return errorFromZig(err);
@@ -500,7 +507,7 @@ fn connect(fd: linux.fd_t, address: *const linux.sockaddr, len: linux.socklen_t)
     defer file.deref();
 
     const data = getNetAddressData(
-        sock, address, len
+        sock, address, len, true
     ) catch |err| return errorFromZig(err);
 
     log.debug("connectinig to '{s}'", .{data});
@@ -577,7 +584,7 @@ fn receiveImpl(fd: linux.fd_t, msg: *linux.msghdr, flags: u32, kernel: bool) isi
     var out_address: []u8 = &.{};
     const out_ptr = if (msg.name) |addr| blk: {
         const data = getNetAddressData(
-            sock, addr, msg.namelen
+            sock, addr, msg.namelen, false
         ) catch |err| return errorFromZig(err);
         out_address = @constCast(@ptrCast(data));
         break :blk &out_address;
@@ -597,7 +604,10 @@ fn receiveImpl(fd: linux.fd_t, msg: *linux.msghdr, flags: u32, kernel: bool) isi
         total_received += received;
     }
 
-    msg.namelen = @truncate(out_address.len);
+    if (msg.name) |n| {
+        n.family = @intFromEnum(sock.family);
+        msg.namelen = @truncate(out_address.len + @sizeOf(linux.sa_family_t));
+    }
 
     return @intCast(total_received);
 }
@@ -644,7 +654,7 @@ fn sendImpl(fd: linux.fd_t, msg: *const linux.msghdr_const, flags: u32, kernel: 
 
     const address = if (msg.name) |addr| blk: {
         break :blk getNetAddressData(
-            sock, addr, msg.namelen
+            sock, addr, msg.namelen, true
         ) catch |err| return errorFromZig(err);
     } else null;
 
@@ -840,93 +850,111 @@ fn setRemainTime(remain: ?*linux.timespec, start_time_ns: u64, wait_time_ns: u64
 }
 
 fn clone(
-    ctx: *arch.syscall.Context, sp: usize, parent_tid: *u32,
-    child_tid: *u32, tls: usize, flags: usize
+    ctx: *arch.syscall.Context, stack_ptr: usize,
+    parent_tid: *u32, child_tid: *u32,
+    tls_ptr: usize, flags: usize,
 ) callconv(.c) isize {
     trace.info("clone(0x{x}, 0x{x}, 0x{x}, 0x{x}, 0x{x})", .{
-        flags, sp, @intFromPtr(parent_tid), @intFromPtr(child_tid), tls
+        flags, stack_ptr, @intFromPtr(parent_tid), @intFromPtr(child_tid), tls_ptr
     });
-
-    // Currently this flags is not implemented.
-    if ((flags & linux.CLONE.THREAD) != 0 or
-        (flags & linux.CLONE.DETACHED) != 0 or
-        (flags & linux.CLONE.NEWCGROUP) != 0 or
-        (flags & linux.CLONE.NEWTIME) != 0 or
-        (flags & linux.CLONE.NEWUSER) != 0 or
-        (flags & linux.CLONE.NEWIPC) != 0 or
-        (flags & linux.CLONE.NEWNET) != 0 or
-        (flags & linux.CLONE.NEWPID) != 0 or
-        (flags & linux.CLONE.FILES) != 0 or
-        (flags & linux.CLONE.VFORK) != 0 or
-        (flags & linux.CLONE.FS) != 0 or
-        (flags & linux.CLONE.IO) != 0 or
-        (flags & linux.CLONE.VM) != 0
-    ) return errorFromE(.NOSYS);
-
-    const new_proc = cloneImpl(ctx) catch |err| return errorFromZig(err);
-    const new_task = new_proc.getMainTask().?;
-
-    if ((flags & linux.CLONE.CHILD_SETTID) != 0) {
-        validateMemoryPtr(@intFromPtr(child_tid)) catch return errorFromE(.FAULT);
-        child_tid.* = new_proc.id.value;
-    }
-    if ((flags & linux.CLONE.PARENT_SETTID) != 0) {
-        validateMemoryPtr(@intFromPtr(parent_tid)) catch return errorFromE(.FAULT);
-        parent_tid.* = new_proc.id.value;
-    }
-    if (sp != 0) {
-        @branchHint(.cold);
-        log.warn("non-null stack ptr: 0x{x} while CLONE_VM flag is not specified", .{sp});
-    }
-
-    sched.enqueue(new_task);
-    return new_proc.id.value;
-}
-
-fn cloneImpl(ctx: *arch.syscall.Context) vfs.Error!*sys.Process {
-    const task = sched.getCurrentTask();
-    const proc = task.spec.user.process;
-
-    const new_proc = try proc.clone();
-    errdefer new_proc.delete();
-
-    const new_task = new_proc.createTask() catch return error.NoMemory;
-    try sys.call.cloneThread(
-        .linux_sysv, task, new_task,  ctx
-    );
-
-    return new_proc;
+    return cloneImpl(
+        ctx, flags, if (stack_ptr != 0) stack_ptr else null,
+        tls_ptr, parent_tid, child_tid,
+    ) catch |err| return errorFromZig(err);
 }
 
 fn fork(ctx: *arch.syscall.Context) callconv(.c) isize {
     trace.info("fork() ctx: 0x{x}, 0x{x}, 0x{x}", .{ctx.rcx, ctx.rsp, ctx.rbp});
-
-    const new_proc = cloneImpl(ctx) catch |err| return errorFromZig(err);
-    const new_task = new_proc.getMainTask().?;
-
-    sched.enqueue(new_task);
-    return new_proc.id.value;
+    return cloneImpl(
+        ctx, 0, null,
+        undefined, undefined, undefined,
+    ) catch |err| return errorFromZig(err);
 }
 
 fn vfork(ctx: *arch.syscall.Context) callconv(.c) isize {
     trace.info("vfork()", .{});
-    // TODO: Implement a real vfork, not just this stub
+    return cloneImpl(
+        ctx, linux.CLONE.VM | linux.CLONE.VFORK, null,
+        undefined, undefined, undefined,
+    ) catch |err| return errorFromZig(err);
+}
 
-    const proc = sys.Process.getCurrent();
-    const new_proc = cloneImpl(ctx) catch |err| return errorFromZig(err);
-    const new_task = new_proc.getMainTask().?;
+fn cloneImpl(
+    ctx: *arch.syscall.Context, flags: usize, 
+    stack_ptr: ?usize, tls_ptr: usize,
+    parent_tid: *u32, child_tid: *u32,
+) vfs.Error!u32 {
+    const task = sched.getCurrentTask();
+    const proc = task.spec.user.process;
+
+    const unsupported_flags =
+        linux.CLONE.PIDFD | linux.CLONE.IO |
+        linux.CLONE.NEWCGROUP | linux.CLONE.NEWIPC |
+        linux.CLONE.NEWNET | linux.CLONE.NEWNS |
+        linux.CLONE.NEWPID | linux.CLONE.NEWTIME |
+        linux.CLONE.NEWUSER | linux.CLONE.NEWUTS;
+
+    const partial_flags = linux.CLONE.FS | linux.CLONE.FILES | linux.CLONE.SIGHAND;
+    const thread_flags = partial_flags | linux.CLONE.VM | linux.CLONE.THREAD;
+    const unimplemented_flags = partial_flags | linux.CLONE.PARENT | linux.CLONE.DETACHED;
+
+    if ((flags & unsupported_flags) != 0) {
+        log.debug("Unsupported clone flags: 0x{x} (0x{x})", .{flags & unsupported_flags, flags});
+        return error.InvalidArgs;
+    }
+
+    const new_proc = if ((flags & thread_flags) == thread_flags) blk: {
+        if ((flags & linux.CLONE.VFORK) != 0) return error.InvalidArgs;
+        break :blk proc;
+    } else if ((flags & unimplemented_flags) != 0) {
+        log.debug("Unimplemented clone flags: 0x{x} (0x{x})", .{flags & unimplemented_flags, flags});
+        return error.InvalidArgs;
+    } else blk: {
+        const new_proc = try proc.clone((flags & linux.CLONE.VM) != 0);
+        new_proc.flags.virtual_fork = (flags & linux.CLONE.VFORK) != 0;
+
+        break :blk new_proc;
+    };
+    errdefer if (new_proc != proc) new_proc.delete();
+
     const child_id = new_proc.id;
+    const new_task = try new_proc.createTask();
+    const new_tls = if ((flags & linux.CLONE.SETTLS) != 0) tls_ptr else null;
+    try sys.call.cloneThread(
+        .linux_sysv, ctx, task,
+        new_task, stack_ptr, new_tls,
+    );
+
+    if ((flags & linux.CLONE.CHILD_SETTID) != 0) {
+        try validateMemoryPtr(@intFromPtr(child_tid));
+        if (new_proc == proc) {
+            child_tid.* = child_id.value;
+        } else {
+            const address = @intFromPtr(child_tid);
+            const page,
+            const offset = try new_proc.addr_space.getPageSafe(address, .write);
+            const dst: *u32 = @ptrFromInt(@intFromPtr(page.asSlice().ptr) + offset);
+
+            dst.* = child_id.value;
+        }
+    }
+    if ((flags & linux.CLONE.PARENT_SETTID) != 0) {
+        try validateMemoryPtr(@intFromPtr(parent_tid));
+        parent_tid.* = child_id.value;
+    }
 
     sched.enqueue(new_task);
 
-    proc.id.lock.lock();
-    defer proc.id.lock.unlock();
+    if ((flags & linux.CLONE.VFORK) != 0) {
+        proc.id.lock.lock();
+        defer proc.id.lock.unlock();
 
-    while (!child_id.isZombie()) {
-        defer proc.id.lock.lock();
+        while (!child_id.isZombie() and new_proc.flags.virtual_fork) {
+            defer proc.id.lock.lock();
 
-        const id = proc.id.waitForEventAtomic() catch continue;
-        id.deref();
+            const id = proc.id.waitForEventAtomic() catch continue;
+            id.deref();
+        }
     }
 
     return child_id.value;
@@ -944,7 +972,7 @@ fn close(fd: linux.fd_t) isize {
 }
 
 fn chdir(path: [*c]const u8) isize {
-    trace.info("chdir(0x{x})", .{path});
+    trace.info("chdir(0x{x})", .{@intFromPtr(path)});
     validateMemoryArgs(@intFromPtr(path), sys.limits.max_path) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
@@ -1123,6 +1151,7 @@ fn execve(path: [*c]const u8, args: ?[*:null][*c]const u8, envs: ?[*:null][*c]co
     validateMemoryArgs(@intFromPtr(envs), vm.page_size) catch return errorFromE(.FAULT);
 
     const proc = sys.Process.getCurrent();
+    const virtual_fork = proc.flags.virtual_fork;
 
     var ret_error: sys.exe.Error = undefined;
     const run_ctx: ?sys.exe.RunContext = blk: {
@@ -1157,6 +1186,11 @@ fn execve(path: [*c]const u8, args: ?[*:null][*c]const u8, envs: ?[*:null][*c]co
         log.warn("execve failed: {t}, kill: {f}", .{ret_error, proc});
 
         proc.terminate(1);
+    }
+
+    if (virtual_fork) {
+        @branchHint(.unlikely);
+        proc.parent.notifyEvent(proc);
     }
 
     log.debug("loaded process: {f}", .{proc});
@@ -1702,8 +1736,7 @@ fn seek(fd: linux.fd_t, offset: isize, whence: u8) isize {
     const new_offset = @as(isize, @intCast(base)) +% offset;
     if (
         (offset < 0 and (new_offset < 0 or new_offset > base)) or
-        (offset >= 0 and (new_offset < base)) or
-        (file.dentry.inode.type == .regular_file and new_offset > file.dentry.inode.size)
+        (offset >= 0 and (new_offset < base))
     ) return errorFromE(.INVAL);
 
     file.offset = @intCast(new_offset);
@@ -1751,7 +1784,7 @@ fn mkdirImpl(fd: linux.fd_t, path: [*:0]const u8, mode: linux.mode_t) isize {
 }
 
 fn mmap(virt: usize, len: usize, prot: c_int, flags: linux.MAP, fd: linux.fd_t, offset: linux.off_t) usize {
-    trace.info("mmap(0x{x}, 0x{x}, {}, {any}, {}, {});", .{virt, len, prot, flags, fd, offset});
+    trace.info("mmap(0x{x}, 0x{x}, {}, 0x{x}, {}, {});", .{virt, len, prot, @as(u32, @bitCast(flags)), fd, offset});
 
     if (!std.mem.isAligned(virt, vm.page_size) or
         !vm.isUserVirtAddr(virt +| len) or
@@ -2117,7 +2150,7 @@ fn epollWait(
     epfd: linux.fd_t, events: [*]linux.epoll_event,
     len: i32, timeout: i32,
 ) isize {
-    trace.info("epoll_pwait2({}, 0x{x}, {}, {})", .{epfd, @intFromPtr(events), len, timeout});
+    trace.info("epoll_wait({}, 0x{x}, {}, {})", .{epfd, @intFromPtr(events), len, timeout});
 
     const timeout_ns: u64 = if (timeout < 0) std.math.maxInt(u64) else @intCast(timeout * std.time.ns_per_ms);
     return epollWaitImpl(epfd, events, len, timeout_ns, null);
@@ -2130,11 +2163,11 @@ fn epollPwait(
     timeout: i32,
     sigmask: ?*const linux.sigset_t,
 ) isize {
-    trace.info("epoll_pwait2({}, 0x{x}, {}, {}, 0x{x})", .{
+    trace.info("epoll_pwait({}, 0x{x}, {}, {}, 0x{x})", .{
         epfd, @intFromPtr(events), len, timeout, @intFromPtr(sigmask)
     });
 
-    const timeout_ns: u64 = if (timeout < 0) std.math.maxInt(u64) else @intCast(timeout * std.time.ns_per_ms);
+    const timeout_ns: u64 = if (timeout < 0) std.math.maxInt(u64) else @as(u64, @intCast(timeout)) *| std.time.ns_per_ms;
     return epollWaitImpl(epfd, events, len, timeout_ns, sigmask);
 }
 
@@ -2153,7 +2186,7 @@ fn epollPwait2(
         validateMemoryArgs(@intFromPtr(t), @sizeOf(linux.timespec)) catch return errorFromE(.FAULT);
         if (t.sec < 0 or t.nsec < 0 or t.nsec >= std.time.ns_per_s) return errorFromE(.INVAL);
 
-        break :blk @intCast((t.sec * std.time.ns_per_s) + t.nsec);
+        break :blk @intCast((t.sec *| std.time.ns_per_s) +| t.nsec);
     } else std.math.maxInt(u64);
 
     return epollWaitImpl(epfd, events, len, timeout_ns, sigmask);
@@ -2249,7 +2282,10 @@ fn preadv(fd: linux.fd_t, iov: [*]posix.iovec, num: c_int, off: u64) isize {
     var readed: usize = 0;
     for (iov[0..@intCast(num)]) |*io| {
         validateMemoryArgs(@intFromPtr(io.base), io.len) catch return errorFromE(.FAULT);
-        readed += file.readAt(offset, io.base[0..io.len]) catch |err| return errorFromZig(err);
+        readed += file.readAt(offset, io.base[0..io.len]) catch |err| {
+            if (readed > 0) return @intCast(readed);
+            return errorFromZig(err);
+        };
         offset += io.len;
     }
 
@@ -2390,7 +2426,10 @@ fn readv(fd: linux.fd_t, iov: [*]posix.iovec, num: c_int) isize {
     var readed: usize = 0;
     for (iov[0..@intCast(num)]) |*io| {
         validateMemoryArgs(@intFromPtr(io.base), io.len) catch return errorFromE(.FAULT);
-        readed += file.read(io.base[0..io.len]) catch |err| return errorFromZig(err);
+        readed += file.read(io.base[0..io.len]) catch |err| {
+            if (readed > 0) return @intCast(readed);
+            return errorFromZig(err);
+        };
     }
 
     return @intCast(readed);
@@ -2507,10 +2546,32 @@ fn rmdirImpl(proc: *sys.Process, dentry: *vfs.Dentry) isize {
     dentry.unlink() catch |err| return errorFromZig(err);
     return 0;
 }
+fn setGroupId(gid: u32) isize {
+    trace.info("setgid({})", .{gid});
+
+    const proc = sys.Process.getCurrent();
+    // FIXME: Check permissions and implement locking
+    if (proc.gid == 0 or proc.uid == 0) proc.gid = @truncate(gid);
+
+    return 0;
+}
+
+fn setUserId(uid: u32) isize {
+    trace.info("setuid({})", .{uid});
+
+    const proc = sys.Process.getCurrent();
+    // FIXME: Check permissions and implement locking
+    if (proc.gid == 0 or proc.uid == 0) proc.uid = @truncate(uid);
+
+    return 0;
+}
 
 fn setProcGroup(pid: linux.pid_t, pgid: linux.pid_t) isize {
     trace.info("setpgid({}, {})", .{pid, pgid});
+    return setProcGroupImpl(pid, pgid);
+}
 
+fn setProcGroupImpl(pid: linux.pid_t, pgid: linux.pid_t) isize {
     if (pid < 0 or pgid < 0) return errorFromE(.INVAL);
     const proc = getProcByPid(pid) orelse return errorFromE(.SRCH);
 
@@ -2816,7 +2877,7 @@ fn kill(pid: i32, sig: u32) isize {
         const group = sys.Process.Id.lookup(@intCast(-pid)) orelse return errorFromE(.SRCH);
         defer group.deref();
 
-        group.sendSignalToGroup(@intFromEnum(sig));
+        group.sendSignalToGroup(@enumFromInt(sig));
     }
 
     return 0;
