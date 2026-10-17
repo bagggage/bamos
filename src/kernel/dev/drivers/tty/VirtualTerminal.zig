@@ -426,11 +426,13 @@ fn cursorTask() noreturn {
 }
 
 fn keyboardHandler(ctx: lib.AnyData, device: *Input, event: Input.Event) bool {
+    if (event.@"type" == .sync) return false;
+
     const self = ctx.asPtr(Self).?;
     if (!self.kbd_state.initialized) {
         @branchHint(.cold);
         self.kbd_state.initialized = true;
-        device.request(.{ .keyboard = .{ .set_leds = .{} } }) catch {};
+        keyboardUpdateLeds(device, .{}, .all()) catch {};
         device.request(.{ .keyboard = .{ .set_repeat_rate_and_delay = .{
             .delay_ms = 250, .rate_hz = 30
         }}}) catch {};
@@ -438,10 +440,10 @@ fn keyboardHandler(ctx: lib.AnyData, device: *Input, event: Input.Event) bool {
 
     if (self.kbd_mode != .translate) {
         self.keyboardPutEvent(event);
-        return true;
+        return false;
     }
 
-    switch (event.code) {
+    switch (event.code.scan) {
         .unknown => return false,
         .capslock => {
             if (event.action != .press) return false;
@@ -450,7 +452,11 @@ fn keyboardHandler(ctx: lib.AnyData, device: *Input, event: Input.Event) bool {
             defer self.kbd_lock.unlockAtomic();
 
             self.kbd_state.capslock = !self.kbd_state.capslock;
-            self.keyboardUpdateLeds(device) catch {};
+            keyboardUpdateLeds(
+                device,
+                .{ .capslock = self.kbd_state.capslock },
+                .{ .capslock = true },
+            ) catch {};
         },
         .numlock => {
             if (event.action != .press) return false;
@@ -459,7 +465,11 @@ fn keyboardHandler(ctx: lib.AnyData, device: *Input, event: Input.Event) bool {
             defer self.kbd_lock.unlockAtomic();
 
             self.kbd_state.numlock = !self.kbd_state.numlock;
-            self.keyboardUpdateLeds(device) catch {};
+            keyboardUpdateLeds(
+                device,
+                .{ .numlock = self.kbd_state.numlock },
+                .{ .numlock = true },
+            ) catch {};
         },
         .left_alt,
         .right_alt => {
@@ -498,7 +508,7 @@ fn keyboardHandler(ctx: lib.AnyData, device: *Input, event: Input.Event) bool {
             }
         },
         else => {
-            if (event.action == .release or event.code == .unknown) return false;
+            if (event.action == .release or event.code.scan == .unknown) return false;
             self.keyboardPutEvent(event);
         }
     }
@@ -514,10 +524,10 @@ fn keyboardPutEvent(self: *Self, event: Input.Event) void {
     dev.intr.scheduleImmediate(&kbd_immediate);
 }
 
-fn keyboardUpdateLeds(self: *Self, device: *Input) !void {
+fn keyboardUpdateLeds(device: *Input, values: Input.Leds, mask: Input.Leds) !void {
     try device.request(.{ .keyboard = .{ .set_leds = .{
-        .numlock = self.kbd_state.numlock,
-        .capslock = self.kbd_state.capslock,
+        .values = values,
+        .mask = mask,
     }}});
 }
 
@@ -693,7 +703,7 @@ fn keyboardImmediate(ctx: ?*anyopaque) void {
 
 fn keyboardRawInput(self: *Self, events: []const Input.Event, buffer: [*]u8) void {
     for (events, 0..) |*event, i| {
-        const code: u8 = @truncate(event.code.toLegacy());
+        const code: u8 = @truncate(event.code.scan.toLegacy());
         const prefix: u8 = if (event.action == .release) 0x80 else 0x00;
 
         buffer[i] = code | prefix;
@@ -705,7 +715,7 @@ fn keyboardRawInput(self: *Self, events: []const Input.Event, buffer: [*]u8) voi
 fn keyboardMediumRawInput(self: *Self, events: []const Input.Event, buffer: [*]u8) void {
     var i: u32 = 0;
     for (events) |*event| {
-        const code: u8 = @truncate(event.code.toInt());
+        const code: u8 = @truncate(event.code.scan.toInt());
         const prefix: u8 = if (event.action == .release) 0x80 else 0x00;
 
         buffer[i] = code | prefix;
@@ -718,14 +728,14 @@ fn keyboardMediumRawInput(self: *Self, events: []const Input.Event, buffer: [*]u
 fn keyboardTranslateInput(self: *Self, events: []const Input.Event, buffer: [*]u8) void {
     var i: usize = 0;
     for (events) |*event| {
-        const ascii = self.scancodeToAscii(event.code);
+        const ascii = self.scancodeToAscii(event.code.scan);
         if (ascii == 0) continue;
 
         if (ascii == 0xff) {
             if (i > 0) self.tty.insertInput(buffer[0..i]) catch {};
             i = 0;
 
-            self.tty.insertInput(scancodeToEscape(event.code)) catch {};
+            self.tty.insertInput(scancodeToEscape(event.code.scan)) catch {};
             continue;
         } else if (self.kbd_state.isControl()) {
             if (ascii < 0x40) continue;
