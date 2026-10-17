@@ -21,6 +21,7 @@ pub const AddressSpace = Process.AddressSpace;
 pub const call = @import("sys/call.zig");
 pub const exe = @import("sys/exe.zig");
 pub const FileTable = @import("sys/FileTable.zig");
+pub const futex = @import("sys/futex.zig");
 pub const input = @import("sys/input.zig");
 pub const limits = @import("sys/limits.zig");
 pub const Process = @import("sys/Process.zig");
@@ -41,6 +42,8 @@ const InitSource = struct {
 };
 
 pub fn init() !void {
+    try futex.init();
+
     startInit() catch |err| {
         if (err == error.InitNotFound) @panic("Init executable not found.");
         return err;
