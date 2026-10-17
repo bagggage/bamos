@@ -239,6 +239,145 @@ const Command = enum(u8) {
     }
 };
 
+const supported: Input.Event.Supported = .build(&.{
+    .{ .sync, &.{} },
+    .{ .key, &.{
+        .{ .scan = .esc },
+        .{ .scan = .@"1" },
+        .{ .scan = .@"2" },
+        .{ .scan = .@"3" },
+        .{ .scan = .@"4" },
+        .{ .scan = .@"5" },
+        .{ .scan = .@"6" },
+        .{ .scan = .@"7" },
+        .{ .scan = .@"8" },
+        .{ .scan = .@"9" },
+        .{ .scan = .@"0" },
+        .{ .scan = .minus },
+        .{ .scan = .equal },
+        .{ .scan = .backspace },
+        .{ .scan = .tab },
+        .{ .scan = .Q },
+        .{ .scan = .W },
+        .{ .scan = .E },
+        .{ .scan = .R },
+        .{ .scan = .T },
+        .{ .scan = .Y },
+        .{ .scan = .U },
+        .{ .scan = .I },
+        .{ .scan = .O },
+        .{ .scan = .P },
+        .{ .scan = .left_brace },
+        .{ .scan = .right_brace },
+        .{ .scan = .enter },
+        .{ .scan = .left_ctrl },
+        .{ .scan = .A },
+        .{ .scan = .S },
+        .{ .scan = .D },
+        .{ .scan = .F },
+        .{ .scan = .G },
+        .{ .scan = .H },
+        .{ .scan = .J },
+        .{ .scan = .K },
+        .{ .scan = .L },
+        .{ .scan = .semicolon },
+        .{ .scan = .apostrope },
+        .{ .scan = .grave },
+        .{ .scan = .left_shift },
+        .{ .scan = .backslash },
+        .{ .scan = .Z },
+        .{ .scan = .X },
+        .{ .scan = .C },
+        .{ .scan = .V },
+        .{ .scan = .B },
+        .{ .scan = .N },
+        .{ .scan = .M },
+        .{ .scan = .comma },
+        .{ .scan = .dot },
+        .{ .scan = .slash },
+        .{ .scan = .right_shift },
+        .{ .scan = .kp_asterik },
+        .{ .scan = .left_alt },
+        .{ .scan = .space },
+        .{ .scan = .capslock },
+        .{ .scan = .f1 },
+        .{ .scan = .f2 },
+        .{ .scan = .f3 },
+        .{ .scan = .f4 },
+        .{ .scan = .f5 },
+        .{ .scan = .f6 },
+        .{ .scan = .f7 },
+        .{ .scan = .f8 },
+        .{ .scan = .f9 },
+        .{ .scan = .f10 },
+        .{ .scan = .numlock },
+        .{ .scan = .scrolllok },
+        .{ .scan = .kp_7 },
+        .{ .scan = .kp_8 },
+        .{ .scan = .kp_9 },
+        .{ .scan = .kp_minus },
+        .{ .scan = .kp_4 },
+        .{ .scan = .kp_5 },
+        .{ .scan = .kp_6 },
+        .{ .scan = .kp_plus },
+        .{ .scan = .kp_1 },
+        .{ .scan = .kp_2 },
+        .{ .scan = .kp_3 },
+        .{ .scan = .kp_0 },
+        .{ .scan = .kp_dot },
+        .{ .scan = .f11 },
+        .{ .scan = .f12 },
+        .{ .scan = .kp_jpcomma },
+        .{ .scan = .kp_enter },
+        .{ .scan = .right_ctrl },
+        .{ .scan = .kp_slash },
+        .{ .scan = .sysrq },
+        .{ .scan = .right_alt },
+        .{ .scan = .line_feed },
+        .{ .scan = .home },
+        .{ .scan = .up },
+        .{ .scan = .page_up },
+        .{ .scan = .left },
+        .{ .scan = .right },
+        .{ .scan = .end },
+        .{ .scan = .down },
+        .{ .scan = .page_down },
+        .{ .scan = .insert },
+        .{ .scan = .delete },
+        .{ .scan = .macro },
+        .{ .scan = .mute },
+        .{ .scan = .volume_down },
+        .{ .scan = .volume_up },
+        .{ .scan = .power },
+        .{ .scan = .kp_equal },
+        .{ .scan = .kp_plus_minus },
+        .{ .scan = .pause },
+        .{ .scan = .scale },
+        .{ .scan = .@"fn" },
+        .{ .scan = .fn_esc },
+        .{ .scan = .fn_f1 },
+        .{ .scan = .fn_f2 },
+        .{ .scan = .fn_f3 },
+        .{ .scan = .fn_f4 },
+        .{ .scan = .fn_f5 },
+        .{ .scan = .fn_f6 },
+        .{ .scan = .fn_f7 },
+        .{ .scan = .fn_f8 },
+        .{ .scan = .fn_f9 },
+        .{ .scan = .fn_f10 },
+        .{ .scan = .fn_f11 },
+        .{ .scan = .fn_f12 },
+        .{ .scan = .fn_1 },
+        .{ .scan = .fn_2 },
+        .{ .scan = .fn_d },
+        .{ .scan = .fn_e },
+        .{ .scan = .fn_f },
+        .{ .scan = .fn_s },
+        .{ .scan = .fn_b },
+        .{ .scan = .fn_right_shift },
+    } },
+});
+
 const Keyboard = struct {
     device: dev.Device,
     input: Input,
@@ -253,6 +392,10 @@ const Keyboard = struct {
 
         update_leds: bool = false,
         update_typematic: bool = false,
+
+        inline fn toInputLeds(self: @This()) Input.Leds {
+            return @bitCast(@as(u8, @bitCast(self)) & 0b111);
+        }
     } = .{},
     last_code: u8 = 0,
 
@@ -285,7 +428,15 @@ const Keyboard = struct {
         try dev.intr.requestIrq(irq, &self.device, &interruptHandler, .edge, true);
         errdefer dev.intr.releaseIrq(irq, &self.device);
 
-        try self.input.setup(.keyboard);
+        try self.input.setup(
+            .keyboard,
+            supported,
+            "AT Translated Set 2 keyboard",
+            .{
+                .bus_type = .host, .product = 0x1,
+                .vendor = 0x1, .version = 0x1,
+            },
+        );
         errdefer self.input.deinit();
 
         self.input.request_op = &inputRequest;
@@ -423,18 +574,23 @@ fn inputRequest(device: *Input, request: Input.Request) Input.Error!void {
     const kbd = Keyboard.fromInput(device);
     switch (request.keyboard) {
         .set_leds => |arg| {
-            kbd.state.numlock = arg.numlock;
-            kbd.state.capslock = arg.capslock;
-            kbd.state.scroll_lock = arg.scroll_lock;
+            const old: u8 = @bitCast(kbd.state.toInputLeds());
+            const mask :u8 = @bitCast(arg.mask);
+            const masked = (@as(u8, @bitCast(arg.values)) & mask);
+            const new: Input.Leds = @bitCast(masked | (old & ~mask));
+
+            kbd.state.numlock = new.numlock;
+            kbd.state.capslock = new.capslock;
+            kbd.state.scroll_lock = new.scroll_lock;
 
             if (!dev.intr.isEnabledForCpu()) {
                 kbd.state.update_leds = true;
                 dev.intr.scheduleImmediate(&kbd.immediate);
             } else {
                 kbd.setLeds(.{
-                    .numlock = arg.numlock,
-                    .capslock = arg.capslock,
-                    .scroll_lock = arg.scroll_lock
+                    .numlock = new.numlock,
+                    .capslock = new.capslock,
+                    .scroll_lock = new.scroll_lock,
                 }) catch return error.IoFailed;
             }
         },
