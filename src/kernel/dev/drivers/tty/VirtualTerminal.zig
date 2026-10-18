@@ -303,7 +303,10 @@ pub fn disable(self: *Self) void {
     tty_ops.flush = &ttyNullFlush;
     cursor_enable = false;
 
-    if (active == self) active = null;
+    if (active == self) {
+        active = null;
+        video.terminal.clearBlinkIfVisible();
+    }
 
     sys.input.unregisterHandler(.keyboard, &kbd_handler);
     self.kbd_state = .{};
@@ -421,6 +424,8 @@ fn cursorTask() noreturn {
         sched.getCurrent().sleepFor(std.time.ns_per_ms * 350) catch unreachable;
         if (active) |tty| if (tty.kbd_mode == .translate and cursor_enable) {
             video.terminal.blinkCursor();
+        } else {
+            video.terminal.clearBlinkIfVisible();
         };
     }
 }

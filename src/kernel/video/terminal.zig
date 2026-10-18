@@ -226,9 +226,14 @@ pub inline fn blinkCursor() void {
     cursor.blink();
 }
 
+pub inline fn clearBlinkIfVisible() void {
+    if (cursor_blink) clearBlink();
+}
+
 pub fn clear() void {
     @memset(char_buffer, 0);
 
+    clearBlinkIfVisible();
     for (0..rows) |row| text_output.fillRow(@truncate(row), 0, cols, 0);
 }
 
@@ -236,6 +241,7 @@ pub fn clearAt(row: u16, col: u16, n: u16) void {
     const pos = row * cols + col;
     @memset(char_buffer[pos .. pos + n], 0);
 
+    if (blink_pos[0] == row) clearBlinkIfVisible();
     text_output.fillRow(row, col, n, 0);
 }
 
