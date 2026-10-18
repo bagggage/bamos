@@ -160,6 +160,7 @@ pub fn close(self: *Self, idx: u32) vfs.Error!void {
 pub fn closeAll(self: *Self) void {
     self.lock.writeLock();
     defer self.lock.writeUnlock();
+
     defer self.num_files = 0;
     defer self.bitmap.clearAll(self.capacity);
 
@@ -169,7 +170,13 @@ pub fn closeAll(self: *Self) void {
 
         const file = self.files[i].get() orelse continue;
         self.files[i].set(null);
-        file.deref();
+
+        {
+            self.lock.writeUnlock();
+            defer self.lock.writeLock();
+
+            file.deref();
+        }
 
         num_files += 1;
     }
@@ -193,7 +200,12 @@ pub fn closeOnExecute(self: *Self) void {
         self.bitmap.clear(i);
         self.num_files -= 1;
 
-        file.deref();
+        {
+            self.lock.writeUnlock();
+            defer self.lock.writeLock();
+
+            file.deref();
+        }
     }
 }
 
@@ -301,6 +313,9 @@ pub fn newDescriptors(self: *Self, buffer: []Descriptor) vfs.Error!void {
 }
 
 pub fn newDescriptorAt(self: *Self, idx: u32, file: *vfs.File, rebase: bool) vfs.Error!Descriptor {
+    var old_file: ?*vfs.File = null;
+    defer if (old_file) |f| f.deref();
+
     self.lock.writeLock();
     defer self.lock.writeUnlock();
 
@@ -313,8 +328,7 @@ pub fn newDescriptorAt(self: *Self, idx: u32, file: *vfs.File, rebase: bool) vfs
 
     const fd_idx = if (self.bitmap.get(idx) != 0) blk: {
         if (!rebase) { // Replace
-            const old_file = self.files[idx].get().?;
-            defer old_file.deref();
+            old_file = self.files[idx].get().?;
 
             file.ref();
             self.files[idx].set(file);
